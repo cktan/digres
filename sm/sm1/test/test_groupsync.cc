@@ -200,7 +200,7 @@ public:
   }
 
   /* The shared database object behind the sessions. */
-  wisr::db_t *db() const { return m_first->db; }
+  sm1_internal::db_t *db() const { return m_first->db; }
 
 private:
   home_t m_home;
@@ -221,18 +221,18 @@ int commit_one(sm1::session_t *s, uint64_t store, const std::string &key) {
  * How many commits wait in the commit queue, not yet in a leader's
  * batch, read under commit_mu.
  */
-int sync_line_length(wisr::db_t *db) {
+int sync_line_length(sm1_internal::db_t *db) {
   // Hold commit_mu to walk the queue the commits keep under it.
   std::lock_guard<std::mutex> guard(db->commit_mu);
   int n = 0;
-  for (wisr::commit_entry_t *e = db->commit_head; e; e = e->next) {
+  for (sm1_internal::commit_entry_t *e = db->commit_head; e; e = e->next) {
     n++;
   }
   return n;
 }
 
 /* Wait up to 10 seconds for n commits to wait in the commit queue. */
-bool wait_for_waiters(wisr::db_t *db, int n) {
+bool wait_for_waiters(sm1_internal::db_t *db, int n) {
   auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (std::chrono::steady_clock::now() < until) {
     if (sync_line_length(db) == n) {

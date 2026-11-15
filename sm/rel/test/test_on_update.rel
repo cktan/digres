@@ -9,7 +9,7 @@
 #    the same.
 # 3. :on-update without a string after it panics.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_on_update"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_on_update"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

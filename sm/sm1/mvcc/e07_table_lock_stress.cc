@@ -279,7 +279,7 @@ TEST_CASE("e07: table locks never grant two incompatible modes at once") {
   CHECK(other == 0);
   sm1::session_t *s1 = s.session(1);
   {
-    wisr::lock_all_t all(s1->db);
+    sm1_internal::lock_all_t all(s1->db);
     CHECK(s1->db->lock_table.empty());
   }
   for (const auto &c : s1->db->fp_strong) {

@@ -17,7 +17,7 @@
 # 6. A column a foreign key names is ERR_INUSE; one not there
 #    panics.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_altertype"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_altertype"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

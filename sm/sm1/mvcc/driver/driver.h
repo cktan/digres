@@ -11,8 +11,8 @@
  * consumed while parsing and describe the run rather than
  * appearing in it. DRIVER.md §2 is the language reference.
  */
-#ifndef WISR_DRIVER_H
-#define WISR_DRIVER_H
+#ifndef SM1_DRIVER_H
+#define SM1_DRIVER_H
 
 #include <stdint.h>
 
@@ -125,4 +125,4 @@ bool script_parse(const std::string &path, script_t *out, std::string *err);
 int script_run(const script_t &script, int block_ms, bool chained,
                std::string *out);
 
-#endif /* WISR_DRIVER_H */
+#endif /* SM1_DRIVER_H */

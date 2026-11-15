@@ -19,8 +19,8 @@
  * returns holds until the partition is next changed; what reads
  * the whole table holds every partition's, in their order.
  */
-#ifndef WISR_LOCKTAB_H
-#define WISR_LOCKTAB_H
+#ifndef SM1_LOCKTAB_H
+#define SM1_LOCKTAB_H
 
 #include "sm_lock.h"
 
@@ -29,7 +29,7 @@
 
 #include <mutex>
 
-namespace wisr {
+namespace sm1_internal {
 
 /*
  * A lock's id in the lock table: hi is the storeid, its top bit flipped
@@ -281,6 +281,6 @@ private:
   part_t m_parts[parts];
 };
 
-} // namespace wisr
+} // namespace sm1_internal
 
-#endif /* WISR_LOCKTAB_H */
+#endif /* SM1_LOCKTAB_H */

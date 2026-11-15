@@ -4,7 +4,7 @@
  */
 
 /*
- * version.cc -- the row-version codec, the wisr.store.v2
+ * version.cc -- the row-version codec, the sm.store.v2
  * comparator, and the userkey prefix extractor (../DBMGR.md §6.2).
  */
 
@@ -12,7 +12,7 @@
 
 #include "sm0_codec.h"
 
-namespace wisr {
+namespace sm1_internal {
 
 namespace {
 
@@ -26,7 +26,7 @@ namespace {
 class version_comparator_t : public rocksdb::Comparator {
 public:
   /* The persisted name; changing the order means a new name. */
-  const char *Name() const override { return "wisr.store.v2"; }
+  const char *Name() const override { return "sm.store.v2"; }
 
   /* Order by class, then within it. */
   int Compare(const rocksdb::Slice &a, const rocksdb::Slice &b) const override {
@@ -80,7 +80,7 @@ public:
 class version_prefix_t : public rocksdb::SliceTransform {
 public:
   /* The persisted name. */
-  const char *Name() const override { return "wisr.prefix.v2"; }
+  const char *Name() const override { return "sm.prefix.v2"; }
 
   /* A version key less its tail; any other key whole. */
   rocksdb::Slice Transform(const rocksdb::Slice &key) const override {
@@ -202,4 +202,4 @@ std::shared_ptr<const rocksdb::SliceTransform> version_prefix_extractor() {
   return std::make_shared<version_prefix_t>();
 }
 
-} // namespace wisr
+} // namespace sm1_internal

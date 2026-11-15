@@ -10,7 +10,7 @@
 # 4. After a reopen the names are as they were; DROP NOT NULL takes
 #    one away.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_notnull"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_notnull"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

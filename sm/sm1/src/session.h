@@ -8,8 +8,8 @@
  * plus the internal calls between xct.cc, catalog.cc, and
  * access.cc.
  */
-#ifndef WISR_SESSION_H
-#define WISR_SESSION_H
+#ifndef SM1_SESSION_H
+#define SM1_SESSION_H
 
 #include "bufpool.h"
 #include "db.h"
@@ -75,7 +75,7 @@ struct sm1::batch_iter_t {
 
 struct sm1::session_t {
   sm1::env_t *env = nullptr;
-  wisr::db_t *db = nullptr;
+  sm1_internal::db_t *db = nullptr;
 
   /* sm1::set_no_transaction: settled reads and pages need none. */
   bool no_transaction = false;
@@ -119,7 +119,7 @@ struct sm1::session_t {
     uint64_t storeid = 0;
     std::string key;
     sm1::page_t *frame = nullptr;
-    std::shared_ptr<const wisr::bufpool_copy_t> copy;
+    std::shared_ptr<const sm1_internal::bufpool_copy_t> copy;
   };
   std::vector<page_copy_t> page_copies;
   /* The bulk load open in the transaction, if any (load.cc). */
@@ -196,17 +196,17 @@ struct sm1::session_t {
    * push order, so savepoints[d - 1] is the mark at depth d.
    */
   struct mark_t {
-    size_t undo = 0;              /* undo.size() at the mark */
-    uint32_t seq_hwm = 0;         /* seq_hwm at the mark */
-    wisr::lock_mark_t locks;      /* the lock list at the mark */
-    size_t created = 0;           /* created.size() at the mark */
-    size_t dropped = 0;           /* dropped.size() at the mark */
-    size_t dropped_seqs = 0;      /* dropped_seqs.size() at the mark */
-    size_t temp_seqs_made = 0;    /* temp_seqs_made.size() at the mark */
-    size_t temp_seqs_dropped = 0; /* temp_seqs_dropped.size() at the mark */
-    uint64_t scan_id = 0;         /* cursors with a larger id came later */
-    size_t on_commit = 0;         /* on_commit.size() at the mark */
-    size_t loaded_stores = 0;     /* loaded_stores.size() at the mark */
+    size_t undo = 0;                 /* undo.size() at the mark */
+    uint32_t seq_hwm = 0;            /* seq_hwm at the mark */
+    sm1_internal::lock_mark_t locks; /* the lock list at the mark */
+    size_t created = 0;              /* created.size() at the mark */
+    size_t dropped = 0;              /* dropped.size() at the mark */
+    size_t dropped_seqs = 0;         /* dropped_seqs.size() at the mark */
+    size_t temp_seqs_made = 0;       /* temp_seqs_made.size() at the mark */
+    size_t temp_seqs_dropped = 0;    /* temp_seqs_dropped.size() at the mark */
+    uint64_t scan_id = 0;            /* cursors with a larger id came later */
+    size_t on_commit = 0;            /* on_commit.size() at the mark */
+    size_t loaded_stores = 0;        /* loaded_stores.size() at the mark */
   };
   std::vector<mark_t> savepoints;
   /*
@@ -230,9 +230,9 @@ struct sm1::session_t {
    * thread, an entry's fields under its partition's mutex, or by
    * fp_mu for an entry in a slot. lockref_t is db.h's.
    */
-  using lockref_t = wisr::lockref_t;
-  wisr::lock_lists_t locks; /* held, by partition */
-  size_t latest_marks = 0;  /* locks with latest set; 0 skips scans */
+  using lockref_t = sm1_internal::lockref_t;
+  sm1_internal::lock_lists_t locks; /* held, by partition */
+  size_t latest_marks = 0;          /* locks with latest set; 0 skips scans */
 
   /*
    * The fast path (../LOCKMGR.md §3.2): an OID lock taken IS or IX, while no
@@ -243,9 +243,9 @@ struct sm1::session_t {
    */
   static constexpr int fp_slots = 32;
   struct fp_slot_t {
-    wisr::lockid_t id{};
+    sm1_internal::lockid_t id{};
     sm1::lockmode_t mode = sm1::SM_LOCKMODE_IS;
-    wisr::lockref_t *ref = nullptr;
+    sm1_internal::lockref_t *ref = nullptr;
     bool used = false;
   };
   std::mutex fp_mu;
@@ -267,7 +267,7 @@ struct sm1::session_t {
    * lock's partition.
    */
   bool waiting_lock = false;
-  wisr::lockid_t waiting_id{};
+  sm1_internal::lockid_t waiting_id{};
   uint16_t waiting_kind = 0;
   sm1::lockmode_t waiting_mode = sm1::SM_LOCKMODE_SH;
   /*
@@ -277,7 +277,8 @@ struct sm1::session_t {
   uint64_t waiting_xid = 0;
   uint64_t waiting_epoch = 0;
 
-  wisr::ssi_node_t *ssi = nullptr; /* SERIALIZABLE only (../XCTMGR.md §7) */
+  sm1_internal::ssi_node_t *ssi =
+      nullptr; /* SERIALIZABLE only (../XCTMGR.md §7) */
 
   /*
    * Two-phase commit (../XCTMGR.md §10). sm1::prepare moves the transaction
@@ -311,7 +312,7 @@ struct sm1::session_t {
    * a reference to one stays good through a call.
    */
   struct store_handle_t {
-    wisr::store_t store;
+    sm1_internal::store_t store;
     uint64_t version = 0;
   };
   std::unordered_map<uint64_t, store_handle_t> store_handles;
@@ -363,7 +364,7 @@ struct sm1::scan_t {
   /* The scan's SIREAD range and how far it read (../XCTMGR.md §7.2). */
   bool has_ssi_range = false;
   uint64_t ssi_storeid = 0;
-  std::list<wisr::ssi_range_t>::iterator ssi_range;
+  std::list<sm1_internal::ssi_range_t>::iterator ssi_range;
   bool examined = false;     /* some userkey's run was inspected */
   std::string last_examined; /* the last one, the key scannxt hands out */
   /*
@@ -388,7 +389,7 @@ struct sm1::scan_t {
   rocksdb::PinnableSlice got;
 };
 
-namespace wisr {
+namespace sm1_internal {
 
 struct version_t;
 
@@ -425,10 +426,10 @@ int xct_check_btree_reaper(sm1::session_t *session);
 int xct_check_readonly(sm1::session_t *session);
 
 /* Whether the commit cache holds xid (../XCTMGR.md); for tests. */
-bool xct_cache_has(wisr::db_t *db, uint64_t xid);
+bool xct_cache_has(sm1_internal::db_t *db, uint64_t xid);
 
 /* How many entries the commit cache holds; for tests. */
-size_t xct_cache_used(wisr::db_t *db);
+size_t xct_cache_used(sm1_internal::db_t *db);
 
 /* Drop session's undo list, which passed the cap; its marks are lost. */
 void xct_undo_overflow(sm1::session_t *session);
@@ -640,7 +641,7 @@ void lock_release_from(sm1::session_t *session, const lock_mark_t &m);
  * Delete the COMMITTED status records with commit_ts <= w0, for
  * the CF:txn sweep (../GC.md §1). Returns the number deleted, or -1.
  */
-int64_t xct_drop_committed_records(wisr::db_t *db, uint64_t w0);
+int64_t xct_drop_committed_records(sm1_internal::db_t *db, uint64_t w0);
 
 /* Give a SERIALIZABLE transaction its SSI node (../XCTMGR.md §7). */
 void ssi_begin(sm1::session_t *session);
@@ -686,23 +687,23 @@ void ssi_prepared_aborted(sm1::session_t *session);
 
 /* Record xid as a transaction restored in doubt (../XCTMGR.md §10, ../DBMGR.md
  * §9.1). */
-void ssi_restore(wisr::db_t *db, uint64_t xid);
+void ssi_restore(sm1_internal::db_t *db, uint64_t xid);
 
 /* Free SSI nodes no active transaction overlaps (../XCTMGR.md §7.2). */
-void ssi_cleanup(wisr::db_t *db);
+void ssi_cleanup(sm1_internal::db_t *db);
 
 /*
  * Decode a PREPARED status record for xid into a new database-
  * owned transaction object; false if it is not one.
  */
-bool xct_decode_prepared(wisr::db_t *db, uint64_t xid, rocksdb::Slice val,
-                         sm1::session_t **out);
+bool xct_decode_prepared(sm1_internal::db_t *db, uint64_t xid,
+                         rocksdb::Slice val, sm1::session_t **out);
 
 /*
  * Restore every prepared transaction from CF:txn, then drop the
  * store CFs nothing needs (../DBMGR.md §9.1 steps 4-6). Returns 0 or -1.
  */
-int recover(wisr::db_t *db);
+int recover(sm1_internal::db_t *db);
 
 /*
  * Give the session's transaction its xid (../XCTMGR.md §2.1) and enter it
@@ -727,13 +728,14 @@ enum xct_state_t { XCT_DEAD, XCT_IN_FLIGHT, XCT_COMMITTED, XCT_ERROR };
  * committed. XCT_ERROR sets the error. Callers check the stamp
  * and their own xid first.
  */
-xct_state_t xct_status(wisr::db_t *db, uint64_t xid, uint64_t *commit_ts);
+xct_state_t xct_status(sm1_internal::db_t *db, uint64_t xid,
+                       uint64_t *commit_ts);
 
 /*
  * Resolve the writer of xid (../DBMGR.md §6.6): 1 and *commit_ts if it
  * committed, 0 if it is in flight or dead, -1 on error.
  */
-int xct_resolve(wisr::db_t *db, uint64_t xid, uint64_t *commit_ts);
+int xct_resolve(sm1_internal::db_t *db, uint64_t xid, uint64_t *commit_ts);
 
 /*
  * End the hold of every cursor open on session, and its batch
@@ -862,6 +864,6 @@ int chain_read_settled(sm1::session_t *s, const store_t &st, rocksdb::Slice key,
 int chain_restore(db_t *db, const store_t &st, rocksdb::Slice key, uint64_t xid,
                   uint32_t seq_above);
 
-} // namespace wisr
+} // namespace sm1_internal
 
-#endif /* WISR_SESSION_H */
+#endif /* SM1_SESSION_H */

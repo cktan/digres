@@ -25,10 +25,10 @@
 #include <thread>
 #include <vector>
 
-using wisr::bufpool_inner;
-using wisr::bufpool_no_read;
-using wisr::bufpool_page_t;
-using wisr::bufpool_t;
+using sm1_internal::bufpool_inner;
+using sm1_internal::bufpool_no_read;
+using sm1_internal::bufpool_page_t;
+using sm1_internal::bufpool_t;
 
 namespace {
 
@@ -118,7 +118,7 @@ TEST_CASE("bufpool: a miss reads once, a hit not at all") {
   pool.unpin(f);
   CHECK(1 == pin(pool, st, 3, false, 0, f, b));
   CHECK_FALSE(cached(pool, 3));
-  std::string long_key(wisr::bufpool_key_max + 1, 'x');
+  std::string long_key(sm1_internal::bufpool_key_max + 1, 'x');
   CHECK(-1 == pool.pin(bufpool_page_t{1, 2, long_key}, false, 0, load_page,
                        nullptr, f, b));
   CHECK(sm1::SM_ERR_INVALID == sm1::errnum());
@@ -637,8 +637,8 @@ TEST_CASE("bufpool: readers share one copy of a page at a version") {
   bufpool_t::frame_t *f = nullptr;
   std::string_view b;
   REQUIRE(0 == pin(pool, st, 0, false, bufpool_inner, f, b));
-  std::shared_ptr<const wisr::bufpool_copy_t> c1 = pool.share(f, b);
-  std::shared_ptr<const wisr::bufpool_copy_t> c2 = pool.share(f, b);
+  std::shared_ptr<const sm1_internal::bufpool_copy_t> c1 = pool.share(f, b);
+  std::shared_ptr<const sm1_internal::bufpool_copy_t> c2 = pool.share(f, b);
   CHECK(c1.get() == c2.get());
   CHECK("page0" == c1->bytes);
   pool.unpin(f);
@@ -647,17 +647,17 @@ TEST_CASE("bufpool: readers share one copy of a page at a version") {
   pool.install(f, "page0 again");
   pool.unpin(f);
   CHECK("page0" == c1->bytes);
-  std::weak_ptr<const wisr::bufpool_copy_t> w1 = c1;
+  std::weak_ptr<const sm1_internal::bufpool_copy_t> w1 = c1;
   c1.reset();
   c2.reset();
   CHECK(w1.expired());
 
   REQUIRE(0 == pin(pool, st, 0, false, bufpool_inner, f, b));
-  std::shared_ptr<const wisr::bufpool_copy_t> c3 = pool.share(f, b);
+  std::shared_ptr<const sm1_internal::bufpool_copy_t> c3 = pool.share(f, b);
   pool.unpin(f);
   CHECK("page0 again" == c3->bytes);
 
-  std::weak_ptr<const wisr::bufpool_copy_t> w3 = c3;
+  std::weak_ptr<const sm1_internal::bufpool_copy_t> w3 = c3;
   c3.reset();
   CHECK_FALSE(w3.expired());
   for (size_t i = 1; i < 20 && cached(pool, 0); i++) {

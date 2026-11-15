@@ -46,7 +46,7 @@
 
 #include <algorithm>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -332,7 +332,7 @@ void free_node(db_t *db, ssi_node_t *n) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Give a SERIALIZABLE transaction its node. */
 void ssi_begin(sm1::session_t *s) {
@@ -510,7 +510,7 @@ void ssi_range_open(sm1::scan_t *c, uint64_t storeid, const char *skey,
   s->ssi->ranges.emplace_back(storeid, c->ssi_range);
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /* An SIREAD on a range of keys not stored; see sm1.h. */
 int sm1::ssi_read_range(sm1::session_t *s, uint64_t storeid, const char *lo,
@@ -558,7 +558,7 @@ int sm1::ssi_write_key(sm1::session_t *s, uint64_t storeid,
   return 0;
 }
 
-namespace wisr {
+namespace sm1_internal {
 
 /*
  * Narrow a closing scan's range to what it actually traversed
@@ -749,4 +749,4 @@ void ssi_cleanup(db_t *db) {
   }
 }
 
-} // namespace wisr
+} // namespace sm1_internal

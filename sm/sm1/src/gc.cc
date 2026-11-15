@@ -30,7 +30,7 @@
 #include <chrono>
 #include <shared_mutex>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -57,7 +57,7 @@ public:
   }
 
   /* The filter's name, for RocksDB's logs. */
-  const char *Name() const override { return "wisr.gc.v1"; }
+  const char *Name() const override { return "sm.gc.v1"; }
 
   /*
    * Judge one version by judge(), and say how RocksDB is to remove one
@@ -318,7 +318,7 @@ private:
 class keep_all_filter_t : public rocksdb::CompactionFilter {
 public:
   /* The filter's name, for RocksDB's logs. */
-  const char *Name() const override { return "wisr.keep_all"; }
+  const char *Name() const override { return "sm.keep_all"; }
 };
 
 /* Creates gc_filter_t for one store CF. */
@@ -328,7 +328,7 @@ public:
   gc_factory_t(db_t *db, uint64_t storeid) : m_db(db), m_storeid(storeid) {}
 
   /* The factory's name, for RocksDB's logs. */
-  const char *Name() const override { return "wisr.gc_factory.v1"; }
+  const char *Name() const override { return "sm.gc_factory.v1"; }
 
   /*
    * A filter judging against the watermark as of now. Until
@@ -562,7 +562,7 @@ void gc_main(db_t *db) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Count ourselves in the current epoch, re-checking it after. */
 uint64_t db_read_enter(db_t *db) {
@@ -758,4 +758,4 @@ int64_t gc_sweep_txn(db_t *db, bool start) {
   return sweep_txn_locked(db, start);
 }
 
-} // namespace wisr
+} // namespace sm1_internal

@@ -24,8 +24,8 @@
  * that is the whole question these tests answer: which
  * conflicts each level detects, and which it lets through.
  */
-#ifndef WISR_MVCC_H
-#define WISR_MVCC_H
+#ifndef SM1_MVCC_H
+#define SM1_MVCC_H
 
 #include "doctest.h"
 
@@ -89,7 +89,7 @@ public:
   /* Create the directory. */
   mvcc_tmpdir_t() {
     std::string tmpl =
-        (std::filesystem::temp_directory_path() / "wisr-mvcc-XXXXXX").string();
+        (std::filesystem::temp_directory_path() / "sm-mvcc-XXXXXX").string();
     m_path = mkdtemp(tmpl.data());
   }
 
@@ -292,4 +292,4 @@ inline void conflicts(int rc) {
   CHECK(sm1::retryable());
 }
 
-#endif /* WISR_MVCC_H */
+#endif /* SM1_MVCC_H */

@@ -32,7 +32,7 @@
 #    its rows, their old versions, a savepoint's undoing, and not
 #    its index's entries.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_vchain"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_vchain"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir :toast true)

@@ -3,7 +3,7 @@
 # ERR_DOOMED, so the writes the rollback was to undo never commit.
 # The rollback fails here past savepoint_undo_bytes, set to 1 byte.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_doomed"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_doomed"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

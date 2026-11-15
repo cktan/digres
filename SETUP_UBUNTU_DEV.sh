@@ -25,7 +25,7 @@
 # otherwise.
 set -euo pipefail
 
-wisr=$(cd "$(dirname "$0")" && pwd)
+top=$(cd "$(dirname "$0")" && pwd)
 src=${SRC:-$HOME/p}
 pg18=$src/postgres18
 
@@ -85,11 +85,11 @@ fi
 
 # 5. PostgreSQL 18.6 for the benchmark, optimized, with no assertions,
 #    from a worktree of the clone above (bench/DESIGN.md section 2).
-if [ ! -x "$wisr/bench/build/pg18/bin/postgres" ]; then
+if [ ! -x "$top/bench/build/pg18/bin/postgres" ]; then
   step "bench/build/pg18"
   wt=$src/postgres18-724edf9
   [ -d "$wt" ] || git -C "$pg18" worktree add --detach "$wt" 724edf9
-  (cd "$wt" && ./configure --prefix="$wisr/bench/build/pg18")
+  (cd "$wt" && ./configure --prefix="$top/bench/build/pg18")
   make -C "$wt" -j4
   make -C "$wt" install
 fi
@@ -98,15 +98,15 @@ fi
 #    given to it, so build the release build's before make does.
 . /etc/os-release
 if dpkg --compare-versions "$VERSION_ID" gt 24.04 &&
-  [ ! -f "$wisr/rocksdb/release/librocksdb.a" ]; then
+  [ ! -f "$top/rocksdb/release/librocksdb.a" ]; then
   step "rocksdb release"
-  CXX="g++ -include cstdint" "$wisr/dg/test/rocksdb.sh" release
+  CXX="g++ -include cstdint" "$top/dg/test/rocksdb.sh" release
 fi
 
 step "done"
 echo "Log in again, or run: . ~/.profile"
 if dpkg --compare-versions "$VERSION_ID" gt 24.04; then
-  echo "Release builds here need: export CPATH=$wisr/rocksdb/src/include"
+  echo "Release builds here need: export CPATH=$top/rocksdb/src/include"
   echo "For make tsan, first: CXX=\"g++ -include cstdint\" dg/test/rocksdb.sh tsan"
 fi
 echo "Then: DEBUG=1 make -j4 && make -j4 test"

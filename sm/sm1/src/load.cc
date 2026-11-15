@@ -34,7 +34,7 @@
 #include <rocksdb/sst_file_writer.h>
 #include <rocksdb/write_batch.h>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -359,7 +359,7 @@ int check_store(sm1::session_t *s, uint64_t storeid) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Whether the session has a load open into storeid; see session.h. */
 bool load_open_on(const sm1::session_t *s, uint64_t storeid) {
@@ -381,7 +381,7 @@ void load_discard(sm1::session_t *s) {
   delete l;
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /* Whether a store holds no key; see sm1.h. */
 int sm1::store_empty(sm1::session_t *s, uint64_t storeid, bool &empty) {

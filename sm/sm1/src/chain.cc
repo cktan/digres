@@ -29,9 +29,9 @@
 
 #include <rocksdb/write_batch.h>
 
-using namespace wisr;
+using namespace sm1_internal;
 
-namespace wisr {
+namespace sm1_internal {
 
 /*
  * Queue storeid's chained key for the row reaper, if v, its CURR
@@ -120,7 +120,7 @@ std::string old_key(uint64_t id) {
   return k;
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 namespace {
 
@@ -1202,18 +1202,21 @@ sm1::scan_t *scan_chained(sm1::session_t *s, uint64_t storeid,
  * the common case, by its stamps alone (../XCTMGR.md §3.3, access.cc
  * visible()). *dead and *commit_ts are set as access_visible sets them.
  */
-int chain_visible(wisr::db_t *db, const wisr::chain_version_t &v,
-                  const wisr::view_t &view, bool *dead, uint64_t *commit_ts) {
+int chain_visible(sm1_internal::db_t *db,
+                  const sm1_internal::chain_version_t &v,
+                  const sm1_internal::view_t &view, bool *dead,
+                  uint64_t *commit_ts) {
   if (v.flags & version_stamped) {
     *commit_ts = v.commit_ts;
     return v.wts <= view.snapshot_ts && v.commit_ts <= view.snapshot_ts;
   }
-  return wisr::access_visible(db, v.as_version(), view, dead, commit_ts);
+  return sm1_internal::access_visible(db, v.as_version(), view, dead,
+                                      commit_ts);
 }
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* A chained key's newest version, past the snapshot; see session.h. */
 int chain_read_newest(sm1::session_t *s, const store_t &st, rocksdb::Slice key,
@@ -1558,7 +1561,7 @@ int chain_scan_next(sm1::scan_t *c, std::string_view &key,
   return 1;
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /* Open a cursor over a chained store's keys; see sm1.h. */
 int sm1::chain_scan(sm1::session_t *session, uint64_t storeid, const char *skey,
@@ -1754,7 +1757,7 @@ bool sm1::batch_iter_held(const sm1::batch_iter_t *iter) {
   return iter && iter->it;
 }
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Let go of a batch iterator's iterator; see session.h. */
 void batch_iter_release(sm1::batch_iter_t *iter) {
@@ -1773,7 +1776,7 @@ void batch_iters_release(sm1::session_t *s) {
   }
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /* Read a chained key into the session's own pin; see sm1.h. */
 int sm1::chain_read(sm1::session_t *session, uint64_t storeid,

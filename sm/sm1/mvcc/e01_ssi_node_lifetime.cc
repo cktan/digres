@@ -34,7 +34,7 @@ TEST_CASE("e01: SSI state is freed once no transaction overlaps it") {
     REQUIRE(s.w(1, R2, std::to_string(round)) == 0);
     CHECK(s.c(1));
   }
-  wisr::gc_run_once(t->db);
+  sm1_internal::gc_run_once(t->db);
 
   std::lock_guard<std::mutex> guard(t->db->ssi_mu);
   CHECK(t->db->ssi_nodes.empty());

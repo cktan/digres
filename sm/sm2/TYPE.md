@@ -753,7 +753,7 @@ Paths are relative to
 (`test/gen.h`). Each type has a generator weighted to small
 values and its boundaries. A property runs every pair of boundary
 values first, then N random pairs, from a fixed default seed. The
-environment variable `WISR_SEED` overrides the seed. A failing
+environment variable `SM1_SEED` overrides the seed. A failing
 property prints its seed through doctest, so any failure replays
 exactly. There is no shrinking: size-biased generation keeps
 failures small.

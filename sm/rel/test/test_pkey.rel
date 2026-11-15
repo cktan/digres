@@ -33,7 +33,7 @@
 #     another session's uncommitted insert and update, and this
 #     transaction's own update and delete.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_pkey"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_pkey"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

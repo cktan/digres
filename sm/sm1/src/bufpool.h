@@ -17,8 +17,8 @@
  * RocksDB, which stay in page.cc: a miss reads through the caller's
  * loader. So it is tested alone (../test/test_bufpool.cc).
  */
-#ifndef WISR_BUFPOOL_H
-#define WISR_BUFPOOL_H
+#ifndef SM1_BUFPOOL_H
+#define SM1_BUFPOOL_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -30,7 +30,7 @@
 #include <string>
 #include <string_view>
 
-namespace wisr {
+namespace sm1_internal {
 
 /* The bytes a frame holds, and so the most a page may be. */
 constexpr size_t bufpool_frame_bytes = 4096;
@@ -199,6 +199,6 @@ private:
   std::atomic<uint64_t> m_hand{0};
 };
 
-} // namespace wisr
+} // namespace sm1_internal
 
 #endif

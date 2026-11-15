@@ -19,7 +19,7 @@
 #include <memory>
 #include <new>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -69,7 +69,7 @@ db_t *find_or_open(sm1::env_t *env, const char *dbname,
   std::string val;
   rocksdb::Status s =
       env->root->Get(rocksdb::ReadOptions(),
-                     std::string(WISR_ROOT_DBNAME_PREFIX) + dbname, &val);
+                     std::string(SM1_ROOT_DBNAME_PREFIX) + dbname, &val);
   // Fail if no database has this name.
   if (s.IsNotFound()) {
     set_error(sm1::SM_ERR_NOTFOUND, "database {} does not exist", dbname);

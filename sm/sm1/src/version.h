@@ -16,8 +16,8 @@
  * versioned keys are ordered by userkey, then newest version
  * first; current and old keys bytewise. No caller of sm1 sees it.
  */
-#ifndef WISR_VERSION_H
-#define WISR_VERSION_H
+#ifndef SM1_VERSION_H
+#define SM1_VERSION_H
 
 #include <stdint.h>
 
@@ -28,7 +28,7 @@
 #include <rocksdb/slice.h>
 #include <rocksdb/slice_transform.h>
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Bytes after the userkey in every version key. */
 constexpr size_t version_tail_size = 12;
@@ -77,7 +77,7 @@ std::string version_value(uint8_t flags, uint64_t xid, rocksdb::Slice payload);
 /* Decode a version value into v; false if it is malformed. */
 bool version_decode_value(rocksdb::Slice value, version_t *v);
 
-/* The wisr.store.v2 comparator, a process-wide singleton. */
+/* The sm.store.v2 comparator, a process-wide singleton. */
 const rocksdb::Comparator *version_comparator();
 
 /*
@@ -86,6 +86,6 @@ const rocksdb::Comparator *version_comparator();
  */
 std::shared_ptr<const rocksdb::SliceTransform> version_prefix_extractor();
 
-} // namespace wisr
+} // namespace sm1_internal
 
-#endif /* WISR_VERSION_H */
+#endif /* SM1_VERSION_H */

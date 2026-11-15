@@ -40,7 +40,7 @@
 #include <mutex>
 #include <string_view>
 
-namespace wisr {
+namespace sm1_internal {
 
 class hint_queue_t {
 public:
@@ -131,6 +131,6 @@ private:
   size_t m_count = 0;
 };
 
-} // namespace wisr
+} // namespace sm1_internal
 
 #endif /* SM1_HINTQ_H */

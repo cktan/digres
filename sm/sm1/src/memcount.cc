@@ -9,7 +9,7 @@
  */
 #include "memcount.h"
 
-namespace wisr {
+namespace sm1_internal {
 
 /* A key's prefix, its first two bytes big-endian; a shorter key's are 0. */
 uint16_t key_prefix(std::string_view key) {
@@ -152,4 +152,4 @@ void memcount_listener_t::OnFlushCompleted(rocksdb::DB * /*db*/,
   }
 }
 
-} // namespace wisr
+} // namespace sm1_internal

@@ -6,8 +6,8 @@
 /*
  * util.h -- helpers shared by the test files.
  */
-#ifndef WISR_TEST_UTIL_H
-#define WISR_TEST_UTIL_H
+#ifndef SM1_TEST_UTIL_H
+#define SM1_TEST_UTIL_H
 
 #include "doctest.h"
 
@@ -29,7 +29,7 @@ public:
   /* Create the directory. */
   tmpdir_t() {
     std::string tmpl =
-        (std::filesystem::temp_directory_path() / "wisr-test-XXXXXX").string();
+        (std::filesystem::temp_directory_path() / "sm-test-XXXXXX").string();
     m_path = mkdtemp(tmpl.data());
   }
 
@@ -211,4 +211,4 @@ inline std::vector<uint64_t> lsstore(sm1::session_t *sess) {
   return out;
 }
 
-#endif /* WISR_TEST_UTIL_H */
+#endif /* SM1_TEST_UTIL_H */

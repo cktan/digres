@@ -169,7 +169,7 @@ TEST_CASE("sm1_attach rejects an unknown format version") {
     REQUIRE(rocksdb::DB::Open(rocksdb::Options(), rootpath, &root).ok());
     std::string v;
     sm0::put_be64(v, 99);
-    REQUIRE(root->Put(rocksdb::WriteOptions(), WISR_ROOT_VERSION, v).ok());
+    REQUIRE(root->Put(rocksdb::WriteOptions(), SM1_ROOT_VERSION, v).ok());
     delete root;
   }
   CHECK(attach(tmp.path()) == nullptr);
@@ -247,7 +247,7 @@ TEST_CASE("sm1_attach recovers every database and fails on one it cannot") {
   sm0::put_be64(v, 99);
   REQUIRE(
       s->db->rdb
-          ->Put(rocksdb::WriteOptions(), s->db->cf_meta, WISR_META_VERSION, v)
+          ->Put(rocksdb::WriteOptions(), s->db->cf_meta, SM1_META_VERSION, v)
           .ok());
   REQUIRE(sm1::closedb(s) == 0);
   home.detach();
@@ -344,11 +344,11 @@ TEST_CASE("every column family of the environment shares one block cache") {
     few.block_cache_bytes = 64 << 10;
     sm1::env_t *e = nullptr;
     REQUIRE(sm1::attach(small.path(), e, &few) == 0);
-    CHECK(wisr::bufpool_min_frames == e->bufpool->frames());
+    CHECK(sm1_internal::bufpool_min_frames == e->bufpool->frames());
     REQUIRE(sm1::detach(e, 0) == 0);
     few.max_sessions = 100;
     REQUIRE(sm1::attach(small.path(), e, &few) == 0);
-    CHECK(100 * wisr::bufpool_session_frames == e->bufpool->frames());
+    CHECK(100 * sm1_internal::bufpool_session_frames == e->bufpool->frames());
     REQUIRE(sm1::detach(e, 0) == 0);
   }
 
@@ -361,10 +361,11 @@ TEST_CASE("every column family of the environment shares one block cache") {
   REQUIRE(sm1::begin(s, sm1::xctlevel_t::read_committed) == 0);
   uint64_t store = mkstore(s);
   REQUIRE(sm1::commit(s) == 0);
-  wisr::db_t *db = s->db;
+  sm1_internal::db_t *db = s->db;
   for (rocksdb::ColumnFamilyHandle *cf :
-       {db->cf_default, db->cf_txn, db->cf_meta, wisr::db_store(db, 0).cf,
-        wisr::db_store(db, store).cf}) {
+       {db->cf_default, db->cf_txn, db->cf_meta,
+        sm1_internal::db_store(db, 0).cf,
+        sm1_internal::db_store(db, store).cf}) {
     REQUIRE(cf);
     CHECK(cache_of(db->rdb, cf) == cache);
   }

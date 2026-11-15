@@ -22,7 +22,7 @@
 
 #include <rocksdb/options.h>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 

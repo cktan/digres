@@ -50,7 +50,7 @@ grep -q 'server does not support SSL' "$tw/off.out" ||
 
 # 2. A CA, and two certificates for localhost it signs; a key file must be
 #    the owner's alone.
-openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=wisr test CA" \
+openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=digres test CA" \
   -keyout "$tw/ca.key" -out "$tw/ca.crt" > "$tw/openssl.log" 2>&1
 for s in s1 s2; do
   openssl req -newkey rsa:2048 -nodes -subj "/O=$s/CN=localhost" \

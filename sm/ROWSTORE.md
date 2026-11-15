@@ -337,7 +337,7 @@ sm1 adds the class when it builds a key, and strips it when it
 hands a key out. A versioned key costs one byte more for it. A
 current key costs one byte, not the twelve of a version tail.
 
-The comparator is `wisr.store.v2`:
+The comparator is `sm.store.v2`:
 
 ```
 compare(a, b):
@@ -368,7 +368,7 @@ compare(a, b):
 
 ### 3.3 The prefix extractor
 
-`wisr.prefix.v2` gives a versioned key's class and userkey, its
+`sm.prefix.v2` gives a versioned key's class and userkey, its
 tail stripped, and any other key whole. One bloom filter serves
 both: a versioned read filters on its userkey, a `Get` on its
 whole key. The extractor is variable-length, so

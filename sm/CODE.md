@@ -140,9 +140,9 @@ two differ, [`CLAUDE.md`](../CLAUDE.md) wins.
   included.
 - **C++ interfaces are a namespace per level**: `sm0::`,
   `sm1::`, `sm2::`, `sm3::`, each in its `smN.h`. sm1's
-  internals are in `namespace wisr`. `sm1.h` brings sm0's error
-  and log calls into `namespace sm1`, so the stack calls them
-  `sm1::errnum()` and so on.
+  internals are in `namespace sm1_internal`. `sm1.h` brings
+  sm0's error and log calls into `namespace sm1`, so the stack
+  calls them `sm1::errnum()` and so on.
 - **sm0's headers are named `sm0_*.h`**, but for `sm0.h`
   itself, the vendored `doctest.h`, and `sm_sys.h`, which is
   public.

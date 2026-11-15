@@ -632,13 +632,13 @@ TEST_CASE("a store's handle copied before its drop is good to its last copy") {
   db_fixture_t f;
   sm1::session_t *s = f.session();
   uint64_t store = mkstore_committed(s);
-  wisr::store_t st = wisr::db_store(s->db, store);
+  sm1_internal::store_t st = sm1_internal::db_store(s->db, store);
   REQUIRE(st.cf != nullptr);
   std::string name = st.cf->GetName();
 
   // 2.
-  REQUIRE(wisr::db_drop_store_cf(s->db, store) == 0);
-  CHECK(!wisr::db_store(s->db, store).cf);
+  REQUIRE(sm1_internal::db_drop_store_cf(s->db, store) == 0);
+  CHECK(!sm1_internal::db_store(s->db, store).cf);
 
   // 3.
   CHECK(st.cf->GetName() == name);
@@ -647,7 +647,7 @@ TEST_CASE("a store's handle copied before its drop is good to its last copy") {
   (void)cs;
 
   // 4.
-  st = wisr::store_t{};
+  st = sm1_internal::store_t{};
 }
 
 TEST_CASE("current keys in SSTs scan whole in total order, apart from the "
@@ -667,9 +667,9 @@ TEST_CASE("current keys in SSTs scan whole in total order, apart from the "
   REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
   put(s, store, "v", "versioned");
   REQUIRE(sm1::commit(s) == 0);
-  wisr::store_t st = wisr::db_store(s->db, store);
+  sm1_internal::store_t st = sm1_internal::db_store(s->db, store);
   auto current = [](const char *k) {
-    return std::string(1, wisr::key_class_current) + k;
+    return std::string(1, sm1_internal::key_class_current) + k;
   };
   char key[16];
   for (int i = 0; i < 10000; i += 2) {
@@ -681,7 +681,7 @@ TEST_CASE("current keys in SSTs scan whole in total order, apart from the "
 
   rocksdb::ReadOptions ro;
   ro.auto_prefix_mode = true;
-  std::string upper(1, static_cast<char>(wisr::key_class_current + 1));
+  std::string upper(1, static_cast<char>(sm1_internal::key_class_current + 1));
   rocksdb::Slice upper_slice(upper);
   ro.iterate_upper_bound = &upper_slice;
   std::unique_ptr<rocksdb::Iterator> it(st.rdb->NewIterator(ro, st.cf));

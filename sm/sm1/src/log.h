@@ -6,19 +6,19 @@
 /*
  * log.h -- reporting through the caller's log hook
  * (sm1::set_log): sm0's helpers (sm0_log.h), brought into
- * namespace wisr.
+ * namespace sm1_internal.
  */
-#ifndef WISR_LOG_H
-#define WISR_LOG_H
+#ifndef SM1_LOG_H
+#define SM1_LOG_H
 
 #include "sm0_log.h"
 
-namespace wisr {
+namespace sm1_internal {
 
 using sm0::fatal;
 using sm0::log_enabled;
 using sm0::log_msg;
 
-} // namespace wisr
+} // namespace sm1_internal
 
-#endif /* WISR_LOG_H */
+#endif /* SM1_LOG_H */

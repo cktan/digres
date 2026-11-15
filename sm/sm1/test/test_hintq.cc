@@ -17,7 +17,7 @@
 #include <thread>
 #include <vector>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 

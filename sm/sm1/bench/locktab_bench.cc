@@ -58,8 +58,8 @@
 #include <thread>
 #include <vector>
 
-using wisr::lockid_t;
-using wisr::locktab_t;
+using sm1_internal::lockid_t;
+using sm1_internal::locktab_t;
 
 /* The allocations this thread made, counted by operator new. */
 static thread_local uint64_t t_allocs = 0;

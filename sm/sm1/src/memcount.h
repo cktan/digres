@@ -40,7 +40,7 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace wisr {
+namespace sm1_internal {
 
 /* A key's prefix, its first two bytes big-endian; a shorter key's are 0. */
 uint16_t key_prefix(std::string_view key);
@@ -148,6 +148,6 @@ private:
   std::unordered_map<std::string, std::shared_ptr<memcount_t>> m_counts;
 };
 
-} // namespace wisr
+} // namespace sm1_internal
 
 #endif /* SM1_MEMCOUNT_H */

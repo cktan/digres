@@ -52,9 +52,9 @@
 #include <unordered_set>
 #include <vector>
 
-using namespace wisr;
+using namespace sm1_internal;
 
-namespace wisr {
+namespace sm1_internal {
 
 std::atomic<bool> lock_test_rows_collide{false};
 
@@ -75,7 +75,7 @@ uint64_t lock_row_hash(rocksdb::Slice key) {
   return lock_fmix64(h ^ tail);
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 namespace {
 
@@ -372,7 +372,7 @@ lockref_t *first_ref(sm1::session_t *s, const lockid_t &k) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* The write latch (storeid, key) hashes to. */
 std::mutex &lock_latch(db_t *db, uint64_t storeid, rocksdb::Slice key) {
@@ -984,4 +984,4 @@ lock_all_t::~lock_all_t() {
   }
 }
 
-} // namespace wisr
+} // namespace sm1_internal

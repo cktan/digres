@@ -29,7 +29,7 @@
 #include <string.h>
 #include <unistd.h>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 

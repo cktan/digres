@@ -40,7 +40,7 @@
 #include <rocksdb/options.h>
 #include <rocksdb/write_batch.h>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -119,7 +119,7 @@ bool parse_dbid(const char *name, uint64_t *dbid) {
 int wal_prealloc(sm1::env_t *env) {
   std::string val;
   rocksdb::Status s =
-      env->root->Get(rocksdb::ReadOptions(), WISR_ROOT_WAL_PREALLOC, &val);
+      env->root->Get(rocksdb::ReadOptions(), SM1_ROOT_WAL_PREALLOC, &val);
   if (!s.ok() && !s.IsNotFound()) {
     return set_status_error(s, "read root db");
   }
@@ -127,7 +127,7 @@ int wal_prealloc(sm1::env_t *env) {
   if (s.ok()) {
     if (val.size() != 8) {
       return set_error(sm1::SM_ERR_CORRUPT, "{}: bad {}",
-                       root_path(env->homedir).c_str(), WISR_ROOT_WAL_PREALLOC);
+                       root_path(env->homedir).c_str(), SM1_ROOT_WAL_PREALLOC);
     }
     bytes = sm0::get_be64(val.data());
   } else {
@@ -154,7 +154,7 @@ int wal_prealloc(sm1::env_t *env) {
     rocksdb::WriteOptions wo;
     wo.sync = true;
     // Keep the answer, so no later attach probes again.
-    s = env->root->Put(wo, WISR_ROOT_WAL_PREALLOC, be);
+    s = env->root->Put(wo, SM1_ROOT_WAL_PREALLOC, be);
     if (!s.ok()) {
       return set_status_error(s, "write root db");
     }
@@ -175,8 +175,8 @@ int sweep_base(sm1::env_t *env) {
   // Collect every dbid the root db names.
   std::unique_ptr<rocksdb::Iterator> it(
       env->root->NewIterator(rocksdb::ReadOptions()));
-  for (it->Seek(WISR_ROOT_DBNAME_PREFIX);
-       it->Valid() && it->key().starts_with(WISR_ROOT_DBNAME_PREFIX);
+  for (it->Seek(SM1_ROOT_DBNAME_PREFIX);
+       it->Valid() && it->key().starts_with(SM1_ROOT_DBNAME_PREFIX);
        it->Next()) {
     // Reject a malformed dbid.
     if (it->value().size() != 8) {
@@ -236,8 +236,8 @@ int recover_dbs(sm1::env_t *env) {
   // Collect every database's name and dbid.
   std::unique_ptr<rocksdb::Iterator> it(
       env->root->NewIterator(rocksdb::ReadOptions()));
-  for (it->Seek(WISR_ROOT_DBNAME_PREFIX);
-       it->Valid() && it->key().starts_with(WISR_ROOT_DBNAME_PREFIX);
+  for (it->Seek(SM1_ROOT_DBNAME_PREFIX);
+       it->Valid() && it->key().starts_with(SM1_ROOT_DBNAME_PREFIX);
        it->Next()) {
     // sweep_base already rejected a malformed dbid.
     dbs.emplace_back(it->key().ToString().substr(1),
@@ -308,7 +308,7 @@ int open_tmp(sm1::env_t *env) {
   opt.create_if_missing = true;
   opt.error_if_exists = true;
   // Count its stores' memtable bytes as RocksDB seals and flushes them.
-  env->tmp_listener = std::make_shared<wisr::memcount_listener_t>();
+  env->tmp_listener = std::make_shared<sm1_internal::memcount_listener_t>();
   opt.listeners.push_back(env->tmp_listener);
   // Open the empty instance every temporary store will live in.
   rocksdb::Status s = rocksdb::DB::Open(opt, path, &env->tmp);
@@ -354,7 +354,7 @@ sm1::env_t *attach(const char *homedir, const sm1::env_options_t *opt) {
   struct stat st;
   // Refuse a directory sm1::init never prepared.
   if (stat(rootpath.c_str(), &st) != 0) {
-    set_error(sm1::SM_ERR_NOTFOUND, "{}: not a wisr home directory", homedir);
+    set_error(sm1::SM_ERR_NOTFOUND, "{}: not an sm home directory", homedir);
     return nullptr;
   }
   // Its default CF as a fixed CF of a database's, through the cache.
@@ -370,7 +370,7 @@ sm1::env_t *attach(const char *homedir, const sm1::env_options_t *opt) {
 
   std::string version;
   // Read the recorded format version.
-  s = env->root->Get(rocksdb::ReadOptions(), WISR_ROOT_VERSION, &version);
+  s = env->root->Get(rocksdb::ReadOptions(), SM1_ROOT_VERSION, &version);
   // Reject a home directory without one.
   if (!s.ok() || version.size() != 8) {
     set_error(sm1::SM_ERR_CORRUPT, "{}: no format version", rootpath.c_str());
@@ -378,9 +378,9 @@ sm1::env_t *attach(const char *homedir, const sm1::env_options_t *opt) {
   }
   uint64_t v = sm0::get_be64(version.data());
   // Reject a format this build does not understand.
-  if (v != WISR_HOME_VERSION) {
+  if (v != SM1_HOME_VERSION) {
     set_error(sm1::SM_ERR_VERSION, "{}: format version {}, expected {}",
-              homedir, v, WISR_HOME_VERSION);
+              homedir, v, SM1_HOME_VERSION);
     return nullptr;
   }
 
@@ -461,7 +461,7 @@ void db_reaper_main(sm1::env_t *env) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Start the db reaper; see env.h. */
 void env_start_db_reaper(sm1::env_t *env) {
@@ -509,7 +509,7 @@ int env_destroy_db_dir(const std::string &path) {
   return 0;
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /* Make homedir an sm home directory: global/, base/, root db. */
 int sm1::init(std::string_view homedir_arg) {
@@ -531,7 +531,7 @@ int sm1::init(std::string_view homedir_arg) {
   if (mkdir(global.c_str(), 0700) != 0) {
     // global/ already exists: this is already a home directory.
     if (errno == EEXIST) {
-      return set_error(sm1::SM_ERR_EXISTS, "{}: already a wisr home directory",
+      return set_error(sm1::SM_ERR_EXISTS, "{}: already an sm home directory",
                        homedir);
     }
     return set_errno_error(errno, global.c_str());
@@ -561,12 +561,12 @@ int sm1::init(std::string_view homedir_arg) {
   };
   // Encode the format version and the first dbid.
   std::string version, next_dbid;
-  sm0::put_be64(version, WISR_HOME_VERSION);
+  sm0::put_be64(version, SM1_HOME_VERSION);
   sm0::put_be64(next_dbid, 1);
   // Record both in one synced batch.
   rocksdb::WriteBatch batch;
-  batch.Put(WISR_ROOT_VERSION, version);
-  batch.Put(WISR_ROOT_NEXT_DBID, next_dbid);
+  batch.Put(SM1_ROOT_VERSION, version);
+  batch.Put(SM1_ROOT_NEXT_DBID, next_dbid);
   rocksdb::WriteOptions wo;
   wo.sync = true;
   // Write the batch.

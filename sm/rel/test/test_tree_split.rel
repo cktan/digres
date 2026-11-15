@@ -1,7 +1,7 @@
 # test_tree_split.rel -- trees of long keys through sm.h (../BTREEINDEX.md), at
 # their real page limit, so pages split at every level, the root among them.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_tree_split"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_tree_split"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

@@ -27,7 +27,7 @@
 #include <new>
 #include <string>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 

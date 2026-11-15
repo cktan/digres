@@ -32,7 +32,7 @@
 #include <random>
 #include <string>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -228,8 +228,7 @@ namespace {
 /* The home's decision, as its root db keeps it; UINT64_MAX if none. */
 uint64_t prealloc_kept(sm1::env_t *env) {
   std::string v;
-  if (!env->root->Get(rocksdb::ReadOptions(), WISR_ROOT_WAL_PREALLOC, &v)
-           .ok() ||
+  if (!env->root->Get(rocksdb::ReadOptions(), SM1_ROOT_WAL_PREALLOC, &v).ok() ||
       v.size() != 8) {
     return UINT64_MAX;
   }
@@ -247,7 +246,7 @@ void prealloc_keep(sm1::env_t *env, uint64_t bytes) {
     v[k] = static_cast<char>(bytes & 0xff);
   }
   REQUIRE(
-      env->root->Put(rocksdb::WriteOptions(), WISR_ROOT_WAL_PREALLOC, v).ok());
+      env->root->Put(rocksdb::WriteOptions(), SM1_ROOT_WAL_PREALLOC, v).ok());
 }
 
 } // namespace

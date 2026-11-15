@@ -24,7 +24,7 @@
 #include <unordered_set>
 #include <vector>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -181,7 +181,7 @@ int sweep_orphan_cfs(db_t *db) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Restore prepared transactions, then sweep orphaned CFs. */
 int recover(db_t *db) {
@@ -193,4 +193,4 @@ int recover(db_t *db) {
   return sweep_orphan_cfs(db);
 }
 
-} // namespace wisr
+} // namespace sm1_internal
