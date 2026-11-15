@@ -1,4 +1,4 @@
-# DESIGN — rel, an interactive relational test driver for wisr
+# DESIGN — rel, an interactive relational test driver for sm
 
 Status: built; the design of record for the `rel` test driver.
 
@@ -7,7 +7,7 @@ Status: built; the design of record for the `rel` test driver.
 ## 1. What is rel?
 
 `rel` is an interactive test driver and script interpreter for
-the `wisr` storage engine (`include/sm.h`). It works with
+the sm storage engine (`include/sm.h`). It works with
 relations and rows, without SQL.
 
 **Why no SQL.** The tests target the storage engine: MVCC, tuple

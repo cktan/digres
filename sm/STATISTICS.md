@@ -1,4 +1,4 @@
-# STATISTICS — what the planner needs, and how wisr gives it
+# STATISTICS — what the planner needs, and how sm gives it
 
 The fork keeps PostgreSQL's planner
 ([`PGFORK.md`](PGFORK.md#4-the-fork-and-what-it-costs) §4), and the
@@ -363,11 +363,11 @@ algorithm. Its own comment grants the consequence: "for large
 relations the number of different blocks represented by the
 sample tends to be too small". A block is 8 KB, so at a
 hundred-byte row PostgreSQL's unit is some eighty neighbouring
-rows — wisr's run of about that length, not a run of one. And
+rows — sm's run of about that length, not a run of one. And
 for a table of fewer than `targrows` blocks, 240 MB at the
 default target, it reads every block there is.
 
-So the clustering a long run brings is not a cost wisr would
+So the clustering a long run brings is not a cost sm would
 be paying and PostgreSQL would not. Matching PostgreSQL means
 a run of roughly the rows in 8 KB, and §6 measures what that
 costs and what it does to a distinct count.
@@ -918,7 +918,7 @@ either loosely or not at all.
 - **A negative `stadistinct` is a multiplier of total rows**,
   nulls included. A column 99% null with 100 distinct values
   in 10,000 rows came back as -0.00999999. The header in
-  `pg_statistic.h` gives the reason, and it is wisr's reason
+  `pg_statistic.h` gives the reason, and it is sm's reason
   too: the row count is refreshed more often than the
   statistics, so a multiplier survives the drift §3.2 creates.
 - **The statistics target sizes the output as well as the

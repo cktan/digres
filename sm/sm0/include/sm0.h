@@ -129,7 +129,7 @@ enum class loglevel_t {
 /*
  * A log hook: receives level and a NUL-terminated message
  * valid only for the duration of the call, plus the arg given
- * to sm1::set_log(). It is noexcept: it is called from wisr's
+ * to sm1::set_log(). It is noexcept: it is called from sm's
  * own threads and with a library lock held, where an error has
  * nowhere to go, so a hook that throws ends the process.
  */
@@ -137,19 +137,19 @@ using log_fn = void (*)(void *arg, loglevel_t level, const char *msg) noexcept;
 
 /*
  * Install fn as the process-wide log hook, replacing any
- * previous one; NULL removes it. With no hook, wisr formats
+ * previous one; NULL removes it. With no hook, sm formats
  * and reports nothing.
  *
  * The library never writes a log of its own. The hook hears
  * only what no caller would otherwise learn: failures in
- * wisr's background GC, a fatal error before the process aborts,
+ * sm's background GC, a fatal error before the process aborts,
  * versions the compaction filter could not judge, a snapshot
  * holding back garbage collection for over a minute, and what
  * sm1::attach() and recovery clean up or restore. Errors a call
  * returns are not logged; its caller already has them.
  *
- * fn may be called from any thread, wisr's own included, one
- * call at a time. It must not call back into wisr: calls are
+ * fn may be called from any thread, sm's own included, one
+ * call at a time. It must not call back into sm: calls are
  * made with a library lock held.
  */
 void set_log(log_fn fn, void *arg);

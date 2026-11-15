@@ -763,7 +763,7 @@ a later rewrite by vacuum, not WAL. An unlogged table never
 logs its contents at any `wal_level` and is emptied after a
 crash: its data is not durable at all.
 
-| | PostgreSQL | wisr, file mode |
+| | PostgreSQL | sm, file mode |
 | --- | --- | --- |
 | Condition | storage file created in this transaction, and `wal_level = minimal` | for everything: store created in this transaction, by `CREATE TABLE` or `TRUNCATE`, and empty. For the heap alone: any table (§5.1) |
 | Contents logged | no | no: written to sorted files and ingested, past RocksDB's log |
@@ -776,7 +776,7 @@ goes further in two ways. A load that appends to a table with
 rows still keeps its heap out of the log, which PostgreSQL
 never does, because new `_id`s meet no existing row. And, the
 last row, PostgreSQL gives the saving up on any server with
-standbys, where wisr does not have to.
+standbys, where sm does not have to.
 
 ---
 

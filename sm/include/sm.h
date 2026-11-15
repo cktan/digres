@@ -4,7 +4,7 @@
  */
 
 /*
- * sm.h -- wisr's API: the one entry into the stack, for
+ * sm.h -- sm's API: the one entry into the stack, for
  * PostgreSQL to call (DESIGN.md sections 1 and 5). It is C in
  * style and compiled as C++: the standard types in it are
  * std::string and std::vector, which carry owned data, and
@@ -163,7 +163,7 @@ int sm_set_log(sm_log_fn fn, void* arg);
 
 /* ---- home directories and databases ---- */
 
-/* Make homedir, which must exist, a wisr home directory. */
+/* Make homedir, which must exist, an sm home directory. */
 int sm_init(const char* homedir);
 
 /*

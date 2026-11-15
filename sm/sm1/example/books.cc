@@ -4,16 +4,16 @@
  */
 
 /*
- * books.cc -- a small tour of the wisr API: create a table
+ * books.cc -- a small tour of the sm API: create a table
  * book(id, title, author), insert a few rows and commit, then
  * read one row back and scan them all.
  *
  *   make -j4 && build/example/books [homedir]
  *
- * wisr stores ordered key -> value maps, so the table is laid
+ * sm stores ordered key -> value maps, so the table is laid
  * out by hand:
  *
- *   key   = id, 8 bytes big-endian, so the byte order wisr keeps
+ *   key   = id, 8 bytes big-endian, so the byte order sm keeps
  *           keys in is also numeric order
  *   value = title and author, each as a 4-byte big-endian
  *           length followed by its bytes
@@ -45,7 +45,7 @@ struct book_t {
   std::string author;
 };
 
-/* Exit with wisr's error message if rc reports a failure. */
+/* Exit with sm's error message if rc reports a failure. */
 void check(int rc, const char *what) {
   // Any negative return is an error; sm1::errmsg() says which.
   if (rc < 0) {
@@ -131,7 +131,7 @@ void print_book(const book_t &b) {
 }
 
 /*
- * Insert b, or update it if its id is already taken: wisr has
+ * Insert b, or update it if its id is already taken: sm has
  * no upsert, so try the insert and fall back on SM_ERR_DUPKEY.
  */
 void upsert_book(sm1::session_t *s, uint64_t store, const book_t &b) {
@@ -160,7 +160,7 @@ int main(int argc, char **argv) {
     perror(homedir);
     return 1;
   }
-  // Prepare it as a wisr home directory, once in its life.
+  // Prepare it as an sm home directory, once in its life.
   if (sm1::init(homedir) != 0 && sm1::errnum() != sm1::SM_ERR_EXISTS) {
     check(-1, "sm1_init");
   }

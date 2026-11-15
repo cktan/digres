@@ -1,6 +1,6 @@
 # MVCC scenario suite — behaviours the audit verified
 
-This is what an audit of wisr's scenario testing infrastructure
+This is what an audit of sm's scenario testing infrastructure
 in `mvcc/` left standing: three behaviours that look wrong at
 first reading and are not. Every gap the audit found in the
 driver and the scenarios is closed; [`MVCC.md`](MVCC.md)

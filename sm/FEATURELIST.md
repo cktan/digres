@@ -1,12 +1,12 @@
 # FEATURELIST — the PostgreSQL subset sm targets
 
-[`OBJECTIVE.md`](OBJECTIVE.md) says wisr's PostgreSQL target is a
+[`OBJECTIVE.md`](OBJECTIVE.md) says sm's PostgreSQL target is a
 subset — the essential parts, not full compatibility. This is
 that subset, spelled out feature by feature so it can be decided
 once and referenced afterward, instead of re-litigated every time
 it comes up.
 
-**How to edit this file.** Check a box for everything wisr should
+**How to edit this file.** Check a box for everything sm should
 support. Leave a box unchecked for everything it should not. Add
 a line under any item if the decision needs a reason attached — a
 reason written down here is worth more later than the box itself.
@@ -15,11 +15,11 @@ Once this file stops changing, its decisions move into
 this file either stays as the working list or is retired.
 
 Scope note: [`OBJECTIVE.md`](OBJECTIVE.md) already excludes a
-query language, a planner and an executor from wisr itself. Most
+query language, a planner and an executor from sm itself. Most
 SQL-language features (window functions, CTEs, stored procedures,
-triggers) are decided by whatever sits above wisr, not by wisr,
+triggers) are decided by whatever sits above sm, not by sm,
 so they are left out of this list except where they force
-something onto storage. What is listed here is the part wisr
+something onto storage. What is listed here is the part sm
 itself must decide to support: types, index access methods,
 constraints, table storage features, and the ecosystem axis
 PGFORK.md §7 raises but does not settle.
@@ -98,7 +98,7 @@ ordered key as the only access path below sm2.
 - [x] temporary tables
 - [ ] unlogged tables
 - [ ] materialized views — storage and refresh only; no query
-      semantics needed from wisr
+      semantics needed from sm
 
 ## 5. Full-text search
 

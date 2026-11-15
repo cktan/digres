@@ -4,7 +4,7 @@
  */
 
 /*
- * sm1.h -- the wisr storage manager's public C++ API, in
+ * sm1.h -- the sm storage manager's public C++ API, in
  * namespace sm1 (DESIGN.md section 5 at the top level). Names,
  * keys and values travel as std::string_view, lists as
  * std::vector; sm1::scan() alone keeps (pointer, length) bounds,
@@ -71,7 +71,7 @@ namespace sm1 {
  * the engine keeps them as C strings.
  *
  * max_dbname matches PostgreSQL's NAMEDATALEN - 1, so every
- * name PostgreSQL accepts for a database is one wisr accepts,
+ * name PostgreSQL accepts for a database is one sm accepts,
  * and max_gid matches its GIDSIZE. An over-long name is an
  * error here, never a truncation: PostgreSQL emits a NOTICE
  * and truncates, and this API has no channel for a notice.
@@ -181,13 +181,13 @@ struct env_options_t : ::sm_env_options_t {
 };
 
 /*
- * Make homedir -- which must already exist -- a wisr home
+ * Make homedir -- which must already exist -- an sm home
  * directory: create global/ and base/, the root db inside
  * global/, and the format version inside that.
  *
  * Call it once in a home directory's life, not once per
  * process. It takes no lock and opens nothing. Returns 0, or
- * -1 with SM_ERR_EXISTS if homedir is already a wisr home.
+ * -1 with SM_ERR_EXISTS if homedir is already an sm home.
  */
 int init(std::string_view homedir);
 

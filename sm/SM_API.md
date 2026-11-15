@@ -42,7 +42,7 @@ A host does these things in this order. Each step names the
 section that has the calls.
 
 1. **Set up a home directory, once.** `sm_init` makes a directory
-   a wisr home. ([Home
+   an sm home. ([Home
    directories](#home-directories-and-databases))
 2. **Attach it, once for each process.** `sm_attach` gives an
    environment, `sm_env_t`. `sm_mkdb` makes a database in it.
@@ -475,7 +475,7 @@ The first session on a database also loads its catalog
 int sm_init(const char* homedir);
 ```
 
-Makes `homedir`, which must exist, a wisr home directory. Call it
+Makes `homedir`, which must exist, an sm home directory. Call it
 once in a home directory's life, not once in each process.
 
 Errors: `SM_ERR_EXISTS` (already a home directory),

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 CK Tan
 # SPDX-License-Identifier: MIT
 
-# wisr -- build the storage manager library and its tests.
+# sm -- build the storage manager library and its tests.
 #
 #   make -j4          libsm1.a, the test binaries, the examples, and
 #                     the lock table's benchmark

@@ -1232,7 +1232,7 @@ old WAL files alive. sm1 does not set it. A host sets it in
 
 ### 10.4 Logging
 
-wisr writes no log of its own. A host installs a process-wide
+sm writes no log of its own. A host installs a process-wide
 hook with `sm1::set_log` ([`sm1/API.md`](sm1/API.md)). The engine
 reports through it only what no caller can learn from a return
 value:
@@ -1369,7 +1369,7 @@ Offloading trades local CPU and I/O for network I/O and
 coordination. It pays when the primary is CPU-bound on compaction
 and the storage is shared. It loses when fragments cross the
 network to relieve a machine that was not the bottleneck. Which
-of these describes wisr is not known, as no benchmark measures
+of these describes sm is not known, as no benchmark measures
 it. No work here should start before that number exists.
 
 ### 12.6 What it does not cost

@@ -199,7 +199,7 @@ Bigger, and each needs a decision of record first:
 Not worth doing for the suite: the parallel query settings
 (7 files) were removed with their module, and the plans those
 files print would differ anyway; `INHERITS` is outside the
-subset wisr targets
+subset sm targets
 ([`../../../sm/FEATURELIST.md`](../../../sm/FEATURELIST.md#4-table-storage-features)
 §4), and the
 geometric types are refused by design

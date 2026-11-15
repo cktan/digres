@@ -9,7 +9,7 @@
 # which the load makes its id, where digres's is the id itself.
 #
 # Its settings are in the environment, as run.sh sets them:
-#   Q6_HOME     the wisr home the rows are in
+#   Q6_HOME     the sm home the rows are in
 #   Q6_PHASE    load: make the home and load the rows; scan: time
 #               the queries on a home loaded before
 #   Q6_ROWS     rows to load, 1,000,000 as the bench's

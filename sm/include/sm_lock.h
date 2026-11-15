@@ -4,7 +4,7 @@
  */
 
 /*
- * sm_lock.h -- the lock modes of the whole wisr stack, in C.
+ * sm_lock.h -- the lock modes of the whole sm stack, in C.
  *
  * One set of modes serves every level, as sm_error.h's codes do
  * (DESIGN.md section 5): sm1 takes them, sm2 and sm3 pass them

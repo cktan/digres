@@ -511,7 +511,7 @@ int env_destroy_db_dir(const std::string &path) {
 
 } // namespace wisr
 
-/* Make homedir a wisr home directory: global/, base/, root db. */
+/* Make homedir an sm home directory: global/, base/, root db. */
 int sm1::init(std::string_view homedir_arg) {
   // Take the name as a C string, as the engine uses it.
   std::string homedir_str;

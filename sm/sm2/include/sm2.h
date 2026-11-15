@@ -4,7 +4,7 @@
  */
 
 /*
- * sm2.h -- the wisr type and tuple level's public C++ API, in
+ * sm2.h -- the sm type and tuple level's public C++ API, in
  * namespace sm2 (SM2_DESIGN.md): the four steps of SM2_DESIGN.md
  * TYPE.md §9, the types, their keys, the tuple codec and the rels.
  *

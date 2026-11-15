@@ -23,11 +23,11 @@ catalog_t::catalog_t() : m_env(nullptr), m_env_path(""), m_active_session("") {}
 /* Destroy catalog and release any dangling resources. */
 catalog_t::~catalog_t() { reset(); }
 
-/* Initialize a wisr home directory. */
+/* Initialize an sm home directory. */
 int catalog_t::env_init(const char *path) {
   std::error_code ec;
   std::filesystem::create_directories(path, ec);
-  // sm_init formats the target directory as a wisr environment.
+  // sm_init formats the target directory as an sm environment.
   return sm_init(path);
 }
 
@@ -84,7 +84,7 @@ int catalog_t::env_detach(int force) {
   m_sessions.clear();
   m_active_session.clear();
 
-  // Detach from wisr environment.
+  // Detach from sm environment.
   int rc = sm_detach(m_env, force);
   m_env = nullptr;
   m_env_path.clear();
