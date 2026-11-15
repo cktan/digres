@@ -104,7 +104,7 @@ class server_t:
             cmd = [os.path.join(PG_BIN, 'initdb'), '-D', data, '-E', 'UTF8',
                    '--locale=C', '-A', 'trust', '--no-sync']
         else:
-            cmd = [os.path.join(DG, 'build', 'initdb'), data]
+            cmd = [os.path.join(DG, 'build', 'digres'), '--init', data]
         with open(os.path.join(self.dir, 'initdb.out'), 'w') as out:
             subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT,
                            check=True)
