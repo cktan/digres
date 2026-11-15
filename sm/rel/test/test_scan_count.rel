@@ -10,7 +10,7 @@
 #    the length of scan: 40, 16, 1, 0 and 0.
 # 4. A table that does not exist fails, named in the error.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_scan_count"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_scan_count"))
 (rm-rf test-dir)
 (env-init test-dir)
 

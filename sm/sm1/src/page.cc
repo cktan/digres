@@ -28,10 +28,10 @@
 
 #include <rocksdb/write_batch.h>
 
-static_assert(sm1::page_size == wisr::bufpool_frame_bytes);
-static_assert(sm1::page_key_max == wisr::bufpool_key_max);
+static_assert(sm1::page_size == sm1_internal::bufpool_frame_bytes);
+static_assert(sm1::page_key_max == sm1_internal::bufpool_key_max);
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 

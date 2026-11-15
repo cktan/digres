@@ -10,7 +10,7 @@
 
 #include "error.h"
 
-namespace wisr {
+namespace sm1_internal {
 
 /*
  * Map a RocksDB status onto an sm1::errnum_t. RocksDB reports
@@ -35,4 +35,4 @@ int set_status_error(const rocksdb::Status &s, const char *what) {
   return set_error(e, "{}: {}", what, s.ToString().c_str());
 }
 
-} // namespace wisr
+} // namespace sm1_internal

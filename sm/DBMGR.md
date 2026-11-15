@@ -381,8 +381,8 @@ families (CFs):
 | `default` | bytewise | nothing; RocksDB requires it |
 | `txn` | bytewise | the commit status table (§6.5) |
 | `meta` | bytewise | bootstrap state (§6.7) |
-| `store.<storeid>` | `wisr.store.v2` | one store's keys; `store.0` is the catalog (§7.1) |
-| `chain.<storeid>` | `wisr.store.v2` | one chained store's keys (ROWSTORE.md) |
+| `store.<storeid>` | `sm.store.v2` | one store's keys; `store.0` is the catalog (§7.1) |
+| `chain.<storeid>` | `sm.store.v2` | one chained store's keys (ROWSTORE.md) |
 
 A **store** is an ordered map of keys to values, named by a
 storeid. A store is exactly one column family, and is never split
@@ -419,7 +419,7 @@ is its highest old id, which `chain_next_old()` reads at open.
 
 ### 6.3 The comparator
 
-Store CFs use a custom comparator, `wisr.store.v2`:
+Store CFs use a custom comparator, `sm.store.v2`:
 
 1. Compare the class bytes.
 2. Within class `0x00`, compare the userkeys (the key less the
@@ -433,7 +433,7 @@ begins with it. The versions of `"a"` (`61 FF FF ...`, as `~wts`
 of any `wts` below 2^56 starts with `FF`) would sort after those
 of `"ab"` (`61 62 ...`). Scans would return `"ab"` before `"a"`,
 and a point read could stop early on a foreign key. With
-`wisr.store.v2`, a key's versions are contiguous, and userkeys
+`sm.store.v2`, a key's versions are contiguous, and userkeys
 sort in `memcmp` order.
 
 **Warning: every versioned key given to RocksDB for a store CF
@@ -452,7 +452,7 @@ order means a new name and a rewrite.
 
 ### 6.4 The prefix extractor
 
-The extractor, `wisr.prefix.v2`, strips a versioned key's 12-byte
+The extractor, `sm.prefix.v2`, strips a versioned key's 12-byte
 tail, so the bloom key is its class and userkey. The comparator
 keeps each userkey's versions contiguous, which a prefix
 extractor requires. A current or old key is its own prefix, as a
@@ -557,7 +557,7 @@ the cache's design.
 
 | Key | Value |
 | --- | --- |
-| `version` | database format version, `WISR_DB_VERSION`, now 6 |
+| `version` | database format version, `SM1_DB_VERSION`, now 6 |
 | `next_ts` | durable high-water mark of the timestamp allocator |
 | `next_objid` | durable high-water mark of the object-id allocator |
 | `"seq." \| be64(seqid)` | one lease for each sequence in use (§7.7) |
@@ -565,7 +565,7 @@ the cache's design.
 XCTMGR.md gives the leases. A storeid and a seqid come from the
 object-id allocator. Ids 1 to 999 are reserved for objects a
 database is made with, so the first one handed out is 1000
-(`WISR_FIRST_OBJID`).
+(`SM1_FIRST_OBJID`).
 
 ---
 
@@ -1172,8 +1172,8 @@ options are fixed in code, and no caller sets them.
 | `data_block_index_type` | store CFs | `kDataBlockBinaryAndHash` | a `Get` jumps to its restart interval by a table of one byte a bucket, and does not search the block's restart points; 0.3 thousand instructions fewer a query on a row read by key; a scan pays nothing |
 | `block_restart_interval` | store CFs | 4 (`store_restart_interval`) | a `Get` reads entries one by one from the restart point; 8.5% fewer instructions a query measured with `MultiGet`; tables grew under 4% |
 | bloom filter | store CFs | 10 bits a key, on the prefix; `whole_key_filtering` off | whole version keys are never looked up |
-| `prefix_extractor` | store CFs | `wisr.prefix.v2` (§6.4) | |
-| `comparator` | store CFs | `wisr.store.v2` (§6.3) | |
+| `prefix_extractor` | store CFs | `sm.prefix.v2` (§6.4) | |
+| `comparator` | store CFs | `sm.store.v2` (§6.3) | |
 | `compaction_filter_factory` | store CFs | `gc_filter_factory()` (GC.md) | |
 | `memtable_max_range_deletions` | store CFs | 1000 (`store_max_range_deletions`) | GC.md; needs RocksDB 8.9 or later |
 | `row_cache` | store CFs | none, and it must stay none | `DeleteRange` returns `NotSupported` with one (GC.md) |
@@ -1232,7 +1232,7 @@ old WAL files alive. sm1 does not set it. A host sets it in
 
 ### 10.4 Logging
 
-wisr writes no log of its own. A host installs a process-wide
+sm writes no log of its own. A host installs a process-wide
 hook with `sm1::set_log` ([`sm1/API.md`](sm1/API.md)). The engine
 reports through it only what no caller can learn from a return
 value:
@@ -1369,7 +1369,7 @@ Offloading trades local CPU and I/O for network I/O and
 coordination. It pays when the primary is CPU-bound on compaction
 and the storage is shared. It loses when fragments cross the
 network to relieve a machine that was not the bottleneck. Which
-of these describes wisr is not known, as no benchmark measures
+of these describes sm is not known, as no benchmark measures
 it. No work here should start before that number exists.
 
 ### 12.6 What it does not cost

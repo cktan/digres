@@ -8,8 +8,8 @@
  * when its new write-ahead logs are zero-filled first, so a commit's
  * sync never grows a file (../DBMGR.md).
  */
-#ifndef WISR_WALFS_H
-#define WISR_WALFS_H
+#ifndef SM1_WALFS_H
+#define SM1_WALFS_H
 
 #include <stdint.h>
 
@@ -18,7 +18,7 @@
 
 #include <rocksdb/env.h>
 
-namespace wisr {
+namespace sm1_internal {
 
 /* The size a new log is zero-filled to, where zero-filling pays. */
 constexpr uint64_t wal_prealloc_bytes = 64ULL << 20;
@@ -51,6 +51,6 @@ bool wal_on_wsl();
 /* Whether a sync that grows a file costs enough more to zero-fill. */
 bool wal_prealloc_pays(double append_us, double overwrite_us);
 
-} // namespace wisr
+} // namespace sm1_internal
 
 #endif

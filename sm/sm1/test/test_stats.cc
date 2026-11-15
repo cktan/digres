@@ -170,9 +170,9 @@ public:
    */
   void plant_files(uint64_t bytes) {
     std::string top(sm1::max_keylen + 1, '\xff');
-    wisr::db_store(m_s->db, m_store)
-        .files->put(wisr::version_bound(rocksdb::Slice(), '\x00'),
-                    wisr::version_bound(rocksdb::Slice(top), '\x00'),
+    sm1_internal::db_store(m_s->db, m_store)
+        .files->put(sm1_internal::version_bound(rocksdb::Slice(), '\x00'),
+                    sm1_internal::version_bound(rocksdb::Slice(top), '\x00'),
                     tree_version(), bytes);
   }
 
@@ -186,7 +186,7 @@ public:
 private:
   /* The store's column family. */
   rocksdb::ColumnFamilyHandle *cf() const {
-    return wisr::db_store(m_s->db, m_store).cf;
+    return sm1_internal::db_store(m_s->db, m_store).cf;
   }
 
   home_t m_home;
@@ -214,8 +214,8 @@ uint64_t load_prefix(sm1::session_t *s, uint64_t store, uint16_t prefix, int n,
     sm0::put_be32(key, i);
     std::string val(width, 'v');
     REQUIRE(sm1::insert(s, store, key, val) == 0);
-    bytes += wisr::version_key(key, 0, 0).size() +
-             wisr::version_value(0, 0, val).size();
+    bytes += sm1_internal::version_key(key, 0, 0).size() +
+             sm1_internal::version_value(0, 0, val).size();
   }
   REQUIRE(sm1::commit(s) == 0);
   return bytes;
@@ -501,7 +501,7 @@ TEST_CASE("every sorted file is LZ4") {
   for (const std::string &c : f.compressions()) {
     CHECK(c == "LZ4");
   }
-  wisr::db_t *db = f.s()->db;
+  sm1_internal::db_t *db = f.s()->db;
   for (rocksdb::ColumnFamilyHandle *cf : {db->cf_txn, db->cf_meta}) {
     REQUIRE(db->rdb->Flush(rocksdb::FlushOptions(), cf).ok());
     for (const std::string &c : f.compressions(cf)) {
@@ -534,7 +534,8 @@ TEST_CASE("a store's data blocks restart every store_restart_interval") {
   f.flush();
   uint64_t n = f.sole_block_entries();
   REQUIRE(n >= 20);
-  CHECK((n + wisr::store_restart_interval - 1) / wisr::store_restart_interval ==
+  CHECK((n + sm1_internal::store_restart_interval - 1) /
+            sm1_internal::store_restart_interval ==
         (f.sole_block_restarts() & 0x7fffffffu));
 }
 
@@ -550,10 +551,10 @@ TEST_CASE("a store's blocks are store_block_size") {
   f.flush();
   REQUIRE(!f.mean_block_sizes().empty());
   for (uint64_t n : f.mean_block_sizes()) {
-    CHECK(n > wisr::store_block_size * 3 / 4);
+    CHECK(n > sm1_internal::store_block_size * 3 / 4);
   }
   f.compact();
   for (uint64_t n : f.mean_block_sizes()) {
-    CHECK(n > wisr::store_block_size * 3 / 4);
+    CHECK(n > sm1_internal::store_block_size * 3 / 4);
   }
 }

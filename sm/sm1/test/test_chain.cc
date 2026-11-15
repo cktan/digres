@@ -28,7 +28,7 @@
 
 #include <rocksdb/db.h>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 

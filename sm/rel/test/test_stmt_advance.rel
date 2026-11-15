@@ -2,7 +2,7 @@
 # counter: the running statement sees its writes so far, at the same
 # snapshot, and the visibility rule is otherwise unchanged.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_stmt_advance"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_stmt_advance"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

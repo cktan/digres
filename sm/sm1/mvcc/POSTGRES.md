@@ -9,7 +9,7 @@ cover.
 
 The list is the suite on PostgreSQL's `REL_17_STABLE` branch,
 125 files, read through GitHub's API on 2026-10-06. The
-comparison with wisr's scenarios is by name and purpose; the
+comparison with sm's scenarios is by name and purpose; the
 scripts have not been compared line by line.
 
 ---
@@ -125,9 +125,9 @@ RUBiS. The suite below is where the cases live.
 
 ---
 
-## 3. Against wisr's scenarios
+## 3. Against sm's scenarios
 
-| PostgreSQL | wisr's nearest |
+| PostgreSQL | sm's nearest |
 | --- | --- |
 | `simple-write-skew` | `c02_write_skew_point_reads` |
 | `receipt-report`, `read-only-anomaly*` | `c07_read_only_anomaly` |

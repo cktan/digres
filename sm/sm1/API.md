@@ -418,7 +418,7 @@ using log_fn = void (*)(void* arg, loglevel_t level,
 void set_log(log_fn fn, void* arg);   /* nullptr removes it */
 ```
 
-The hook is `noexcept`. It is called from wisr's own threads and
+The hook is `noexcept`. It is called from sm's own threads and
 with a library lock held, where an error has nowhere to go: a
 hook not declared `noexcept` does not compile as one, and one
 that throws ends the process.
@@ -426,9 +426,9 @@ that throws ends the process.
 The hook, like the error state, is level 0's, brought into
 `namespace sm1` by `sm1.h`.
 
-wisr never writes a log of its own. `sm1::set_log` installs a
+sm never writes a log of its own. `sm1::set_log` installs a
 process-wide hook, in the manner of SQLite's
-`SQLITE_CONFIG_LOG`, so the host can route wisr's messages
+`SQLITE_CONFIG_LOG`, so the host can route sm's messages
 into its own logging. With no hook installed, nothing is
 formatted or reported.
 
@@ -449,10 +449,10 @@ has them.
 | `info` | recovery restored a prepared transaction in doubt, or dropped an orphaned column family |
 | `info` | a `CF:txn` sweep deleted status records |
 
-The hook may be called from any thread, including wisr's own
+The hook may be called from any thread, including sm's own
 GC thread, but never twice at once. `msg` is valid only for
 the duration of the call. The hook must not call back into
-wisr, because it runs with a library lock held.
+sm, because it runs with a library lock held.
 
 RocksDB still writes its own `LOG` files in each database
 directory; `rocksdb_options` controls those for a database.
@@ -532,7 +532,7 @@ each process's use of it. The split is PostgreSQL's, between
 
 ### int sm1::init(std::string_view homedir)
 
-Make `homedir` a wisr home directory. It must already
+Make `homedir` an sm home directory. It must already
 exist. Creates `global` and `base`, creates the root db in
 `global`, and records the format version in it.
 
@@ -542,7 +542,7 @@ racing on a fresh directory resolve themselves, because the
 first `mkdir` wins and the second fails with
 `SM_ERR_EXISTS`.
 
-Errors: `SM_ERR_EXISTS` (already a wisr home directory),
+Errors: `SM_ERR_EXISTS` (already an sm home directory),
 `SM_ERR_NOTFOUND` (no such directory), `SM_ERR_PERMISSION`,
 `SM_ERR_IO`, `SM_ERR_DISKFULL`, `SM_ERR_INVALID`.
 
@@ -592,7 +592,7 @@ top level). A process that installs its
 own handler first keeps it; one that throws is unsupported.
 
 Returns 0 with the environment in `out`, or -1 on error:
-`SM_ERR_NOTFOUND` (no such directory, or not a wisr home
+`SM_ERR_NOTFOUND` (no such directory, or not an sm home
 directory), `SM_ERR_VERSION` (written by an incompatible
 version), `SM_ERR_CORRUPT`, `SM_ERR_PERMISSION`,
 `SM_ERR_NOMEM`, `SM_ERR_INVALID`.
@@ -637,7 +637,7 @@ A database name `dbname` is a `std::string_view` of 1 to
 `sm1::max_dbname` bytes, otherwise unrestricted: any byte
 but NUL, in any position. `sm1::max_dbname` is 63, matching
 PostgreSQL's `NAMEDATALEN - 1`, so every name PostgreSQL
-accepts for a database is a name wisr accepts. A name
+accepts for a database is a name sm accepts. A name
 outside those bounds fails with `SM_ERR_INVALID`.
 
 A `dbname` is never a path. It is a key in the environment's root
@@ -652,9 +652,9 @@ Two divergences from PostgreSQL, both deliberate:
 
 - **Names are compared bytewise and never folded.**
   PostgreSQL lower-cases *unquoted* identifiers in its
-  parser; wisr has no parser, so `sm1::mkdb(env, "Foo")` is
+  parser; sm has no parser, so `sm1::mkdb(env, "Foo")` is
   `CREATE DATABASE "Foo"`, and `Foo` and `foo` are two
-  databases. A SQL layer above wisr does its own folding.
+  databases. A SQL layer above sm does its own folding.
 - **An over-long name is an error, not a truncation.**
   PostgreSQL truncates at `NAMEDATALEN - 1` and emits a
   `NOTICE`. This API has no channel for a notice, and
@@ -2520,7 +2520,7 @@ ones.
     any 1..63 bytes —
     every name PostgreSQL allows. Restricting the
     spelling would have been simpler, but it would have
-    made wisr reject database names a SQL layer above it
+    made sm reject database names a SQL layer above it
     must accept. Containment no longer rests on the
     spelling: no path is built from a `dbname` at all.
     `sm1::lsdb` comes with it, because the directory names
@@ -2538,7 +2538,7 @@ ones.
     process's use of it and replace `sm1::final`. The old
     `sm1::init` did both, which forced it to create `global`
     and `base` when absent — so it could not tell a
-    directory that is not a wisr home from one that is
+    directory that is not an sm home from one that is
     brand new, and a mistyped path became an empty home
     rather than an error. The split is `initdb` against
     starting a server, it leaves `sm1::attach` with no

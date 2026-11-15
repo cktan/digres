@@ -27,7 +27,7 @@ system's RocksDB, so it needs no other download.
 ## 2. Make a data directory
 
 ```
-dg/build/digres --init ~/wisr-data
+dg/build/digres --init ~/digres-data
 ```
 
 This makes the database `postgres`, with one superuser: your
@@ -39,7 +39,7 @@ OS user name. A data directory goes on a real disk, not in
 In a terminal of its own:
 
 ```
-dg/build/digres -D ~/wisr-data -p 5432 -k /tmp
+dg/build/digres -D ~/digres-data -p 5432 -k /tmp
 ```
 
 The server runs in the foreground and logs to the terminal. It

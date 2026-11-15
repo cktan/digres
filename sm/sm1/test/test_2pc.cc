@@ -571,8 +571,8 @@ TEST_CASE("row locks whose keys hash alike are one lock after a restart") {
   //    table holds it as one hold of g's.
   // 4. Aborting "g" by gid leaves the lock table empty.
   tpc_fixture_t f;
-  wisr::lock_test_rows_collide = true;
-  defer { wisr::lock_test_rows_collide = false; };
+  sm1_internal::lock_test_rows_collide = true;
+  defer { sm1_internal::lock_test_rows_collide = false; };
   sm1::session_t *s = f.open();
   REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
   REQUIRE(sm1::lock_row(s, g_store, "a", sm1::SM_LOCKMODE_SH, false, 7) == 0);
@@ -602,19 +602,19 @@ TEST_CASE("row locks whose keys hash alike are one lock after a restart") {
   sm1::session_t *v = f.open();
   CHECK(listed() == one);
   {
-    wisr::lock_all_t all(v->db);
+    sm1_internal::lock_all_t all(v->db);
     REQUIRE(v->db->lock_table.size() == 1);
     std::vector<sm1::lockmode_t> modes;
-    v->db->lock_table.each(
-        [&](const wisr::lockid_t &, const wisr::locktab_t::holder_t &h) {
-          modes.push_back(h.mode);
-        });
+    v->db->lock_table.each([&](const sm1_internal::lockid_t &,
+                               const sm1_internal::locktab_t::holder_t &h) {
+      modes.push_back(h.mode);
+    });
     REQUIRE(modes.size() == 1);
     CHECK(modes[0] == sm1::SM_LOCKMODE_EX);
   }
   REQUIRE(sm1::abort_prepared(v, "g") == 0);
   {
-    wisr::lock_all_t all(v->db);
+    sm1_internal::lock_all_t all(v->db);
     CHECK(v->db->lock_table.empty());
   }
   sm1::closedb(v);
@@ -884,15 +884,15 @@ TEST_CASE("a prepared drop commits after a restart and its CF goes") {
   f.restart();
 
   sm1::session_t *v = f.open();
-  CHECK(wisr::db_store(v->db, storeid).cf != nullptr);
+  CHECK(sm1_internal::db_store(v->db, storeid).cf != nullptr);
   REQUIRE(sm1::commit_prepared(v, "gd") == 0);
   REQUIRE(sm1::begin(v, sm1::xctlevel_t::repeatable_read) == 0);
   std::string_view d;
   CHECK(sm1::read(v, storeid, "k", d) == -1);
   CHECK(sm1::errnum() == sm1::SM_ERR_NOTFOUND);
   REQUIRE(sm1::commit(v) == 0);
-  wisr::gc_run_once(v->db);
-  CHECK(wisr::db_store(v->db, storeid).cf == nullptr);
+  sm1_internal::gc_run_once(v->db);
+  CHECK(sm1_internal::db_store(v->db, storeid).cf == nullptr);
   sm1::closedb(v);
 }
 

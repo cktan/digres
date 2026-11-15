@@ -4,7 +4,7 @@
  */
 
 /*
- * sm.cc -- wisr's C API over sm1, sm2 and sm3 (include/sm.h).
+ * sm.cc -- sm's C API over sm1, sm2 and sm3 (include/sm.h).
  *
  * Each entry point converts its arguments, calls the level below
  * inside guard(), and converts the results back. guard() is the
@@ -422,7 +422,7 @@ int sm_set_log(sm_log_fn fn, void *arg) {
   });
 }
 
-/* Make homedir a wisr home directory. */
+/* Make homedir an sm home directory. */
 int sm_init(const char *homedir) {
   return guard(nullptr, [&] { return sm1::init(name_of(homedir)); });
 }

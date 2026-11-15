@@ -11,7 +11,7 @@ full MVCC, for OLTP workloads.
   key**: the value is stored with its key, rows are ordered by
   key, and the key is the only access path.
 - Keys are ordered **bytewise (`memcmp`)**; there is no custom
-  comparator of user keys (a store CF's, `wisr.store.v2`, only
+  comparator of user keys (a store CF's, `sm.store.v2`, only
   orders each key's versions,
   [`../DBMGR.md`](../DBMGR.md#62-key-classes) §6.2). Callers
   encode composite or typed keys into byte strings whose

@@ -77,7 +77,7 @@ int finish(sm1::session_t *s) {
 /* Whether s's transaction still holds SIREAD entries or edges. */
 bool tracked(sm1::session_t *s) {
   std::lock_guard<std::mutex> guard(s->db->ssi_mu);
-  wisr::ssi_node_t *n = s->ssi;
+  sm1_internal::ssi_node_t *n = s->ssi;
   return n &&
          (!n->points.empty() || !n->ranges.empty() || !n->out_edges.empty());
 }

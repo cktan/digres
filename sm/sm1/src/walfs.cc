@@ -35,7 +35,7 @@
 
 #include <rocksdb/file_system.h>
 
-namespace wisr {
+namespace sm1_internal {
 
 namespace {
 
@@ -93,7 +93,7 @@ public:
       : FileSystemWrapper(target), m_prealloc_bytes(prealloc_bytes) {}
 
   /* The name RocksDB knows this file system by. */
-  static const char *kClassName() { return "WisrWalFileSystem"; }
+  static const char *kClassName() { return "SmWalFileSystem"; }
 
   /* The name RocksDB knows this file system by. */
   const char *Name() const override { return kClassName(); }
@@ -277,4 +277,4 @@ std::unique_ptr<rocksdb::Env> walfs_env(uint64_t prealloc_bytes) {
       rocksdb::FileSystem::Default(), prealloc_bytes));
 }
 
-} // namespace wisr
+} // namespace sm1_internal

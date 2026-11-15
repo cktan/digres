@@ -41,8 +41,9 @@ TEST_CASE("e06: RC contention loses no increment, with compaction running") {
     opt.bottommost_level_compaction =
         rocksdb::BottommostLevelCompaction::kForce;
     while (!stop) {
-      wisr::db_t *db = csess->db;
-      rocksdb::ColumnFamilyHandle *cf = wisr::db_store_cf(db, s.store());
+      sm1_internal::db_t *db = csess->db;
+      rocksdb::ColumnFamilyHandle *cf =
+          sm1_internal::db_store_cf(db, s.store());
       if (cf) {
         db->rdb->CompactRange(opt, cf, nullptr, nullptr);
       }

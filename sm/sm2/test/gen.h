@@ -6,7 +6,7 @@
 /*
  * gen.h -- generators for sm2's property tests (TYPE.md §9,
  * "Testing"). Every property runs from one seed: a fixed default
- * that the environment variable WISR_SEED overrides, which a
+ * that the environment variable SM1_SEED overrides, which a
  * property prints when it fails, so any failure replays exactly.
  */
 #ifndef SM2_TEST_GEN_H
@@ -21,10 +21,10 @@
 #include <string>
 #include <vector>
 
-/* The seed every property runs from: WISR_SEED, or a fixed default. */
+/* The seed every property runs from: SM1_SEED, or a fixed default. */
 inline uint64_t test_seed() {
   static const uint64_t seed = [] {
-    const char *s = getenv("WISR_SEED");
+    const char *s = getenv("SM1_SEED");
     return s ? strtoull(s, nullptr, 0) : 20260924ULL;
   }();
   return seed;

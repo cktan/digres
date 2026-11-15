@@ -29,7 +29,7 @@
 #     does.
 # 13. Past the cap a closed handle is freed, and those kept stay.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_reopen"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_reopen"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

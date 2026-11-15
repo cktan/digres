@@ -52,7 +52,7 @@ Instructions a statement, `main` at 20f43e31:
 - **q3 differs by the cost of a row.** digres pays about 13,200
   instructions a row beyond q1, PostgreSQL 3,200. In q3's
   profile RocksDB takes 40% (about 9,000 a row, in `MultiGet`),
-  sm and wisr 22%, the rest is the executor.
+  sm 22%, the rest is the executor.
 
 What an entry cost digres in q2 on `main`, by share of the
 profile:

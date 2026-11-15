@@ -38,7 +38,7 @@ int rank(sm_lockmode_t m) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /*
  * The compatibility of two modes; see locktab.h. Gray's five, and the
@@ -150,8 +150,8 @@ struct conflict_masks_t {
   conflict_masks_t() {
     for (int want = 0; want < 7; want++) {
       for (int held = 0; held < 7; held++) {
-        if (!wisr::lock_compatible(static_cast<sm_lockmode_t>(held),
-                                   static_cast<sm_lockmode_t>(want))) {
+        if (!sm1_internal::lock_compatible(static_cast<sm_lockmode_t>(held),
+                                           static_cast<sm_lockmode_t>(want))) {
           of[want] |= uint32_t(1) << held;
         }
       }
@@ -362,4 +362,4 @@ void locktab_t::part_t::move_owner(const lockid_t &id, const void *from,
   }
 }
 
-} // namespace wisr
+} // namespace sm1_internal

@@ -32,13 +32,13 @@
 #include <rocksdb/table.h>
 #include <rocksdb/write_batch.h>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
 /* The root db key naming dbname: "D" | dbname. */
 std::string dbname_key(const char *dbname) {
-  return std::string(WISR_ROOT_DBNAME_PREFIX) + dbname;
+  return std::string(SM1_ROOT_DBNAME_PREFIX) + dbname;
 }
 
 /*
@@ -54,8 +54,8 @@ int create_db(const std::string &path, rocksdb::DBOptions dbo) {
   // The fixed CFs: default, CF:txn, CF:meta, and the catalog.
   std::vector<rocksdb::ColumnFamilyDescriptor> cfs = {
       {rocksdb::kDefaultColumnFamilyName, fixed_cf_options()},
-      {WISR_CF_TXN, fixed_cf_options()},
-      {WISR_CF_META, fixed_cf_options()},
+      {SM1_CF_TXN, fixed_cf_options()},
+      {SM1_CF_META, fixed_cf_options()},
       {store_cf_name(0), store_cf_options()},
   };
   std::vector<rocksdb::ColumnFamilyHandle *> handles;
@@ -80,12 +80,12 @@ int create_db(const std::string &path, rocksdb::DBOptions dbo) {
   // persisted lease of 0 resumes both allocators at 1 (../XCTMGR.md §2.3),
   // so storeid 0 stays the catalog's.
   std::string version, zero;
-  sm0::put_be64(version, WISR_DB_VERSION);
+  sm0::put_be64(version, SM1_DB_VERSION);
   sm0::put_be64(zero, 0);
   rocksdb::WriteBatch batch;
-  batch.Put(handles[2], WISR_META_VERSION, version);
-  batch.Put(handles[2], WISR_META_NEXT_TS, zero);
-  batch.Put(handles[2], WISR_META_NEXT_OBJID, zero);
+  batch.Put(handles[2], SM1_META_VERSION, version);
+  batch.Put(handles[2], SM1_META_NEXT_TS, zero);
+  batch.Put(handles[2], SM1_META_NEXT_OBJID, zero);
   // Write the seed synced.
   rocksdb::WriteOptions wo;
   wo.sync = true;
@@ -135,7 +135,7 @@ int mkdb(sm1::env_t *env, const char *dbname, const sm1::options_t *opt) {
 
   // Allocate a dbid, durably, before its directory exists, so
   // a dbid is never reused (../DBMGR.md §4).
-  s = env->root->Get(rocksdb::ReadOptions(), WISR_ROOT_NEXT_DBID, &val);
+  s = env->root->Get(rocksdb::ReadOptions(), SM1_ROOT_NEXT_DBID, &val);
   // Fail if the root db has no usable next_dbid.
   if (!s.ok() || val.size() != 8) {
     return set_error(sm1::SM_ERR_CORRUPT, "root db has no next_dbid");
@@ -148,7 +148,7 @@ int mkdb(sm1::env_t *env, const char *dbname, const sm1::options_t *opt) {
   // Persist the advance synced.
   rocksdb::WriteOptions wo;
   wo.sync = true;
-  s = env->root->Put(wo, WISR_ROOT_NEXT_DBID, next);
+  s = env->root->Put(wo, SM1_ROOT_NEXT_DBID, next);
   // Fail if the advance did not persist.
   if (!s.ok()) {
     return set_status_error(s, "write root db");
@@ -247,8 +247,8 @@ int lsdb(sm1::env_t *env, std::vector<std::string> &out) {
     std::unique_ptr<rocksdb::Iterator> it(
         env->root->NewIterator(rocksdb::ReadOptions()));
     // Walk the "D" rows in bytewise order.
-    for (it->Seek(WISR_ROOT_DBNAME_PREFIX);
-         it->Valid() && it->key().starts_with(WISR_ROOT_DBNAME_PREFIX);
+    for (it->Seek(SM1_ROOT_DBNAME_PREFIX);
+         it->Valid() && it->key().starts_with(SM1_ROOT_DBNAME_PREFIX);
          it->Next()) {
       // Strip the "D" prefix from the key.
       rocksdb::Slice k = it->key();
@@ -301,7 +301,7 @@ int dbid(sm1::env_t *env, const char *dbname, uint64_t *out) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* store.<storeid>, or chain.<storeid>, in decimal. */
 std::string store_cf_name(uint64_t storeid, bool chained) {
@@ -344,7 +344,7 @@ rocksdb::ColumnFamilyOptions store_cf_options(db_t *db, uint64_t storeid) {
   if (db) {
     cfo.compaction_filter_factory = gc_filter_factory(db, storeid);
   }
-  // Order keys by the wisr.store.v2 comparator: by class, then within it.
+  // Order keys by the sm.store.v2 comparator: by class, then within it.
   cfo.comparator = version_comparator();
   // Key bloom filters on the userkey.
   cfo.prefix_extractor = version_prefix_extractor();
@@ -557,10 +557,10 @@ db_t *db_open(const std::string &path, const char *dbname,
     if (name == rocksdb::kDefaultColumnFamilyName) {
       db->cf_default = handles[i];
       // The status table.
-    } else if (name == WISR_CF_TXN) {
+    } else if (name == SM1_CF_TXN) {
       db->cf_txn = handles[i];
       // The bootstrap state.
-    } else if (name == WISR_CF_META) {
+    } else if (name == SM1_CF_META) {
       db->cf_meta = handles[i];
       // A store's CF.
     } else if (parse_store_cf_name(name, &storeid, &chained)) {
@@ -593,15 +593,15 @@ db_t *db_open(const std::string &path, const char *dbname,
 
   uint64_t version, next_ts, next_objid;
   // Read the format version and both leases.
-  if (0 != required_meta(db.get(), WISR_META_VERSION, &version) ||
-      0 != required_meta(db.get(), WISR_META_NEXT_TS, &next_ts) ||
-      0 != required_meta(db.get(), WISR_META_NEXT_OBJID, &next_objid)) {
+  if (0 != required_meta(db.get(), SM1_META_VERSION, &version) ||
+      0 != required_meta(db.get(), SM1_META_NEXT_TS, &next_ts) ||
+      0 != required_meta(db.get(), SM1_META_NEXT_OBJID, &next_objid)) {
     return nullptr;
   }
   // Reject a format this build does not understand.
-  if (version != WISR_DB_VERSION) {
+  if (version != SM1_DB_VERSION) {
     set_error(sm1::SM_ERR_VERSION, "{}: format version {}, expected {}", dbname,
-              version, WISR_DB_VERSION);
+              version, SM1_DB_VERSION);
     return nullptr;
   }
 
@@ -616,7 +616,7 @@ db_t *db_open(const std::string &path, const char *dbname,
   db->visible_ts = next_ts;
   // Resume object ids the same way, but never below the first
   // unreserved one, in a new database or an older one.
-  db->next_objid = std::max<uint64_t>(next_objid + 1, WISR_FIRST_OBJID);
+  db->next_objid = std::max<uint64_t>(next_objid + 1, SM1_FIRST_OBJID);
   db->objid_limit = db->next_objid;
   // Size the commit cache.
   // Two slots a set, the entries asked for rounded up to even.
@@ -715,7 +715,7 @@ static int cover_ts_locked(db_t *db, uint64_t n) {
   // Extend the lease from n.
   uint64_t new_limit = n + db->lease;
   // Persist the new lease before n is handed out.
-  if (persist_lease(db, WISR_META_NEXT_TS, new_limit) != 0) {
+  if (persist_lease(db, SM1_META_NEXT_TS, new_limit) != 0) {
     return -1;
   }
   // Adopt the new limit.
@@ -742,12 +742,12 @@ int db_alloc_ts(db_t *db, uint64_t *out) {
 /* Allocate an object id: a storeid or a seqid. */
 int db_alloc_objid(db_t *db, uint64_t *out) {
   return alloc_leased(db, &db->next_objid, &db->objid_limit,
-                      WISR_META_NEXT_OBJID, out);
+                      SM1_META_NEXT_OBJID, out);
 }
 
 /* The CF:meta key holding sequence seqid's lease. */
 static std::string seq_meta_key(uint64_t seqid) {
-  std::string key(WISR_META_SEQ_PREFIX);
+  std::string key(SM1_META_SEQ_PREFIX);
   sm0::put_be64(key, seqid);
   return key;
 }
@@ -986,7 +986,7 @@ int db_drop_store_cf(db_t *db, uint64_t storeid) {
   return 0;
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /*
  * Persist each sequence's next value as its lease, so the next open
@@ -995,7 +995,7 @@ int db_drop_store_cf(db_t *db, uint64_t storeid) {
  * as it is. A failure is logged, and the next open skips the rest of
  * each block, as after a crash.
  */
-static void keep_seq_positions(wisr::db_t *db) {
+static void keep_seq_positions(sm1_internal::db_t *db) {
   rocksdb::WriteBatch batch;
   size_t n = 0;
   for (const auto &[seqid, st] : db->seqs) {
@@ -1004,7 +1004,7 @@ static void keep_seq_positions(wisr::db_t *db) {
     }
     std::string val;
     sm0::put_be64(val, st.next);
-    batch.Put(db->cf_meta, wisr::seq_meta_key(seqid), val);
+    batch.Put(db->cf_meta, sm1_internal::seq_meta_key(seqid), val);
     n++;
   }
   if (n == 0) {
@@ -1023,7 +1023,7 @@ static void keep_seq_positions(wisr::db_t *db) {
 }
 
 /* Destroy every CF handle, then close RocksDB. */
-wisr::db_t::~db_t() {
+sm1_internal::db_t::~db_t() {
   // Stop the GC worker, then wait out running compactions,
   // whose filters read the handles destroyed below.
   gc_stop(this);

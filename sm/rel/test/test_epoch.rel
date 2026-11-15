@@ -12,7 +12,7 @@
 # 6. A temporary table's create and drop move the creating
 #    session's epoch, and not another's.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_epoch"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_epoch"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

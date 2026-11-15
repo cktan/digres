@@ -56,7 +56,7 @@ public:
   }
 
   /* The shared database object behind the sessions. */
-  wisr::db_t *db() const { return m_first->db; }
+  sm1_internal::db_t *db() const { return m_first->db; }
 
   /* The home directory. */
   home_t &home() { return m_home; }
@@ -252,7 +252,8 @@ TEST_CASE("a batch's records go in commit_ts order, after the older batch") {
       {
         std::lock_guard<std::mutex> guard(f.db()->commit_mu);
         int k = 0;
-        for (wisr::commit_entry_t *e = f.db()->commit_head; e; e = e->next) {
+        for (sm1_internal::commit_entry_t *e = f.db()->commit_head; e;
+             e = e->next) {
           k++;
         }
         if (k == n) {
@@ -387,7 +388,7 @@ TEST_CASE("the smallest commit cache gives the same answers") {
   REQUIRE(sm1::begin(a, sm1::xctlevel_t::repeatable_read) == 0);
   for (int i = 0; i < 50; i++) {
     REQUIRE(commit_one(b, f.store(), "k" + std::to_string(100 + i)) == 0);
-    CHECK(wisr::xct_cache_used(f.db()) <= 2);
+    CHECK(sm1_internal::xct_cache_used(f.db()) <= 2);
   }
   CHECK(get(a, f.store(), "k100") == "<none>");
   CHECK(get(a, f.store(), "k149") == "<none>");
@@ -441,14 +442,14 @@ TEST_CASE("a commit read from the status table is remembered") {
 
   s = opendb(home.env(), "db", &now);
   REQUIRE(s);
-  CHECK_FALSE(wisr::xct_cache_has(s->db, xid));
+  CHECK_FALSE(sm1_internal::xct_cache_has(s->db, xid));
 
   REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
   CHECK(get(s, store, "k") == "v");
-  CHECK(wisr::xct_cache_has(s->db, xid));
+  CHECK(sm1_internal::xct_cache_has(s->db, xid));
 
   CHECK(get(s, store, "k") == "v");
-  CHECK(wisr::xct_cache_has(s->db, xid));
+  CHECK(sm1_internal::xct_cache_has(s->db, xid));
   REQUIRE(sm1::commit(s) == 0);
   REQUIRE(sm1::closedb(s) == 0);
 }
@@ -475,14 +476,14 @@ TEST_CASE("a commit cache set holds two, and a third evicts the smaller xid") {
   sm1::session_t *b = f.open();
   const uint64_t x1 = commit_key(b, f.store(), "k1");
   const uint64_t x2 = commit_key(b, f.store(), "k2");
-  CHECK(wisr::xct_cache_has(f.db(), x1));
-  CHECK(wisr::xct_cache_has(f.db(), x2));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x1));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x2));
 
   const uint64_t x3 = commit_key(b, f.store(), "k3");
-  CHECK_FALSE(wisr::xct_cache_has(f.db(), x1));
-  CHECK(wisr::xct_cache_has(f.db(), x2));
-  CHECK(wisr::xct_cache_has(f.db(), x3));
-  CHECK(wisr::xct_cache_used(f.db()) == 2);
+  CHECK_FALSE(sm1_internal::xct_cache_has(f.db(), x1));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x2));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x3));
+  CHECK(sm1_internal::xct_cache_used(f.db()) == 2);
   sm1::closedb(b);
 }
 
@@ -503,18 +504,18 @@ TEST_CASE("an old commit read back from disk keeps the newer of its set") {
   const uint64_t x1 = commit_key(b, f.store(), "k1");
   const uint64_t x2 = commit_key(b, f.store(), "k2");
   const uint64_t x3 = commit_key(b, f.store(), "k3");
-  REQUIRE(wisr::xct_cache_has(f.db(), x3));
+  REQUIRE(sm1_internal::xct_cache_has(f.db(), x3));
 
   REQUIRE(sm1::begin(a, sm1::xctlevel_t::repeatable_read) == 0);
   CHECK(get(a, f.store(), "k1") == "v");
-  CHECK(wisr::xct_cache_has(f.db(), x1));
-  CHECK_FALSE(wisr::xct_cache_has(f.db(), x2));
-  CHECK(wisr::xct_cache_has(f.db(), x3));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x1));
+  CHECK_FALSE(sm1_internal::xct_cache_has(f.db(), x2));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x3));
 
   CHECK(get(a, f.store(), "k2") == "v");
-  CHECK(wisr::xct_cache_has(f.db(), x2));
-  CHECK_FALSE(wisr::xct_cache_has(f.db(), x1));
-  CHECK(wisr::xct_cache_has(f.db(), x3));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x2));
+  CHECK_FALSE(sm1_internal::xct_cache_has(f.db(), x1));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x3));
   CHECK(get(a, f.store(), "k3") == "v");
   REQUIRE(sm1::commit(a) == 0);
   sm1::closedb(b);
@@ -542,13 +543,13 @@ TEST_CASE("a long transaction committing late is cached, and evicted first") {
   const uint64_t x2 = commit_key(b, f.store(), "k2");
   REQUIRE(xl < x2);
   REQUIRE(sm1::commit(l) == 0);
-  CHECK(wisr::xct_cache_has(f.db(), xl));
-  CHECK(wisr::xct_cache_has(f.db(), x2));
+  CHECK(sm1_internal::xct_cache_has(f.db(), xl));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x2));
 
   const uint64_t x3 = commit_key(b, f.store(), "k3");
-  CHECK_FALSE(wisr::xct_cache_has(f.db(), xl));
-  CHECK(wisr::xct_cache_has(f.db(), x2));
-  CHECK(wisr::xct_cache_has(f.db(), x3));
+  CHECK_FALSE(sm1_internal::xct_cache_has(f.db(), xl));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x2));
+  CHECK(sm1_internal::xct_cache_has(f.db(), x3));
 
   REQUIRE(sm1::begin(b, sm1::xctlevel_t::repeatable_read) == 0);
   put(b, f.store(), "k4", "v");
@@ -557,7 +558,7 @@ TEST_CASE("a long transaction committing late is cached, and evicted first") {
   sm1::session_t *a = f.first();
   REQUIRE(sm1::begin(a, sm1::xctlevel_t::repeatable_read) == 0);
   CHECK(get(a, f.store(), "k4") == "<none>");
-  CHECK_FALSE(wisr::xct_cache_has(f.db(), x4));
+  CHECK_FALSE(sm1_internal::xct_cache_has(f.db(), x4));
   REQUIRE(sm1::commit(a) == 0);
   sm1::closedb(l);
   sm1::closedb(b);

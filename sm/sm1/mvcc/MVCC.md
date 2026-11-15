@@ -1,7 +1,7 @@
-# MVCC: what wisr detects, and what it does not
+# MVCC: what sm detects, and what it does not
 
 This directory is an argument, in two parts. This document
-states the rules wisr's concurrency control follows and
+states the rules sm's concurrency control follows and
 enumerates every scenario those rules decide. Beside it, one
 file per scenario runs that scenario against the engine, in
 each pairing of isolation levels, and asserts the outcome
@@ -66,7 +66,7 @@ recorded, that is a read-write conflict, an edge
 **The dangerous structure.** A cycle in the serialization
 graph always contains a transaction with an incoming and an
 outgoing rw-edge — the pivot — where the transaction the
-outgoing edge points at commits first. wisr keeps the edges of
+outgoing edge points at commits first. sm keeps the edges of
 each transaction and fails one that would complete such a
 structure, at commit, with `SM_ERR_SERIALIZATION`. This is
 Cahill's rule with Ports and Grittner's commit-order and
@@ -525,9 +525,9 @@ show a slot still meets what conflicts with it.
 | h05 | `T1: IS(1)` ‖ `T2: X(2)` ‖ `T1: X(2)` ‖ `T2: X(1)` | T2 DEADLOCK, the younger; T1's X(2) granted | `in/h05_deadlock_through_a_slot.t` |
 | h06 | `T1: IX(1)` ‖ `T2: IX(1)` ‖ `T3: S(1)` | IX and IX at once; T3 BLOCK → OK once both commit | `in/h06_writers_share_a_table.t` |
 
-## 8. What wisr does not detect, by design
+## 8. What sm does not detect, by design
 
-At REPEATABLE READ, wisr **does not** detect, and must not
+At REPEATABLE READ, sm **does not** detect, and must not
 fail:
 
 - **Write skew** — two transactions reading a common set and
@@ -537,7 +537,7 @@ fail:
 - **The read-only anomaly** — a transaction that only reads
   observing a state no serial order produces (c07).
 
-At every level, wisr **does not** detect:
+At every level, sm **does not** detect:
 
 - **Read-read** anything. Readers neither block nor conflict
   (c20).

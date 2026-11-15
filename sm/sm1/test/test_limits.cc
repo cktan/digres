@@ -54,7 +54,7 @@ public:
     opt.bottommost_level_compaction =
         rocksdb::BottommostLevelCompaction::kForce;
     REQUIRE(m_s->db->rdb
-                ->CompactRange(opt, wisr::db_store(m_s->db, m_store).cf,
+                ->CompactRange(opt, sm1_internal::db_store(m_s->db, m_store).cf,
                                nullptr, nullptr)
                 .ok());
   }

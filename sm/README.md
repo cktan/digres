@@ -1,7 +1,9 @@
-# Wisr
+# sm
 
-Wisconsin Storage on the Rocks: a stack of storage levels, each
-one built on the level below it.
+sm is a storage engine for a SQL database system: a stack of
+storage levels, each one built on the level below it. It is a
+library of its own. digres
+([`../dg/README.md`](../dg/README.md)) is its first client.
 
 | Level | Where | What it is |
 | --- | --- | --- |
@@ -43,7 +45,7 @@ by driving the wrapper through the `rel/` test suite.
 - [`GLOSSARY.md`](GLOSSARY.md) — the words this stack uses, the
   ones that mean more than one thing first, and the identifiers
   side by side
-- [`OBJECTIVE.md`](OBJECTIVE.md) — what wisr as a whole is for,
+- [`OBJECTIVE.md`](OBJECTIVE.md) — what sm as a whole is for,
   and the decisions that span every level
 - [`DESIGN.md`](DESIGN.md) — how the levels fit together: the
   stack, the build, and the decisions that cross level boundaries
@@ -92,7 +94,7 @@ by driving the wrapper through the `rel/` test suite.
   driver over `include/sm.h`: its design and its verbs
 - [`sm0/VFD.md`](sm0/VFD.md) — virtual file descriptors, under
   one ceiling for the process
-- [`FEATURELIST.md`](FEATURELIST.md) — the PostgreSQL subset wisr
+- [`FEATURELIST.md`](FEATURELIST.md) — the PostgreSQL subset sm
   targets, decided feature by feature; not all of it is built
 - [`PGFORK.md`](PGFORK.md) — what it would take to put PostgreSQL
   on this stack, and what that target forces on level 2's design

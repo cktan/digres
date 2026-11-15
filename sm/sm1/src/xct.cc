@@ -45,7 +45,7 @@
 
 #include <rocksdb/write_batch.h>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -1380,7 +1380,7 @@ int list_prepared(sm1::session_t *s, std::vector<sm1::prepared_t> &out) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* READONLY if the transaction was declared read-only. */
 int xct_check_readonly(sm1::session_t *s) {
@@ -1729,7 +1729,7 @@ void xct_undo_overflow(sm1::session_t *s) {
   s->lost_marks = s->savepoints.size();
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /* Begin a statement inside another; see sm1.h. */
 int sm1::stmt_begin(sm1::session_t *session, sm1::stmt_t &outer) {
@@ -1773,7 +1773,7 @@ int sm1::stmt_end(sm1::session_t *session, const sm1::stmt_t &outer) {
   return 0;
 }
 
-namespace wisr {
+namespace sm1_internal {
 
 /*
  * End the hold of every open cursor of the session, and free none:
@@ -1804,7 +1804,7 @@ void xct_free_scans(sm1::session_t *s) {
   s->scans.clear();
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /* Begin a transaction at level, declared read-only or not. */
 int sm1::begin(sm1::session_t *session, sm1::xctlevel_t level, bool read_only) {

@@ -35,7 +35,7 @@
 #include <new>
 #include <vector>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -181,7 +181,7 @@ int lsstore(sm1::session_t *s, std::vector<uint64_t> &out) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /*
  * A point read of the catalog row at view, or the session's store
@@ -228,7 +228,7 @@ int catalog_lookup(sm1::session_t *s, const view_t &view, uint64_t storeid) {
   return r;
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /* Create a store and hand out its storeid. */
 int sm1::mkstore(sm1::session_t *session, uint64_t &storeid, bool temporary,

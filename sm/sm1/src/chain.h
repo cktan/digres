@@ -21,8 +21,8 @@
  * commit_ts once stamped (chain_displaced_stamped), or, once the
  * entry is unlinked (chain_unlinked), the ts it was unlinked at.
  */
-#ifndef WISR_CHAIN_H
-#define WISR_CHAIN_H
+#ifndef SM1_CHAIN_H
+#define SM1_CHAIN_H
 
 #include "version.h"
 
@@ -33,7 +33,7 @@
 
 #include <rocksdb/slice.h>
 
-namespace wisr {
+namespace sm1_internal {
 
 /*
  * An old version no chain reaches any more: a repair or a rollback
@@ -88,6 +88,6 @@ using reap_hook_fn = void (*)(db_t *db);
 extern std::atomic<reap_hook_fn> g_reap_hook;
 #endif
 
-} // namespace wisr
+} // namespace sm1_internal
 
-#endif /* WISR_CHAIN_H */
+#endif /* SM1_CHAIN_H */

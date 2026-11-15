@@ -535,21 +535,21 @@ TEST_CASE("page: no version meets a page") {
   rocksdb::CompactRangeOptions copt;
   copt.bottommost_level_compaction = rocksdb::BottommostLevelCompaction::kForce;
   REQUIRE(s->db->rdb
-              ->CompactRange(copt, wisr::db_store(s->db, store).cf, nullptr,
-                             nullptr)
+              ->CompactRange(copt, sm1_internal::db_store(s->db, store).cf,
+                             nullptr, nullptr)
               .ok());
   // An old version compaction has not seen, so the next id is past it.
   REQUIRE(sm1::begin(s, sm1::xctlevel_t::read_committed) == 0);
   REQUIRE(sm1::chain_update(s, store, "k", "v3") == 0);
   REQUIRE(sm1::commit(s) == 0);
-  uint64_t next_old = wisr::db_store(s->db, store).next_old->load();
+  uint64_t next_old = sm1_internal::db_store(s->db, store).next_old->load();
   REQUIRE(next_old > 1);
   REQUIRE(sm1::closedb(s) == 0);
 
   home.reattach();
   s = opendb(home.env(), "db");
   REQUIRE(s);
-  CHECK(next_old == wisr::db_store(s->db, store).next_old->load());
+  CHECK(next_old == sm1_internal::db_store(s->db, store).next_old->load());
   REQUIRE(sm1::begin(s, sm1::xctlevel_t::read_committed) == 0);
   CHECK("page" == read_page(s, store, "k"));
   CHECK("last page" == read_page(s, store, std::string(8, '\xff')));
@@ -645,7 +645,7 @@ TEST_CASE("page: a page not inner is evicted before an inner page") {
   write_page(s, store, "once", "a");
   write_pages(s, store, {{"inner", "c", false, sm1::page_inner}});
   const std::string pad(4000, 'p');
-  int others = static_cast<int>(wisr::bufpool_min_frames);
+  int others = static_cast<int>(sm1_internal::bufpool_min_frames);
   for (int i = 0; i < others; i++) {
     write_page(s, store, "k" + std::to_string(i), pad);
   }
@@ -686,7 +686,7 @@ TEST_CASE("page: a good copy keeps its page in the pool") {
   sm1::keep_page_copy(s, store, "root", page, bytes);
   sm1::unpin_page(s, page);
   const std::string pad(4000, 'p');
-  int others = 3 * static_cast<int>(wisr::bufpool_min_frames);
+  int others = 3 * static_cast<int>(sm1_internal::bufpool_min_frames);
   int good = 0;
   for (int i = 0; i < others; i++) {
     write_page(s, store, "k" + std::to_string(i), pad);

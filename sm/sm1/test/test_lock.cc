@@ -84,7 +84,7 @@ bool no_strong(sm1::session_t *s) {
 
 /* The number of entries in s's database's lock table. */
 size_t table_size(sm1::session_t *s) {
-  wisr::lock_all_t all(s->db);
+  sm1_internal::lock_all_t all(s->db);
   return s->db->lock_table.size();
 }
 
@@ -502,8 +502,8 @@ TEST_CASE(
     REQUIRE(sm1::begin(w, level) == 0);
     REQUIRE(set(w, "x", dirty) == 0);
     sm1::lockmode_t mode;
-    CHECK_FALSE(wisr::lock_held(w, g_store, "x", &mode));
-    CHECK_FALSE(wisr::lock_held(w, g_store, "y", &mode));
+    CHECK_FALSE(sm1_internal::lock_held(w, g_store, "x", &mode));
+    CHECK_FALSE(sm1_internal::lock_held(w, g_store, "y", &mode));
     CHECK(w->locks.empty());
 
     REQUIRE(sm1::begin(r, level) == 0);
@@ -531,8 +531,8 @@ TEST_CASE(
     CHECK_FALSE(seen.empty());
     CHECK(seen != dirty);
     CHECK(rows == 2);
-    CHECK_FALSE(wisr::lock_held(r, g_store, "x", &mode));
-    CHECK_FALSE(wisr::lock_held(r, g_store, "y", &mode));
+    CHECK_FALSE(sm1_internal::lock_held(r, g_store, "x", &mode));
+    CHECK_FALSE(sm1_internal::lock_held(r, g_store, "y", &mode));
 
     returned = false;
     int rc = -2;
@@ -851,7 +851,7 @@ TEST_CASE("a transaction's writes leave no lock entries") {
   REQUIRE(sm1::erase(w, g_store, "y") == 0);
   CHECK(w->locks.empty());
   {
-    wisr::lock_all_t all(w->db);
+    sm1_internal::lock_all_t all(w->db);
     CHECK(w->db->lock_table.empty());
   }
 
@@ -889,7 +889,7 @@ TEST_CASE("a write refused with SM_ERR_UPDATED keeps the row locked until "
   CHECK(set(t, "x", "t") == -1);
   CHECK(sm1::errnum() == sm1::SM_ERR_UPDATED);
   sm1::lockmode_t mode;
-  REQUIRE(wisr::lock_held(t, g_store, "x", &mode));
+  REQUIRE(sm1_internal::lock_held(t, g_store, "x", &mode));
   CHECK(mode == sm1::SM_LOCKMODE_EX);
 
   REQUIRE(sm1::set_qa_nowait(o, true) == 0);
@@ -1084,10 +1084,10 @@ TEST_CASE("lock_status lists each lock held, and each waited for in lock") {
     std::vector<std::string> got;
     for (const auto &r : out) {
       // A row's word is its key's hash: "y" for "y"'s.
-      std::string word =
-          r.type == sm1::LOCKTYPE_ROW && r.word == wisr::lock_row_hash("y")
-              ? "y"
-              : std::to_string(r.word);
+      std::string word = r.type == sm1::LOCKTYPE_ROW &&
+                                 r.word == sm1_internal::lock_row_hash("y")
+                             ? "y"
+                             : std::to_string(r.word);
       got.push_back(r.dbname + " " + std::to_string(r.type) + " " +
                     std::to_string(r.storeid == g_store ? 1 : r.storeid) + " " +
                     word + " " + std::to_string(r.kind) + " " +
@@ -1217,7 +1217,7 @@ TEST_CASE("a lock list across blocks keeps each lock exact past a savepoint") {
   auto key = [](int i) { return "k" + std::to_string(i); };
   auto held = [&](const std::string &k) {
     sm1::lockmode_t mode;
-    return wisr::lock_held(a, g_store, k, &mode) ? int(mode) : -1;
+    return sm1_internal::lock_held(a, g_store, k, &mode) ? int(mode) : -1;
   };
   for (int i = 0; i < 512; i++) {
     REQUIRE(sm1::lock_row(a, g_store, key(i), sm1::SM_LOCKMODE_SH) == 0);
@@ -1257,7 +1257,7 @@ TEST_CASE("a lock list across blocks keeps each lock exact past a savepoint") {
   CHECK(held(key(900)) == sm1::SM_LOCKMODE_SH);
   REQUIRE(sm1::commit(a) == 0);
   {
-    wisr::lock_all_t all(a->db);
+    sm1_internal::lock_all_t all(a->db);
     CHECK(a->db->lock_table.empty());
   }
   CHECK(a->locks.empty());
@@ -1280,15 +1280,15 @@ TEST_CASE("row keys that hash alike are one lock") {
   //    list entry kept, and B's lock of "z" is still refused.
   // 5. A commits: the table and A's list are empty, and B locks "z".
   lock_fixture_t f;
-  wisr::lock_test_rows_collide = true;
-  defer { wisr::lock_test_rows_collide = false; };
+  sm1_internal::lock_test_rows_collide = true;
+  defer { sm1_internal::lock_test_rows_collide = false; };
   sm1::session_t *a = f.open(), *b = f.open();
   REQUIRE(sm1::set_tag(a, 101) == 0);
   REQUIRE(sm1::begin(a, sm1::xctlevel_t::read_committed) == 0);
   REQUIRE(sm1::lock_row(a, g_store, "x", sm1::SM_LOCKMODE_SH, false, 1) == 0);
   REQUIRE(sm1::lock_row(a, g_store, "y", sm1::SM_LOCKMODE_EX, false, 2) == 0);
   {
-    wisr::lock_all_t all(a->db);
+    sm1_internal::lock_all_t all(a->db);
     CHECK(a->db->lock_table.size() == 1);
   }
   CHECK(a->locks.size() == 1);
@@ -1310,7 +1310,7 @@ TEST_CASE("row keys that hash alike are one lock") {
   };
   auto held = [&](const char *key) {
     sm1::lockmode_t mode;
-    return wisr::lock_held(a, g_store, key, &mode) ? int(mode) : -1;
+    return sm1_internal::lock_held(a, g_store, key, &mode) ? int(mode) : -1;
   };
   CHECK(held("x") == sm1::SM_LOCKMODE_EX);
   CHECK(held("y") == sm1::SM_LOCKMODE_EX);
@@ -1336,7 +1336,7 @@ TEST_CASE("row keys that hash alike are one lock") {
 
   REQUIRE(sm1::commit(a) == 0);
   {
-    wisr::lock_all_t all(a->db);
+    sm1_internal::lock_all_t all(a->db);
     CHECK(a->db->lock_table.empty());
   }
   CHECK(a->locks.empty());
@@ -1352,11 +1352,12 @@ TEST_CASE("a row key's lock hash is the same in every build") {
   // 1. The empty key, a key shorter than a word, and one of two words
   //    and a tail hash to the values written down.
   // 2. Two keys that differ only in a trailing zero byte differ.
-  CHECK(wisr::lock_row_hash("") == 0x0ULL);
-  CHECK(wisr::lock_row_hash("x") == 0x34558360b0535c76ULL);
-  CHECK(wisr::lock_row_hash("a key of 20 bytes ok") == 0x8641b660711e5168ULL);
-  CHECK(wisr::lock_row_hash(rocksdb::Slice("x\0", 2)) !=
-        wisr::lock_row_hash("x"));
+  CHECK(sm1_internal::lock_row_hash("") == 0x0ULL);
+  CHECK(sm1_internal::lock_row_hash("x") == 0x34558360b0535c76ULL);
+  CHECK(sm1_internal::lock_row_hash("a key of 20 bytes ok") ==
+        0x8641b660711e5168ULL);
+  CHECK(sm1_internal::lock_row_hash(rocksdb::Slice("x\0", 2)) !=
+        sm1_internal::lock_row_hash("x"));
 }
 
 TEST_CASE("a weak table lock takes a slot, and a strong one moves it") {
@@ -1453,7 +1454,7 @@ TEST_CASE("a slot's entry is its own, wherever it is in the list") {
     std::vector<std::string> got;
     for (const auto &r : out) {
       std::string name = sm1::LOCKTYPE_OID == r.type ? "oid"
-                         : r.word == wisr::lock_row_hash("x")
+                         : r.word == sm1_internal::lock_row_hash("x")
                              ? "x"
                              : std::to_string(r.word);
       got.push_back(name + " " + std::to_string(r.mode));
@@ -1699,10 +1700,12 @@ TEST_CASE("a cycle across two partitions of the lock table is found") {
   //    cycle. B, the younger, fails with deadlock; A is granted.
   lock_fixture_t f;
   std::string k1 = "k0", k2;
-  size_t p1 = wisr::locktab_t::part_of(wisr::lock_row_id(g_store, k1));
+  size_t p1 =
+      sm1_internal::locktab_t::part_of(sm1_internal::lock_row_id(g_store, k1));
   for (int i = 1; k2.empty(); i++) {
     std::string k = "k" + std::to_string(i);
-    if (wisr::locktab_t::part_of(wisr::lock_row_id(g_store, k)) != p1) {
+    if (sm1_internal::locktab_t::part_of(
+            sm1_internal::lock_row_id(g_store, k)) != p1) {
       k2 = k;
     }
   }

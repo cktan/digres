@@ -22,7 +22,7 @@
 
 #include <rocksdb/options.h>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 namespace {
 
@@ -392,7 +392,7 @@ int lock_object(sm1::session_t *s, uint64_t oid, sm1::lockmode_t mode,
   }
   // An oid outside any store takes the lock and nothing else: no
   // store is read and no version is checked, since none can exist.
-  return wisr::lock_oid(s, oid, mode, nowait);
+  return sm1_internal::lock_oid(s, oid, mode, nowait);
 }
 
 /* sm1::lock_row and sm1::trylock_row, minus the out-of-memory guard. */
@@ -650,7 +650,7 @@ sm1::scan_t *scan(sm1::session_t *s, uint64_t storeid, const char *skey,
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Open a cursor over storeid at view, between the given bounds. */
 sm1::scan_t *access_scan(sm1::session_t *s, uint64_t storeid,
@@ -721,7 +721,7 @@ sm1::scan_t *access_scan(sm1::session_t *s, uint64_t storeid,
   return c.release();
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 namespace {
 
@@ -874,7 +874,7 @@ int scan_seek(sm1::scan_t *c, const char *key, size_t klen, int inclusive) {
 
 } // namespace
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Seek to the newest version a reader at view could see (../ROWSTORE.md §5.2).
  */
@@ -1171,7 +1171,7 @@ int access_enter(sm1::session_t *s, const view_t &view, uint64_t storeid,
   return enter(s, view, storeid, key, klen);
 }
 
-} // namespace wisr
+} // namespace sm1_internal
 
 /* Move an open cursor to key, forward only. */
 int sm1::scan_seek(sm1::scan_t *scan, std::string_view key, int inclusive) {
@@ -1499,7 +1499,7 @@ int sm1::scannxt(sm1::scan_t *c, std::string_view &key,
 }
 
 /* Release a cursor's hold: the iterator first, then its snapshot. */
-void wisr::scan_release(sm1::scan_t *scan) {
+void sm1_internal::scan_release(sm1::scan_t *scan) {
   ssi_range_close(scan); // narrow the SIREAD range to what was read
   // Destroy the iterator, and a chained cursor's row, before the
   // snapshot and bound.

@@ -7,8 +7,8 @@
  * db.h -- the layout of one database directory: its column
  * families, their options, and CF:meta's keys (../DBMGR.md §6).
  */
-#ifndef WISR_DB_H
-#define WISR_DB_H
+#ifndef SM1_DB_H
+#define SM1_DB_H
 
 #include "bufpool.h"
 #include "hintq.h"
@@ -45,27 +45,27 @@
  * the mode byte on each lock key of a PREPARED record (../XCTMGR.md §10);
  * version 6 renamed each store's column family from rel.<id>
  * to store.<id>. */
-#define WISR_DB_VERSION 6
+#define SM1_DB_VERSION 6
 
 /* Column family names. */
-#define WISR_CF_TXN "txn"
-#define WISR_CF_META "meta"
+#define SM1_CF_TXN "txn"
+#define SM1_CF_META "meta"
 
 /* CF:meta keys (../DBMGR.md §6.7, ../XCTMGR.md §2.3). */
-#define WISR_META_VERSION "version"
-#define WISR_META_NEXT_TS "next_ts"
-#define WISR_META_NEXT_OBJID "next_objid"
+#define SM1_META_VERSION "version"
+#define SM1_META_NEXT_TS "next_ts"
+#define SM1_META_NEXT_OBJID "next_objid"
 
 /*
  * The first object id handed out: 1 to 999 are reserved for
  * objects a database is made with (../XCTMGR.md §2.3).
  */
-#define WISR_FIRST_OBJID 1000
+#define SM1_FIRST_OBJID 1000
 
 /* CF:meta key prefix of a sequence's lease: "seq." | be64(seqid). */
-#define WISR_META_SEQ_PREFIX "seq."
+#define SM1_META_SEQ_PREFIX "seq."
 
-namespace wisr {
+namespace sm1_internal {
 
 struct ssi_range_t;
 
@@ -851,6 +851,6 @@ int64_t gc_sweep_txn(db_t *db, bool start);
  */
 int db_options(const sm1::options_t *opt, rocksdb::DBOptions *out);
 
-} // namespace wisr
+} // namespace sm1_internal
 
-#endif /* WISR_DB_H */
+#endif /* SM1_DB_H */

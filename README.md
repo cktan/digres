@@ -1,12 +1,30 @@
-# Wisr
+# digres
 
-Wisr is Wisconsin Storage on the Rocks: a storage manager
-built on RocksDB. Its database is digres, a PostgreSQL whose
-tables live in Wisr. The repository holds both, in four parts:
+digres is a PostgreSQL 18 database on a new storage engine. It
+speaks PostgreSQL's wire protocol and runs PostgreSQL's planner
+and executor, so `psql`, `pgbench` and any PostgreSQL driver
+connect to it unchanged. Under the executor, everything is
+new:
+
+- **One process, a thread a session**: no fork per connection,
+  and no background processes.
+- **Tables organized by their primary key**, in RocksDB, an
+  ordered key-value store, through sm, a storage stack that is
+  a library of its own.
+- **MVCC with no VACUUM to schedule**: old row versions are
+  collected automatically.
+- **SERIALIZABLE isolation** from sm's own concurrency control.
+- **A database is one directory**, its rows, catalog and WAL
+  in it.
+
+[`DG-vs-PG.md`](DG-vs-PG.md) says how digres differs from
+PostgreSQL 18, and [`PERF.md`](PERF.md) how fast it runs
+against it. The repository holds digres and the libraries it
+links, in four parts:
 
 | Where | What it is |
 | --- | --- |
-| [`sm/`](sm/) | the storage stack: an MVCC storage manager on RocksDB, types and tuples over it, and schema and index maintenance over those, with one API, `sm/include/sm.h` |
+| [`sm/`](sm/) | sm, the storage stack: a library of its own, for digres or another SQL database system. An MVCC storage manager on RocksDB, types and tuples over it, and schema and index maintenance over those, with one API, `sm/include/sm.h` |
 | [`dg/`](dg/) | digres: a fork of PostgreSQL 18.6 that runs on the stack ([`DG-vs-PG.md`](DG-vs-PG.md)). It compiles as C++, is one process with a thread a session, and serves PostgreSQL's own `psql`, its tables sm's; [`dg/README.md`](dg/README.md) says what runs, and [`sm/PGFORK.md`](sm/PGFORK.md#10-digres-how-the-fork-is-to-be-made) §10 how it is being made |
 | [`sq/`](sq/) | the SQL parser: PostgreSQL 18's SQL in, a tree of nodes out, as a library with one API, `sq/include/sq.h`. It is built from nothing outside `sq/` |
 | [`aa/`](aa/) | roles, authentication and authorization, a library on sm that digres links ([`aa/AA_DESIGN.md`](aa/AA_DESIGN.md), [`aa/USAGE.md`](aa/USAGE.md)) |
@@ -14,13 +32,6 @@ tables live in Wisr. The repository holds both, in four parts:
 
 To try digres, from a build to a query:
 [`QUICKSTART.md`](QUICKSTART.md).
-
-See [`PERF.md`](PERF.md) for the performance of digres vs
-PostgreSQL 18.
-
-See [`DG-vs-PG.md`](DG-vs-PG.md) for how digres differs from
-PostgreSQL 18: its process model, storage, transactions,
-catalog, roles and SQL surface.
 
 ## How the parts fit
 

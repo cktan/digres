@@ -5,7 +5,7 @@
 
 /*
  * test_log.cc -- the process-wide log hook (sm1::set_log) and the
- * events wisr reports through it: what no caller would
+ * events sm reports through it: what no caller would
  * otherwise learn.
  */
 
@@ -167,8 +167,8 @@ TEST_CASE("recovery reports restored transactions and dropped orphans") {
   log_fixture_t f;
   sm1::session_t *s = f.open();
   uint64_t orphan = 0;
-  REQUIRE(wisr::db_alloc_objid(s->db, &orphan) == 0);
-  REQUIRE(wisr::db_create_store_cf(s->db, orphan) == 0);
+  REQUIRE(sm1_internal::db_alloc_objid(s->db, &orphan) == 0);
+  REQUIRE(sm1_internal::db_create_store_cf(s->db, orphan) == 0);
   REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
   put(s, f.store(), "k", "v");
   REQUIRE(sm1::prepare(s, "g-log") == 0);
@@ -229,7 +229,7 @@ TEST_CASE("a CF:txn sweep reports what it deleted") {
     commit_put(s, f.store(), "k" + std::to_string(i));
   }
   log_capture_t cap;
-  CHECK(wisr::gc_sweep_txn(s->db, true) > 0);
+  CHECK(sm1_internal::gc_sweep_txn(s->db, true) > 0);
   CHECK_MESSAGE(cap.count(sm1::loglevel_t::info, "sweep deleted") == 1,
                 cap.all());
   sm1::closedb(s);
@@ -245,10 +245,10 @@ TEST_CASE("versions the filter cannot judge are reported per compaction") {
   log_fixture_t f;
   sm1::session_t *s = f.open();
   REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
-  rocksdb::ColumnFamilyHandle *cf = wisr::db_store(s->db, f.store()).cf;
+  rocksdb::ColumnFamilyHandle *cf = sm1_internal::db_store(s->db, f.store()).cf;
   REQUIRE(s->db->rdb
-              ->Put(rocksdb::WriteOptions(), cf, wisr::version_key("bad", 1, 1),
-                    rocksdb::Slice())
+              ->Put(rocksdb::WriteOptions(), cf,
+                    sm1_internal::version_key("bad", 1, 1), rocksdb::Slice())
               .ok());
 
   log_capture_t cap;
@@ -259,7 +259,7 @@ TEST_CASE("versions the filter cannot judge are reported per compaction") {
   CHECK_MESSAGE(reports >= 1, cap.all());
   CHECK(cap.count(sm1::loglevel_t::warn, "kept 1 version(s)") == reports);
 
-  CHECK(wisr::gc_sweep_txn(s->db, true) == -1);
+  CHECK(sm1_internal::gc_sweep_txn(s->db, true) == -1);
   CHECK_MESSAGE(cap.count(sm1::loglevel_t::warn, "sweep abandoned") == 1,
                 cap.all());
   sm1::closedb(s);
@@ -278,11 +278,11 @@ TEST_CASE("a snapshot holding back GC too long is reported once") {
   log_capture_t cap;
   REQUIRE(sm1::begin(t, sm1::xctlevel_t::repeatable_read) == 0);
   std::this_thread::sleep_for(std::chrono::milliseconds(1200));
-  wisr::gc_run_once(t->db);
-  wisr::gc_run_once(t->db);
+  sm1_internal::gc_run_once(t->db);
+  sm1_internal::gc_run_once(t->db);
   CHECK_MESSAGE(cap.count(sm1::loglevel_t::warn, "held back") == 1, cap.all());
   REQUIRE(sm1::commit(t) == 0);
-  wisr::gc_run_once(t->db);
+  sm1_internal::gc_run_once(t->db);
   CHECK(cap.count(sm1::loglevel_t::warn, "held back") == 1);
   sm1::closedb(t);
 }

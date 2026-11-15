@@ -17,10 +17,10 @@
 #include <algorithm>
 #include <vector>
 
-using wisr::lock_compatible;
-using wisr::lock_cover;
-using wisr::lockid_t;
-using wisr::locktab_t;
+using sm1_internal::lock_compatible;
+using sm1_internal::lock_cover;
+using sm1_internal::lockid_t;
+using sm1_internal::locktab_t;
 
 namespace {
 
@@ -257,7 +257,7 @@ TEST_CASE("locktab: an id's hash spreads both its words to its low bits") {
   //    as rare as chance makes them, not every pair.
   // 2. Hash a row lock and an OID lock of the same words, which
   //    differ only in hi's top bit: the same.
-  wisr::lockid_hash_t h;
+  sm1_internal::lockid_hash_t h;
   const uint64_t oid = uint64_t(1) << 63;
   int apart = 0, typed = 0;
   for (uint64_t k = 0; k < 1024; k++) {

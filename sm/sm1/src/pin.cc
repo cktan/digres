@@ -13,7 +13,7 @@
 #include "error.h"
 #include "session.h"
 
-using namespace wisr;
+using namespace sm1_internal;
 
 /* Make an empty raw pin; see sm1.h. */
 sm1::rawpin_t *sm1::rawpin_new() {

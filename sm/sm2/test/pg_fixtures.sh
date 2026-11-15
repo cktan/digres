@@ -25,7 +25,7 @@ export PGUSER=${PGUSER:-postgres}
 # intervals (sm2.h).
 export PGOPTIONS="-c DateStyle=ISO -c TimeZone=UTC -c IntervalStyle=iso_8601"
 PSQL=${PSQL:-$HOME/pg18/bin/psql}
-DB=wisr_fixtures
+DB=sm_fixtures
 
 # Each type: its frozen code (TYPE.md §3), its PostgreSQL name,
 # and its fixture values as SQL literals.

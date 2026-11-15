@@ -18,14 +18,14 @@ Manipulate storage home directories and filesystem paths.
 Recursively removes the file or directory tree at `path`.
 
 ```janet
-(rm-rf "/tmp/wisr_home")
+(rm-rf "/tmp/sm_home")
 ```
 
 ### `(env-init path)`
-Formats a fresh wisr storage home directory at `path`.
+Formats a fresh sm storage home directory at `path`.
 
 ```janet
-(env-init "/tmp/wisr_home")
+(env-init "/tmp/sm_home")
 ```
 
 ### `(env-attach path [:toast bool] [:cache-bytes n])`
@@ -41,9 +41,9 @@ one block cache every database reads through
 fails with `ERR_INVALID`.
 
 ```janet
-(env-attach "/tmp/wisr_home")
-(env-attach "/tmp/wisr_home" :toast true)
-(env-attach "/tmp/wisr_home" :cache-bytes (* 2 1024 1024 1024))
+(env-attach "/tmp/sm_home")
+(env-attach "/tmp/sm_home" :toast true)
+(env-attach "/tmp/sm_home" :cache-bytes (* 2 1024 1024 1024))
 ```
 
 ### `(env-detach [:force bool])`

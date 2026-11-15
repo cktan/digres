@@ -11,7 +11,7 @@
 # 5. After a restart the check left is there, as it was.
 # 6. A table dropped takes its checks: the catalog loads after a restart.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_check"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_check"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

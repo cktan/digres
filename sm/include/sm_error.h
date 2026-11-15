@@ -4,7 +4,7 @@
  */
 
 /*
- * sm_error.h -- the error codes of the whole wisr stack, in C.
+ * sm_error.h -- the error codes of the whole sm stack, in C.
  *
  * One errno namespace serves every level (DESIGN.md section 5):
  * every level and the C wrapper report through sm0's

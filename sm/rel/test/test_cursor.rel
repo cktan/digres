@@ -3,7 +3,7 @@
 # closes it with ERR_SCANCLOSED, one opened before the savepoint goes
 # on, and the transaction's end ends what is still open.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_cursor"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_cursor"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

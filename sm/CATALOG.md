@@ -277,7 +277,7 @@ A tree index's pages are not in this table:
 [`BTREEINDEX.md`](BTREEINDEX.md) has their keys.
 
 - **The class byte orders the column family.** The store's
-  comparator, `wisr.store.v2`, sorts versioned keys by userkey
+  comparator, `sm.store.v2`, sorts versioned keys by userkey
   then newest version first, and current and old keys bytewise.
   The three classes lie in three ranges, and a scan of rows
   bounds itself to one. [`ROWSTORE.md`](ROWSTORE.md) says why sm1

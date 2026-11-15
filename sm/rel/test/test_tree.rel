@@ -2,7 +2,7 @@
 # a scan of a tree's rows gives each row while it has its entry's key; its
 # dead entries stay until (compact) removes them.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_tree"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_tree"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

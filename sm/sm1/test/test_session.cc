@@ -70,7 +70,7 @@ TEST_CASE("an open database cannot be removed, and detach honors force") {
 namespace {
 
 /* The database dbname open in env now, or nullptr: closed, or never. */
-wisr::db_t *open_db(sm1::env_t *env, const char *dbname) {
+sm1_internal::db_t *open_db(sm1::env_t *env, const char *dbname) {
   std::lock_guard<std::mutex> guard(env->mu);
   auto it = env->dbs.find(dbname);
   return it == env->dbs.end() ? nullptr : it->second;
@@ -99,7 +99,7 @@ TEST_CASE("a database stays open for its idle time after its last session") {
   REQUIRE(sm1::mkdb(env, "db", nullptr) == 0);
   sm1::session_t *a = opendb(env, "db", &idle);
   REQUIRE(a);
-  wisr::db_t *db = open_db(env, "db");
+  sm1_internal::db_t *db = open_db(env, "db");
   REQUIRE(sm1::closedb(a) == 0);
   CHECK(open_db(env, "db") == db);
   sm1::session_t *b = opendb(env, "db", &idle);

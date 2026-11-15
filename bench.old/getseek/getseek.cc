@@ -107,8 +107,8 @@ rocksdb::Options options(bool versioned, bool hash, int restart) {
   if (versioned) {
     // Today: versions in the key, a bloom filter on the userkey.
     if (!bytewise)
-      o.comparator = wisr::version_comparator();
-    o.prefix_extractor = wisr::version_prefix_extractor();
+      o.comparator = sm1_internal::version_comparator();
+    o.prefix_extractor = sm1_internal::version_prefix_extractor();
     t.whole_key_filtering = false;
   } else if (hash) {
     // A point lookup finds its key in a block by hash.
@@ -140,8 +140,8 @@ void load(const std::string &dir, const rocksdb::Options &o, bool versioned) {
     std::string k = row_key(id);
     std::string v = row_value(id);
     rocksdb::Status s =
-        versioned ? db->Put(w, wisr::version_key(k, 100, 1),
-                            wisr::version_value(wisr::version_stamped, 50, v))
+        versioned ? db->Put(w, sm1_internal::version_key(k, 100, 1),
+                            sm1_internal::version_value(sm1_internal::version_stamped, 50, v))
                   : db->Put(w, k, v);
     if (!s.ok()) {
       fprintf(stderr, "put: %s\n", s.ToString().c_str());
@@ -211,7 +211,7 @@ uint64_t run(rocksdb::DB *db, const std::string &variant,
   for (uint64_t id : ids) {
     std::string k = row_key(id);
     // The newest version a reader at ts 1000 sees: sm1 access_read.
-    std::string target = wisr::version_key(k, 1000, UINT32_MAX);
+    std::string target = sm1_internal::version_key(k, 1000, UINT32_MAX);
     std::unique_ptr<rocksdb::Iterator> fresh;
     rocksdb::Iterator *it = kept.get();
     if (!it) {
@@ -219,9 +219,9 @@ uint64_t run(rocksdb::DB *db, const std::string &variant,
       it = fresh.get();
     }
     it->Seek(target);
-    if (it->Valid() && wisr::version_userkey(it->key()) == rocksdb::Slice(k)) {
-      wisr::version_t v;
-      if (wisr::version_decode_value(it->value(), &v))
+    if (it->Valid() && sm1_internal::version_userkey(it->key()) == rocksdb::Slice(k)) {
+      sm1_internal::version_t v;
+      if (sm1_internal::version_decode_value(it->value(), &v))
         found += v.payload.size() == value_len;
     }
   }
@@ -246,10 +246,10 @@ bool read_one(rocksdb::DB *db, const std::string &variant, uint64_t id,
     fresh.reset(db->NewIterator(ro));
     it = fresh.get();
   }
-  it->Seek(wisr::version_key(k, 1000, UINT32_MAX));
-  wisr::version_t v;
-  return it->Valid() && wisr::version_userkey(it->key()) == rocksdb::Slice(k) &&
-         wisr::version_decode_value(it->value(), &v) &&
+  it->Seek(sm1_internal::version_key(k, 1000, UINT32_MAX));
+  sm1_internal::version_t v;
+  return it->Valid() && sm1_internal::version_userkey(it->key()) == rocksdb::Slice(k) &&
+         sm1_internal::version_decode_value(it->value(), &v) &&
          v.payload.size() == value_len;
 }
 
@@ -278,7 +278,7 @@ int main(int argc, char **argv) {
     rocksdb::WriteOptions w;
     w.disableWAL = true;
     for (uint64_t id = 1; id <= nrows; id++)
-      db->Put(w, wisr::version_key(row_key(id), 100, 1), row_value(id));
+      db->Put(w, sm1_internal::version_key(row_key(id), 100, 1), row_value(id));
     rocksdb::CompactRangeOptions c;
     c.bottommost_level_compaction = rocksdb::BottommostLevelCompaction::kForce;
     db->CompactRange(c, nullptr, nullptr);
@@ -301,13 +301,13 @@ int main(int argc, char **argv) {
     w.disableWAL = true;
     std::string header(cls_header, '\0');
     if (cls_header)
-      header[0] = static_cast<char>(wisr::version_stamped);
+      header[0] = static_cast<char>(sm1_internal::version_stamped);
     // CLS_RANDOM: the header's bytes random, as the payload's are.
     bool random_header = getenv("CLS_RANDOM") != nullptr;
     for (uint64_t id = 1; id <= nrows; id++) {
       if (random_header)
         header = row_value(id + nrows).substr(0, cls_header);
-      db->Put(w, std::string(1, wisr::key_class_current) + row_key(id),
+      db->Put(w, std::string(1, sm1_internal::key_class_current) + row_key(id),
               header + row_value(id));
     }
     rocksdb::CompactRangeOptions c;
@@ -327,7 +327,7 @@ int main(int argc, char **argv) {
           getenv("NOSNAP") ? nullptr : db->GetSnapshot();
       ro.snapshot = snap;
       ro.auto_prefix_mode = !getenv("NOAUTO");
-      std::string upper(1, wisr::key_class_old);
+      std::string upper(1, sm1_internal::key_class_old);
       rocksdb::Slice upper_slice(upper);
       if (!getenv("NOUPPER"))
         ro.iterate_upper_bound = &upper_slice;
@@ -335,7 +335,7 @@ int main(int argc, char **argv) {
       uint64_t rows = 0;
       size_t bytes = 0;
       auto t0 = std::chrono::steady_clock::now();
-      for (it->Seek(std::string(1, wisr::key_class_current)); it->Valid();
+      for (it->Seek(std::string(1, sm1_internal::key_class_current)); it->Valid();
            it->Next()) {
         bytes += it->value().size() - cls_header;
         rows++;
@@ -389,9 +389,9 @@ int main(int argc, char **argv) {
       for (it->SeekToFirst(); it->Valid(); it->Next()) {
         if (versioned && decode) {
           // Decode the version, as sm1's scan does for visibility.
-          wisr::version_t v;
-          wisr::version_decode_key(it->key(), &v);
-          wisr::version_decode_value(it->value(), &v);
+          sm1_internal::version_t v;
+          sm1_internal::version_decode_key(it->key(), &v);
+          sm1_internal::version_decode_value(it->value(), &v);
           bytes += v.payload.size();
         } else {
           // A version's value carries 9 bytes of header before the row.

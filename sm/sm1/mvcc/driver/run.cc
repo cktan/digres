@@ -513,7 +513,7 @@ void worker_main(worker_t *w) {
 bool waiting(sm1::session_t *s) {
   // Hold every lock mutex: a waiter's list is written under its
   // partition's, or xact_mu.
-  wisr::lock_all_t all(s->db);
+  sm1_internal::lock_all_t all(s->db);
   return !s->waiting_for.empty();
 }
 
@@ -527,8 +527,7 @@ public:
         m_out(*out) {
     // A home directory of its own, so no run sees another's state.
     std::string tmpl =
-        (std::filesystem::temp_directory_path() / "wisr-driver-XXXXXX")
-            .string();
+        (std::filesystem::temp_directory_path() / "sm-driver-XXXXXX").string();
     m_home = mkdtemp(tmpl.data());
     m_ok = sm1::init(m_home.c_str()) == 0;
     m_ok = m_ok && sm1::attach(m_home.c_str(), m_env) == 0;

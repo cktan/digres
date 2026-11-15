@@ -483,7 +483,7 @@ later stream the same bytes (§10). How the fields map:
   in binary on request; an unchanged long value is
   `pgoutput`'s `u` (§6.3), a null `n`.
 - **DDL and sequences** are Message, transactional, with the
-  prefixes `wisr.schema` and `wisr.sequence`; a consumer that
+  prefixes `sm.schema` and `sm.sequence`; a consumer that
   does not know them passes them by, as `pgoutput`'s consumers
   do any message they did not ask for. The content is the
   object as a small JSON document: kind, oid, schema, name, and

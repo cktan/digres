@@ -147,7 +147,7 @@ need_index(session_ctx_t *s, const std::string &name, sm_lockmode_t mode,
 static Janet cfun_env_init(int32_t argc, Janet *argv) {
   janet_fixarity(argc, 1);
   const char *path = janet_getcstring(argv, 0);
-  // Initialize target directory as wisr environment.
+  // Initialize target directory as sm environment.
   if (get_catalog().env_init(path) != 0) {
     panic_sm_error("env-init");
   }
@@ -174,7 +174,7 @@ static Janet cfun_env_attach(int32_t argc, Janet *argv) {
                   ":cache-bytes");
     }
   }
-  // Attach to the wisr environment.
+  // Attach to the sm environment.
   if (get_catalog().env_attach(path, toast, &opt) != 0) {
     panic_sm_error("env-attach");
   }

@@ -4,7 +4,7 @@
 # the transaction's writes made before the save, at the save's
 # snapshot, and nothing since.
 
-(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/wisr_rel_test_stmt_view"))
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_stmt_view"))
 (rm-rf test-dir)
 (env-init test-dir)
 (env-attach test-dir)

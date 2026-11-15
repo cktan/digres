@@ -7,8 +7,8 @@
  * env.h -- the environment: one process's handle on a home
  * directory (../DBMGR.md §4).
  */
-#ifndef WISR_ENV_H
-#define WISR_ENV_H
+#ifndef SM1_ENV_H
+#define SM1_ENV_H
 
 #include "bufpool.h"
 #include "sm1.h"
@@ -28,23 +28,23 @@
 
 #include "memcount.h"
 
-namespace wisr {
+namespace sm1_internal {
 struct db_t;
 }
 
 /* Home directory format version, stored as "M" | "version". */
-#define WISR_HOME_VERSION 1
+#define SM1_HOME_VERSION 1
 
 /* Root db keys (../DBMGR.md §4). */
-#define WISR_ROOT_DBNAME_PREFIX "D"
-#define WISR_ROOT_NEXT_DBID "Mnext_dbid"
-#define WISR_ROOT_VERSION "Mversion"
+#define SM1_ROOT_DBNAME_PREFIX "D"
+#define SM1_ROOT_NEXT_DBID "Mnext_dbid"
+#define SM1_ROOT_VERSION "Mversion"
 /*
  * The size each database's new log is zero-filled to, 0 for none: 8
  * bytes big-endian, decided by the home's first attach
  * (../DBMGR.md).
  */
-#define WISR_ROOT_WAL_PREALLOC "Mwal_prealloc"
+#define SM1_ROOT_WAL_PREALLOC "Mwal_prealloc"
 
 struct sm1::env_t {
   std::string homedir;
@@ -57,7 +57,7 @@ struct sm1::env_t {
    * The pages of every database's trees (../BUFMGR.md), a
    * quarter of block_cache_bytes, made by attach.
    */
-  std::unique_ptr<wisr::bufpool_t> bufpool;
+  std::unique_ptr<sm1_internal::bufpool_t> bufpool;
   /*
    * The Env every database's instance writes through, its new logs
    * zero-filled (walfs.h, ../DBMGR.md); none, RocksDB's own, where
@@ -71,11 +71,11 @@ struct sm1::env_t {
    */
   rocksdb::DB *tmp = nullptr;
   /* The listener of tmp's memtables, for its stores' counts. */
-  std::shared_ptr<wisr::memcount_listener_t> tmp_listener;
+  std::shared_ptr<sm1_internal::memcount_listener_t> tmp_listener;
   std::mutex mu; /* guards the root db and the two sets below */
 
   /* Open databases by name, shared by their sessions. */
-  std::unordered_map<std::string, wisr::db_t *> dbs;
+  std::unordered_map<std::string, sm1_internal::db_t *> dbs;
 
   /* Every open session, for sm1::detach. */
   std::unordered_set<sm1::session_t *> sessions;
@@ -94,7 +94,7 @@ struct sm1::env_t {
   ~env_t();
 };
 
-namespace wisr {
+namespace sm1_internal {
 
 /* Start env's db reaper; an environment's first act once attached. */
 void env_start_db_reaper(sm1::env_t *env);
@@ -116,6 +116,6 @@ std::string env_db_path(const sm1::env_t *env, uint64_t dbid);
  */
 int env_destroy_db_dir(const std::string &path);
 
-} // namespace wisr
+} // namespace sm1_internal
 
-#endif /* WISR_ENV_H */
+#endif /* SM1_ENV_H */

@@ -73,8 +73,8 @@ int meta_seq_keys(sm1::session_t *s) {
   std::unique_ptr<rocksdb::Iterator> it(
       s->db->rdb->NewIterator(rocksdb::ReadOptions(), s->db->cf_meta));
   int n = 0;
-  for (it->Seek(WISR_META_SEQ_PREFIX); it->Valid(); it->Next()) {
-    if (!it->key().starts_with(WISR_META_SEQ_PREFIX)) {
+  for (it->Seek(SM1_META_SEQ_PREFIX); it->Valid(); it->Next()) {
+    if (!it->key().starts_with(SM1_META_SEQ_PREFIX)) {
       break;
     }
     n++;
@@ -206,13 +206,13 @@ TEST_CASE("a sequence refuses a malformed or unreadable lease") {
   REQUIRE(1 == next(s));
   sm1::seqref_t ref;
   REQUIRE(0 == sm1::seqref(s, SEQ, ref));
-  std::string key(WISR_META_SEQ_PREFIX);
+  std::string key(SM1_META_SEQ_PREFIX);
   sm0::put_be64(key, ref.seqid);
   std::string lease;
   REQUIRE(s->db->rdb->Get(rocksdb::ReadOptions(), s->db->cf_meta, key, &lease)
               .ok());
   // Stop background access before replacing the database for the probe.
-  wisr::gc_stop(s->db);
+  sm1_internal::gc_stop(s->db);
   s->db->seqs.erase(ref.seqid);
   rocksdb::DB *original = s->db->rdb;
   sm1::errnum_t expected = sm1::SM_ERR_CORRUPT;
@@ -227,7 +227,7 @@ TEST_CASE("a sequence refuses a malformed or unreadable lease") {
   SUBCASE("failed lease read") {
     // Fail only lease reads; catalog lookups still work.
     s->db->test_before_meta_read = [](rocksdb::Slice key) {
-      return key.starts_with(WISR_META_SEQ_PREFIX)
+      return key.starts_with(SM1_META_SEQ_PREFIX)
                  ? rocksdb::Status::IOError("lease read failed")
                  : rocksdb::Status::OK();
     };

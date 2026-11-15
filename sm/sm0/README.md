@@ -31,7 +31,7 @@ into `namespace sm1`, so the stack and its callers call them
 [`../sm1/API.md`](../sm1/API.md)
 documents them there.
 sm1's `src/error.h` and `src/log.h` likewise bring the setters
-and `log_msg` into its `namespace wisr`, beside
+and `log_msg` into its `namespace sm1_internal`, beside
 `set_status_error`, which knows RocksDB and so stays in sm1.
 
 ## sm_sys.h

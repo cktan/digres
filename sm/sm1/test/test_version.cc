@@ -4,7 +4,7 @@
  */
 
 /*
- * test_version.cc -- the version codec, the wisr.store.v2
+ * test_version.cc -- the version codec, the sm.store.v2
  * comparator and its prefix extractor (../DBMGR.md §6.2,
  * ../ROWSTORE.md §3.2).
  */
@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-using namespace wisr;
+using namespace sm1_internal;
 
 TEST_CASE("version keys round-trip through encode and decode") {
   // Verify a version key decodes to the userkey, wts, and seq it encodes.
@@ -140,7 +140,7 @@ TEST_CASE("scan bounds bracket every version of their userkey") {
 }
 
 TEST_CASE("the comparator orders keys by class, then within each class") {
-  // Verify wisr.store.v2's class order and its two orders within.
+  // Verify sm.store.v2's class order and its two orders within.
   // 1. Every versioned key sorts before every current key, and every
   //    current key before every old key, whatever their bytes.
   // 2. Current keys sort bytewise, a key before the longer keys it
@@ -175,7 +175,7 @@ TEST_CASE("the comparator orders keys by class, then within each class") {
 
 TEST_CASE("the prefix extractor keys a versioned key on its userkey, any "
           "other whole") {
-  // Verify wisr.prefix.v2's domain and its prefixes.
+  // Verify sm.prefix.v2's domain and its prefixes.
   // 1. A versioned key's prefix is its class and userkey: every
   //    version of a userkey shares it.
   // 2. A current or an old key is its own prefix.

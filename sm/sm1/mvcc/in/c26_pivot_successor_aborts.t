@@ -2,7 +2,7 @@
 #
 # c06's chain, T1 --rw--> T2 --rw--> T3, with T3 aborting
 # instead of committing. An aborted T3 cannot be part of a
-# cycle. wisr keeps the edges themselves, and an abort takes
+# cycle. sm keeps the edges themselves, and an abort takes
 # its edges with it, so T2 is no longer a pivot and commits.
 
 pairings all

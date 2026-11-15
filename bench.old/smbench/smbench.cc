@@ -256,8 +256,8 @@ rocksdb::DB *raw_open(const std::string &dir, bool classed) {
   t.block_size = 16 << 10;
   t.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10));
   if (classed) {
-    o.comparator = wisr::version_comparator();
-    o.prefix_extractor = wisr::version_prefix_extractor();
+    o.comparator = sm1_internal::version_comparator();
+    o.prefix_extractor = sm1_internal::version_prefix_extractor();
     t.whole_key_filtering = false;
   }
   o.table_factory.reset(rocksdb::NewBlockBasedTableFactory(t));
@@ -272,7 +272,7 @@ rocksdb::DB *raw_open(const std::string &dir, bool classed) {
 
 /* The key a raw store keeps row id under: classed, a current key. */
 std::string raw_key(uint64_t id, bool classed) {
-  return classed ? std::string(1, wisr::key_class_current) + row_key(id)
+  return classed ? std::string(1, sm1_internal::key_class_current) + row_key(id)
                  : row_key(id);
 }
 
@@ -285,7 +285,7 @@ void raw_fill(rocksdb::DB *db, bool classed, uint64_t rows, size_t pad) {
   w.disableWAL = true;
   std::string header(classed ? 29 : 0, '\0');
   if (classed) {
-    header[0] = static_cast<char>(wisr::version_stamped);
+    header[0] = static_cast<char>(sm1_internal::version_stamped);
   }
   for (uint64_t i = 1; i <= rows; i++) {
     if (!db->Put(w, raw_key(i, classed), header + row_value(i, pad, 'v'))
@@ -306,7 +306,7 @@ void raw_fill(rocksdb::DB *db, bool classed, uint64_t rows, size_t pad) {
 double raw_scan(rocksdb::DB *db, bool classed, uint64_t rows) {
   rocksdb::ReadOptions ro;
   const rocksdb::Snapshot *snap = classed ? db->GetSnapshot() : nullptr;
-  std::string upper(1, wisr::key_class_old);
+  std::string upper(1, sm1_internal::key_class_old);
   rocksdb::Slice upper_slice(upper);
   if (classed) {
     ro.snapshot = snap;
@@ -316,7 +316,7 @@ double raw_scan(rocksdb::DB *db, bool classed, uint64_t rows) {
   auto t0 = std::chrono::steady_clock::now();
   std::unique_ptr<rocksdb::Iterator> it(db->NewIterator(ro));
   uint64_t n = 0, sum = 0;
-  for (classed ? it->Seek(std::string(1, wisr::key_class_current))
+  for (classed ? it->Seek(std::string(1, sm1_internal::key_class_current))
                : it->SeekToFirst();
        it->Valid(); it->Next()) {
     n++;
