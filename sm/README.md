@@ -1,9 +1,10 @@
-# sm, the storage stack of digres
+# sm
 
-sm is the storage engine of digres
-([`../dg/README.md`](../dg/README.md)): a stack of storage
-levels, each one built on the level below it. Its C++ code is
-in `namespace wisr`, and its RocksDB names start with `wisr.`.
+sm is a storage engine for a SQL frontend: a stack of storage
+levels, each one built on the level below it. It is a library
+of its own. digres ([`../dg/README.md`](../dg/README.md)) is
+its first client. Its C++ code is in `namespace wisr`, and its
+RocksDB names start with `wisr.`.
 
 | Level | Where | What it is |
 | --- | --- | --- |
@@ -94,9 +95,8 @@ by driving the wrapper through the `rel/` test suite.
   driver over `include/sm.h`: its design and its verbs
 - [`sm0/VFD.md`](sm0/VFD.md) — virtual file descriptors, under
   one ceiling for the process
-- [`FEATURELIST.md`](FEATURELIST.md) — the PostgreSQL subset
-  digres targets, decided feature by feature; not all of it is
-  built
+- [`FEATURELIST.md`](FEATURELIST.md) — the PostgreSQL subset sm
+  targets, decided feature by feature; not all of it is built
 - [`PGFORK.md`](PGFORK.md) — what it would take to put PostgreSQL
   on this stack, and what that target forces on level 2's design
 

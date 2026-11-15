@@ -1,4 +1,4 @@
-# FEATURELIST — the PostgreSQL subset digres targets
+# FEATURELIST — the PostgreSQL subset sm targets
 
 [`OBJECTIVE.md`](OBJECTIVE.md) says wisr's PostgreSQL target is a
 subset — the essential parts, not full compatibility. This is

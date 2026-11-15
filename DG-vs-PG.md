@@ -1,7 +1,7 @@
 # DG vs. PG: digres and PostgreSQL 18
 
 `digres` (DG) is a hard fork of PostgreSQL 18.6 (PG) that runs on
-its own storage stack (`sm/`). DG keeps PG's wire protocol,
+the sm storage stack (`sm/`). DG keeps PG's wire protocol,
 analyzer, planner, and executor. It replaces the process model,
 storage engine, transaction manager, catalog, and authentication
 layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.

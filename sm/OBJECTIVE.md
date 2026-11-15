@@ -9,8 +9,8 @@ dependency of anything below, but they shape the decisions at
 every level, because a design that could not host the subset
 would be wasted work at this project's scale.
 
-sm is the storage stack of digres: a stack of storage levels,
-each one built on the level below it.
+sm is a stack of storage levels, each one built on the level
+below it.
 [`README.md`](README.md) has the map of the stack and where to
 read about each level.
 
@@ -171,7 +171,7 @@ These are settled; they bind every level below.
   [`sm3/SM3_OBJECTIVE.md`](sm3/SM3_OBJECTIVE.md) — what each
   level is for, and the decisions that settled its own design.
 - [`FEATURELIST.md`](FEATURELIST.md) — which PostgreSQL features
-  digres targets.
+  sm targets.
 - [`PGFORK.md`](PGFORK.md) — the PostgreSQL target in full,
   including the parts of it that are not yet verified.
 - [`DESIGN.md`](DESIGN.md) (this directory) — how the stack fits
