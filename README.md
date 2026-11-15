@@ -168,7 +168,7 @@ certificates its TLS tests make, `bc` for `bench.old/btree.sh`.
     git -C ~/p/postgres18 worktree add --detach \
         ~/p/postgres18-724edf9 724edf9
     cd ~/p/postgres18-724edf9
-    ./configure --prefix=$HOME/p/wisr/bench/build/pg18
+    ./configure --prefix=$HOME/p/digres/bench/build/pg18
     make -j4 && make install
     ```
 

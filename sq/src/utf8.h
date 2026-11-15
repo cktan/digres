@@ -7,7 +7,7 @@
  * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  * Portions Copyright (c) 2026, CK Tan: the changes for sq,
- * under the MIT License (https://github.com/cktan/wisr/blob/main/LICENSE)
+ * under the MIT License (https://github.com/cktan/digres/blob/main/LICENSE)
  *
  * sq reads UTF-8 and nothing else. These are PostgreSQL's functions
  * of the same purpose (common/wchar.c, utils/mb/mbutils.c), for that

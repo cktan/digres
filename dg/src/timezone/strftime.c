@@ -3,7 +3,7 @@
 /*
  * Copyright 1989 The Regents of the University of California.
  * Portions Copyright (c) 2026, CK Tan: the changes for digres,
- * under the MIT License (https://github.com/cktan/wisr/blob/main/LICENSE)
+ * under the MIT License (https://github.com/cktan/digres/blob/main/LICENSE)
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

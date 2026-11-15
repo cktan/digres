@@ -4,7 +4,7 @@
  *
  * Portions Copyright (c) 2002-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 2026, CK Tan: the changes for digres,
- * under the MIT License (https://github.com/cktan/wisr/blob/main/LICENSE)
+ * under the MIT License (https://github.com/cktan/digres/blob/main/LICENSE)
  *
  * src/backend/utils/adt/pg_locale_builtin.c
  *

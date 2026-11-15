@@ -12,7 +12,7 @@
  * Portions Copyright (c) 1996-2025, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  * Portions Copyright (c) 2026, CK Tan: the changes for digres,
- * under the MIT License (https://github.com/cktan/wisr/blob/main/LICENSE)
+ * under the MIT License (https://github.com/cktan/digres/blob/main/LICENSE)
  *
  *
  * IDENTIFICATION
@@ -434,8 +434,8 @@ static void help(const char *progname) {
       _("\nPlease read the documentation for the complete list of run-time\n"
         "configuration settings and how to set them on the command line or in\n"
         "the configuration file.\n\n"
-        "Report bugs at <https://github.com/cktan/wisr/issues>.\n"
-        "Home page: <https://github.com/cktan/wisr>\n"));
+        "Report bugs at <https://github.com/cktan/digres/issues>.\n"
+        "Home page: <https://github.com/cktan/digres>\n"));
 }
 
 static void check_root(const char *progname) {
