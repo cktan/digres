@@ -1,4 +1,4 @@
-# DESIGN — wisr
+# DESIGN — sm
 
 This document says how the stack in
 [`OBJECTIVE.md`](OBJECTIVE.md) fits together: the levels, the
