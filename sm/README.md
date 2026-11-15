@@ -1,10 +1,11 @@
 # sm
 
-sm is a storage engine for a SQL frontend: a stack of storage
-levels, each one built on the level below it. It is a library
-of its own. digres ([`../dg/README.md`](../dg/README.md)) is
-its first client. Its C++ code is in `namespace wisr`, and its
-RocksDB names start with `wisr.`.
+sm is a storage engine for a SQL database system: a stack of
+storage levels, each one built on the level below it. It is a
+library of its own. digres
+([`../dg/README.md`](../dg/README.md)) is its first client. Its
+C++ code is in `namespace wisr`, and its RocksDB names start
+with `wisr.`.
 
 | Level | Where | What it is |
 | --- | --- | --- |
