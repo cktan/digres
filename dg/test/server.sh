@@ -14,6 +14,9 @@
 # to run, build/digres if it is not set: "make tsan" sets it to the build
 # under the thread sanitizer, and then a report in the log fails.
 cd "$(dirname "$0")/.." || exit 1
+# PostgreSQL 18.6's psql, built in ../ext, before any other: an older one
+# fails on \d+.
+export PATH=$PWD/../ext/pg18.6/install/bin:$PATH
 if ! command -v psql > /dev/null; then
   echo "server: SKIPPED (no psql to connect with)"
   exit 0

@@ -101,16 +101,18 @@ By hand, on Ubuntu:
 sudo apt install build-essential cmake git wget flex bison python3 \
     clang-format libicu-dev \
     libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev libbz2-dev \
-    libreadline-dev libpq-dev libssl-dev openssl pkg-config bc \
-    postgresql-client linux-tools-generic
+    libreadline-dev libssl-dev openssl pkg-config bc \
+    linux-tools-generic
 ```
 
 `libssl-dev` is OpenSSL, which digres always links for TLS.
 `wget` downloads `ext/`'s sources. `libsnappy-dev` to
 `libbz2-dev` are RocksDB's compression libraries.
-`libreadline-dev` is for building PostgreSQL 18.6, `libpq-dev`
-and `pkg-config` for digres's test clients, `openssl` for the
-certificates its TLS tests make, `bc` for `bench.old/btree.sh`.
+`libreadline-dev` and `pkg-config` are for building PostgreSQL
+18.6, `openssl` for the certificates its TLS tests make, `bc`
+for `bench.old/btree.sh`. No package holds PostgreSQL or
+RocksDB: `ext/` builds both, with the server, `psql`,
+`pgbench` and `libpq`.
 
 - **`ext/`: PostgreSQL 18.6 and RocksDB**, downloaded with
   `wget` and built there by `make` the first time
@@ -139,14 +141,11 @@ certificates its TLS tests make, `bc` for `bench.old/btree.sh`.
   cd janet && git checkout 86ca958e
   make -j4 && sudo make install && sudo ldconfig
   ```
-- **`psql`**, from `postgresql-client`: digres serves
-  PostgreSQL's own clients. `ext/pg18.6`'s `psql` is the one to
-  use by hand (§Connect).
-- **`pgbench`**, for the benchmarks: `ext/pg18.6`'s. Ubuntu's is
-  in the server package, and `/usr/bin/pgbench` alone only fails
-  without it, so put `ext`'s first: `export
+- **`psql` and `pgbench`**, `ext/pg18.6`'s: digres serves
+  PostgreSQL's own clients. Put them on `PATH` by hand: `export
   PATH=$HOME/p/digres/ext/pg18.6/install/bin:$PATH`, in
-  `~/.profile` to keep it. dg's tests put it first themselves.
+  `~/.profile` to keep it (§Connect). dg's tests put them
+  first themselves.
 
 ## Building
 

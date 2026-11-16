@@ -9,7 +9,7 @@ to disk on both. The read benchmarks are in
 
 ```
 make -C dg release -j4
-PGBIN=$HOME/pg18/bin wbench/run.sh
+wbench/run.sh
 ```
 
 `run.sh` starts both servers itself, with their data under

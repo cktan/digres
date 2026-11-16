@@ -19,6 +19,9 @@
 # What differs is left in build/test/NAME.out and NAME.diff, and in
 # NAME.threadN.out and NAME.threadN.diff for each of the 8 sessions.
 cd "$(dirname "$0")/.." || exit 1
+# PostgreSQL 18.6's psql, built in ../ext, before any other: an older one
+# fails on \d+.
+export PATH=$PWD/../ext/pg18.6/install/bin:$PATH
 if ! command -v psql > /dev/null; then
   echo "run: SKIPPED (no psql to connect with)"
   exit 0

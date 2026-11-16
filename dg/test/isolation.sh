@@ -17,6 +17,9 @@
 # DIGRES names the server, build/digres if it is not set. What each spec
 # printed and its diff are in build/test/isolation/SPEC/.
 cd "$(dirname "$0")/.." || exit 1
+# PostgreSQL 18.6's psql, built in ../ext, before any other: an older one
+# fails on \d+.
+export PATH=$PWD/../ext/pg18.6/install/bin:$PATH
 src=${PG18_SRC:-$PWD/../ext/pg18.6}/src/test/isolation
 work=$PWD/build/test/isolation
 port=${DG_TEST_PORT:-$(python3 -c 'import socket; s = socket.socket()

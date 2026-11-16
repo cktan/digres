@@ -10,8 +10,8 @@
 #   test/slt.sh --pg18 [FILE...]    run them on PostgreSQL 18 instead
 #   test/slt.sh --rewrite FILE...   fill FILE's results from PostgreSQL 18
 #
-# PostgreSQL 18 is the one installed in $PG18, ~/pg18 if that is not
-# set: its results are the ones digres must give. On digres, "skipif" and
+# PostgreSQL 18 is the one installed in $PG18, ../ext/pg18.6/install if
+# that is not set: its results are the ones digres must give. On digres, "skipif" and
 # "onlyif" match both "digres" and "postgresql"; on PostgreSQL 18,
 # "postgresql" alone. The server runs on a data directory made in
 # build/test/slt, at port DG_TEST_PORT, or if that is not set one the
@@ -26,7 +26,7 @@ port=${DG_TEST_PORT:-$(python3 -c 'import socket; s = socket.socket()
 s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}
 digres=${DIGRES:-build/digres}
 initdb=${INITDB:-build/digres --init}
-pg18=${PG18:-$HOME/pg18}
+pg18=${PG18:-$PWD/../ext/pg18.6/install}
 target=digres
 args=()
 case $1 in

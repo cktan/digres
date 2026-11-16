@@ -23,14 +23,13 @@
 # Sourced by server.sh, using its server, port, fail and server_ready.
 tw=$work/tls
 mkdir -p "$tw"
-# A psql whose libpq has TLS: the one on PATH, else Ubuntu's; one built
+# A psql whose libpq has TLS: the one on PATH, ../ext's; one built
 # without it cannot ask for TLS ("SSL support is not compiled in").
 no_tls() {
   "$1" "host=localhost port=1 sslmode=require" 2>&1 |
     grep -q 'SSL support is not compiled in'
 }
 tpsql=psql
-no_tls "$tpsql" && tpsql=/usr/bin/psql
 if [ ! -x "$(command -v "$tpsql")" ] || no_tls "$tpsql"; then
   fail "tls: no psql with TLS; build PostgreSQL 18 --with-ssl=openssl"
   return

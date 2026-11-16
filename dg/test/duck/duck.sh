@@ -50,9 +50,11 @@ die() {
 [ -x build/digres ] ||
   die "no build/digres; run DEBUG=1 make -C sm -j4 && DEBUG=1 make -C dg -j4"
 
-# The runner, built as dg/Makefile builds build/slt, less -lcrypto.
-g++ -std=c++20 -O2 -Wall $(pkg-config --cflags libpq) -o build/duckrun \
-  test/duck/duckrun.cc -lpq || die "could not build build/duckrun"
+# The runner, built as dg/Makefile builds build/slt, less -lcrypto: on
+# $pg18's libpq, with an rpath so it runs without LD_LIBRARY_PATH.
+g++ -std=c++20 -O2 -Wall -I"$pg18/include" -o build/duckrun \
+  test/duck/duckrun.cc -L"$pg18/lib" -Wl,-rpath,"$pg18/lib" -lpq ||
+  die "could not build build/duckrun"
 
 # The files to run: the self-test's, or DuckDB's, fetched once with no
 # file's contents until sparse-checkout names it.

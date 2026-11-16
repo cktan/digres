@@ -15,10 +15,10 @@ test/slt.sh --pg18 [FILE...]     on PostgreSQL 18 instead
 test/slt.sh --rewrite FILE...    fill FILE's results from PostgreSQL 18
 ```
 
-PostgreSQL 18 is the one installed in `$PG18`, `~/pg18` if
-that is not set. Each file runs in a database of its own,
-made for it and dropped after. What failed, with its line,
-its SQL and the expected and actual values, is in
+PostgreSQL 18 is the one installed in `$PG18`,
+`ext/pg18.6/install` if that is not set. Each file runs in a
+database of its own, made for it and dropped after. What failed,
+with its line, its SQL and the expected and actual values, is in
 `build/test/slt/failures`; each file's counts and time are in
 `build/test/slt/tally`, and every record's time, the slowest
 first, in `build/test/slt/times`. A time much worse than

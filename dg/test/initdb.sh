@@ -9,6 +9,9 @@
 #
 # Each check's output is left in build/test/initdb/.
 cd "$(dirname "$0")/.." || exit 1
+# PostgreSQL 18.6's psql, built in ../ext, before any other: an older one
+# fails on \d+.
+export PATH=$PWD/../ext/pg18.6/install/bin:$PATH
 work=build/test/initdb
 rm -rf "$work"
 mkdir -p "$work"

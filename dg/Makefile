@@ -43,6 +43,10 @@ LINK_ROCKSDB = $(ROCKSDB_LIB) $(ROCKSDB_DEPS)
 # PostgreSQL 18.6's psql and pgbench, built in ../ext, before any other:
 # the tests need psql 18, and an older one fails on \d+.
 export PATH := $(PG18)/install/bin:$(PATH)
+# Its libpq, which the test clients link: the header, the library, and an
+# rpath, so a client runs without LD_LIBRARY_PATH.
+PQ_CFLAGS = -I$(PG18)/install/include
+PQ_LIBS = -L$(PG18)/install/lib -Wl,-rpath,$(PG18)/install/lib -lpq
 # OpenSSL for TLS (../aa/ROLE.md section 8); the hashes stay PostgreSQL's
 # own (src/common/cryptohash.c), so cryptohash_openssl.c is skipped.
 LDLIBS = $(LINK_ROCKSDB) -lssl -lcrypto -licui18n -licuuc -licudata -lm \
@@ -252,18 +256,19 @@ SLT_QUICK = $(filter-out %/select5.test,$(sort $(wildcard test/slt/*.test \
     test/slt/sqlite/*.test)))
 
 # The sqllogictest runner (test/slt/README.md), a client of the
-# system's libpq, as psql is; it hashes a result with OpenSSL's MD5.
+# libpq of ../ext's PostgreSQL, as psql is; it hashes a result with
+# OpenSSL's MD5.
 build/slt: test/slt/slt.cc
 	@mkdir -p build
-	$(CXX) -std=c++20 -O2 -Wall $(shell pkg-config --cflags libpq) \
-	    -o $@ $< -lpq -lcrypto
+	$(CXX) -std=c++20 -O2 -Wall $(PQ_CFLAGS) \
+	    -o $@ $< $(PQ_LIBS) -lcrypto
 
 # A client binding numerics in binary, as a driver does (test/numbin),
-# which test/server.sh runs; a client of the system's libpq, as slt is.
+# which test/server.sh runs; a client of ../ext's libpq, as slt is.
 build/numbin: test/numbin/numbin.cc
 	@mkdir -p build
-	$(CXX) -std=c++20 -O2 -Wall $(shell pkg-config --cflags libpq) \
-	    -o $@ $< -lpq
+	$(CXX) -std=c++20 -O2 -Wall $(PQ_CFLAGS) \
+	    -o $@ $< $(PQ_LIBS)
 
 # The sqllogictest files under test/slt, on digres.
 .PHONY: slt

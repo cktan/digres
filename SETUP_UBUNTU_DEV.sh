@@ -32,16 +32,16 @@ step() { echo "== $*"; }
 # 1. The packages: the compilers and generators, wget for ext/'s
 #    downloads, the libraries sm and digres link (OpenSSL among them,
 #    for TLS, and RocksDB's compression libraries), PostgreSQL's build
-#    dependencies, the clients, and openssl for the TLS tests'
-#    certificates.
+#    dependencies, and openssl for the TLS tests' certificates. No
+#    PostgreSQL package: ext/'s build has the server, psql, pgbench
+#    and libpq.
 step "apt packages"
 $sudo apt-get update
 DEBIAN_FRONTEND=noninteractive $sudo apt-get install -y \
   build-essential cmake git wget ca-certificates flex bison python3 \
   clang-format libicu-dev \
   libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev libbz2-dev \
-  libreadline-dev libpq-dev libssl-dev openssl pkg-config bc \
-  postgresql-client linux-tools-generic
+  libreadline-dev libssl-dev openssl pkg-config bc linux-tools-generic
 
 mkdir -p "$src"
 
@@ -57,7 +57,7 @@ if [ ! -f /usr/local/include/janet.h ]; then
   $sudo ldconfig
 fi
 
-# 3. ext/'s PostgreSQL 18.6's psql and pgbench before Ubuntu's.
+# 3. ext/'s PostgreSQL 18.6's psql and pgbench on PATH.
 line="export PATH=$top/ext/pg18.6/install/bin:\$PATH"
 if ! grep -qxF "$line" "$HOME/.profile" 2>/dev/null; then
   step "PATH in ~/.profile"
