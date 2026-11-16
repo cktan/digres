@@ -137,10 +137,13 @@ TEST_CASE("btree reaper queue: writers and btree reapers on many threads lose "
     std::vector<uint64_t> mine;
     reap_page_t p;
     for (;;) {
+      // Read running before the take: a writer that finishes after an
+      // empty take may have queued pages the take did not see.
+      bool writers_done = 0 == running;
       reap_take_t t = q.take(1, p);
       if (reap_take_t::page == t) {
         mine.push_back(p.pageid);
-      } else if (reap_take_t::empty == t && 0 == running) {
+      } else if (reap_take_t::empty == t && writers_done) {
         break;
       }
     }
