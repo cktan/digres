@@ -274,7 +274,7 @@ void checkDataDir(void) {
 #if !defined(WIN32) && !defined(__CYGWIN__)
   SetDataDirectoryCreatePerm(stat_buf.st_mode);
 
-  umask(pcb->pg_mode_mask);
+  umask(postmaster_tcb->pg_mode_mask);
 #endif
 
   /* Check for PG_VERSION */
@@ -798,7 +798,7 @@ static void UnlinkLockFiles(int status, Datum arg) {
    * proc_exit() to do it, but that seems uglier.  In a standalone backend,
    * use NOTICE elevel to be less chatty.
    */
-  ereport(pcb->IsPostmasterEnvironment ? LOG : NOTICE,
+  ereport(postmaster_tcb->IsPostmasterEnvironment ? LOG : NOTICE,
           (errmsg("database system is shut down")));
 }
 
@@ -989,7 +989,7 @@ static void CreateLockFile(const char *filename, bool amPostmaster,
    */
   snprintf(buffer, sizeof(buffer), "%d\n%s\n" INT64_FORMAT "\n%d\n%s\n",
            amPostmaster ? (int)my_pid : -((int)my_pid), pcb->DataDir,
-           MyStartTime, pcb->PostPortNumber, socketDir);
+           MyStartTime, postmaster_tcb->PostPortNumber, socketDir);
 
   /*
    * In a standalone backend, the next line (LOCK_FILE_LINE_LISTEN_ADDR)
@@ -1324,10 +1324,9 @@ void ValidatePgVersion(const char *path) {
  */
 
 /*
- * Whether shared_preload_libraries are being loaded, and are loaded:
- * pcb->process_shared_preload_libraries_in_progress and _done.
+ * Whether shared_preload_libraries are being loaded:
+ * pcb->process_shared_preload_libraries_in_progress.
  */
-
 
 /*
  * load the shared libraries listed in 'libraries'
@@ -1382,10 +1381,9 @@ static void load_libraries(const char *libraries, const char *gucname,
  */
 void process_shared_preload_libraries(void) {
   pcb_main()->process_shared_preload_libraries_in_progress = true;
-  load_libraries(pcb->shared_preload_libraries_string.c_str(),
+  load_libraries(postmaster_tcb->shared_preload_libraries_string.c_str(),
                  "shared_preload_libraries", false);
   pcb_main()->process_shared_preload_libraries_in_progress = false;
-  pcb_main()->process_shared_preload_libraries_done = true;
 }
 
 /*

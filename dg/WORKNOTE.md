@@ -13436,3 +13436,46 @@ A check hook took the new value as a `char **`, to change it with
   the second of the newest log file's name. It replaces the
   `sleep 1` before the 1,200 statements and before
   `pg_rotate_logfile()`, which both need a new second.
+
+## Step 444: pcb changes only in its atomics after threads start
+
+- **The risk**: `pcb_t` held `std::string` settings that a reload
+  rewrites: the postmaster's SSL settings and the file logger's.
+  Every thread can read `pcb`, so a session that read one, or
+  read the file logger's without `shmem->log.mutex`, would
+  compile cleanly and race. A `std::string` assignment can free
+  the buffer the reader holds. No reader did; nothing stopped
+  one.
+- **Four classes** of what the main thread sets, by who reads it
+  and whether it changes after the first thread starts, are now
+  in the header of `control_block.h`: the postmaster's only
+  (`postmaster_tcb_t`), shared under a mutex (`shmem_t`), shared
+  as an atomic, and shared and fixed (`pcb_t`).
+- **The postmaster's only, to `postmaster_tcb_t`**: the
+  reloadable SSL and `send_abort_for_*` settings, the
+  restart-only settings the main thread alone reads
+  (`listen_addresses`, `unix_socket_directories`,
+  `unix_socket_group`, `port`, `max_connections`,
+  `shared_buffers`, `max_files_per_process`,
+  `shared_preload_libraries`, `external_pid_file`, the Bonjour
+  settings, `log_destination`'s string),
+  `IsPostmasterEnvironment` and `pg_mode_mask`. A session that
+  reads one finds `postmaster_tcb` NULL and stops at once.
+- **The file logger's settings, to `logfile_state_t`**:
+  `log_file_settings()` (`guc_tables.c`) returns them as a
+  `logfile_conf_t`, and `logfile.c` copies it into its state
+  under `shmem->log.mutex`. Only `logfile.c` knows the state's
+  layout. `publish_log_file_settings()` is gone.
+- **Fields nothing read, deleted**: the seven preset settings
+  (`block_size` and the rest; `SHOW` reads the GUC variable),
+  `oauth_validator_libraries_string` and
+  `process_shared_preload_libraries_done`. The GUC variables
+  stay.
+- **Left in `pcb_t`**: what a session reads and what never
+  changes after the first thread starts, and the atomics
+  `log_min_messages`, `log_min_error_statement` and
+  `PgReloadTime`.
+- **Test**: none new. `tls.sh` reloads `ssl_cert_file` and
+  `ssl_key_file`, and `server.sh` reloads `log_filename` with
+  `logging_collector` on; both cover the moved settings. A race
+  does not show in SQL.

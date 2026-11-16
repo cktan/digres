@@ -51,8 +51,9 @@ int run_ssl_passphrase_command(const char *prompt, bool is_server_start,
   Assert(size > 0);
   buf[0] = '\0';
 
-  command = replace_percent_placeholders(pcb->ssl_passphrase_command.c_str(),
-                                         "ssl_passphrase_command", "p", prompt);
+  command = replace_percent_placeholders(
+      postmaster_tcb->ssl_passphrase_command.c_str(), "ssl_passphrase_command",
+      "p", prompt);
 
   fh = OpenPipeStream(command, "r");
   if (fh == NULL) {

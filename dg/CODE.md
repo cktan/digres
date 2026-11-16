@@ -172,9 +172,8 @@ digres is one process; each session is a thread of it.
   - **`pcb_t`**: what the main thread owns and other threads
     read. They read it through `const pcb_t *pcb`; the main
     thread alone writes it, through `pcb_main()`, which
-    asserts it is the main thread. A field it writes after
-    the first thread starts is an atomic, or guarded by a
-    mutex its comment names.
+    asserts it is the main thread. After the first thread
+    starts, it writes only an atomic field.
   - **`shmem_t`**: what the threads share and write. Each
     field is an atomic, a mutex whose comment names what it
     guards, or an object that guards itself.
@@ -186,9 +185,17 @@ digres is one process; each session is a thread of it.
     `shmem_t`; nothing of it is reached from another thread.
   - **`postmaster_tcb_t`**: what the main thread owns and no
     other thread reads, the postmaster's own state, or a
-    standalone backend's. `main()` makes it; it is reached
+    standalone backend's, and the settings only the main
+    thread reads. `main()` makes it; it is reached
     through `thread_local postmaster_tcb_t *postmaster_tcb`,
     NULL in every other thread, and never freed.
+  - **What the main thread sets for the process is in one of
+    four classes**, by who reads it and whether it changes
+    after the first thread starts: the postmaster's only
+    (`postmaster_tcb_t`), shared under a mutex (`shmem_t`),
+    shared as an atomic (`pcb_t` or `shmem_t`), and shared and
+    fixed (`pcb_t`). The header of `control_block.h` defines
+    them.
   - A field is a value, or a `std::unique_ptr` to what the
     block owns. A non-owning raw pointer is fine, with a
     comment naming its owner (a memory context, shmem).
@@ -203,26 +210,28 @@ digres is one process; each session is a thread of it.
     thread's start and freed at its end, and NULL while it is
     being freed. A signal handler checks for NULL.
   - **A setting that changes only with a restart
-    (`PGC_POSTMASTER`) is read as `pcb->name`**, never as the
-    GUC variable, which each thread has a copy of.
+    (`PGC_POSTMASTER`) is read as `pcb->name`**, or as
+    `postmaster_tcb->name` if only the main thread reads it,
+    never as the GUC variable, which each thread has a copy of.
     `publish_postmaster_settings()` (`guc_tables.c`) copies it
-    into `pcb_t` once the postmaster has read its settings; the
-    variable is `static` there, so no other file can name it.
-    A new such setting adds a `pcb_t` field and a line in that
-    function. The same holds for a preset one (`PGC_INTERNAL`,
-    such as `block_size`), which the build fixes. Each `pcb_t`
-    field of a preset setting names, in a comment, the file
-    the variable was defined in.
-  - **A reloadable setting that one module alone reads** may be
-    a `pcb_t` field the postmaster rewrites on each reload,
-    guarded by a mutex the field's comment names. The file
-    logger's are: `publish_log_file_settings()` writes them
-    with `shmem->log.mutex` held, and `logfile.c` reads
+    once the postmaster has read its settings; the variable is
+    `static` there, so no other file can name it. A new such
+    setting adds a field and a line in that function.
+  - **A preset setting** (`PGC_INTERNAL`, such as
+    `block_size`) has no field: the build fixes it, so the
+    code reads the constant (`BLCKSZ`), and `SHOW` reads the
+    GUC variable.
+  - **A reloadable setting that one module alone reads** is in
+    the module's own state in `shmem_t`, guarded by a mutex.
+    The file logger's are: `logfile.c` copies them from
+    `log_file_settings()` (`guc_tables.c`) into
+    `logfile_state_t` with `shmem->log.mutex` held, and reads
     them with it held.
   - **A reloadable setting only the postmaster reads**
-    (`PGC_SIGHUP`, such as the `ssl_*` file names) is a `pcb_t`
-    field, in the section of the postmaster's own reloadable
-    settings. `publish_postmaster_reload_settings()`
+    (`PGC_SIGHUP`, such as the `ssl_*` file names) is a
+    `postmaster_tcb_t` field, in the section of the
+    postmaster's reloadable settings.
+    `publish_postmaster_reload_settings()`
     (`guc_tables.c`) copies it from the GUC variable at start
     and on each reload, and only the main thread reads it, so
     it needs no guard. If a session thread reads it, make it

@@ -13,10 +13,8 @@
  * it and who reads it (CODE.md section 3):
  *
  * - pcb_t: what the main thread owns and other threads read, through a
- *   const pointer.  The main thread alone writes it; a field it writes
- *   after the first thread starts is an atomic, or guarded by a mutex,
- *   unless only the main thread reads it (the postmaster's reloadable
- *   settings).
+ *   const pointer.  The main thread alone writes it; after the first thread
+ *   starts, it writes only an atomic field.
  * - shmem_t: what the threads share and write.  Each field is an atomic, a
  *   mutex, whose comment names what it guards, or an object that guards
  *   itself.
@@ -30,6 +28,24 @@
  * - postmaster_tcb_t: the main thread's alone, the postmaster's: what the
  *   main thread owns and no other thread reads.  It is NULL in every other
  *   thread.
+ *
+ * What the main thread sets for the process, a setting among them, is in one
+ * of four classes, by who reads it and whether it changes after the first
+ * thread starts:
+ *
+ * 1. The postmaster's only: the main thread alone reads it, whether or not
+ *    a reload changes it.  It is in postmaster_tcb_t, so another thread that
+ *    reads it finds postmaster_tcb NULL and stops at once.
+ * 2. Shared, under a mutex: a reload changes it, and another thread reads
+ *    it with the mutex held.  It is in shmem_t: in a module's own state if
+ *    one module reads it (logfile.c's settings, under shmem->log.mutex), or
+ *    a snapshot the mutex guards (log_line_prefix).
+ * 3. Shared, an atomic: it changes after the first thread starts, and any
+ *    thread reads it.  It is a std::atomic in pcb_t (log_min_messages) or
+ *    in shmem_t (pre_auth_delay).
+ * 4. Shared, fixed: the main thread sets it before the first thread starts,
+ *    and it never changes after, so any thread reads it with no guard.  It
+ *    is a plain field of pcb_t.
  *
  * They replace the SHARED and LOCAL thread_local variables (c.h), a module
  * at a time.  pcb and shmem are made once by main(), before any thread
@@ -205,106 +221,21 @@ typedef struct pcb_t {
    * publish_postmaster_settings() once the main thread has read its
    * settings, before any session thread starts; ConfigFileName by
    * SelectConfigFiles().  Read these, never the GUC variables, which each
-   * thread has a copy of.  A string with no value is "".
+   * thread has a copy of.  A string with no value is "".  Those the main
+   * thread alone reads are in postmaster_tcb_t.
    */
-  bool enable_bonjour = false;
   bool Trace_connection_negotiation = false;
   bool Logging_collector = false;
-  int MaxConnections = 100;
   int SuperuserReservedConnections = 3;
   int ReservedConnections = 0;
-  int NBuffers = 16384;
-  int PostPortNumber = DEF_PGPORT;
   int Unix_socket_permissions = 0777;
-  int max_files_per_process = 1000;
-  /* elog.c: the bitmask of LOG_DESTINATION_*, parsed from the string below */
+  /* elog.c: the bitmask of LOG_DESTINATION_*, parsed from log_destination */
   int Log_destination = 1; /* LOG_DESTINATION_STDERR */
-  std::string bonjour_name = "";
-  std::string shared_preload_libraries_string = "";
   std::string event_source = DEFAULT_EVENT_SOURCE;
-  std::string Unix_socket_group = "";
-  std::string Unix_socket_directories = DEFAULT_PGSOCKET_DIR;
-  std::string ListenAddresses = "localhost";
-  std::string external_pid_file;
   std::string cluster_name = "";
-  std::string Log_destination_string = "stderr";
   std::string ConfigFileName;
 
-  /*
-   * -- preset settings (PGC_INTERNAL) --
-   * They never change: the build fixes them. guc_tables.c copies them from
-   * the GUC variables with the settings above; the file in each comment is
-   * where the variable was defined.
-   */
-#ifdef USE_ASSERT_CHECKING
-  bool assert_enabled = true; /* guc_tables.c */
-#else
-  bool assert_enabled = false; /* guc_tables.c */
-#endif
-  bool integer_datetimes = true;               /* guc_tables.c */
-  int max_function_args = FUNC_MAX_ARGS;       /* guc_tables.c */
-  int max_index_keys = INDEX_MAX_KEYS;         /* guc_tables.c */
-  int max_identifier_length = NAMEDATALEN - 1; /* guc_tables.c */
-  int block_size = BLCKSZ;                     /* guc_tables.c */
-#ifdef USE_SSL
-  std::string ssl_library = "OpenSSL"; /* be-secure.c */
-#else
-  std::string ssl_library = ""; /* be-secure.c */
-#endif
-
-  /*
-   * -- the file logger's settings (PGC_SIGHUP) --
-   * They change on a reload, after threads have started, so they are
-   * guarded: the postmaster writes them with shmem->log.mutex held
-   * (publish_log_file_settings(), guc_tables.c), and logfile.c reads them
-   * with it held. The file in each comment is where the variable was defined.
-   */
-  std::string Log_directory = "log"; /* logfile.c */
-  std::string Log_filename =
-      "postgresql-%Y-%m-%d_%H%M%S.log";  /* logfile.c, a strftime() pattern */
-  int Log_file_mode = 0600;              /* logfile.c */
-  int Log_RotationAge = 24 * 60;         /* logfile.c, minutes */
-  int Log_RotationSize = 10 * 1024;      /* logfile.c, kB */
-  bool Log_truncate_on_rotation = false; /* logfile.c */
-
-  /*
-   * -- the postmaster's own reloadable settings (PGC_SIGHUP) --
-   * The main thread alone reads these, so they need no guard even though a
-   * reload writes them: publish_postmaster_reload_settings() (guc_tables.c)
-   * copies them from the GUC variables at start and on each reload. The file
-   * in each comment is where the variable was defined.
-   */
-  bool EnableSSL = false;            /* postmaster.c, GUC "ssl" */
-  bool send_abort_for_crash = false; /* postmaster.c */
-  bool send_abort_for_kill = false;  /* postmaster.c */
-  std::string ssl_cert_file = "server.crt";            /* be-secure.c */
-  std::string ssl_key_file = "server.key";             /* be-secure.c */
-  std::string oauth_validator_libraries_string;        /* auth-oauth.c */
-  bool SSLPreferServerCiphers = true;                  /* be-secure.c */
-  std::string SSLCipherSuites;                         /* be-secure.c */
-#ifdef USE_OPENSSL
-  std::string SSLCipherList = "HIGH:MEDIUM:+3DES:!aNULL"; /* be-secure.c */
-#else
-  std::string SSLCipherList = "none"; /* be-secure.c */
-#endif
-  bool ssl_passphrase_command_supports_reload = false; /* be-secure.c */
-  std::string ssl_passphrase_command;                  /* be-secure.c */
-#ifdef USE_SSL
-  std::string SSLECDHCurve = "X25519:prime256v1"; /* be-secure.c */
-#else
-  std::string SSLECDHCurve = "none"; /* be-secure.c */
-#endif
-  std::string ssl_dh_params_file;    /* be-secure.c */
-  std::string ssl_crl_dir;           /* be-secure.c */
-  std::string ssl_crl_file;          /* be-secure.c */
-  std::string ssl_ca_file;           /* be-secure.c */
-
   /* -- how the process runs -- */
-  /*
-   * globals.c: true in the postmaster and its sessions; false in a
-   * standalone process (bootstrap or standalone backend).
-   */
-  bool IsPostmasterEnvironment = false;
   bool IsBinaryUpgrade = false;
 
   /* -- limits -- */
@@ -318,10 +249,9 @@ typedef struct pcb_t {
 
   /* -- file permissions -- */
   /* file_perm.c: modes for creating directories and files in the data
-   * directory, and the mask to pass to umask() */
+   * directory; the mask for umask() is in postmaster_tcb_t */
   int pg_dir_create_mode = PG_DIR_MODE_OWNER;
   int pg_file_create_mode = PG_FILE_MODE_OWNER;
-  int pg_mode_mask = PG_MODE_MASK_OWNER;
 
   /* -- configuration and libraries -- */
   /*
@@ -337,9 +267,8 @@ typedef struct pcb_t {
    */
   std::atomic<int> log_min_messages{19};        /* WARNING */
   std::atomic<int> log_min_error_statement{21}; /* ERROR */
-  /* miscinit.c: shared_preload_libraries being loaded, and loaded */
+  /* miscinit.c: shared_preload_libraries being loaded */
   bool process_shared_preload_libraries_in_progress = false;
-  bool process_shared_preload_libraries_done = false;
 
   /* -- module state -- */
   /*
@@ -684,6 +613,65 @@ typedef struct postmaster_tcb_t {
   struct List *lock_files = nullptr;
   /* pqcomm.c: the socket files to remove at exit, in TopMemoryContext */
   struct List *sock_paths = nullptr;
+
+  /*
+   * -- settings that change only with a restart (PGC_POSTMASTER) --
+   * The main thread alone reads these.  publish_postmaster_settings()
+   * (guc_tables.c) copies them from the GUC variables, with pcb's.  A string
+   * with no value is "".
+   */
+  bool enable_bonjour = false;
+  int MaxConnections = 100;
+  int NBuffers = 16384;
+  int PostPortNumber = DEF_PGPORT;
+  int max_files_per_process = 1000;
+  std::string bonjour_name = "";
+  std::string shared_preload_libraries_string = "";
+  std::string Unix_socket_group = "";
+  std::string Unix_socket_directories = DEFAULT_PGSOCKET_DIR;
+  std::string ListenAddresses = "localhost";
+  std::string external_pid_file;
+  std::string Log_destination_string = "stderr";
+
+  /*
+   * -- the postmaster's reloadable settings (PGC_SIGHUP) --
+   * The main thread alone reads these, so they need no guard even though a
+   * reload writes them: publish_postmaster_reload_settings() (guc_tables.c)
+   * copies them from the GUC variables at start and on each reload. The file
+   * in each comment is where the variable was defined.
+   */
+  bool EnableSSL = false;                   /* postmaster.c, GUC "ssl" */
+  bool send_abort_for_crash = false;        /* postmaster.c */
+  bool send_abort_for_kill = false;         /* postmaster.c */
+  std::string ssl_cert_file = "server.crt"; /* be-secure.c */
+  std::string ssl_key_file = "server.key";  /* be-secure.c */
+  bool SSLPreferServerCiphers = true;       /* be-secure.c */
+  std::string SSLCipherSuites;              /* be-secure.c */
+#ifdef USE_OPENSSL
+  std::string SSLCipherList = "HIGH:MEDIUM:+3DES:!aNULL"; /* be-secure.c */
+#else
+  std::string SSLCipherList = "none"; /* be-secure.c */
+#endif
+  bool ssl_passphrase_command_supports_reload = false; /* be-secure.c */
+  std::string ssl_passphrase_command;                  /* be-secure.c */
+#ifdef USE_SSL
+  std::string SSLECDHCurve = "X25519:prime256v1"; /* be-secure.c */
+#else
+  std::string SSLECDHCurve = "none"; /* be-secure.c */
+#endif
+  std::string ssl_dh_params_file; /* be-secure.c */
+  std::string ssl_crl_dir;        /* be-secure.c */
+  std::string ssl_crl_file;       /* be-secure.c */
+  std::string ssl_ca_file;        /* be-secure.c */
+
+  /* -- how the process runs -- */
+  /*
+   * globals.c: true when the process runs as a postmaster and its sessions;
+   * false in a standalone process (bootstrap or standalone backend).
+   */
+  bool IsPostmasterEnvironment = false;
+  /* file_perm.c: the mask to pass to umask(), from the data directory */
+  int pg_mode_mask = PG_MODE_MASK_OWNER;
 } postmaster_tcb_t;
 
 extern const pcb_t *pcb;

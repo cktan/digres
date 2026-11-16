@@ -18,16 +18,19 @@ all of them in one operation.
 - Each session re-reads the config file on `INTERRUPT_RELOAD`
   (`ProcessConfigFile()` in `postgres.c`). The postmaster
   signals the sessions to do so.
-- The `POSTMASTER` and `INTERNAL` settings are in `pcb_t`
-  already (`publish_postmaster_settings()` in `guc_tables.c`).
-- The six file-logger settings are in `pcb_t` too, guarded by
-  `shmem->log.mutex` (`publish_log_file_settings()`).
+- The `POSTMASTER` settings are in `pcb_t`, or in
+  `postmaster_tcb_t` if only the main thread reads them
+  (`publish_postmaster_settings()` in `guc_tables.c`). The
+  `INTERNAL` settings have no field: the build fixes them.
+- The six file-logger settings are in `logfile_state_t`, in
+  `shmem_t`, guarded by `shmem->log.mutex`
+  (`log_file_settings()`).
 
 ## 2. The three groups
 
 | Group | Block | Who writes | Who reads |
 |---|---|---|---|
-| 1 | `pcb` | the postmaster | the postmaster; any thread, for a constant |
+| 1 | `pcb`, or `postmaster_tcb` if only the postmaster reads it | the postmaster | the postmaster; any thread, for a constant |
 | 2 | `shmem` | the postmaster, on a reload | the postmaster and the other threads |
 | 3 | `tcb`, in `tcb->guc` | each thread | that thread alone |
 
@@ -52,7 +55,7 @@ all of them in one operation.
 | Group | Settings |
 |---|---|
 | 1 | The 23 `POSTMASTER` and 11 `INTERNAL` settings (done). The `SIGHUP` settings only the postmaster reads: `ssl_ca_file`, `ssl_cert_file`, `ssl_crl_dir`, `ssl_crl_file`, `ssl_dh_params_file`, `ssl_key_file`, `ssl_groups`, `ssl_min_protocol_version`, `ssl_max_protocol_version`, `ssl_passphrase_command`, `ssl_passphrase_command_supports_reload`, `send_abort_for_crash`, `send_abort_for_kill`. |
-| 2 | `log_line_prefix`, `syslog_facility`, `syslog_ident`, `syslog_sequence_numbers`, `syslog_split_messages` (`elog.c` reads them in every thread). The six file-logger settings (now in `pcb`: they move to `shmem`, next to `log.mutex`, when a change touches them). `ssl`, `log_hostname`, `authentication_timeout`, `allow_alter_system`, `oauth_validator_libraries`. |
+| 2 | `log_line_prefix`, `syslog_facility`, `syslog_ident`, `syslog_sequence_numbers`, `syslog_split_messages` (`elog.c` reads them in every thread). The six file-logger settings (done: in `logfile_state_t`, under `log.mutex`). `ssl`, `log_hostname`, `authentication_timeout`, `allow_alter_system`, `oauth_validator_libraries`. |
 | 3 | The 105 `USERSET`, 31 `SUSET`, 2 `BACKEND` and 2 `SU_BACKEND` settings. `log_connections`, `log_disconnections`, `post_auth_delay` and `ignore_system_indexes` are here because the session reads them at connect or disconnect. |
 | No reader found | `ssl_ciphers`, `ssl_prefer_server_ciphers`, `ssl_tls13_ciphers`, `krb_server_keyfile`, `krb_caseins_users`, `gss_accept_delegation`, `pre_auth_delay`. They are compiled out, not removed ([`CODE.md`](CODE.md) §7): keep them, in group 1. |
 

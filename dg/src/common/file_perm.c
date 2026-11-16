@@ -18,10 +18,11 @@
 #include "utils/control_block.h"
 
 /*
- * The modes for creating directories and files in the data directory, and
- * the mask to pass to umask(), are pcb's (utils/control_block.h).  The mask
- * is more of a preventative measure since all file/directory creates should
- * be performed using the create modes.
+ * The modes for creating directories and files in the data directory are
+ * pcb's, and the mask to pass to umask() is postmaster_tcb's
+ * (utils/control_block.h).  The mask is more of a preventative measure
+ * since all file/directory creates should be performed using the create
+ * modes.
  */
 
 /*
@@ -35,13 +36,13 @@ void SetDataDirectoryCreatePerm(int dataDirMode) {
   if ((PG_DIR_MODE_GROUP & dataDirMode) == PG_DIR_MODE_GROUP) {
     pcb_main()->pg_dir_create_mode = PG_DIR_MODE_GROUP;
     pcb_main()->pg_file_create_mode = PG_FILE_MODE_GROUP;
-    pcb_main()->pg_mode_mask = PG_MODE_MASK_GROUP;
+    postmaster_tcb->pg_mode_mask = PG_MODE_MASK_GROUP;
   }
   /* Else use default permissions */
   else {
     pcb_main()->pg_dir_create_mode = PG_DIR_MODE_OWNER;
     pcb_main()->pg_file_create_mode = PG_FILE_MODE_OWNER;
-    pcb_main()->pg_mode_mask = PG_MODE_MASK_OWNER;
+    postmaster_tcb->pg_mode_mask = PG_MODE_MASK_OWNER;
   }
 }
 

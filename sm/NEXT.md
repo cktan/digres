@@ -276,7 +276,6 @@ Low priority:
    Nothing is moved out of it just so the file goes
    ([`../dg/WORKNOTE.md`](../dg/WORKNOTE.md) steps 232 to 236).
    It is 2,893 lines.
-3. **GUC** replace it with something simpler.
 
 ### Feature gaps against PostgreSQL
 
@@ -425,7 +424,8 @@ Owed, and blocking nothing above:
   Next: find every other caller, and every place that puts a
   GUC string or extra in another context or frees it with
   `free()` or `pfree()`. Decide for each field of `tcb->guc`,
-  `pcb` and `shmem` who owns its memory and when it is freed.
+  `pcb`, `postmaster_tcb` and `shmem` who owns its memory and
+  when it is freed.
   A string field that starts as a literal
   ([`../dg/GUCPLAN.md`](../dg/GUCPLAN.md) §5) must be set by
   `InitializeOneGUCOption()` before anything frees it.

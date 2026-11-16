@@ -43,8 +43,9 @@
 #define PG_FILE_MODE_GROUP			(S_IRUSR | S_IWUSR | S_IRGRP)
 
 /*
- * The modes for creating directories and files in the data directory, and
- * the mask to pass to umask(), are pcb's (utils/control_block.h).
+ * The modes for creating directories and files in the data directory are
+ * pcb's, and the mask to pass to umask() is postmaster_tcb's
+ * (utils/control_block.h).
  */
 
 /* Set permissions and mask based on the provided mode */

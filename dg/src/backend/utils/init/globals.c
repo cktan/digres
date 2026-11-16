@@ -91,7 +91,8 @@ thread_local /*LOCAL*/ char *DatabasePath = NULL;
  * things if an error should occur during process initialization.
  *
  * These are initialized for the bootstrap/standalone case.
- * IsPostmasterEnvironment, PostmasterPid and IsBinaryUpgrade are pcb's.
+ * PostmasterPid and IsBinaryUpgrade are pcb's; IsPostmasterEnvironment is
+ * postmaster_tcb's.
  */
 thread_local /*LOCAL*/ bool IsUnderPostmaster = false;
 

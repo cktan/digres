@@ -17,7 +17,23 @@
 #ifndef LOGFILE_H
 #define LOGFILE_H
 
-extern void publish_log_file_settings(void);
+#include <string>
+
+/*
+ * The file logger's settings (PGC_SIGHUP), as the main thread last read them.
+ * logfile.c keeps them in its own state, under shmem->log.mutex.
+ */
+typedef struct logfile_conf_t {
+  std::string directory = "log"; /* log_directory */
+  /* log_filename, a strftime() pattern */
+  std::string filename = "postgresql-%Y-%m-%d_%H%M%S.log";
+  int file_mode = 0600;              /* log_file_mode */
+  int rotation_age = 24 * 60;        /* log_rotation_age, minutes */
+  int rotation_size = 10 * 1024;     /* log_rotation_size, kB */
+  bool truncate_on_rotation = false; /* log_truncate_on_rotation */
+} logfile_conf_t;
+
+extern logfile_conf_t log_file_settings(void);
 extern void logfile_open(void);
 extern void logfile_reload(void);
 extern bool logfile_rotate(void);

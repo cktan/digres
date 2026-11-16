@@ -117,9 +117,8 @@ yet:
     encrypted connection. It is built now, by one setting
     ([`../aa/ROLE.md`](../aa/ROLE.md#8-decisions) §8).
 
-The replacement of GUC was to follow the threads
-([`../sm/NEXT.md`](../sm/NEXT.md), low priority). It is not
-designed yet.
+GUC stays: digres keeps PostgreSQL's settings, `SET`, and each
+session's reload of the configuration file (§4).
 
 ## 3. The globals, and how the build keeps them
 
@@ -151,7 +150,7 @@ marked `/*LOCAL*/`. Threads share only through `pcb` and
   - flex's `yy_start_state_list` in `jsonpath_scan.c`, which the
     Makefile makes `const`.
 - **The GUC variables and tables are per thread.** The owner
-  chose this over sharing them until GUC is replaced. The 340
+  chose this over sharing them. The 340
   variables and the five tables (`ConfigureNamesBool` and the
   rest) are `thread_local`. A table's initializer runs in each
   thread on first use, and takes the addresses of that thread's
@@ -223,6 +222,13 @@ Do not reopen these without the owner.
   Now the only writable globals outside `thread_local` are `pcb`
   and `shmem`. A LOCAL global moves when a change touches it.
 - **The GUC variables and tables are per thread** (§3).
+- **GUC stays, with each session's reload.** On SIGHUP each
+  session processes the configuration file again, as a
+  PostgreSQL backend does. So an open session takes a reloaded
+  default that it did not `SET` (`statement_timeout`,
+  `log_min_duration_statement`,
+  `default_transaction_read_only`). Its own `SET` outranks the
+  file, and `RESET` goes to the reloaded value.
 - **No client in the tree**: use stock `psql` (§2).
 - **No parallel workers.** Parallel query, parallel index build
   and parallel vacuum are removed, from the planner too. Sorting

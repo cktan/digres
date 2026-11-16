@@ -167,16 +167,18 @@ int be_tls_init(bool isServerStart) {
   /*
    * Load and verify server's certificate and private key
    */
-  if (SSL_CTX_use_certificate_chain_file(context,
-                                         pcb->ssl_cert_file.c_str()) != 1) {
+  if (SSL_CTX_use_certificate_chain_file(
+          context, postmaster_tcb->ssl_cert_file.c_str()) != 1) {
     ereport(isServerStart ? FATAL : LOG,
             (errcode(ERRCODE_CONFIG_FILE_ERROR),
              errmsg("could not load server certificate file \"%s\": %s",
-                    pcb->ssl_cert_file.c_str(), SSLerrmessage(ERR_get_error()))));
+                    postmaster_tcb->ssl_cert_file.c_str(),
+                    SSLerrmessage(ERR_get_error()))));
     goto error;
   }
 
-  if (!check_ssl_key_file_permissions(pcb->ssl_key_file.c_str(), isServerStart))
+  if (!check_ssl_key_file_permissions(postmaster_tcb->ssl_key_file.c_str(),
+                                      isServerStart))
     goto error;
 
   /*
@@ -184,20 +186,20 @@ int be_tls_init(bool isServerStart) {
    */
   dummy_ssl_passwd_cb_called = false;
 
-  if (SSL_CTX_use_PrivateKey_file(context, pcb->ssl_key_file.c_str(),
-                                  SSL_FILETYPE_PEM) !=
-      1) {
+  if (SSL_CTX_use_PrivateKey_file(context, postmaster_tcb->ssl_key_file.c_str(),
+                                  SSL_FILETYPE_PEM) != 1) {
     if (dummy_ssl_passwd_cb_called)
       ereport(isServerStart ? FATAL : LOG,
               (errcode(ERRCODE_CONFIG_FILE_ERROR),
                errmsg("private key file \"%s\" cannot be reloaded because it "
                       "requires a passphrase",
-                      pcb->ssl_key_file.c_str())));
+                      postmaster_tcb->ssl_key_file.c_str())));
     else
       ereport(isServerStart ? FATAL : LOG,
               (errcode(ERRCODE_CONFIG_FILE_ERROR),
                errmsg("could not load private key file \"%s\": %s",
-                      pcb->ssl_key_file.c_str(), SSLerrmessage(ERR_get_error()))));
+                      postmaster_tcb->ssl_key_file.c_str(),
+                      SSLerrmessage(ERR_get_error()))));
     goto error;
   }
 
@@ -310,7 +312,8 @@ int be_tls_init(bool isServerStart) {
     goto error;
 
   /* set up the allowed cipher list for TLSv1.2 and below */
-  if (SSL_CTX_set_cipher_list(context, pcb->SSLCipherList.c_str()) != 1) {
+  if (SSL_CTX_set_cipher_list(context, postmaster_tcb->SSLCipherList.c_str()) !=
+      1) {
     ereport(isServerStart ? FATAL : LOG,
             (errcode(ERRCODE_CONFIG_FILE_ERROR),
              errmsg("could not set the TLSv1.2 cipher list (no valid ciphers "
@@ -322,9 +325,10 @@ int be_tls_init(bool isServerStart) {
    * Set up the allowed cipher suites for TLSv1.3. If the GUC is an empty
    * string we leave the allowed suites to be the OpenSSL default value.
    */
-  if (!pcb->SSLCipherSuites.empty()) {
+  if (!postmaster_tcb->SSLCipherSuites.empty()) {
     /* set up the allowed cipher suites */
-    if (SSL_CTX_set_ciphersuites(context, pcb->SSLCipherSuites.c_str()) != 1) {
+    if (SSL_CTX_set_ciphersuites(
+            context, postmaster_tcb->SSLCipherSuites.c_str()) != 1) {
       ereport(isServerStart ? FATAL : LOG,
               (errcode(ERRCODE_CONFIG_FILE_ERROR),
                errmsg("could not set the TLSv1.3 cipher suites (no valid "
@@ -334,24 +338,24 @@ int be_tls_init(bool isServerStart) {
   }
 
   /* Let server choose order */
-  if (pcb->SSLPreferServerCiphers)
+  if (postmaster_tcb->SSLPreferServerCiphers)
     SSL_CTX_set_options(context, SSL_OP_CIPHER_SERVER_PREFERENCE);
 
   /*
    * Load CA store, so we can verify client certificates if needed.
    */
-  if (!pcb->ssl_ca_file.empty()) {
+  if (!postmaster_tcb->ssl_ca_file.empty()) {
     STACK_OF(X509_NAME) * root_cert_list;
 
-    if (SSL_CTX_load_verify_locations(context, pcb->ssl_ca_file.c_str(),
-                                      NULL) != 1 ||
-        (root_cert_list = SSL_load_client_CA_file(pcb->ssl_ca_file.c_str())) ==
-            NULL) {
-      ereport(
-          isServerStart ? FATAL : LOG,
-          (errcode(ERRCODE_CONFIG_FILE_ERROR),
-           errmsg("could not load root certificate file \"%s\": %s",
-                  pcb->ssl_ca_file.c_str(), SSLerrmessage(ERR_get_error()))));
+    if (SSL_CTX_load_verify_locations(
+            context, postmaster_tcb->ssl_ca_file.c_str(), NULL) != 1 ||
+        (root_cert_list = SSL_load_client_CA_file(
+             postmaster_tcb->ssl_ca_file.c_str())) == NULL) {
+      ereport(isServerStart ? FATAL : LOG,
+              (errcode(ERRCODE_CONFIG_FILE_ERROR),
+               errmsg("could not load root certificate file \"%s\": %s",
+                      postmaster_tcb->ssl_ca_file.c_str(),
+                      SSLerrmessage(ERR_get_error()))));
       goto error;
     }
 
@@ -378,40 +382,44 @@ int be_tls_init(bool isServerStart) {
    * http://searchsecurity.techtarget.com/sDefinition/0,,sid14_gci803160,00.html
    *----------
    */
-  if (!pcb->ssl_crl_file.empty() || !pcb->ssl_crl_dir.empty()) {
+  if (!postmaster_tcb->ssl_crl_file.empty() ||
+      !postmaster_tcb->ssl_crl_dir.empty()) {
     X509_STORE *cvstore = SSL_CTX_get_cert_store(context);
 
     if (cvstore) {
       /* Set the flags to check against the complete CRL chain */
-      if (X509_STORE_load_locations(
-              cvstore,
-              !pcb->ssl_crl_file.empty() ? pcb->ssl_crl_file.c_str() : NULL,
-              !pcb->ssl_crl_dir.empty() ? pcb->ssl_crl_dir.c_str() : NULL) ==
-          1) {
+      if (X509_STORE_load_locations(cvstore,
+                                    !postmaster_tcb->ssl_crl_file.empty()
+                                        ? postmaster_tcb->ssl_crl_file.c_str()
+                                        : NULL,
+                                    !postmaster_tcb->ssl_crl_dir.empty()
+                                        ? postmaster_tcb->ssl_crl_dir.c_str()
+                                        : NULL) == 1) {
         X509_STORE_set_flags(cvstore,
                              X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
-      } else if (pcb->ssl_crl_dir.empty()) {
+      } else if (postmaster_tcb->ssl_crl_dir.empty()) {
         ereport(isServerStart ? FATAL : LOG,
                 (errcode(ERRCODE_CONFIG_FILE_ERROR),
                  errmsg("could not load SSL certificate revocation list file "
                         "\"%s\": %s",
-                        pcb->ssl_crl_file.c_str(),
+                        postmaster_tcb->ssl_crl_file.c_str(),
                         SSLerrmessage(ERR_get_error()))));
         goto error;
-      } else if (pcb->ssl_crl_file.empty()) {
-        ereport(
-            isServerStart ? FATAL : LOG,
-            (errcode(ERRCODE_CONFIG_FILE_ERROR),
-             errmsg("could not load SSL certificate revocation list "
-                    "directory \"%s\": %s",
-                    pcb->ssl_crl_dir.c_str(), SSLerrmessage(ERR_get_error()))));
+      } else if (postmaster_tcb->ssl_crl_file.empty()) {
+        ereport(isServerStart ? FATAL : LOG,
+                (errcode(ERRCODE_CONFIG_FILE_ERROR),
+                 errmsg("could not load SSL certificate revocation list "
+                        "directory \"%s\": %s",
+                        postmaster_tcb->ssl_crl_dir.c_str(),
+                        SSLerrmessage(ERR_get_error()))));
         goto error;
       } else {
         ereport(isServerStart ? FATAL : LOG,
                 (errcode(ERRCODE_CONFIG_FILE_ERROR),
                  errmsg("could not load SSL certificate revocation list file "
                         "\"%s\" or directory \"%s\": %s",
-                        pcb->ssl_crl_file.c_str(), pcb->ssl_crl_dir.c_str(),
+                        postmaster_tcb->ssl_crl_file.c_str(),
+                        postmaster_tcb->ssl_crl_dir.c_str(),
                         SSLerrmessage(ERR_get_error()))));
         goto error;
       }
@@ -436,7 +444,7 @@ int be_tls_init(bool isServerStart) {
     old = shmem->tls->context;
     shmem->tls->context = context;
     /* Whether the CA store has been loaded into the context. */
-    shmem->tls->loaded_verify_locations = !pcb->ssl_ca_file.empty();
+    shmem->tls->loaded_verify_locations = !postmaster_tcb->ssl_ca_file.empty();
     if (old)
       SSL_CTX_free(old);
   }
@@ -1347,8 +1355,9 @@ static bool initialize_dh(SSL_CTX *context, bool isServerStart) {
 
   SSL_CTX_set_options(context, SSL_OP_SINGLE_DH_USE);
 
-  if (!pcb->ssl_dh_params_file.empty())
-    dh = load_dh_file(pcb->ssl_dh_params_file.c_str(), isServerStart);
+  if (!postmaster_tcb->ssl_dh_params_file.empty())
+    dh =
+        load_dh_file(postmaster_tcb->ssl_dh_params_file.c_str(), isServerStart);
   if (!dh)
     dh = load_dh_buffer(FILE_DH2048, sizeof(FILE_DH2048));
   if (!dh) {
@@ -1378,7 +1387,8 @@ static bool initialize_dh(SSL_CTX *context, bool isServerStart) {
  */
 static bool initialize_ecdh(SSL_CTX *context, bool isServerStart) {
 #ifndef OPENSSL_NO_ECDH
-  if (SSL_CTX_set1_groups_list(context, pcb->SSLECDHCurve.c_str()) != 1) {
+  if (SSL_CTX_set1_groups_list(context, postmaster_tcb->SSLECDHCurve.c_str()) !=
+      1) {
     /*
      * OpenSSL 3.3.0 introduced proper error messages for group parsing
      * errors, earlier versions returns "no SSL error reported" which is
@@ -1688,11 +1698,11 @@ static const char *ssl_protocol_version_to_string(int v) {
 
 static void default_openssl_tls_init(SSL_CTX *context, bool isServerStart) {
   if (isServerStart) {
-    if (!pcb->ssl_passphrase_command.empty())
+    if (!postmaster_tcb->ssl_passphrase_command.empty())
       SSL_CTX_set_default_passwd_cb(context, ssl_external_passwd_cb);
   } else {
-    if (!pcb->ssl_passphrase_command.empty() &&
-        pcb->ssl_passphrase_command_supports_reload)
+    if (!postmaster_tcb->ssl_passphrase_command.empty() &&
+        postmaster_tcb->ssl_passphrase_command_supports_reload)
       SSL_CTX_set_default_passwd_cb(context, ssl_external_passwd_cb);
     else
 

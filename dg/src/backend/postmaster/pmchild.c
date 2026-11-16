@@ -108,7 +108,7 @@ void InitPostmasterChildSlots(void) {
    * MaxConnections limit is enforced when a new backend tries to join the
    * session registry.
    */
-  pcs().pmchild_pools[B_BACKEND].size = 2 * pcb->MaxConnections;
+  pcs().pmchild_pools[B_BACKEND].size = 2 * postmaster_tcb->MaxConnections;
 
   /*
    * There can be only one of each of these running at a time.  They each

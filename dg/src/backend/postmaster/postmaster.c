@@ -362,7 +362,7 @@ void PostmasterMain(int argc, char *argv[]) {
 
   pcb_main()->PostmasterPid = MyProcPid;
 
-  pcb_main()->IsPostmasterEnvironment = true;
+  postmaster_tcb->IsPostmasterEnvironment = true;
 
   /*
    * Start our win32 signal implementation
@@ -669,12 +669,12 @@ void PostmasterMain(int argc, char *argv[]) {
    * Check for invalid combinations of GUC settings.
    */
   if (pcb->SuperuserReservedConnections + pcb->ReservedConnections >=
-      pcb->MaxConnections) {
+      postmaster_tcb->MaxConnections) {
     write_stderr("%s: \"superuser_reserved_connections\" (%d) plus "
                  "\"reserved_connections\" (%d) must be less than "
                  "\"max_connections\" (%d)\n",
                  pcb->progname, pcb->SuperuserReservedConnections,
-                 pcb->ReservedConnections, pcb->MaxConnections);
+                 pcb->ReservedConnections, postmaster_tcb->MaxConnections);
     ExitPostmaster(1);
   }
 
@@ -750,7 +750,7 @@ void PostmasterMain(int argc, char *argv[]) {
    * Initialize SSL library, if specified.
    */
 #ifdef USE_SSL
-  if (pcb->EnableSSL)
+  if (postmaster_tcb->EnableSSL)
     (void)secure_initialize(true);
 #endif
 
@@ -805,7 +805,7 @@ void PostmasterMain(int argc, char *argv[]) {
     ereport(LOG,
             (errmsg("ending log output to stderr"),
              errhint("Future log output will go to log destination \"%s\".",
-                     pcb->Log_destination_string.c_str())));
+                     postmaster_tcb->Log_destination_string.c_str())));
 
   whereToSendOutput = DestNone;
 
@@ -830,14 +830,14 @@ void PostmasterMain(int argc, char *argv[]) {
   pms().ListenSockets = (pgsocket *)palloc(MAXLISTEN * sizeof(pgsocket));
   on_proc_exit(CloseServerPorts, 0);
 
-  if (!pcb->ListenAddresses.empty()) {
+  if (!postmaster_tcb->ListenAddresses.empty()) {
     char *rawstring;
     List *elemlist;
     ListCell *l;
     int success = 0;
 
     /* Need a modifiable copy of ListenAddresses */
-    rawstring = pstrdup(pcb->ListenAddresses.c_str());
+    rawstring = pstrdup(postmaster_tcb->ListenAddresses.c_str());
 
     /* Parse string into list of hostnames */
     if (!SplitGUCList(rawstring, ',', &elemlist)) {
@@ -852,12 +852,12 @@ void PostmasterMain(int argc, char *argv[]) {
 
       if (strcmp(curhost, "*") == 0)
         status = ListenServerPort(
-            AF_UNSPEC, NULL, (unsigned short)pcb->PostPortNumber, NULL,
-            pms().ListenSockets, &pms().NumListenSockets, MAXLISTEN);
+            AF_UNSPEC, NULL, (unsigned short)postmaster_tcb->PostPortNumber,
+            NULL, pms().ListenSockets, &pms().NumListenSockets, MAXLISTEN);
       else
         status = ListenServerPort(
-            AF_UNSPEC, curhost, (unsigned short)pcb->PostPortNumber, NULL,
-            pms().ListenSockets, &pms().NumListenSockets, MAXLISTEN);
+            AF_UNSPEC, curhost, (unsigned short)postmaster_tcb->PostPortNumber,
+            NULL, pms().ListenSockets, &pms().NumListenSockets, MAXLISTEN);
 
       if (status == STATUS_OK) {
         success++;
@@ -880,7 +880,7 @@ void PostmasterMain(int argc, char *argv[]) {
 
 #ifdef USE_BONJOUR
   /* Register for Bonjour only if we opened TCP socket(s) */
-  if (pcb->enable_bonjour && pms().NumListenSockets > 0) {
+  if (postmaster_tcb->enable_bonjour && pms().NumListenSockets > 0) {
     DNSServiceErrorType err;
 
     /*
@@ -890,8 +890,9 @@ void PostmasterMain(int argc, char *argv[]) {
      * just a subset of the available network interfaces.
      */
     err = DNSServiceRegister(
-        &bonjour_sdref, 0, 0, pcb->bonjour_name.c_str(), "_postgresql._tcp.", NULL,
-        NULL, pg_hton16(pcb->PostPortNumber), 0, NULL, NULL, NULL);
+        &bonjour_sdref, 0, 0, postmaster_tcb->bonjour_name.c_str(),
+        "_postgresql._tcp.", NULL, NULL,
+        pg_hton16(postmaster_tcb->PostPortNumber), 0, NULL, NULL, NULL);
     if (err != kDNSServiceErr_NoError)
       ereport(LOG, (errmsg("DNSServiceRegister() failed: error code %ld",
                            (long)err)));
@@ -906,14 +907,14 @@ void PostmasterMain(int argc, char *argv[]) {
   }
 #endif
 
-  if (!pcb->Unix_socket_directories.empty()) {
+  if (!postmaster_tcb->Unix_socket_directories.empty()) {
     char *rawstring;
     List *elemlist;
     ListCell *l;
     int success = 0;
 
     /* Need a modifiable copy of Unix_socket_directories */
-    rawstring = pstrdup(pcb->Unix_socket_directories.c_str());
+    rawstring = pstrdup(postmaster_tcb->Unix_socket_directories.c_str());
 
     /* Parse string into list of directories */
     if (!SplitDirectoriesString(rawstring, ',', &elemlist)) {
@@ -927,8 +928,8 @@ void PostmasterMain(int argc, char *argv[]) {
       char *socketdir = (char *)lfirst(l);
 
       status = ListenServerPort(
-          AF_UNIX, NULL, (unsigned short)pcb->PostPortNumber, socketdir,
-          pms().ListenSockets, &pms().NumListenSockets, MAXLISTEN);
+          AF_UNIX, NULL, (unsigned short)postmaster_tcb->PostPortNumber,
+          socketdir, pms().ListenSockets, &pms().NumListenSockets, MAXLISTEN);
 
       if (status == STATUS_OK) {
         success++;
@@ -973,22 +974,22 @@ void PostmasterMain(int argc, char *argv[]) {
   /*
    * Write the external PID file if requested
    */
-  if (!pcb->external_pid_file.empty()) {
-    FILE *fpidfile = fopen(pcb->external_pid_file.c_str(), "w");
+  if (!postmaster_tcb->external_pid_file.empty()) {
+    FILE *fpidfile = fopen(postmaster_tcb->external_pid_file.c_str(), "w");
 
     if (fpidfile) {
       fprintf(fpidfile, "%d\n", MyProcPid);
       fclose(fpidfile);
 
       /* Make PID file world readable */
-      if (chmod(pcb->external_pid_file.c_str(),
+      if (chmod(postmaster_tcb->external_pid_file.c_str(),
                 S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH) != 0)
         write_stderr("%s: could not change permissions of external PID file "
                      "\"%s\": %m\n",
-                     pcb->progname, pcb->external_pid_file.c_str());
+                     pcb->progname, postmaster_tcb->external_pid_file.c_str());
     } else
       write_stderr("%s: could not write external PID file \"%s\": %m\n",
-                   pcb->progname, pcb->external_pid_file.c_str());
+                   pcb->progname, postmaster_tcb->external_pid_file.c_str());
 
     on_proc_exit(unlink_external_pid_file, 0);
   }
@@ -1084,8 +1085,8 @@ static void CloseServerPorts(int status, Datum arg) {
  * on_proc_exit callback to delete external_pid_file
  */
 static void unlink_external_pid_file(int status, Datum arg) {
-  if (!pcb->external_pid_file.empty())
-    unlink(pcb->external_pid_file.c_str());
+  if (!postmaster_tcb->external_pid_file.empty())
+    unlink(postmaster_tcb->external_pid_file.c_str());
 }
 
 /*
@@ -1271,8 +1272,10 @@ static int ServerLoop(void) {
       ereport(LOG,
               /* translator: %s is SIGKILL or SIGABRT */
               (errmsg("issuing %s to recalcitrant children",
-                      pcb->send_abort_for_kill ? "SIGABRT" : "SIGKILL")));
-      TerminateChildren(pcb->send_abort_for_kill ? SIGABRT : SIGKILL);
+                      postmaster_tcb->send_abort_for_kill ? "SIGABRT"
+                                                          : "SIGKILL")));
+      TerminateChildren(postmaster_tcb->send_abort_for_kill ? SIGABRT
+                                                            : SIGKILL);
       /* reset flag so we don't SIGKILL again */
       pms().AbortStartTime = 0;
 
@@ -1433,7 +1436,7 @@ static void process_pm_reload_request(void) {
 
 #ifdef USE_SSL
     /* Reload SSL configuration as well */
-    if (pcb->EnableSSL) {
+    if (postmaster_tcb->EnableSSL) {
       if (secure_initialize(false) != 0)
         ereport(LOG, (errmsg("SSL configuration was not reloaded")));
     } else
@@ -1678,7 +1681,7 @@ static void HandleFatalError(QuitSignalReason reason, bool consider_sigabrt) {
 
   SetQuitSignalReason(reason);
 
-  if (consider_sigabrt && pcb->send_abort_for_crash)
+  if (consider_sigabrt && postmaster_tcb->send_abort_for_crash)
     sigtosend = SIGABRT;
   else
     sigtosend = SIGQUIT;

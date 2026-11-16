@@ -600,7 +600,7 @@ int ListenServerPort(int family, const char *hostName,
      * to use a value similar to the maximum number of child processes
      * that the postmaster will permit.
      */
-    maxconn = pcb->MaxConnections * 2;
+    maxconn = postmaster_tcb->MaxConnections * 2;
 
     err = listen(fd, maxconn);
     if (err < 0) {
@@ -678,7 +678,7 @@ static int Setup_AF_UNIX(const char *sock_path) {
    * before we listen() to avoid a window where unwanted connections could
    * get accepted.
    */
-  if (pcb->Unix_socket_group[0] != '\0') {
+  if (postmaster_tcb->Unix_socket_group[0] != '\0') {
 #ifdef WIN32
     elog(WARNING, "configuration item \"unix_socket_group\" is not supported "
                   "on this platform");
@@ -687,16 +687,16 @@ static int Setup_AF_UNIX(const char *sock_path) {
     unsigned long val;
     gid_t gid;
 
-    val = strtoul(pcb->Unix_socket_group.c_str(), &endptr, 10);
+    val = strtoul(postmaster_tcb->Unix_socket_group.c_str(), &endptr, 10);
     if (*endptr == '\0') { /* numeric group id */
       gid = val;
     } else { /* convert group name to id */
       struct group *gr;
 
-      gr = getgrnam(pcb->Unix_socket_group.c_str());
+      gr = getgrnam(postmaster_tcb->Unix_socket_group.c_str());
       if (!gr) {
         ereport(LOG, (errmsg("group \"%s\" does not exist",
-                             pcb->Unix_socket_group.c_str())));
+                             postmaster_tcb->Unix_socket_group.c_str())));
         return STATUS_ERROR;
       }
       gid = gr->gr_gid;

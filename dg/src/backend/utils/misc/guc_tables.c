@@ -398,12 +398,13 @@ static thread_local /*LOCAL*/ bool SSLPreferServerCiphers;
 static thread_local /*LOCAL*/ std::string oauth_validator_libraries_string;
 
 /*
- * Copy the postmaster's reloadable settings into the process control block.
- * Only the main thread reads them, so a write on a reload races with no
- * reader. publish_shared_settings() calls this at start and on each reload.
+ * Copy the postmaster's reloadable settings into the postmaster's thread
+ * control block. Only the main thread reads them, so a write on a reload
+ * races with no reader. publish_shared_settings() calls this at start and on
+ * each reload.
  */
 static void publish_postmaster_reload_settings(void) {
-  pcb_t *b = pcb_main();
+  postmaster_tcb_t *b = postmaster_tcb;
 
   b->EnableSSL = EnableSSL;
   b->send_abort_for_crash = send_abort_for_crash;
@@ -421,7 +422,6 @@ static void publish_postmaster_reload_settings(void) {
   b->SSLCipherList = SSLCipherList;
   b->SSLCipherSuites = SSLCipherSuites;
   b->SSLPreferServerCiphers = SSLPreferServerCiphers;
-  b->oauth_validator_libraries_string = oauth_validator_libraries_string;
 }
 
 /*
@@ -430,7 +430,7 @@ static void publish_postmaster_reload_settings(void) {
  * and after each reload; the other threads read the copy, never the variable.
  */
 void publish_shared_settings(void) {
-  /* The main thread's own reloadable settings go to pcb, for it alone. */
+  /* The main thread's own reloadable settings go to it alone. */
   publish_postmaster_reload_settings();
 
   /* Each is independent of the others, so no order is needed between them. */
@@ -483,19 +483,20 @@ void publish_shared_settings(void) {
 }
 
 /*
- * Copy the file logger's settings into the process control block. The
- * postmaster calls this, with shmem->log.mutex held, at start and on each
- * reload; logfile.c reads the copy under the same mutex.
+ * Return the file logger's settings, from the main thread's GUC variables.
+ * logfile.c keeps the copy in its own state, under shmem->log.mutex, at
+ * start and on each reload.
  */
-void publish_log_file_settings(void) {
-  pcb_t *b = pcb_main();
+logfile_conf_t log_file_settings(void) {
+  logfile_conf_t conf;
 
-  b->Log_directory = Log_directory;
-  b->Log_filename = Log_filename;
-  b->Log_file_mode = Log_file_mode;
-  b->Log_RotationAge = Log_RotationAge;
-  b->Log_RotationSize = Log_RotationSize;
-  b->Log_truncate_on_rotation = Log_truncate_on_rotation;
+  conf.directory = Log_directory;
+  conf.filename = Log_filename;
+  conf.file_mode = Log_file_mode;
+  conf.rotation_age = Log_RotationAge;
+  conf.rotation_size = Log_RotationSize;
+  conf.truncate_on_rotation = Log_truncate_on_rotation;
+  return conf;
 }
 
 /* GUC show_hook for log_file_mode: the mode in octal, as chmod takes it. */
@@ -507,43 +508,38 @@ static const char *show_log_file_mode(void) {
 }
 
 /*
- * Copy the settings that change only with a restart, and the preset ones that
- * never change, into the process control block. The main thread calls this
- * after it reads its settings, before the postmaster starts a thread or the
- * standalone backend starts. From then on each thread reads pcb, not its own
- * copy of the GUC variable, which no code outside this file can name.
+ * Copy the settings that change only with a restart into the process control
+ * block, or, for those the main thread alone reads, into the postmaster's
+ * thread control block. The main thread calls this after it reads its
+ * settings, before the postmaster starts a thread or the standalone backend
+ * starts. From then on each thread reads the copy, not its own copy of the
+ * GUC variable, which no code outside this file can name.
  */
 void publish_postmaster_settings(void) {
   pcb_t *b = pcb_main();
+  postmaster_tcb_t *pm = postmaster_tcb;
 
-  b->enable_bonjour = enable_bonjour;
   b->Trace_connection_negotiation = Trace_connection_negotiation;
   b->Logging_collector = Logging_collector;
-  b->MaxConnections = MaxConnections;
   b->SuperuserReservedConnections = SuperuserReservedConnections;
   b->ReservedConnections = ReservedConnections;
-  b->NBuffers = NBuffers;
-  b->PostPortNumber = PostPortNumber;
   b->Unix_socket_permissions = Unix_socket_permissions;
-  b->max_files_per_process = max_files_per_process;
   b->Log_destination = Log_destination;
-  b->bonjour_name = bonjour_name;
-  b->shared_preload_libraries_string = shared_preload_libraries_string;
   b->event_source = event_source;
-  b->Unix_socket_group = Unix_socket_group;
-  b->Unix_socket_directories = Unix_socket_directories;
-  b->ListenAddresses = ListenAddresses;
-  b->external_pid_file = external_pid_file;
   b->cluster_name = cluster_name;
-  b->Log_destination_string = Log_destination_string;
 
-  b->assert_enabled = assert_enabled;
-  b->integer_datetimes = integer_datetimes;
-  b->max_function_args = max_function_args;
-  b->max_index_keys = max_index_keys;
-  b->max_identifier_length = max_identifier_length;
-  b->block_size = block_size;
-  b->ssl_library = ssl_library;
+  pm->enable_bonjour = enable_bonjour;
+  pm->MaxConnections = MaxConnections;
+  pm->NBuffers = NBuffers;
+  pm->PostPortNumber = PostPortNumber;
+  pm->max_files_per_process = max_files_per_process;
+  pm->bonjour_name = bonjour_name;
+  pm->shared_preload_libraries_string = shared_preload_libraries_string;
+  pm->Unix_socket_group = Unix_socket_group;
+  pm->Unix_socket_directories = Unix_socket_directories;
+  pm->ListenAddresses = ListenAddresses;
+  pm->external_pid_file = external_pid_file;
+  pm->Log_destination_string = Log_destination_string;
 }
 
 /* should be static, but commands/variable.c needs to get at this */

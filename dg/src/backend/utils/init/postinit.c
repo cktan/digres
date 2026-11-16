@@ -293,13 +293,14 @@ void InitializeMaxBackends(void) {
   Assert(pcb->MaxBackends == 0);
 
   /* Note that this does not include "auxiliary" processes */
-  pcb_main()->MaxBackends = pcb->MaxConnections;
+  pcb_main()->MaxBackends = postmaster_tcb->MaxConnections;
 
   if (pcb->MaxBackends > MAX_BACKENDS)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                    errmsg("too many server processes configured"),
-                    errdetail("\"max_connections\" (%d) must be less than %d.",
-                              pcb->MaxConnections, MAX_BACKENDS + 1)));
+    ereport(ERROR,
+            (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+             errmsg("too many server processes configured"),
+             errdetail("\"max_connections\" (%d) must be less than %d.",
+                       postmaster_tcb->MaxConnections, MAX_BACKENDS + 1)));
 }
 
 /*
