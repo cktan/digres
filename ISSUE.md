@@ -665,3 +665,53 @@ one of:
 - **Run `_PG_init()` once per process**, with process-wide
   hooks under a lock. Undoes the per-session hooks
   ([`dg/WORKNOTE.md`](dg/WORKNOTE.md) step 222).
+
+## 4. RocksDB: known issues
+
+Problems in RocksDB, which `ext/` builds
+([`ext/Makefile`](ext/Makefile)), that digres's tests meet. Each
+says which versions have it and what closes it.
+
+### RocksDB issue 1: a data race on `pmull_runtime_flag`
+
+`make tsan` fails now and then on a race inside RocksDB, in
+`server.sh`. Seen on RocksDB 8.9.1 and 11.13.2, and present in
+RocksDB's `main` on 2026-11-15. It is not in digres's code or
+sm's.
+
+**What races.** `util/crc32c.cc` keeps `pmull_runtime_flag`, a
+plain global `bool`, on ARM64 alone:
+
+1. Static initialization sets it from a CPU probe
+   (`Choose_Extend()`).
+2. Every `DB::Open` writes it again:
+   `DumpSupportInfo()` calls `IsFastCrc32Supported()` to log a
+   line, and that sets the flag (11.13.2, `crc32c.cc:380`).
+3. Every checksum reads it, in `crc32c_arm64()`
+   (`crc32c_arm64.cc:127`).
+
+sm opens several RocksDB instances in one process, so one
+instance's `DB::Open` writes the flag while another's flush,
+compaction or WAL write reads it. A database made by `CREATE
+DATABASE` opens beside the open ones, so the race fires when a
+background thread computes a checksum at that time.
+
+**Effect.** None at run time: each write stores the same probe
+result into one aligned byte. It is still a data race to the
+C++ memory model, so the sanitizer reports it, and the server
+that met it exits with the sanitizer's status: `server.sh` then
+fails that server's shutdown check too (seen as `crashed
+retype: shutdown status`). Some runs pass clean, as the timing
+decides.
+
+**What closes it**, from one of:
+
+- **A TSan suppression**,
+  `race:rocksdb::crc32c::IsFastCrc32Supported`, given through
+  `TSAN_OPTIONS` by dg's `make tsan`. RocksDB stays as it is;
+  recommended.
+- **A patch in `ext/`**: delete the write in
+  `IsFastCrc32Supported()`. Static initialization has set the
+  flag already. Carried through each RocksDB upgrade.
+- **A fix upstream**: the same deletion, offered to RocksDB.
+  The suppression stays until a release has it.
