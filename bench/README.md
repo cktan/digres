@@ -9,9 +9,9 @@ environment variables are.
 
 - Use the optimized build, `dg/build/digres-release`
   (`make -C dg release -j4`). `run.sh` refuses a debug build.
-- Use the optimized PostgreSQL 18.6 in `bench/build/pg18`, and
-  PostgreSQL 18's `pgbench` and `psql` (the top
-  [`README.md`](../README.md) tells how to build them).
+- Use PostgreSQL 18.6 in `../ext/pg18.6/install`, optimized,
+  and its `pgbench` and `psql`: `make` builds them
+  ([`../ext/Makefile`](../ext/Makefile)).
 - Data directories, instances and logs go under `bench/build/`,
   not `/tmp`. The scripts do this.
 

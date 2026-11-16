@@ -31,8 +31,8 @@ test/pgregress/pgregress.py -j 4 test FILE...
 Each file runs alone, in a fresh database `regression`, after
 `test_setup` (as trimmed), through PostgreSQL 18's
 `pg_regress --use-existing` and `psql`, from the tree in
-`$PG18_SRC` (`~/p/postgres18`, built and installed into its
-`install/`); with no such tree the run says SKIPPED. Output
+`$PG18_SRC` (`../../../ext/pg18.6`, built and installed into
+its `install/`); with no such tree the run says SKIPPED. Output
 is compared with `expected/`, blind to white space as
 `pg_regress` is, and to the order of the rows of a result whose
 statement has no ORDER BY, which are compared as a multiset
@@ -114,7 +114,7 @@ Copy the files it concerns back from PostgreSQL's tree,
 expected output:
 
 ```
-cp ~/p/postgres18/src/test/regress/sql/FILE.sql sql/
+cp ../../../ext/pg18.6/src/test/regress/sql/FILE.sql sql/
 ./pgregress.py trim FILE && ./pgregress.py expected FILE
 ```
 

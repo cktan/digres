@@ -37,7 +37,10 @@ endif
 CXXFLAGS ?= $(OPTFLAGS)
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Ism0/include \
             -Ism1/include -Ism2/include -Ism3/include -MMD -MP
-LDLIBS   += -lrocksdb -licui18n -licuuc -licudata -lpthread
+# RocksDB, the release build ../ext makes.
+include ../ext/ext.mk
+LDLIBS   += $(ROCKSDB_REL) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata \
+            -lpthread
 
 BUILD     := build
 LIB       := $(BUILD)/libsm.a

@@ -37,11 +37,14 @@ BUILD    := build
 # the system services (sm_sys.h).
 SM0      := ../sm0
 SM0_LIB  := $(SM0)/$(BUILD)/libsm0.a
+# RocksDB, built in ../../ext: its headers, and the library a link
+# takes, the release build's, or under make tsan the sanitizer's.
+include ../../ext/ext.mk
+ROCKSDB_LIB ?= $(ROCKSDB_REL)
 
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -I../include \
-            -I$(SM0)/include -Isrc -MMD -MP
-ROCKSDB  ?= -lrocksdb
-LDLIBS   += $(SM0_LIB) $(ROCKSDB) -lpthread
+            -I$(SM0)/include -I$(ROCKSDB_INC) -Isrc -MMD -MP
+LDLIBS   += $(SM0_LIB) $(ROCKSDB_LIB) $(ROCKSDB_DEPS) -lpthread
 
 # The compiler and flags every object is built with. Rewriting
 # the file when they change makes it newer than the objects, so
@@ -101,13 +104,17 @@ $(LIB): $(LIB_OBJS)
 $(SM0_LIB):
 	$(MAKE) -C $(SM0) $(BUILD)/libsm0.a
 
-$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM0_LIB)
+# Every object includes RocksDB's headers, which must be unpacked first.
+$(LIB_OBJS) $(TEST_OBJS) $(MVCC_OBJS) $(DRV_OBJS) $(EX_OBJS) $(BENCH_OBJ): \
+    | $(ROCKSDB_SRC)
+
+$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM0_LIB) $(ROCKSDB_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_OBJS) $(LIB) $(LDLIBS)
 
-$(MVCC_BIN): $(MVCC_OBJS) $(LIB) $(SM0_LIB)
+$(MVCC_BIN): $(MVCC_OBJS) $(LIB) $(SM0_LIB) $(ROCKSDB_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(MVCC_OBJS) $(LIB) $(LDLIBS)
 
-$(DRIVER): $(DRV_OBJS) $(LIB) $(SM0_LIB)
+$(DRIVER): $(DRV_OBJS) $(LIB) $(SM0_LIB) $(ROCKSDB_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(DRV_OBJS) $(LIB) $(LDLIBS)
 
 $(BUILD)/drvobj/%.o: mvcc/driver/%.cc $(FLAGS_FILE)
@@ -118,7 +125,7 @@ $(BUILD)/mvcc/%.o: mvcc/%.cc $(FLAGS_FILE)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -Imvcc -c -o $@ $<
 
-$(BUILD)/example/%: $(BUILD)/example/%.o $(LIB) $(SM0_LIB)
+$(BUILD)/example/%: $(BUILD)/example/%.o $(LIB) $(SM0_LIB) $(ROCKSDB_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIB) $(LDLIBS)
 
 $(BUILD)/example/%.o: example/%.cc $(FLAGS_FILE)
@@ -204,11 +211,8 @@ clean:
 # The tests that run sm1's threads together, under the thread sanitizer,
 # on a RocksDB built with it, as sm3's are. The sanitizer cannot run with
 # the address space randomised.
-TSAN_ROCKSDB := $(abspath ../../rocksdb/tsan/librocksdb.a) \
-    -lsnappy -llz4 -lzstd -lz -lbz2
 TSAN_TESTS := the row reaper reaps beside writers*
 tsan:
-	../../dg/test/rocksdb.sh tsan
 	$(MAKE) BUILD=$(BUILD)/tsan OPTFLAGS="-O1 -g -fsanitize=thread" \
-	    ROCKSDB="$(TSAN_ROCKSDB)" $(BUILD)/tsan/test_sm1
+	    ROCKSDB_LIB="$(ROCKSDB_TSAN)" $(BUILD)/tsan/test_sm1
 	setarch $$(uname -m) -R $(BUILD)/tsan/test_sm1 -tc="$(TSAN_TESTS)"

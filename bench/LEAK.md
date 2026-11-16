@@ -75,8 +75,6 @@ and valgrind can run `rel` to the end.
         OPTFLAGS='-O3 -DNDEBUG' build/release/libsm.a
       make -C sm/rel -j4 BUILD=../build/release
 
-- `rel` links the system `librocksdb`, not the static copy of
-  digres. A difference in allocator behaviour is possible.
 - `rel` has one thread, so its sessions take turns. It cannot
   show a leak that needs two sessions at the same time.
 - Put the home under `bench/build/`, not `/tmp` (`REL_TMP`).

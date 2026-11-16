@@ -31,14 +31,14 @@
 # The slope leaves out a session's first check of a function, which
 # misses what the session keeps: a check here is a kept one. digres is
 # ../dg/build/digres-release ("make -C dg release"). PGBIN is PostgreSQL
-# 18's bin (~/p/postgres18/install/bin). SRV_CPU and CLI_CPU are the
+# 18's bin (../ext/pg18.6/install/bin). SRV_CPU and CLI_CPU are the
 # CPUs of the server and of pgbench.
 cd "$(dirname "$0")" || exit 1
 set -u
 root=$(cd .. && pwd)
 work=$PWD/build/privcheck
 digres=$root/dg/build/digres-release
-pgbin=${PGBIN:-$HOME/p/postgres18/install/bin}
+pgbin=${PGBIN:-$PWD/../ext/pg18.6/install/bin}
 n1=${N1:-10000}
 n2=${N2:-60000}
 rounds=${ROUNDS:-5}

@@ -462,10 +462,8 @@ TEST_CASE("logs made from spares replay after a crash") {
   rocksdb::Options opts;
   opts.create_if_missing = true;
   opts.env = env.get();
-  // Through a raw pointer, the one form RocksDB 8.9 and 9 share.
-  rocksdb::DB *raw = nullptr;
-  REQUIRE(rocksdb::DB::Open(opts, dir, &raw).ok());
-  std::unique_ptr<rocksdb::DB> db(raw);
+  std::unique_ptr<rocksdb::DB> db;
+  REQUIRE(rocksdb::DB::Open(opts, dir, &db).ok());
   rocksdb::WriteOptions wo;
   wo.sync = true;
   for (int log = 0; log < 5; log++) {
@@ -481,9 +479,8 @@ TEST_CASE("logs made from spares replay after a crash") {
   db.reset();
 
   rocksdb::Options plain;
-  raw = nullptr;
-  REQUIRE(rocksdb::DB::Open(plain, copy, &raw).ok());
-  std::unique_ptr<rocksdb::DB> again(raw);
+  std::unique_ptr<rocksdb::DB> again;
+  REQUIRE(rocksdb::DB::Open(plain, copy, &again).ok());
   for (int log = 0; log < 5; log++) {
     for (int k = 0; k < 10; k++) {
       std::string key = std::to_string(log) + "/" + std::to_string(k);

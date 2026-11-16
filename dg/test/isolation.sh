@@ -9,7 +9,7 @@
 #   test/isolation.sh SPEC...   these
 #
 # The specs, their expected output and pg_isolation_regress are those of
-# the PostgreSQL 18 source tree built in $PG18_SRC, ~/p/postgres18 if that
+# the PostgreSQL 18 source tree built in $PG18_SRC, ../ext/pg18.6 if that
 # is not set. Each spec runs in a database of its own; a step that waits
 # longer than 20 seconds is cancelled, a spec that runs past 180 seconds
 # stopped. The server runs on a data directory initdb makes in
@@ -17,7 +17,7 @@
 # DIGRES names the server, build/digres if it is not set. What each spec
 # printed and its diff are in build/test/isolation/SPEC/.
 cd "$(dirname "$0")/.." || exit 1
-src=${PG18_SRC:-$HOME/p/postgres18}/src/test/isolation
+src=${PG18_SRC:-$PWD/../ext/pg18.6}/src/test/isolation
 work=$PWD/build/test/isolation
 port=${DG_TEST_PORT:-$(python3 -c 'import socket; s = socket.socket()
 s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}

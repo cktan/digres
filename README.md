@@ -84,43 +84,51 @@ for `sm/` and `aa/`, or [`dg/CODE.md`](dg/CODE.md) for `dg/`.
 ## Prerequisites
 
 Developed on Ubuntu 24.04, aarch64; the build must also work
-on x86_64, and has been on Ubuntu 26.10 with GCC 15, which needs
-the steps under "Newer than Ubuntu 24.04" below.
+on x86_64, and with GCC 15 (Ubuntu 26.10).
 
 **`./SETUP_UBUNTU_DEV.sh`** does all of this section on a
 minimal Ubuntu machine. Each step is skipped once its result is
 there, so it can be run again after a failure; `SRC=` sets where
-it clones, `~/p` by default. It does:
+it clones Janet, `~/p` by default. It does:
 
 - **apt packages**: the list below, and `ca-certificates`.
 - **Janet**: commit `86ca958e`, installed into `/usr/local`.
-- **PostgreSQL 18**: `REL_18_STABLE` in `~/p/postgres18`,
-  installed into its `install/`, with its isolation tester.
-- **`PATH`**: that `install/bin` first, in `~/.profile`.
-- **`bench/build/pg18`**: PostgreSQL 18.6 (`724edf9`),
-  optimized, for the benchmark.
-- **Newer than Ubuntu 24.04**: the release build's RocksDB,
-  with `<cstdint>` given to GCC 15. The TSan build's RocksDB
-  and `CPATH` are left to you; it prints how.
+- **`PATH`**: `ext/pg18.6/install/bin` first, in `~/.profile`.
 
 By hand, on Ubuntu:
 
 ```
-sudo apt install build-essential cmake git flex bison python3 \
-    clang-format librocksdb-dev libicu-dev \
+sudo apt install build-essential cmake git wget flex bison python3 \
+    clang-format libicu-dev \
     libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev libbz2-dev \
     libreadline-dev libpq-dev libssl-dev openssl pkg-config bc \
     postgresql-client linux-tools-generic
 ```
 
 `libssl-dev` is OpenSSL, which digres always links for TLS.
-`libreadline-dev` is for building PostgreSQL 18, `libpq-dev` and
-`pkg-config` for digres's test clients, `openssl` for the
+`wget` downloads `ext/`'s sources. `libsnappy-dev` to
+`libbz2-dev` are RocksDB's compression libraries.
+`libreadline-dev` is for building PostgreSQL 18.6, `libpq-dev`
+and `pkg-config` for digres's test clients, `openssl` for the
 certificates its TLS tests make, `bc` for `bench.old/btree.sh`.
 
-- **RocksDB 8.9.1**: the system's (`librocksdb-dev` on 24.04)
-  for the debug build; the release and TSan builds build their
-  own from source (below).
+- **`ext/`: PostgreSQL 18.6 and RocksDB**, downloaded with
+  `wget` and built there by `make` the first time
+  ([`ext/Makefile`](ext/Makefile)); `make -j4 ext` builds them
+  alone. Both take a while, once.
+  - `ext/pg18.6`, PostgreSQL 18.6, the version digres forked,
+    built in its source tree with OpenSSL and installed into
+    its `install/`, optimized, with no `--enable-cassert`.
+    pgregress, the isolation specs and the regression suite run
+    its `psql`, `pg_regress` and isolation tester; its `psql`
+    tests digres's TLS (`dg/test/tls.sh`); the benchmark compares
+    digres with its server
+    ([`bench.old/DESIGN.md`](bench.old/DESIGN.md#2-optimized-builds) §2).
+    `PG18_SRC` names another tree.
+  - `ext/rocksdb-11.13.2`, RocksDB, static: `release/`,
+    `-O3 -DNDEBUG`, which the debug and release builds both link,
+    and `tsan/`, built by `make tsan`. `ext/ext.mk` names the
+    version; a new one is a new directory.
 - **Janet**, for `sm/rel`, which embeds its interpreter: built
   from source and installed into `/usr/local`, where
   `sm/rel/Makefile` looks for `janet.h` and `libjanet`. The
@@ -132,69 +140,13 @@ certificates its TLS tests make, `bc` for `bench.old/btree.sh`.
   make -j4 && sudo make install && sudo ldconfig
   ```
 - **`psql`**, from `postgresql-client`: digres serves
-  PostgreSQL's own clients. PostgreSQL 18's `psql`, built below,
-  is the one to use by hand (§Connect).
-- **`pgbench`**, for the benchmarks: PostgreSQL 18's, built
-  below. Ubuntu's is in the server package, and
-  `/usr/bin/pgbench` alone only fails without it, so put the
-  build first: `export
-  PATH=$HOME/p/postgres18/install/bin:$PATH`, in `~/.profile`
-  to keep it.
-- **PostgreSQL 18 from source**, for the tests that compare
-  with it and for the benchmark:
-  - `~/p/postgres18`, a clone of PostgreSQL on REL_18_STABLE,
-    built and installed into its own `install/`: pgregress,
-    the isolation specs and the regression suite run its
-    `psql` and `pg_regress`. Elsewhere, set `PG18_SRC`. Without
-    it those tests say SKIPPED. It is built with OpenSSL, so its
-    `psql` can test digres's TLS (`dg/test/tls.sh`). Clone it
-    whole, as `724edf9` below is in its history:
-
-    ```
-    git clone --branch REL_18_STABLE --single-branch \
-        https://github.com/postgres/postgres.git ~/p/postgres18
-    cd ~/p/postgres18
-    ./configure --prefix=$HOME/p/postgres18/install --with-ssl=openssl
-    make -j4 && make install && make -C src/test/isolation -j4
-    ```
-  - `bench/build/pg18`, PostgreSQL 18.6 itself (commit
-    `724edf9`) built optimized with no `--enable-cassert` or
-    `--enable-debug`, for the benchmark
-    ([`bench.old/DESIGN.md`](bench.old/DESIGN.md#2-optimized-builds) §2), from a worktree of that clone,
-    its prefix the absolute path of this repository's
-    `bench/build/pg18`:
-
-    ```
-    git -C ~/p/postgres18 worktree add --detach \
-        ~/p/postgres18-724edf9 724edf9
-    cd ~/p/postgres18-724edf9
-    ./configure --prefix=$HOME/p/digres/bench/build/pg18
-    make -j4 && make install
-    ```
-
-### Newer than Ubuntu 24.04
-
-Ubuntu 26.10's `librocksdb-dev` is 9.11, and its GCC 15 cannot
-compile RocksDB 8.9.1 as it is. The debug build uses 9.11 with
-no change. The release and TSan builds need two things:
-
-- **Build RocksDB first**, each kind once, as
-  `dg/test/rocksdb.sh` does nothing once its library is there.
-  GCC 15 needs `<cstdint>` given to it (remove `rocksdb/release`
-  or `rocksdb/tsan` first, if a build of it has failed):
-
-  ```
-  CXX="g++ -include cstdint" dg/test/rocksdb.sh release
-  CXX="g++ -include cstdint" dg/test/rocksdb.sh tsan
-  ```
-
-- **Compile against that RocksDB's headers**, not the system's,
-  or the release build fails to link at `rocksdb::DB::Open`.
-  Set this for those builds alone, not for a debug build:
-
-  ```
-  export CPATH=$PWD/rocksdb/src/include
-  ```
+  PostgreSQL's own clients. `ext/pg18.6`'s `psql` is the one to
+  use by hand (§Connect).
+- **`pgbench`**, for the benchmarks: `ext/pg18.6`'s. Ubuntu's is
+  in the server package, and `/usr/bin/pgbench` alone only fails
+  without it, so put `ext`'s first: `export
+  PATH=$HOME/p/digres/ext/pg18.6/install/bin:$PATH`, in
+  `~/.profile` to keep it. dg's tests put it first themselves.
 
 ## Building
 
@@ -215,20 +167,16 @@ make clean
 | sm | `sm/build/libsm.a`, `-O0 -g`, with `assert()` | `sm/build/release/libsm.a`, `-O3 -DNDEBUG` |
 | aa | `aa/build/libaa.a`, `-O0 -g`, with `assert()` | `aa/build/release/libaa.a`, `-O3 -DNDEBUG` |
 | sq | `sq/build/libsq.a`, `-O0 -g`, with `assert()` | `sq/build/libsq-release.a`, `-O2 -DNDEBUG` |
-| RocksDB 8.9.1 | the system's, shared, with its `assert()`s | built from source, `-O3 -DNDEBUG`, static |
+| RocksDB 11.13.2 | `ext/`'s, `-O3 -DNDEBUG`, static | the same |
 | For | the tests, and running by hand | the benchmark |
 
 The TSan build, `dg/build/digres-tsan`, is digres under the
 thread sanitizer, sm and RocksDB instrumented with it: for
 changes to threads, latches, locks or shared state.
 
-- **The release and TSan builds build RocksDB themselves** the
-  first time: `dg/test/rocksdb.sh` clones v8.9.1 into
-  `rocksdb/src` and builds it with cmake into `rocksdb/release`
-  or `rocksdb/tsan`, which takes a while. Ubuntu's `librocksdb`
-  keeps its `assert()`s, and the sanitizer cannot see into it.
-  `rocksdb/` is outside every `build/`, so `make clean` keeps
-  it; `rm -rf rocksdb` builds it again.
+- **`make clean` keeps `ext/`**: it is outside every `build/`.
+  `make -C ext clean` removes it, and the next `make` downloads
+  and builds it again.
 - **`digres --build` says how a binary was built**: the flags
   of digres, sq and sm, and which RocksDB it links. A release
   build shows `-DNDEBUG` on each, and RocksDB `static`.
@@ -289,7 +237,7 @@ psql -h /tmp -p 5432 -d postgres                 # the socket, as your OS user
 psql -h localhost -p 5432 -U NAME -d postgres    # TCP, with the password
 ```
 
-- **Use PostgreSQL 18's `psql`** (`~/p/postgres18/install/bin`,
+- **Use PostgreSQL 18's `psql`** (`ext/pg18.6/install/bin`,
   above). Ubuntu 24.04's `psql` 16 connects and runs SQL, and
   `\d`, `\dt` and `\di` work, but `\l` fails, as it does
   against PostgreSQL 18 itself: it reads

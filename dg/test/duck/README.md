@@ -31,7 +31,7 @@ test/duck/duck.sh --selftest            prove the runner works
 ```
 
 - **PostgreSQL 18** is the one in `$PG18`. When `PG18` is not
-  set, it is `../bench/build/pg18`.
+  set, it is `../ext/pg18.6/install`.
 - **DuckDB's files** are fetched once, at a pinned commit, into
   `build/duck-corpus`. A run checks out only the directories it
   names. No DuckDB file is copied into this repository.

@@ -1641,7 +1641,7 @@ dropped seqids  4-byte count, then 8-byte seqids; only if any
   were read, and `e03` reports one too. Treat the result as
   inconclusive. sm1 has no sanitizer target of its own. digres's
   `make tsan` links a RocksDB built for the sanitizer
-  (`dg/test/rocksdb.sh`), and runs digres, not these scenarios.
+  (`../ext/Makefile`), and runs digres, not these scenarios.
 
 ---
 

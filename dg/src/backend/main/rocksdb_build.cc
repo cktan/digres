@@ -6,9 +6,9 @@
 /*
  * rocksdb_build.cc -- what "digres --build" says of the RocksDB the server
  * links: its version, from the headers it was built against, and
- * DG_ROCKSDB_BUILD, which the Makefile's link step gives: the system's
- * shared library, or one test/rocksdb.sh built, and its flags.  It is
- * compiled at each link, not with the server's other objects.
+ * DG_ROCKSDB_BUILD, which the Makefile's link step gives: the static
+ * library ../ext built, and its flags.  It is compiled at each link, not
+ * with the server's other objects.
  */
 #include <rocksdb/version.h>
 

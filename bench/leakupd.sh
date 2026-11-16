@@ -24,7 +24,7 @@ cd "$(dirname "$0")"
 
 secs=${1:-60}
 digres=${DIGRES:-$PWD/../dg/build/digres-release}
-pgbin=${PGBIN:-$HOME/p/postgres18/install/bin}
+pgbin=${PGBIN:-$PWD/../ext/pg18.6/install/bin}
 work=$PWD/build/leakupd
 port=5551
 

@@ -59,9 +59,11 @@ int create_db(const std::string &path, rocksdb::DBOptions dbo) {
       {store_cf_name(0), store_cf_options()},
   };
   std::vector<rocksdb::ColumnFamilyHandle *> handles;
-  rocksdb::DB *db = nullptr;
-  // Create the RocksDB instance with every fixed column family.
-  rocksdb::Status s = rocksdb::DB::Open(dbo, path, cfs, &handles, &db);
+  // Create the RocksDB instance with every fixed column family. It is
+  // held by a raw pointer, as every instance of sm1's is.
+  std::unique_ptr<rocksdb::DB> opened;
+  rocksdb::Status s = rocksdb::DB::Open(dbo, path, cfs, &handles, &opened);
+  rocksdb::DB *db = opened.release();
   // Fail if RocksDB could not create the database.
   if (!s.ok()) {
     return set_status_error(s, path.c_str());
@@ -541,7 +543,9 @@ db_t *db_open(const std::string &path, const char *dbname,
     dbo.env = renv;
   }
   // Open RocksDB with every column family; this replays the WAL.
-  s = rocksdb::DB::Open(dbo, path, cfs, &handles, &db->rdb);
+  std::unique_ptr<rocksdb::DB> opened;
+  s = rocksdb::DB::Open(dbo, path, cfs, &handles, &opened);
+  db->rdb = opened.release();
   // Fail if RocksDB could not open it.
   if (!s.ok()) {
     set_status_error(s, path.c_str());

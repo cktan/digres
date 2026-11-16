@@ -34,11 +34,15 @@
 I := src/include
 B := src/backend
 PERL := perl
-# RocksDB, which sm links: the system's, or, for the thread sanitizer, one
-# built for it with its compression libraries (test/rocksdb.sh).
-LINK_ROCKSDB = -lrocksdb
-ROCKSDB_TSAN := ../rocksdb/tsan/librocksdb.a
-ROCKSDB_REL := ../rocksdb/release/librocksdb.a
+# RocksDB, which sm links, built in ../ext: the release build's, which
+# the debug build links too, or, for the thread sanitizer, the
+# instrumented one; each static, with its compression libraries.
+include ../ext/ext.mk
+ROCKSDB_LIB = $(ROCKSDB_REL)
+LINK_ROCKSDB = $(ROCKSDB_LIB) $(ROCKSDB_DEPS)
+# PostgreSQL 18.6's psql and pgbench, built in ../ext, before any other:
+# the tests need psql 18, and an older one fails on \d+.
+export PATH := $(PG18)/install/bin:$(PATH)
 # OpenSSL for TLS (../aa/ROLE.md section 8); the hashes stay PostgreSQL's
 # own (src/common/cryptohash.c), so cryptohash_openssl.c is skipped.
 LDLIBS = $(LINK_ROCKSDB) -lssl -lcrypto -licui18n -licuuc -licudata -lm \
@@ -99,8 +103,7 @@ OPT := -O1 -g -fsanitize=thread
 SERVER := build/digres-tsan
 LINK_SM := $(LIBSM_TSAN)
 LINK_AA := $(LIBAA_TSAN)
-LINK_ROCKSDB := $(ROCKSDB_TSAN) -lsnappy -llz4 -lzstd -lz -lbz2
-ROCKSDB_BUILD := static, $(shell cat $(dir $(ROCKSDB_TSAN))flags 2>/dev/null)
+ROCKSDB_LIB := $(ROCKSDB_TSAN)
 else ifeq ($(FLAVOR),rel)
 OPT := -O2
 ASSERT := -DNDEBUG
@@ -108,8 +111,6 @@ SERVER := build/digres-release
 LIBSQ := $(LIBSQ_REL)
 LINK_SM := $(LIBSM_REL)
 LINK_AA := $(LIBAA_REL)
-LINK_ROCKSDB := $(ROCKSDB_REL) -lsnappy -llz4 -lzstd -lz -lbz2
-ROCKSDB_BUILD := static, $(shell cat $(dir $(ROCKSDB_REL))flags 2>/dev/null)
 else
 $(error FLAVOR is obj, tsan or rel, not "$(FLAVOR)")
 endif
@@ -193,14 +194,15 @@ gen: $(GEN)
 .PHONY: server
 server: $(SERVER)
 
-$(SERVER): $(OBJS) $(LIBSQ) $(LINK_SM) $(LINK_AA)
+$(SERVER): $(OBJS) $(LIBSQ) $(LINK_SM) $(LINK_AA) $(ROCKSDB_LIB)
 	@mkdir -p build
 	$(CHECK_GLOBALS)
 	# What it says of the RocksDB it links, for "digres --build"
 	# (src/backend/main/rocksdb_build.cc); compiled at each link, since
 	# the libraries it reports are relinked at each.
-	$(CXX) $(OPT) -DDG_ROCKSDB_BUILD="\"$(ROCKSDB_BUILD)\"" -c \
-	    -o $(OBJDIR)/rocksdb_build.o src/backend/main/rocksdb_build.cc
+	$(CXX) $(OPT) -I$(ROCKSDB_INC) \
+	    -DDG_ROCKSDB_BUILD="\"static, $$(cat $(dir $(ROCKSDB_LIB))flags)\"" \
+	    -c -o $(OBJDIR)/rocksdb_build.o src/backend/main/rocksdb_build.cc
 	$(CXX) $(OPT) -o $@ $(OBJDIR)/rocksdb_build.o $(OBJS) \
 	    $(LIBSQ) $(LINK_AA) $(LINK_SM) $(LDLIBS)
 
@@ -208,16 +210,12 @@ $(OBJDIR)/%.o: src/%.c
 	@mkdir -p $(dir $@)
 	$(CXX) $(STD) $(OPT) $(CPPFLAGS) -MMD -MP -c -o $@ $<
 
-# The RocksDB the default build links, as "digres --build" names it.
-ROCKSDB_BUILD ?= shared, the system's (Ubuntu's build, with its assert()s)
-
 # The server again, every object compiled once more for the thread
 # sanitizer, and the statements in test/ run with it, alone and in
 # sessions, and test/server.sh run on it. The sanitizer cannot map its
 # memory with the address space randomised, hence setarch -R. Every
 # library that runs threads is instrumented: sm, sm_sys.h's services
-# among it, and RocksDB, built by test/rocksdb.sh. sq, the parser, is
-# not.
+# among it, and RocksDB, built by ../ext. sq, the parser, is not.
 .PHONY: tsan
 tsan: $(LIBSQ) $(LIBSM_TSAN) $(LIBAA_TSAN) $(ROCKSDB_TSAN)
 	$(MAKE) gen
@@ -340,13 +338,6 @@ $(LIBAA_TSAN): $(LIBSM_TSAN)
 $(LIBAA_REL): $(LIBSM_REL)
 	$(MAKE) -C $(AA) BUILD=build/release OPTFLAGS="-O3 -DNDEBUG" \
 	    build/release/libaa.a
-
-# RocksDB for the thread sanitizer, and for the release build, each built
-# once.
-$(ROCKSDB_TSAN):
-	test/rocksdb.sh tsan
-$(ROCKSDB_REL):
-	test/rocksdb.sh release
 
 # The catalogs' #defines: pg_*_d.h and the syscache tables.
 $(I)/catalog/.stamp: $(CATALOG_HEADERS) $(wildcard $(I)/catalog/*.dat) \

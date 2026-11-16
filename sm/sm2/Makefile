@@ -41,10 +41,12 @@ CXXFLAGS ?= $(OPTFLAGS)
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc/type -Isrc/ryu \
             -I$(SM1)/include -I$(SM0)/include -I../include \
             -MMD -MP
-# RocksDB: the system's, or with make tsan the instrumented one
-# ../dg/test/rocksdb.sh builds.
-ROCKSDB  ?= -lrocksdb
-LDLIBS   += $(ROCKSDB) -licui18n -licuuc -licudata -lpthread
+# RocksDB, built in ../../ext: the release build's, or with make tsan
+# the instrumented one.
+include ../../ext/ext.mk
+ROCKSDB_LIB ?= $(ROCKSDB_REL)
+LDLIBS   += $(ROCKSDB_LIB) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata \
+            -lpthread
 
 BUILD := build
 
@@ -90,7 +92,7 @@ $(SM0_LIB):
 $(SM1_LIB):
 	$(MAKE) -C $(SM1) BUILD=$(BUILD) OPTFLAGS='$(OPTFLAGS)' $(BUILD)/libsm1.a
 
-$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM1_LIB) $(SM0_LIB)
+$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM1_LIB) $(SM0_LIB) $(ROCKSDB_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_OBJS) $(LIB) $(SM1_LIB) $(SM0_LIB) \
 	    $(LDLIBS)
 
@@ -114,15 +116,12 @@ test: all
 
 # The B+tree's tests, whose threads share pages and the buffer
 # pool's frames, built apart under the thread sanitizer, against the
-# RocksDB ../../dg/test/rocksdb.sh builds instrumented: the system's
-# is not, and its handovers would read as races. The sanitizer cannot
+# RocksDB ../../ext builds instrumented: its release build is not, and
+# its handovers would read as races. The sanitizer cannot
 # run with the address space randomised, hence setarch -R.
-TSAN_ROCKSDB := $(abspath ../../rocksdb/tsan/librocksdb.a) \
-    -lsnappy -llz4 -lzstd -lz -lbz2
 tsan:
-	../../dg/test/rocksdb.sh tsan
 	$(MAKE) BUILD=$(BUILD)/tsan OPTFLAGS="-O1 -g -fsanitize=thread" \
-	    ROCKSDB="$(TSAN_ROCKSDB)" RUN="setarch $$(uname -m) -R" \
+	    ROCKSDB_LIB="$(ROCKSDB_TSAN)" RUN="setarch $$(uname -m) -R" \
 	    TEST_ARGS='-tc="tree*"' test
 
 format:

@@ -4,8 +4,10 @@
 # digres -- four parts, each with a Makefile of its own (README.md): sm/,
 # the storage stack; sq/, the SQL parser; aa/, roles and privileges; and
 # dg/, digres, which links the other three. This file builds and tests
-# them together.
+# them together, after ext/: PostgreSQL 18.6 and RocksDB, downloaded and
+# built there the first time (ext/Makefile).
 #
+#   make -j4 ext        ext/ alone
 #   DEBUG=1 make -j4    the debug build, dg/build/digres: what tests run
 #   make -j4            the release build, dg/build/digres-release: what
 #                       the benchmark runs
@@ -29,9 +31,9 @@ CLEANDIRS := $(DIRS:%=clean-%)
 FORMATDIRS := $(filter-out format-dg,$(DIRS:%=format-%))
 
 # digres builds sq, sm and aa first, as it links them: -O0 -g with
-# assertions for the tests, or optimized, with RocksDB built from source,
-# for the benchmark (bench.old/CODE.md).
-all:
+# assertions for the tests, or optimized for the benchmark; both on
+# ext/'s RocksDB.
+all: ext
 ifeq ($(DEBUG),1)
 	$(MAKE) -C dg
 else
@@ -40,18 +42,22 @@ endif
 
 # The tests run on the debug build, whatever DEBUG is: sm first, as aa's
 # tests link its library, and digres last, as it runs on all three.
-test: $(TESTDIRS)
+test: ext $(TESTDIRS)
 
 $(TESTDIRS): export DEBUG := 1
 $(TESTDIRS):
 	$(MAKE) -C $(@:test-%=%) test
 
-tsan:
+tsan: ext
 	$(MAKE) -C dg tsan
 
-bench:
+bench: ext
 	$(MAKE) -C dg release
 	bench/run.sh
+
+# PostgreSQL 18.6 for the tests and the benchmark, and RocksDB; once.
+ext:
+	$(MAKE) -C ext
 
 format: $(FORMATDIRS)
 
@@ -64,4 +70,4 @@ $(CLEANDIRS):
 	$(MAKE) -C $(@:clean-%=%) clean
 
 .PHONY: $(TESTDIRS) $(CLEANDIRS) $(FORMATDIRS)
-.PHONY: all test tsan bench format clean
+.PHONY: all ext test tsan bench format clean

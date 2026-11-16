@@ -22,14 +22,14 @@
 # Instructions include the server's background threads, so compactions
 # after an ingest count. DIGRES is the binary, by default
 # ../dg/build/digres-release ("make -C dg release"). PGBIN is PostgreSQL
-# 18's bin (~/p/postgres18/install/bin). SRV_CPU and CLI_CPU are the
+# 18's bin (../ext/pg18.6/install/bin). SRV_CPU and CLI_CPU are the
 # CPUs of the server and of psql.
 cd "$(dirname "$0")" || exit 1
 set -u
 root=$(cd .. && pwd)
 work=$PWD/build/sortload
 digres=${DIGRES:-$root/dg/build/digres-release}
-pgbin=${PGBIN:-$HOME/p/postgres18/install/bin}
+pgbin=${PGBIN:-$PWD/../ext/pg18.6/install/bin}
 rows=${ROWS:-5000000}
 rounds=${ROUNDS:-3}
 srv_cpu=${SRV_CPU:-2}

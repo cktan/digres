@@ -311,7 +311,9 @@ int open_tmp(sm1::env_t *env) {
   env->tmp_listener = std::make_shared<sm1_internal::memcount_listener_t>();
   opt.listeners.push_back(env->tmp_listener);
   // Open the empty instance every temporary store will live in.
-  rocksdb::Status s = rocksdb::DB::Open(opt, path, &env->tmp);
+  std::unique_ptr<rocksdb::DB> opened;
+  rocksdb::Status s = rocksdb::DB::Open(opt, path, &opened);
+  env->tmp = opened.release();
   if (!s.ok()) {
     return set_status_error(s, path.c_str());
   }
@@ -361,7 +363,9 @@ sm1::env_t *attach(const char *homedir, const sm1::env_options_t *opt) {
   rocksdb::Options ropt(rocksdb::DBOptions(),
                         fixed_cf_options(env->block_cache));
   // Open the root db.
-  rocksdb::Status s = rocksdb::DB::Open(ropt, rootpath, &env->root);
+  std::unique_ptr<rocksdb::DB> opened;
+  rocksdb::Status s = rocksdb::DB::Open(ropt, rootpath, &opened);
+  env->root = opened.release();
   // Fail if it cannot be opened.
   if (!s.ok()) {
     set_status_error(s, rootpath.c_str());
@@ -547,9 +551,10 @@ int sm1::init(std::string_view homedir_arg) {
   rocksdb::Options opt;
   opt.create_if_missing = true;
   opt.error_if_exists = true;
-  rocksdb::DB *root = nullptr;
   // Open it, creating it.
-  rocksdb::Status s = rocksdb::DB::Open(opt, rootpath, &root);
+  std::unique_ptr<rocksdb::DB> opened;
+  rocksdb::Status s = rocksdb::DB::Open(opt, rootpath, &opened);
+  rocksdb::DB *root = opened.release();
   // Fail if it cannot be created.
   if (!s.ok()) {
     return set_status_error(s, rootpath.c_str());

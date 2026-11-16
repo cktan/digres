@@ -14,7 +14,7 @@
 # No make target or other test runs this: a person starts it by hand.
 # DuckDB's files are fetched once, at a pinned commit, into
 # build/duck-corpus. The servers, their data and logs, and the report are
-# in build/dk. PostgreSQL 18 is the one in $PG18, ../bench/build/pg18 if
+# in build/dk. PostgreSQL 18 is the one in $PG18, ../ext/pg18.6/install if
 # that is not set. The exit status is 0 with no finding, 1 with one, 2 if
 # the run could not start.
 cd "$(dirname "$0")/../.." || exit 2
@@ -23,7 +23,7 @@ commit=b2207b7290887503b6280ee41f3c8c597a884141
 corpus=$PWD/build/duck-corpus
 dk=$PWD/build/dk
 report=$dk/report
-pg18=${PG18:-$PWD/../bench/build/pg18}
+pg18=${PG18:-$PWD/../ext/pg18.6/install}
 defaults=(test/sql/transactions test/sql/update test/sql/upsert
   test/sql/constraints test/sql/delete test/sql/index test/sql/alter
   test/sql/types/decimal)

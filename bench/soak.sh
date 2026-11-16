@@ -9,7 +9,7 @@
 #
 # dg is digres, a release build (DIGRES, default
 # ../dg/build/digres-release); pg is PostgreSQL 18 (PGBIN, default
-# ~/p/postgres18/install/bin). Environment:
+# ../ext/pg18.6/install/bin). Environment:
 #
 #   DURATION  seconds of the run, warm-up included (14400)
 #   WARMUP    seconds at the start that the report does not score (900)
@@ -41,7 +41,7 @@ duration=${DURATION:-14400}
 srv_cpus=${SRV_CPUS:-0-1}
 cli_cpus=${CLI_CPUS:-2-3}
 digres=${DIGRES:-$PWD/../dg/build/digres-release}
-pgbin=${PGBIN:-$HOME/p/postgres18/install/bin}
+pgbin=${PGBIN:-$PWD/../ext/pg18.6/install/bin}
 me=$(id -un)
 work=$PWD/build/soak/$sys
 port=$([ "$sys" = dg ] && echo 5541 || echo 5542)

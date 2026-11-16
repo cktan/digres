@@ -164,13 +164,12 @@ TEST_CASE("sm1_attach rejects an unknown format version") {
   tmpdir_t tmp;
   REQUIRE(sm1::init(tmp.path()) == 0);
   {
-    rocksdb::DB *root = nullptr;
+    std::unique_ptr<rocksdb::DB> root;
     std::string rootpath = std::string(tmp.path()) + "/global/root";
     REQUIRE(rocksdb::DB::Open(rocksdb::Options(), rootpath, &root).ok());
     std::string v;
     sm0::put_be64(v, 99);
     REQUIRE(root->Put(rocksdb::WriteOptions(), SM1_ROOT_VERSION, v).ok());
-    delete root;
   }
   CHECK(attach(tmp.path()) == nullptr);
   CHECK(sm1::errnum() == sm1::SM_ERR_VERSION);

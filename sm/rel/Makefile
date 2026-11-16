@@ -12,7 +12,9 @@ OPTFLAGS ?= -O3 -DNDEBUG
 endif
 CXXFLAGS ?= $(OPTFLAGS)
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -I../include -I/usr/local/include -Isrc -MMD -MP
-LDLIBS   += -L/usr/local/lib -ljanet -lrocksdb -licui18n -licuuc -licudata -lpthread -ldl -lm
+# RocksDB, the release build ../../ext makes.
+include ../../ext/ext.mk
+LDLIBS   += -L/usr/local/lib -ljanet $(ROCKSDB_REL) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata -lpthread -ldl -lm
 
 BUILD    ?= ../build
 OBJDIR   := $(BUILD)/rel_obj
@@ -37,7 +39,7 @@ $(OBJDIR)/%.o: src/%.cc $(FLAGS_FILE)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-$(BIN): $(OBJS) $(BUILD)/libsm.a
+$(BIN): $(OBJS) $(BUILD)/libsm.a $(ROCKSDB_REL)
 	@mkdir -p $(dir $@)
 	$(CXX) -o $@ $(OBJS) $(BUILD)/libsm.a $(LDLIBS)
 

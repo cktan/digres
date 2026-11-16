@@ -97,7 +97,8 @@ public:
 
   /*
    * The compression of each sorted file of the column family cf,
-   * the store's when cf is null, as RocksDB recorded it.
+   * the store's when cf is null, as RocksDB recorded it, by name:
+   * "LZ4", not the "BuiltinV2;04;" a file's properties keep.
    */
   std::vector<std::string>
   compressions(rocksdb::ColumnFamilyHandle *cf = nullptr) {
@@ -106,7 +107,8 @@ public:
                 .ok());
     std::vector<std::string> out;
     for (const auto &[file, p] : props) {
-      out.push_back(p->compression_name);
+      out.push_back(
+          rocksdb::ParseCompressionNameForDisplay(p->compression_name));
     }
     return out;
   }

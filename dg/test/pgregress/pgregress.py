@@ -52,7 +52,8 @@ from report import normalize  # noqa: E402
 from rowset import rowset, RULE, COUNT  # noqa: E402
 
 DG = os.path.abspath(os.path.join(HERE, '..', '..'))
-PG18 = os.environ.get('PG18_SRC', os.path.expanduser('~/p/postgres18'))
+PG18 = os.environ.get('PG18_SRC',
+                      os.path.normpath(os.path.join(DG, '..', 'ext', 'pg18.6')))
 PG_BIN = os.path.join(PG18, 'install', 'bin')
 PG_REGRESS = os.path.join(PG18, 'src', 'test', 'regress', 'pg_regress')
 DLPATH = os.path.join(PG18, 'src', 'test', 'regress')

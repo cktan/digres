@@ -80,8 +80,8 @@ for a run:
 - **digres:** `dg/build/digres`, the debug build, so `assert()`
   and `Assert()` can fire. Build it with `DEBUG=1 make -C sm -j4`
   and `DEBUG=1 make -C dg -j4`.
-- **PostgreSQL 18:** in `$PG18`. On this machine it is
-  `bench/build/pg18`, version 18.6, so set `PG18` to that path.
+- **PostgreSQL 18:** in `$PG18`, by default
+  `../ext/pg18.6/install`, version 18.6.
   Fail with a clear message if it is not there.
 - **Their data, logs and sockets** go in `dg/build/dk`. Keep the
   path short: a socket's path is at most 107 bytes. Do not use

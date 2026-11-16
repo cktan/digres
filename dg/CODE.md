@@ -85,7 +85,7 @@ The import itself is not built yet
 
 - **`make -j4 isolation`** runs PostgreSQL 18's isolation specs
   on digres with its `isolationtester`, from the PostgreSQL 18
-  tree built in `$PG18_SRC` (`~/p/postgres18`), and checks each
+  tree built in `$PG18_SRC` (`../ext/pg18.6`), and checks each
   against `test/isolation_specs.txt`: which are to pass, and why
   the others fail. Run it for any change to locks or waits; it
   takes ten minutes.
@@ -113,7 +113,7 @@ The import itself is not built yet
   to threads, signals, latches, locks or shared state. RocksDB
   and sm, sm_sys.h's services with it, are instrumented with it;
   the first run builds RocksDB for it
-  (`test/rocksdb.sh tsan`), which takes a while.
+  (`make -C ../ext rocksdb-tsan`), which takes a while.
 - **Run the full suite before every commit** that touches
   source. A commit of documents alone needs none.
 - **Save test output to a file** and read the file, rather

@@ -19,7 +19,7 @@ test/regress.sh FILE...    these files
 ```
 
 The files, their expected output and `pg_regress` are those of
-the PostgreSQL 18 tree built in `$PG18_SRC` (`~/p/postgres18`);
+the PostgreSQL 18 tree built in `$PG18_SRC` (`../../../ext/pg18.6`);
 `pg_regress` and the harness run that tree's `psql`.
 
 - One server, on a data directory `initdb` makes in

@@ -14,14 +14,14 @@
 # primary key and q4 uses no index, so each runs once, before any
 # secondary index. Each query is pgbench, prepared, one client, for
 # Q_SECONDS (10). PGBIN is PostgreSQL 18's bin, for psql and pgbench
-# (~/p/postgres18/install/bin). The logs go to build/run.
+# (../ext/pg18.6/install/bin). The logs go to build/run.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 : "${DG_PORT:?set DG_PORT, digres's port}"
 : "${PG_PORT:?set PG_PORT, PostgreSQL's port}"
 export PGHOST=${PGHOST:-/tmp}
-pgbin=${PGBIN:-$HOME/p/postgres18/install/bin}
+pgbin=${PGBIN:-$PWD/../ext/pg18.6/install/bin}
 seconds=${Q_SECONDS:-10}
 work=build/run
 mkdir -p "$work"

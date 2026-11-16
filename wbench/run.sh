@@ -36,14 +36,14 @@
 #
 # Another process that writes to the device adds to its count. DIGRES
 # is the binary, by default ../dg/build/digres-release ("make -C dg
-# release"). PGBIN is PostgreSQL 18's bin (~/p/postgres18/install/bin).
+# release"). PGBIN is PostgreSQL 18's bin (../ext/pg18.6/install/bin).
 cd "$(dirname "$0")" || exit 1
 set -u
 root=$(cd .. && pwd)
 here=$PWD
 work=$PWD/build/run
 digres=${DIGRES:-$root/dg/build/digres-release}
-pgbin=${PGBIN:-$HOME/p/postgres18/install/bin}
+pgbin=${PGBIN:-$PWD/../ext/pg18.6/install/bin}
 txns=${W_TXNS:-10000}
 clients=${CLIENTS:-1 16}
 counts=${COUNTS:-0 1 4 16}

@@ -29,7 +29,7 @@
 #    index adds, from the tables of 0 and 16.
 #
 # digres is DIGRES, or ../dg/build/digres-release ("make -C dg release"). PGBIN is
-# PostgreSQL 18's bin (~/p/postgres18/install/bin). SRV_CPU and CLI_CPU
+# PostgreSQL 18's bin (../ext/pg18.6/install/bin). SRV_CPU and CLI_CPU
 # are the CPUs of the server and of pgbench. COUNTS (0 1 4 16) are the
 # tables' index counts; UPDATED=1 updates every row once after the load.
 cd "$(dirname "$0")" || exit 1
@@ -37,7 +37,7 @@ set -u
 root=$(cd .. && pwd)
 work=$PWD/build/idxopen
 digres=${DIGRES:-$root/dg/build/digres-release}
-pgbin=${PGBIN:-$HOME/p/postgres18/install/bin}
+pgbin=${PGBIN:-$PWD/../ext/pg18.6/install/bin}
 n1=${N1:-10000}
 n2=${N2:-60000}
 rounds=${ROUNDS:-5}

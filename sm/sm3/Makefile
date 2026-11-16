@@ -34,8 +34,12 @@ CXXFLAGS ?= $(OPTFLAGS)
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc/catalog \
             -Isrc/analyze -I$(SM2)/include -I$(SM1)/include \
             -I$(SM0)/include -I../include -MMD -MP
-ROCKSDB  ?= -lrocksdb
-LDLIBS   += $(ROCKSDB) -licui18n -licuuc -licudata -lpthread
+# RocksDB, built in ../../ext: the release build's, or with make tsan
+# the instrumented one.
+include ../../ext/ext.mk
+ROCKSDB_LIB ?= $(ROCKSDB_REL)
+LDLIBS   += $(ROCKSDB_LIB) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata \
+            -lpthread
 
 BUILD := build
 
@@ -81,7 +85,8 @@ $(SM1_LIB):
 $(SM2_LIB):
 	$(MAKE) -C $(SM2) BUILD=$(BUILD) OPTFLAGS='$(OPTFLAGS)' $(BUILD)/libsm2.a
 
-$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM2_LIB) $(SM1_LIB) $(SM0_LIB)
+$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM2_LIB) $(SM1_LIB) $(SM0_LIB) \
+    $(ROCKSDB_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_OBJS) $(LIB) $(SM2_LIB) $(SM1_LIB) \
 	    $(SM0_LIB) $(LDLIBS)
 
@@ -101,12 +106,9 @@ test: all
 
 # The reapers' tests under the thread sanitizer, the btree reaper's and the
 # pool's row pass, on a RocksDB built with it, as sm2's tree tests are.
-TSAN_ROCKSDB := $(abspath ../../rocksdb/tsan/librocksdb.a) \
-    -lsnappy -llz4 -lzstd -lz -lbz2
 tsan:
-	../../dg/test/rocksdb.sh tsan
 	$(MAKE) BUILD=$(BUILD)/tsan OPTFLAGS="-O1 -g -fsanitize=thread" \
-	    ROCKSDB="$(TSAN_ROCKSDB)" RUN="setarch $$(uname -m) -R" \
+	    ROCKSDB_LIB="$(ROCKSDB_TSAN)" RUN="setarch $$(uname -m) -R" \
 	    TEST_ARGS='-tc="btree reaper*,tree: scans agree with the rows while*,tree: the btree reaper*,tree: the reapers*"' test
 
 format:

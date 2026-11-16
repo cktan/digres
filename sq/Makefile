@@ -160,7 +160,7 @@ test: all
 # PostgreSQL's own scanner and parser made of it. It needs the scripts,
 # which are not here, and takes minutes: so it is not part of `make
 # test`.
-PG_SQL ?= $(HOME)/p/postgres18/src/test/regress/sql
+PG_SQL ?= $(CURDIR)/../ext/pg18.6/src/test/regress/sql
 corpus-test: all
 	test/corpus.py $(PG_SQL)
 

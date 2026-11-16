@@ -10,7 +10,7 @@
 #   test/regress.sh FILE...   these
 #
 # The files, their expected output and pg_regress are those of the
-# PostgreSQL 18 source tree built in $PG18_SRC, ~/p/postgres18 if that is
+# PostgreSQL 18 source tree built in $PG18_SRC, ../ext/pg18.6 if that is
 # not set. Each file runs, one at a time, in a database of its own, after
 # test_setup, which makes the tables most files read; a file that runs
 # past 180 seconds is stopped. The server runs on a data directory initdb
@@ -22,7 +22,7 @@
 # the server's log while it ran (FILE/); and, made by test/regress/report.py
 # from them: summary, causes, crashes and setup (test/regress/README.md).
 cd "$(dirname "$0")/.." || exit 1
-pg=${PG18_SRC:-$HOME/p/postgres18}
+pg=${PG18_SRC:-$PWD/../ext/pg18.6}
 src=$pg/src/test/regress
 work=$PWD/build/test/regress
 port=${DG_TEST_PORT:-$(python3 -c 'import socket; s = socket.socket()

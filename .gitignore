@@ -1,6 +1,8 @@
 *~
 build/
-/rocksdb/
+/ext/*
+!/ext/Makefile
+!/ext/ext.mk
 books-home/
 sm/sm1/mvcc/out/
 .*.swp

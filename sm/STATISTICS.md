@@ -15,7 +15,7 @@ It is a strategy, and §9 is the design, which makes the choices
 left open here.
 
 **§6 has now been measured and §7 checked**, against RocksDB
-9.11.2 through sm1 (the stack builds on 8.9.1 now) and against
+9.11.2 through sm1 (the stack builds on 11.13.2 now) and against
 PostgreSQL 17.11's source and a server built from it. §6
 carries the numbers, §7 the verdicts. Two things the strategy
 said of PostgreSQL were wrong, and both are corrected where

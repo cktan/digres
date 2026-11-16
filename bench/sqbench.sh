@@ -20,7 +20,7 @@ cd "$(dirname "$0")"
 terms=${1:-1000}
 seconds=${2:-10}
 digres=${DIGRES:-../dg/build/digres-release}
-pgbin=${PGBIN:-$HOME/p/postgres18/install/bin}
+pgbin=${PGBIN:-$PWD/../ext/pg18.6/install/bin}
 if [ ! -x "$pgbin/pgbench" ]; then
   pgbin=$(dirname "$(command -v pgbench)")
 fi

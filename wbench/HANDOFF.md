@@ -26,9 +26,8 @@ GCP machine. Read the repository's `CLAUDE.md` first, then
    `-DNDEBUG`.
 3. Find PostgreSQL 18's bin: it must have `postgres`, `initdb`,
    `psql` and `pgbench`. `run.sh` uses
-   `~/p/postgres18/install/bin` by default; set `PGBIN` if it is
-   elsewhere. Prefer the optimized build of the top `README.md`
-   (`bench/build/pg18`, 18.6, no `--enable-cassert`). Record
+   `../ext/pg18.6/install/bin` by default, 18.6 with no
+   `--enable-cassert`; set `PGBIN` if it is elsewhere. Record
    which one you use.
 4. Measure the disk's sync cost:
    `$PGBIN/pg_test_fsync -f wbench/build/fsync.test`. The
