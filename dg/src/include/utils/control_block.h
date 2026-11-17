@@ -6,12 +6,16 @@
 /*-------------------------------------------------------------------------
  *
  * control_block.h
- *	  The process control block, the shared block and the thread control
- *	  block.
+ *	  The process control block, the shared block, the thread control block
+ *	  and the postmaster's thread control block.
  *
  * digres is one process of threads, and each block holds state by who owns
- * it and who reads it (CODE.md section 3):
+ * it and who reads it (CODE.md section 3).  Each global variable moves into
+ * one of these structs:
  *
+ * - postmaster_tcb_t: the main thread's alone, the postmaster's: what the
+ *   main thread owns and no other thread reads.  It is NULL in every other
+ *   thread.
  * - pcb_t: what the main thread owns and other threads read, through a
  *   const pointer.  The main thread alone writes it; after the first thread
  *   starts, it writes only an atomic field.
@@ -21,31 +25,8 @@
  * - tcb_t: what one thread has, alone, its own: one for each thread, made
  *   as it starts and freed as it ends.  What a thread inherits from the one
  *   that started it is copied in at the start, and is its own after, as
- *   are the settings a session can SET (tcb->guc).  What
- *   the main thread owns and no other thread reads is in the main thread's
- *   postmaster_tcb_t.  It may point into shmem_t; nothing of it is reached
- *   from another thread.
- * - postmaster_tcb_t: the main thread's alone, the postmaster's: what the
- *   main thread owns and no other thread reads.  It is NULL in every other
- *   thread.
- *
- * What the main thread sets for the process, a setting among them, is in one
- * of four classes, by who reads it and whether it changes after the first
- * thread starts:
- *
- * 1. The postmaster's only: the main thread alone reads it, whether or not
- *    a reload changes it.  It is in postmaster_tcb_t, so another thread that
- *    reads it finds postmaster_tcb NULL and stops at once.
- * 2. Shared, under a mutex: a reload changes it, and another thread reads
- *    it with the mutex held.  It is in shmem_t: in a module's own state if
- *    one module reads it (logfile.c's settings, under shmem->log.mutex), or
- *    a snapshot the mutex guards (log_line_prefix).
- * 3. Shared, an atomic: it changes after the first thread starts, and any
- *    thread reads it.  It is a std::atomic in pcb_t (log_min_messages) or
- *    in shmem_t (pre_auth_delay).
- * 4. Shared, fixed: the main thread sets it before the first thread starts,
- *    and it never changes after, so any thread reads it with no guard.  It
- *    is a plain field of pcb_t.
+ *   are the settings a session can SET (tcb->guc).  It may point into
+ *   shmem_t; nothing of it is reached from another thread.
  *
  * They replace the SHARED and LOCAL thread_local variables (c.h), a module
  * at a time.  pcb and shmem are made once by main(), before any thread

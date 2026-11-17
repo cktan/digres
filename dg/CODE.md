@@ -189,13 +189,6 @@ digres is one process; each session is a thread of it.
     thread reads. `main()` makes it; it is reached
     through `thread_local postmaster_tcb_t *postmaster_tcb`,
     NULL in every other thread, and never freed.
-  - **What the main thread sets for the process is in one of
-    four classes**, by who reads it and whether it changes
-    after the first thread starts: the postmaster's only
-    (`postmaster_tcb_t`), shared under a mutex (`shmem_t`),
-    shared as an atomic (`pcb_t` or `shmem_t`), and shared and
-    fixed (`pcb_t`). The header of `control_block.h` defines
-    them.
   - A field is a value, or a `std::unique_ptr` to what the
     block owns. A non-owning raw pointer is fine, with a
     comment naming its owner (a memory context, shmem).
