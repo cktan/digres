@@ -679,6 +679,10 @@ says which versions have it and what closes it.
 RocksDB's `main` on 2026-11-15. It is not in digres's code or
 sm's.
 
+**Reported** upstream on 2026-11-17 as
+[meta/rocksdb#15711](https://github.com/meta/rocksdb/issues/15711).
+Its comment has a standalone repro that fires on every run.
+
 **What races.** `util/crc32c.cc` keeps `pmull_runtime_flag`, a
 plain global `bool`, on ARM64 alone:
 
