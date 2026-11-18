@@ -5,13 +5,13 @@ make a database, start the server, connect with `psql`, create a
 table, and read it back. [`DG-vs-PG.md`](DG-vs-PG.md) says what
 digres is, and how it differs from PostgreSQL.
 
-The steps are for Ubuntu 24.04. [`README.md`](README.md) has the
-detail of each step, and the other platforms.
+The steps are for Ubuntu 24.04. [`BUILDING.md`](BUILDING.md) and
+[`RUNNING.md`](RUNNING.md) have the detail of each step.
 
 ## 1. Build
 
 Install the prerequisites once. `./SETUP_UBUNTU_DEV.sh` does it
-on a minimal Ubuntu machine; [`README.md`](README.md),
+on a minimal Ubuntu machine; [`BUILDING.md`](BUILDING.md),
 "Prerequisites", lists the packages to install by hand.
 
 From the top of the repository, build the debug build:
@@ -107,4 +107,5 @@ SELECT name, price FROM fruit WHERE price < 1 ORDER BY price;
   2 (`--init -W`), then `psql -h localhost -p 5432 -U NAME -d
   postgres`.
 - **The release build, the tests and the benchmark**:
-  [`README.md`](README.md).
+  [`BUILDING.md`](BUILDING.md), [`TESTING.md`](TESTING.md) and
+  [`bench/README.md`](bench/README.md).

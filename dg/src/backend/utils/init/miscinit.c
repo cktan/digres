@@ -203,24 +203,24 @@ void SetDatabasePath(const char *path) {
 void checkDataDir(void) {
   struct stat stat_buf;
 
-  Assert(pcb->DataDir);
+  Assert(!pcb->DataDir.empty());
 
-  if (stat(pcb->DataDir, &stat_buf) != 0) {
+  if (stat(pcb->DataDir.c_str(), &stat_buf) != 0) {
     if (errno == ENOENT)
       ereport(FATAL, (errcode_for_file_access(),
-                      errmsg("data directory \"%s\" does not exist", pcb->DataDir)));
+                      errmsg("data directory \"%s\" does not exist", pcb->DataDir.c_str())));
     else
       ereport(FATAL,
               (errcode_for_file_access(),
                errmsg("could not read permissions of directory \"%s\": %m",
-                      pcb->DataDir)));
+                      pcb->DataDir.c_str())));
   }
 
   /* eventual chdir would fail anyway, but let's test ... */
   if (!S_ISDIR(stat_buf.st_mode))
     ereport(FATAL, (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
                     errmsg("specified data directory \"%s\" is not a directory",
-                           pcb->DataDir)));
+                           pcb->DataDir.c_str())));
 
     /*
      * Check that the directory belongs to my userid; if not, reject.
@@ -235,7 +235,7 @@ void checkDataDir(void) {
   if (stat_buf.st_uid != geteuid())
     ereport(FATAL,
             (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-             errmsg("data directory \"%s\" has wrong ownership", pcb->DataDir),
+             errmsg("data directory \"%s\" has wrong ownership", pcb->DataDir.c_str()),
              errhint("The server must be started by the user that owns the "
                      "data directory.")));
 #endif
@@ -255,7 +255,7 @@ void checkDataDir(void) {
   if (stat_buf.st_mode & PG_MODE_MASK_GROUP)
     ereport(FATAL,
             (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-             errmsg("data directory \"%s\" has invalid permissions", pcb->DataDir),
+             errmsg("data directory \"%s\" has invalid permissions", pcb->DataDir.c_str()),
              errdetail(
                  "Permissions should be u=rwx (0700) or u=rwx,g=rx (0750).")));
 #endif
@@ -278,7 +278,7 @@ void checkDataDir(void) {
 #endif
 
   /* Check for PG_VERSION */
-  ValidatePgVersion(pcb->DataDir);
+  ValidatePgVersion(pcb->DataDir.c_str());
 }
 
 /*
@@ -286,15 +286,16 @@ void checkDataDir(void) {
  * never set DataDir directly.
  */
 void SetDataDir(const char *dir) {
-  char *new_;
+  char *abs_dir;
 
   Assert(dir);
 
   /* If presented path is relative, convert to absolute */
-  new_ = make_absolute_path(dir);
+  abs_dir = make_absolute_path(dir);
 
-  free(pcb->DataDir);
-  pcb_main()->DataDir = new_;
+  pcb_main()->DataDir = abs_dir;
+  /* DataDir holds its own copy; make_absolute_path() malloc'd this one */
+  free(abs_dir);
 }
 
 /*
@@ -304,12 +305,12 @@ void SetDataDir(const char *dir) {
  * setup, however, we don't force the chdir to occur during SetDataDir.
  */
 void ChangeToDataDir(void) {
-  Assert(pcb->DataDir);
+  Assert(!pcb->DataDir.empty());
 
-  if (chdir(pcb->DataDir) < 0)
+  if (chdir(pcb->DataDir.c_str()) < 0)
     ereport(FATAL,
             (errcode_for_file_access(),
-             errmsg("could not change directory to \"%s\": %m", pcb->DataDir)));
+             errmsg("could not change directory to \"%s\": %m", pcb->DataDir.c_str())));
 }
 
 /* ----------------------------------------------------------------
@@ -988,7 +989,7 @@ static void CreateLockFile(const char *filename, bool amPostmaster,
    * the datadir lockfile later.
    */
   snprintf(buffer, sizeof(buffer), "%d\n%s\n" INT64_FORMAT "\n%d\n%s\n",
-           amPostmaster ? (int)my_pid : -((int)my_pid), pcb->DataDir,
+           amPostmaster ? (int)my_pid : -((int)my_pid), pcb->DataDir.c_str(),
            MyStartTime, postmaster_tcb->PostPortNumber, socketDir);
 
   /*
@@ -1054,7 +1055,7 @@ static void CreateLockFile(const char *filename, bool amPostmaster,
  * postmaster.c will rewrite it upon creating the first Unix socket.
  */
 void CreateDataDirLockFile(bool amPostmaster) {
-  CreateLockFile(DIRECTORY_LOCK_FILE, amPostmaster, "", true, pcb->DataDir);
+  CreateLockFile(DIRECTORY_LOCK_FILE, amPostmaster, "", true, pcb->DataDir.c_str());
 }
 
 /*

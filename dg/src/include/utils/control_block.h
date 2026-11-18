@@ -188,8 +188,9 @@ typedef struct pcb_t {
    * globals.c: the absolute path to the top level of the data directory.
    * Except during early startup, this is also the server's working
    * directory; most code can use relative paths and not reference it.
+   * It is "" until SetDataDir() sets it.
    */
-  char *DataDir = NULL;
+  std::string DataDir;
   char my_exec_path[MAXPGPATH] = "";   /* full path to my executable */
   char pkglib_path[MAXPGPATH] = "";    /* full path to lib directory */
   pid_t PostmasterPid = 0;

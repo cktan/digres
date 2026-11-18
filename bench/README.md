@@ -8,12 +8,43 @@ environment variables are.
 ## 1. Rules for every run
 
 - Use the optimized build, `dg/build/digres-release`
-  (`make -C dg release -j4`). `run.sh` refuses a debug build.
+  (`make -C dg release -j4`): a debug build's number measures
+  the build. `run.sh` refuses a debug build of either side: a
+  server whose `debug_assertions` is on, or a digres whose
+  `--build` is not a release's.
 - Use PostgreSQL 18.6 in `../ext/pg18.6/install`, optimized,
   and its `pgbench` and `psql`: `make` builds them
   ([`../ext/Makefile`](../ext/Makefile)).
 - Data directories, instances and logs go under `bench/build/`,
   not `/tmp`. The scripts do this.
+- Compare digres with PostgreSQL, not with an older digres.
+- **Let `perf` count.** A system with
+  `kernel.perf_event_paranoid` above 1 refuses:
+  `sudo sysctl kernel.perf_event_paranoid=1` allows it until the
+  next reboot. To keep it:
+
+  ```
+  echo 'kernel.perf_event_paranoid = 1' |
+      sudo tee /etc/sysctl.d/90-perf.conf
+  ```
+- **See which hardware counters a virtual machine has.** It may
+  have none, or only some:
+
+  ```
+  perf stat -e instructions,cycles -- true
+  ```
+
+  If `instructions` says `<not supported>`, as on a GCP
+  `n4a-standard-4`, which has `cycles` alone, the instruction
+  counts cannot run there: `../bench.old/btree.sh`,
+  `../bench.old/relq6/run.sh`, and the scripts of "Cost of one
+  code path" that count instructions.
+- **On a machine whose clock varies** (a VM, a laptop),
+  latency swings run to run with the same work. Compare
+  instructions per statement instead: pin the server
+  (`taskset -c 0-3`) and pgbench (`taskset -c 4`), and count
+  the server's with `perf stat -e instructions -p PID` over a
+  fixed `pgbench -t N`.
 
 ## 2. Query throughput: run.sh
 
@@ -23,10 +54,12 @@ for each. It prints a table of digres against PostgreSQL.
 
 ```
 DG_PORT=5432 PG_PORT=5433 bench/run.sh
+DG_PORT=5432 PG_PORT=5433 make -j4 bench   # from the top
 ```
 
-Both servers must run before you start it. The run does these
-steps on each server:
+`make bench` builds `dg/build/digres-release`, then runs
+`run.sh`. Both servers must run before you start it. The run
+does these steps on each server:
 
 1. Load the data again: `load.sql`.
 2. Run q0 and q4, which use no secondary index.
@@ -34,6 +67,12 @@ steps on each server:
 4. Run q1 to q3.
 5. Make the B-tree indexes: `mkbtidx.sql`.
 6. Run q1 to q3 again.
+
+A regular index is an LSM index: it keeps each entry as a
+RocksDB key. A B-tree index is a B-link tree whose pages are
+RocksDB values ([`../sm/BTREEINDEX.md`](../sm/BTREEINDEX.md)).
+[`../PERF.md`](../PERF.md) has the results, against PostgreSQL
+18, MyRocks and InnoDB.
 
 | File | What it measures |
 |---|---|

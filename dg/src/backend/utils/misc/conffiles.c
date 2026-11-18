@@ -47,8 +47,8 @@ char *AbsoluteConfigLocation(const char *location, const char *calling_file) {
       join_path_components(abs_path, abs_path, location);
       canonicalize_path(abs_path);
     } else {
-      Assert(pcb->DataDir);
-      join_path_components(abs_path, pcb->DataDir, location);
+      Assert(!pcb->DataDir.empty());
+      join_path_components(abs_path, pcb->DataDir.c_str(), location);
       canonicalize_path(abs_path);
     }
     return pstrdup(abs_path);

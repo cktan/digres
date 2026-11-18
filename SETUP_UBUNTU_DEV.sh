@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 
 # SETUP_UBUNTU_DEV.sh -- make a minimal Ubuntu machine ready to build,
-# test and benchmark digres: README.md's "Prerequisites", as a script.
+# test and benchmark digres: BUILDING.md's "Prerequisites", as a script.
 #
 #   ./SETUP_UBUNTU_DEV.sh
 #

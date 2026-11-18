@@ -323,7 +323,7 @@ ConfigVariable *ProcessConfigFileInternal(GucContext context,
    * is in the data directory, we can't read it until the DataDir has been
    * set.
    */
-  if (pcb->DataDir) {
+  if (!pcb->DataDir.empty()) {
     if (!ParseConfigFile(PG_AUTOCONF_FILENAME, false, NULL, 0,
                          CONF_FILE_START_DEPTH, elevel, &head, &tail)) {
       /* Syntax error(s) detected in the file, so bail out */
@@ -1629,7 +1629,7 @@ bool SelectConfigFiles(const char *userDoption, const char *progname) {
    * chdir to DataDir, EXEC_BACKEND can read the config file without knowing
    * DataDir in advance.)
    */
-  SetConfigOption("data_directory", pcb->DataDir, PGC_POSTMASTER, PGC_S_OVERRIDE);
+  SetConfigOption("data_directory", pcb->DataDir.c_str(), PGC_POSTMASTER, PGC_S_OVERRIDE);
 
   /*
    * Now read the config file a second time, allowing any settings in the

@@ -69,7 +69,7 @@ static char *convert_and_check_filename(text *arg) {
    */
   if (is_absolute_path(filename)) {
     /* Allow absolute paths if within DataDir. */
-    if (!path_is_prefix_of_path(pcb->DataDir, filename))
+    if (!path_is_prefix_of_path(pcb->DataDir.c_str(), filename))
       ereport(ERROR, (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
                       errmsg("absolute path not allowed")));
   } else if (!path_is_relative_and_below_cwd(filename))
