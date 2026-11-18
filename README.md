@@ -169,3 +169,6 @@ RocksDB, ICU, OpenSSL and Janet are linked, not copied into the
 repository. Each keeps its own license. Include the applicable
 license texts and notices when distributing code from this
 repository, including copies of individual components.
+
+DuckDB's SQL tests are fetched when `dg/test/duck/duck.sh` runs,
+not copied into the repository.
