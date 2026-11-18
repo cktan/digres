@@ -47,9 +47,10 @@ of what is above them, and everything under them, is new.
 - **Tables organized by their primary key**, through sm, a
   storage library of its own.
 - **sm does its own MVCC**: visibility, locks and SERIALIZABLE
-  isolation. It opens a plain `rocksdb::DB`, not a
-  `TransactionDB`, and commits a transaction as one
-  `WriteBatch`. RocksDB is an ordered, durable, atomic store.
+  isolation ([`sm/MVCC_OVERVIEW.md`](sm/MVCC_OVERVIEW.md)). It
+  opens a plain `rocksdb::DB`, not a `TransactionDB`, and
+  commits a transaction as one `WriteBatch`. RocksDB is an
+  ordered, durable, atomic store.
 - **MVCC with no VACUUM to schedule**: a RocksDB compaction
   filter and one worker thread per database remove the row
   versions that no snapshot can see
