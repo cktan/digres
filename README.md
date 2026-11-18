@@ -24,11 +24,26 @@ comes next.
 
 ## What is new
 
-Under the executor, everything is new:
+digres keeps PostgreSQL's analyzer, planner and executor. Much
+of what is above them, and everything under them, is new.
+
+### Above the executor
 
 - **One process, with one thread per session**: no fork per
   connection, and no background processes; background work
-  runs in threads.
+  runs in threads. A session's globals are `thread_local`.
+- **C++, with exceptions**: the backend compiles as C++20, and
+  `ereport(ERROR)` throws an exception, not a `siglongjmp`.
+- **The SQL parser is a library of its own**, `sq/`:
+  PostgreSQL 18's grammar and scanner, with no dependency on
+  the backend.
+- **Roles, authentication and authorization are redone** in
+  `aa/`, a library on sm. `pg_hba.conf` is removed: a local
+  login is by peer or password, a TCP login by SCRAM-SHA-256. A
+  privilege check is a lookup in memory.
+
+### Under the executor
+
 - **Tables organized by their primary key**, through sm, a
   storage library of its own.
 - **sm does its own MVCC**: visibility, locks and SERIALIZABLE
