@@ -618,8 +618,9 @@ struct sm_bound_t {
 
 /*
  * A cursor over a table's rows, in their key's order: _id order in
- * a table without a primary key (sm_tbl_scan, sm_tbl_scan_rows), the
- * primary key's in one with (sm_tbl_scan_rows, sm_tbl_idx_scan_rows).
+ * a table without a primary key (sm_row_scanopen_idrange,
+ * sm_row_scanopen), the primary key's in one with (sm_row_scanopen,
+ * sm_row_scanopen_with_index).
  */
 typedef struct sm_row_scan_t sm_row_scan_t;
 
@@ -644,11 +645,12 @@ int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, sm_pin_ref_t* ref);
 int sm_row_scan_seek(sm_row_scan_t* scan, uint64_t id);
 
 /*
- * Make a cursor of a tree's rows (sm_tbl_idx_scan_rows) an index-only
- * scan's: an entry on a leaf vacuum found all visible, whose key gives
- * its columns back, comes with its row unread (../BTREEINDEX.md section 8).
- * sm_row_scannxt's *ref then names no row; sm_row_scan_cols gives the
- * entry's columns. 0, or -1 with SM_ERR_INVALID on any other cursor.
+ * Make a cursor of a tree's rows (sm_row_scanopen_with_index) an
+ * index-only scan's: an entry on a leaf vacuum found all visible,
+ * whose key gives its columns back, comes with its row unread
+ * (../BTREEINDEX.md section 8). sm_row_scannxt's *ref then names no
+ * row; sm_row_scan_cols gives the entry's columns. 0, or -1 with
+ * SM_ERR_INVALID on any other cursor.
  */
 int sm_row_scan_entries(sm_row_scan_t* scan);
 
@@ -670,7 +672,7 @@ int sm_row_scan_cols(sm_row_scan_t* scan, sm_datum_t* values, bool* isnull,
 int sm_row_scan_plain(const sm_row_scan_t* scan);
 
 /*
- * Aim a cursor of a tree's rows (sm_tbl_idx_scan_rows) at the rows
+ * Aim a cursor of a tree's rows (sm_row_scanopen_with_index) at the rows
  * between lo and hi, as if opened anew: an IN list's next probe, with
  * no cursor made for it. SM_ERR_INVALID on any other cursor.
  */
@@ -685,7 +687,7 @@ int sm_row_scan_rebound(sm_row_scan_t* scan, const sm_bound_t* lo,
 int sm_row_scan_key(sm_row_scan_t* scan, const void** key, size_t* len);
 
 /*
- * Move a cursor in key order (sm_tbl_scan_rows) forward to key, past
+ * Move a cursor in key order (sm_row_scanopen) forward to key, past
  * its relid, as sm_tbl_keys_at gives one: the next row is the first
  * at or after it. Moving back fails.
  */
@@ -698,7 +700,7 @@ int sm_row_scan_seek_key(sm_row_scan_t* scan, const void* key, size_t len);
  * SM_ERR_SCANCLOSED; the next begin frees one nobody closed, and a
  * call after that is a double free.
  */
-void sm_row_scanend(sm_row_scan_t* scan);
+void sm_row_scanclose(sm_row_scan_t* scan);
 
 /* Encode values and isnull, one per attribute of schema, into tuple. */
 int sm_tup_encode(const std::vector<sm_attribute_t>& schema,
@@ -706,7 +708,7 @@ int sm_tup_encode(const std::vector<sm_attribute_t>& schema,
                   std::string& tuple);
 
 /*
- * A cursor over an index's entries, in key order; sm_tbl_idx_scan
+ * A cursor over an index's entries, in key order; sm_idx_scanopen
  * opens one.
  */
 typedef struct sm_idx_scan_t sm_idx_scan_t;
@@ -752,7 +754,7 @@ int sm_idx_scan_row(sm_idx_scan_t* scan, const void** key, size_t* len);
  * SM_ERR_SCANCLOSED; the next begin frees one nobody closed, and a
  * call after that is a double free.
  */
-void sm_idx_scanend(sm_idx_scan_t* scan);
+void sm_idx_scanclose(sm_idx_scan_t* scan);
 
 /* ---- the catalog: sm3's ---- */
 
@@ -1626,8 +1628,8 @@ int sm_tbl_truncate(sm_tbl_t* tbl);
  * Open a cursor over the rows with _id first..last, both included, of
  * a table without a primary key; SM_ERR_INVALID in one with.
  */
-int sm_tbl_scan(sm_tbl_t* tbl, uint64_t first, uint64_t last,
-                sm_row_scan_t** out);
+int sm_row_scanopen_idrange(sm_tbl_t* tbl, uint64_t first,
+                            uint64_t last, sm_row_scan_t** out);
 
 /*
  * The first n attributes of a row's tuple into values and isnull,
@@ -1694,7 +1696,7 @@ int sm_toast_fetch(sm_session_t* session, sm_datum_t val, std::string* out);
  * the table has no such index. A bound too long to encode widens
  * the scan, and *widened, if widened is not NULL, says so.
  */
-int sm_tbl_idx_scan(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
+int sm_idx_scanopen(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
                     const sm_bound_t* hi, bool* widened,
                     sm_idx_scan_t** out);
 
@@ -1703,11 +1705,11 @@ int sm_tbl_idx_scan(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
  * primary key's, or with none its _id's (../CLUSTER.md section 5),
  * as sm_row_scannxt hands them out. What a sequential scan reads.
  */
-int sm_tbl_scan_rows(sm_tbl_t* tbl, sm_row_scan_t** out);
+int sm_row_scanopen(sm_tbl_t* tbl, sm_row_scan_t** out);
 
 /*
  * Open a cursor over the rows of the table's primary key, index,
- * between lo and hi as sm_tbl_idx_scan takes them, in key order:
+ * between lo and hi as sm_idx_scanopen takes them, in key order:
  * the rows themselves, as sm_row_scannxt hands them out, with their
  * _id, one sorted run (../CLUSTER.md section 5). Or of a tree
  * (../BTREEINDEX.md section 5): each entry's row as the transaction sees
@@ -1716,21 +1718,21 @@ int sm_tbl_scan_rows(sm_tbl_t* tbl, sm_row_scan_t** out);
  * or not usable; SM_ERR_NOTFOUND if there is no such index. It
  * seeks no _id.
  */
-int sm_tbl_idx_scan_rows(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
-                         const sm_bound_t* hi, bool* widened,
-                         sm_row_scan_t** out);
+int sm_row_scanopen_with_index(sm_tbl_t* tbl, uint64_t index,
+                               const sm_bound_t* lo, const sm_bound_t* hi,
+                               bool* widened, sm_row_scan_t** out);
 
 /*
  * Whether the session may scan the table's index now. Not while it
  * is pending, never once it has failed, and not in a statement or
  * transaction whose snapshot is older than the index's build.
- * sm_tbl_idx_scan fails with SM_ERR_INVALID on one that may not be.
+ * sm_idx_scanopen fails with SM_ERR_INVALID on one that may not be.
  */
 bool sm_tbl_index_usable(const sm_tbl_t* tbl, uint64_t index);
 
 /*
  * Whether the table's index is a tree (../BTREEINDEX.md), whose rows a scan
- * reads as sm_tbl_idx_scan_rows gives them; false for no such index.
+ * reads as sm_row_scanopen_with_index gives them; false for no such index.
  */
 bool sm_tbl_index_tree(const sm_tbl_t* tbl, uint64_t index);
 

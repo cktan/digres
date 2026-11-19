@@ -13498,3 +13498,28 @@ A check hook took the new value as a `char **`, to change it with
   from an `sm2::rel_t`, so there the prefix names its handle.
 - **Older steps keep the old names**: they record the code as
   it was named when each step was taken.
+
+## Step 446: a cursor opens and closes under its own name
+
+- **The names misled**: `sm_tbl_scan()` made an `sm_row_scan_t`,
+  and `sm_row_scanend()` freed it. The two calls of one cursor
+  shared no name, and "end" paired with no "begin".
+- **The rename**: each cursor opens and closes under its own
+  prefix, as `sm_tbl_open` and `sm_tbl_close` do.
+
+  | Was | Is |
+  | --- | --- |
+  | `sm_tbl_scan_rows` | `sm_row_scanopen` |
+  | `sm_tbl_scan` | `sm_row_scanopen_idrange` |
+  | `sm_tbl_idx_scan_rows` | `sm_row_scanopen_with_index` |
+  | `sm_row_scanend` | `sm_row_scanclose` |
+  | `sm_tbl_idx_scan` | `sm_idx_scanopen` |
+  | `sm_idx_scanend` | `sm_idx_scanclose` |
+
+- **What went with it**: step 445 kept the openers' names, so
+  that a cursor's calls would not sit among the table's. Now
+  every opener is in its cursor's family, and that reason is
+  gone. `SM_API.md` says "close" a cursor, not "end".
+- **Left on purpose**: an opener still takes the table as its
+  first argument. sm2's `rel_scan` and `rel_scanend` keep their
+  names.

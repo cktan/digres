@@ -180,7 +180,7 @@ session_ctx_t *catalog_t::get_session(const std::string &name) {
 table_def_t::~table_def_t() { sm_tbl_close(tbl); }
 
 /* End the cursor; its table handle closes after, as a member. */
-cursor_t::~cursor_t() { sm_idx_scanend(scan); }
+cursor_t::~cursor_t() { sm_idx_scanclose(scan); }
 
 /* End every cursor s has open, before its transaction ends. */
 void end_cursors(session_ctx_t *s) { s->cursors.clear(); }

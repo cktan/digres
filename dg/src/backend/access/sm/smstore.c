@@ -3581,8 +3581,8 @@ smstore_scan_t *smstore_beginscan(Relation rel, bool by_rowno) {
   scan = (smstore_scan_t *)palloc0(sizeof(smstore_scan_t));
   scan->tbl = tbl;
   scan->relid = RelationGetRelid(rel);
-  if ((by_rowno ? sm_tbl_scan(tbl, 0, UINT64_MAX, &scan->cursor)
-                : sm_tbl_scan_rows(tbl, &scan->cursor)) != 0)
+  if ((by_rowno ? sm_row_scanopen_idrange(tbl, 0, UINT64_MAX, &scan->cursor)
+                : sm_row_scanopen(tbl, &scan->cursor)) != 0)
     sm_error("scan a table");
   open_scans.push_back(scan);
   return scan;
@@ -3827,8 +3827,8 @@ bool smstore_scan_nth(smstore_scan_t *scan, uint64 n, TupleTableSlot *slot) {
 /* End a scan; the table stays open until the transaction ends. */
 void smstore_endscan(smstore_scan_t *scan) {
   std::erase(open_scans, scan);
-  sm_row_scanend(scan->cursor);
-  sm_idx_scanend(scan->icursor);
+  sm_row_scanclose(scan->cursor);
+  sm_idx_scanclose(scan->icursor);
   /* The row it read last by rowno is no one's now, nor those read ahead. */
   sm_unpin(&scan->ref);
   for (int i = scan->ra_at; i < scan->ra_n; i++)
@@ -8672,8 +8672,8 @@ static void open_probe(smstore_scan_t *scan) {
       sm_error("scan an index");
     return;
   }
-  sm_row_scanend(scan->cursor);
-  sm_idx_scanend(scan->icursor);
+  sm_row_scanclose(scan->cursor);
+  sm_idx_scanclose(scan->icursor);
   scan->cursor = NULL;
   scan->icursor = NULL;
   /*
@@ -8712,14 +8712,12 @@ static void open_probe(smstore_scan_t *scan) {
    * A tree's are its rows too, each read and rechecked by sm.
    */
   if (scan->form->indisprimary || scan->tree
-          ? sm_tbl_idx_scan_rows(scan->tbl, scan->index,
-                                 scan->lo.n > 0 ? &scan->lo : NULL,
-                                 scan->hi.n > 0 ? &scan->hi : NULL, NULL,
-                                 &scan->cursor) != 0
-          : sm_tbl_idx_scan(scan->tbl, scan->index,
-                            scan->lo.n > 0 ? &scan->lo : NULL,
-                            scan->hi.n > 0 ? &scan->hi : NULL, NULL,
-                            &scan->icursor) != 0)
+          ? sm_row_scanopen_with_index(
+                scan->tbl, scan->index, scan->lo.n > 0 ? &scan->lo : NULL,
+                scan->hi.n > 0 ? &scan->hi : NULL, NULL, &scan->cursor) != 0
+          : sm_idx_scanopen(
+                scan->tbl, scan->index, scan->lo.n > 0 ? &scan->lo : NULL,
+                scan->hi.n > 0 ? &scan->hi : NULL, NULL, &scan->icursor) != 0)
     sm_error("scan an index");
   if (scan->entries_only && 0 != sm_row_scan_entries(scan->cursor))
     sm_error("scan an index");

@@ -296,12 +296,12 @@ key pays a lookup a row. The arguments for a heap, answered:
 - **A scan of the primary key index is a scan of the rows.**
   `smstore.c`'s `open_probe()` sees the index is the primary key
   and opens a range scan of the table over the bounds
-  (`sm_tbl_idx_scan_rows`), in place of an index cursor. An
+  (`sm_row_scanopen_with_index`), in place of an index cursor. An
   index-only scan of it reads the rows too.
 - **A secondary index scan reads the row by `encode(pk)`**, from
   the entry (`sm_idx_scan_row`, `sm_tbl_read_key`).
 - **A sequential scan reads the rows in key order**
-  (`sm_tbl_scan_rows`), not in insertion order. So digres's tests
+  (`sm_row_scanopen`), not in insertion order. So digres's tests
   compare unordered results as multisets
   (`../dg/test/rowset.py`).
 - **A write names its row by its key**: `sm_tbl_update`,

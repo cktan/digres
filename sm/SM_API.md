@@ -108,7 +108,7 @@ sm_commit(sess);
 sm_begin(sess, SM_XCT_READ_COMMITTED, 1);      // 1: read only
 sm_tbl_open(sess, oid, SM_LOCKMODE_IS, &tbl);  // IS: we will read
 sm_row_scan_t* scan;
-sm_tbl_scan(tbl, 0, UINT64_MAX, &scan);        // every _id
+sm_row_scanopen_idrange(tbl, 0, UINT64_MAX, &scan); // every _id
 const void* tuple;
 size_t len;
 while (sm_row_scannxt(scan, &id, &tuple, &len) == 0) {
@@ -117,7 +117,7 @@ while (sm_row_scannxt(scan, &id, &tuple, &len) == 0) {
     sm_tbl_deform(tbl, tuple, len, &d, &isnull, 1);
     printf("%lld\n", (long long)SM_DATUM_TO_INT64(d));
 }
-sm_row_scanend(scan);                          // end the cursor first
+sm_row_scanclose(scan);                        // close it first
 sm_tbl_close(tbl);
 sm_commit(sess);
 
@@ -143,7 +143,7 @@ differs.
   `sm_errmsg` right after a call that returned -1.
 - Some errors abort the transaction, and some leave it active.
   The table in [The error state](#the-error-state) says which.
-- Close every handle you open. End a cursor before the next
+- Close every handle you open. Close a cursor before the next
   `sm_begin`.
 - A pointer to a row points into engine memory. Copy what you
   keep.
@@ -252,19 +252,19 @@ After it, a failed allocation ends the process.
 | `sm_env_t` | `sm_attach` | `sm_detach` | the attached home directory, and each database's catalog |
 | `sm_session_t` | `sm_opendb` | `sm_closedb`, or a forced `sm_detach` | one session on one database |
 | `sm_tbl_t` | `sm_tbl_open`, `sm_tbl_tryopen` | `sm_tbl_close` | one transaction; close it before or after that transaction ends |
-| `sm_row_scan_t` | `sm_tbl_scan`, `sm_tbl_scan_rows`, `sm_tbl_idx_scan_rows` | `sm_row_scanend` | one transaction; end it before the session's next begin |
-| `sm_idx_scan_t` | `sm_tbl_idx_scan` | `sm_idx_scanend` | one transaction; end it before the session's next begin |
+| `sm_row_scan_t` | `sm_row_scanopen_idrange`, `sm_row_scanopen`, `sm_row_scanopen_with_index` | `sm_row_scanclose` | one transaction; close it before the session's next begin |
+| `sm_idx_scan_t` | `sm_idx_scanopen` | `sm_idx_scanclose` | one transaction; close it before the session's next begin |
 | `sm_stmt_t` | `sm_stmt_begin_inner`, `sm_stmt_resume`, `sm_stmt_save` | `sm_stmt_end`, or `sm_stmt_free` for a saved view | one transaction |
 | `sm_collation_t` | `sm_collation_open` | `sm_collation_close` | no session or environment |
 
 The end of a transaction closes its cursors and frees sm1's
-cursor under each handle. End each cursor first.
+cursor under each handle. Close each cursor first.
 
 A handle given to a call must not be NULL. Some calls check and
 fail with `SM_ERR_INVALID`, and the others read through it. These
 calls take NULL and do nothing: `sm_detach`, `sm_closedb`,
 `sm_unpin`, `sm_release_all_pins`, `sm_stmt_free`,
-`sm_collation_close`, `sm_row_scanend`, `sm_idx_scanend` and
+`sm_collation_close`, `sm_row_scanclose`, `sm_idx_scanclose` and
 `sm_tbl_close`.
 
 ### Memory
@@ -1272,8 +1272,9 @@ canonical text into `text`, as the type's typoutput does.
 **In short.** To read many rows, open a cursor with a call from
 [Tables](#tables), then call `sm_row_scannxt` (rows) or
 `sm_idx_scannxt` (index entries) until it returns 1. Seek to move
-the cursor, and end it with `sm_row_scanend` or `sm_idx_scanend`
-before the next `sm_begin`. `sm_tup_encode` builds a tuple.
+the cursor, and close it with `sm_row_scanclose` or
+`sm_idx_scanclose` before the next `sm_begin`. `sm_tup_encode`
+builds a tuple.
 
 The Row Store and the index modules hold the design
 ([`ROWSTORE.md`](ROWSTORE.md), [`LSMINDEX.md`](LSMINDEX.md),
@@ -1288,8 +1289,9 @@ can change a row and leave its index entries behind
 order: `_id` order in a keyless table, the primary key's in a
 table with one. A tree's rows come in the tree's order.
 `sm_idx_scan_t` is a cursor over an index's entries, in key
-order. `sm_tbl_scan`, `sm_tbl_scan_rows`, `sm_tbl_idx_scan_rows`
-and `sm_tbl_idx_scan`, under Tables, open them.
+order. `sm_row_scanopen_idrange`, `sm_row_scanopen`,
+`sm_row_scanopen_with_index` and `sm_idx_scanopen`, under Tables,
+open them.
 
 ### `sm_row_scannxt`
 
@@ -1416,10 +1418,10 @@ it.
 
 Errors: `SM_ERR_INVALID` (a backward move, or a tree's cursor).
 
-### `sm_row_scanend`
+### `sm_row_scanclose`
 
 ```cpp
-void sm_row_scanend(sm_row_scan_t* scan);
+void sm_row_scanclose(sm_row_scan_t* scan);
 ```
 
 Closes a cursor and releases its pin.
@@ -1468,7 +1470,7 @@ An LSM index's cursor returns entries the transaction sees. A
 tree's entries carry no version, so its cursor returns each entry
 in range, and the row decides what the transaction sees
 ([`BTREEINDEX.md`](BTREEINDEX.md#2-decisions) §2). A host reads a
-tree through `sm_tbl_idx_scan_rows`.
+tree through `sm_row_scanopen_with_index`.
 
 ### `sm_idx_scan_seek`
 
@@ -1506,10 +1508,10 @@ Gives the row key of the row of the entry `sm_idx_scannxt` last
 returned, for `sm_tbl_read_key`. The key is valid until the next
 call on the cursor.
 
-### `sm_idx_scanend`
+### `sm_idx_scanclose`
 
 ```cpp
-void sm_idx_scanend(sm_idx_scan_t* scan);
+void sm_idx_scanclose(sm_idx_scan_t* scan);
 ```
 
 Closes a cursor.
@@ -2209,10 +2211,10 @@ TOAST pointer.
 says read (`SM_LOCKMODE_IS`) or write (`SM_LOCKMODE_IX`).
 Write with `sm_tbl_insert`, `sm_tbl_update` and
 `sm_tbl_delete`, or load many rows with `sm_tbl_load_*`. Read one
-row with `sm_tbl_read`, or many with a cursor (`sm_tbl_scan`,
-`sm_tbl_idx_scan`). Unpack a row with `sm_tbl_deform`. Close the
-table with `sm_tbl_close`; its lock stays until the transaction
-ends.
+row with `sm_tbl_read`, or many with a cursor
+(`sm_row_scanopen_idrange`, `sm_idx_scanopen`). Unpack a row with
+`sm_tbl_deform`. Close the table with `sm_tbl_close`; its lock
+stays until the transaction ends.
 
 An open table `sm_tbl_t` is a table's definition under the
 table-oid lock, its heap and its indexes. A write through it
@@ -2628,11 +2630,11 @@ empty, as in PostgreSQL.
 Errors: `SM_ERR_INVALID` (the handle does not hold the table
 `SM_LOCKMODE_EX`, from its open or a bulk load).
 
-### `sm_tbl_scan`
+### `sm_row_scanopen_idrange`
 
 ```cpp
-int sm_tbl_scan(sm_tbl_t* tbl, uint64_t first, uint64_t last,
-                sm_row_scan_t** out);
+int sm_row_scanopen_idrange(sm_tbl_t* tbl, uint64_t first,
+                            uint64_t last, sm_row_scan_t** out);
 ```
 
 Opens a cursor over the rows with `_id` `first` to `last`, both
@@ -2736,10 +2738,10 @@ keeps the store from being dropped.
 Errors: `SM_ERR_INVALID` (not a pointer), `SM_ERR_NOTFOUND` (the
 value is gone).
 
-### `sm_tbl_idx_scan`
+### `sm_idx_scanopen`
 
 ```cpp
-int sm_tbl_idx_scan(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
+int sm_idx_scanopen(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
                     const sm_bound_t* hi, bool* widened,
                     sm_idx_scan_t** out);
 ```
@@ -2752,10 +2754,10 @@ NULL, says so.
 Errors: `SM_ERR_NOTFOUND` (the table has no such index),
 `SM_ERR_INVALID` (`sm_tbl_index_usable` is false).
 
-### `sm_tbl_scan_rows`
+### `sm_row_scanopen`
 
 ```cpp
-int sm_tbl_scan_rows(sm_tbl_t* tbl, sm_row_scan_t** out);
+int sm_row_scanopen(sm_tbl_t* tbl, sm_row_scan_t** out);
 ```
 
 Opens a cursor over each row of the table, in its key's order:
@@ -2763,16 +2765,16 @@ its primary key's, or with none its `_id`'s
 ([`CLUSTER.md`](CLUSTER.md#5-reading) §5). A
 sequential scan reads this.
 
-### `sm_tbl_idx_scan_rows`
+### `sm_row_scanopen_with_index`
 
 ```cpp
-int sm_tbl_idx_scan_rows(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
-                         const sm_bound_t* hi, bool* widened,
-                         sm_row_scan_t** out);
+int sm_row_scanopen_with_index(sm_tbl_t* tbl, uint64_t index,
+                               const sm_bound_t* lo, const sm_bound_t* hi,
+                               bool* widened, sm_row_scan_t** out);
 ```
 
 Opens a cursor over the rows of `index`, between `lo` and `hi` as
-`sm_tbl_idx_scan` takes them, in key order.
+`sm_idx_scanopen` takes them, in key order.
 
 - On the table's primary key, it gives the rows themselves, one
   sorted run ([`CLUSTER.md`](CLUSTER.md#5-reading) §5). It seeks
@@ -2804,8 +2806,8 @@ bool sm_tbl_index_tree(const sm_tbl_t* tbl, uint64_t index);
 
 Returns whether the table's index is a tree
 ([`BTREEINDEX.md`](BTREEINDEX.md)), whose rows a scan reads
-through `sm_tbl_idx_scan_rows`. It returns false for no such
-index.
+through `sm_row_scanopen_with_index`. It returns false for no
+such index.
 
 ### `sm_tbl_idx_ncols`
 

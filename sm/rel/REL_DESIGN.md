@@ -395,7 +395,7 @@ one must abort.
   the key's values, and call the `sm_row_key_t` overload of the
   same function;
 - `scan`'s bounds are key values. It calls
-  `sm_tbl_idx_scan_rows` on the primary key, and gives
+  `sm_row_scanopen_with_index` on the primary key, and gives
   `[key row]` pairs;
 - `(read-keys <table> [key ...])` reads many rows in one
   `sm_tbl_read_keys` ([`../ROWSTORE.md`](../ROWSTORE.md)).
@@ -463,11 +463,11 @@ one must abort.
 
 #### `(scan <table> [:from first] [:to last])`
 1. Defaults: `first = 1`, `last = UINT64_MAX`.
-2. Calls `sm_tbl_scan(tbl, first, last, &rscan)`, the scan of
-   a keyless table by `_id`.
+2. Calls `sm_row_scanopen_idrange(tbl, first, last, &rscan)`, the
+   scan of a keyless table by `_id`.
 3. Loops `sm_row_scannxt(rscan, &id, &tuple, &len)` until 1.
 4. Decodes each column of a tuple via `sm_tbl_decode`.
-5. Calls `sm_row_scanend(rscan)`.
+5. Calls `sm_row_scanclose(rscan)`.
 6. Returns list of pairs:
    `([id_1 tuple_1] [id_2 tuple_2] ...)`.
 
@@ -478,13 +478,13 @@ one must abort.
 2. Constructs upper bound `sm_bound_t hi_b`:
    - Prefix values and null flags from `:le` (inclusive) or
      `:lt` (exclusive).
-3. Calls `sm_tbl_idx_scan(tbl, index, &lo_b, &hi_b,
+3. Calls `sm_idx_scanopen(tbl, index, &lo_b, &hi_b,
    &widened, &iscan)`, the index named by its oid.
 4. Loops `sm_idx_scannxt(iscan, &id, &cut, &val, &len)`
    until 1.
 5. If INCLUDE columns exist, decodes value via
    `sm_tbl_idx_deform`.
-6. Calls `sm_idx_scanend(iscan)`.
+6. Calls `sm_idx_scanclose(iscan)`.
 7. Returns list of index entries `([id cut includes] ...)`,
    `includes` being nil for an index without INCLUDE columns.
 

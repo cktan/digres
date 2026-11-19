@@ -870,9 +870,9 @@ pairs.
 
 In a table with a primary key it scans the rows in key order,
 the bounds keys or their first columns, both inclusive: the
-rows themselves over the range (`sm_tbl_idx_scan_rows`), as
+rows themselves over the range (`sm_row_scanopen_with_index`), as
 digres scans its primary key, or every row with no bound
-(`sm_tbl_scan_rows`), as its sequential scan. Each pair is
+(`sm_row_scanopen`), as its sequential scan. Each pair is
 `[key [val1 val2 ...]]`.
 
 ```janet

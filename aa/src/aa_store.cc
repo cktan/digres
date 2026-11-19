@@ -490,7 +490,7 @@ static int read_rows(sm_session_t *session, const char *name, size_t natts,
   /* IS: a read of the table's rows. */
   if (0 != sm_tbl_open(session, table, SM_LOCKMODE_IS, &tbl))
     return aa_sm_failed("read a table");
-  if (0 != sm_tbl_scan_rows(tbl, &scan)) {
+  if (0 != sm_row_scanopen(tbl, &scan)) {
     sm_tbl_close(tbl);
     return aa_sm_failed("read a table");
   }
@@ -505,7 +505,7 @@ static int read_rows(sm_session_t *session, const char *name, size_t natts,
       break;
     }
   }
-  sm_row_scanend(scan);
+  sm_row_scanclose(scan);
   sm_tbl_close(tbl);
   if (1 == rc)
     return 0;

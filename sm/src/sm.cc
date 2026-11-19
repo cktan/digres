@@ -1351,7 +1351,7 @@ int sm_row_scan_seek_key(sm_row_scan_t *scan, const void *key, size_t len) {
 }
 
 /* Close a heap cursor, and release its pin. */
-void sm_row_scanend(sm_row_scan_t *scan) {
+void sm_row_scanclose(sm_row_scan_t *scan) {
   sm3::tbl_scanend(rel_scan_of(scan));
 }
 
@@ -1420,7 +1420,7 @@ int sm_idx_scan_row(sm_idx_scan_t *scan, const void **key, size_t *len) {
 }
 
 /* Close an index cursor. */
-void sm_idx_scanend(sm_idx_scan_t *scan) {
+void sm_idx_scanclose(sm_idx_scan_t *scan) {
   sm2::idx_scanend(idx_scan_of(scan));
 }
 
@@ -2481,8 +2481,8 @@ int sm_tbl_truncate(sm_tbl_t *tbl) {
 }
 
 /* Open a cursor over a table's rows. */
-int sm_tbl_scan(sm_tbl_t *tbl, uint64_t first, uint64_t last,
-                sm_row_scan_t **out) {
+int sm_row_scanopen_idrange(sm_tbl_t *tbl, uint64_t first, uint64_t last,
+                            sm_row_scan_t **out) {
   return guard(tbl->session, [&] {
     sm3::scan_t *scan = nullptr;
     if (sm3::tbl_scan(tbl->table, first, last, scan) != 0) {
@@ -2550,11 +2550,11 @@ int sm_toast_fetch(sm_session_t *session, sm_datum_t val, std::string *out) {
 }
 
 /* Open a cursor over one of a table's indexes. */
-int sm_tbl_idx_scan(sm_tbl_t *tbl, uint64_t index, const sm_bound_t *lo,
+int sm_idx_scanopen(sm_tbl_t *tbl, uint64_t index, const sm_bound_t *lo,
                     const sm_bound_t *hi, bool *widened, sm_idx_scan_t **out) {
   return guard(tbl->session, [&] {
     if (bad_bound(lo) || bad_bound(hi)) {
-      return null_arg("sm_tbl_idx_scan", "a bound's prefix or isnull");
+      return null_arg("sm_idx_scanopen", "a bound's prefix or isnull");
     }
     sm2::bound_t lo_b, hi_b;
     if (lo != nullptr) {
@@ -2575,7 +2575,7 @@ int sm_tbl_idx_scan(sm_tbl_t *tbl, uint64_t index, const sm_bound_t *lo,
 }
 
 /* Open a cursor over every row of the table, in its key's order. */
-int sm_tbl_scan_rows(sm_tbl_t *tbl, sm_row_scan_t **out) {
+int sm_row_scanopen(sm_tbl_t *tbl, sm_row_scan_t **out) {
   return guard(tbl->session, [&] {
     sm3::scan_t *scan = nullptr;
     if (sm3::tbl_scan_rows(tbl->table, scan) != 0) {
@@ -2587,12 +2587,13 @@ int sm_tbl_scan_rows(sm_tbl_t *tbl, sm_row_scan_t **out) {
 }
 
 /* Open a cursor over the rows of the table's primary key. */
-int sm_tbl_idx_scan_rows(sm_tbl_t *tbl, uint64_t index, const sm_bound_t *lo,
-                         const sm_bound_t *hi, bool *widened,
-                         sm_row_scan_t **out) {
+int sm_row_scanopen_with_index(sm_tbl_t *tbl, uint64_t index,
+                               const sm_bound_t *lo, const sm_bound_t *hi,
+                               bool *widened, sm_row_scan_t **out) {
   return guard(tbl->session, [&] {
     if (bad_bound(lo) || bad_bound(hi)) {
-      return null_arg("sm_tbl_idx_scan_rows", "a bound's prefix or isnull");
+      return null_arg("sm_row_scanopen_with_index",
+                      "a bound's prefix or isnull");
     }
     sm2::bound_t lo_b, hi_b;
     if (lo != nullptr) {
