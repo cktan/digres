@@ -22,6 +22,7 @@ document. Use these and no others in code comments and documents.
 | Buffer Manager | bufmgr | [`BUFMGR.md`](BUFMGR.md) | sm's buffer pool: frames, pins, the clock | `sm1/src/bufpool.cc`, `page.cc` |
 | Garbage Collector | gc | [`GC.md`](GC.md) | the watermark, the compaction filter, the `CF:txn` sweep | `sm1/src/gc.cc` |
 | Row Store | row store | [`ROWSTORE.md`](ROWSTORE.md) | row keys, versions, chains, the read and write paths | `sm1/src/access.cc`, `chain.cc`, `sm2/src/rel/rel.cc` |
+| Column Store | column store | [`COLSTORE.md`](COLSTORE.md) | a design, not built: a table kept column by column in immutable files, for analytics | none |
 | TOAST | toast | [`TOAST.md`](TOAST.md) | a datum stored out of line | `sm2/src/rel/toast.cc` |
 | LSM Index | lsm index | [`LSMINDEX.md`](LSMINDEX.md) | an index whose entries are sm1 keys | `sm2/src/rel/index.cc` |
 | B-tree Index | btree index | [`BTREEINDEX.md`](BTREEINDEX.md) | an index of its own pages, its in-doubt bit, the btree reaper | `sm2/src/tree/`, `sm3/src/btree_reaper/` |

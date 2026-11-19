@@ -876,8 +876,120 @@ warning, so a script written for a row store table runs.
 
 ## 15. Tests
 
-The scenarios that §10.2 and §11 add go into `sm1/mvcc`, as new
-scenarios. No existing scenario changes. §16 lists the rest.
+A test goes to each layer that can express its scenario
+([`DESIGN.md`](DESIGN.md#4-testing-across-levels) §4). No
+existing scenario of `sm1/mvcc` changes. Each new test opens with
+the one line that says what it proves.
+
+### 15.1 mvcc: the rules of sm1
+
+New scenarios in `sm1/mvcc/in`, a series of their own. Each runs
+twice, on versioned and on chained stores, as every scenario
+does: the sealed tombstone is the chained form of the rule, and
+the moved marker the versioned form. The driver gets a verb
+`seal <row>`, an erase with a sealed tombstone, and a session
+kind whose writes do not feed SSI, for the seal and RG
+compaction.
+
+| Scenario | Expected |
+| --- | --- |
+| an RR writer, whose snapshot is older than the seal of its row, writes the row | `SEALED`, not `CONFLICT` |
+| an RR writer, whose row changed after its snapshot and was then sealed, writes the row | `CONFLICT`: the change under the tombstone decides |
+| an RC writer waits on a seal in flight, and the seal commits | `BLOCK`, then `SEALED` |
+| an RC writer waits on a seal in flight, and the seal aborts | `BLOCK`, then the write succeeds |
+| a reader before and after the seal's commit | the row, then no row |
+| an insert over a sealed tombstone | `ok` |
+| a SERIALIZABLE reader of a row, then a seal of it | no rw-edge: the reader commits |
+| the same with a plain erase (negative) | the reader fails with a serialization failure |
+| a seal meets a writer in flight, or prepared | the seal skips the row; the writer is not blocked |
+| a write over a range that a SERIALIZABLE scan read, by the range form of `ssi_write_key` | an rw-edge; out of the range, none |
+
+The Column Store's notions above sm1, such as RGs, scans and
+pruning, cannot be expressed here. §15.3 and §15.4 test them.
+
+### 15.2 sm1 and sm2: unit tests
+
+`sm1/test`, file sets (§4.5, §13):
+
+1. Write a file set, put its key, commit, and read the files.
+2. Abort, and roll back to a savepoint: the files are unlinked.
+3. Close the database with a file set's key in flight, and open
+   it: the sweep deletes the files.
+4. Prepare, close, and open: the files stay. `COMMIT PREPARED`
+   keeps them; `ROLLBACK PREPARED` lets GC delete them.
+5. Erase a key while an old snapshot is open: the snapshot
+   reads the files; past the watermark, GC deletes them.
+6. Change a byte of a file: a read fails with a data corruption
+   error. The same for one long value.
+7. Drop the store: its directory goes.
+
+`sm2/test`, the CG file and the statistics (§5, §6):
+
+1. Write and read a CG of each type, in each encoding: plain,
+   dictionary and delta.
+2. The choice of a dictionary when it is smaller; a range of
+   codes from a range of values.
+3. Min and max as key bytes, cut at 32 bytes with the inexact
+   bit; null counts; the NaN and infinity flags; `sorted`; the
+   collation version.
+4. The exact set at 4 KB and less, and a bloom filter above; the
+   hash of a non-deterministic collation's key.
+5. Long values: the pointer, the long-value file, `has_long`
+   and its rule.
+6. **Pruning never skips a match.** For random CGs and random
+   bounds, compare each skip against a test of every value.
+
+### 15.3 sm3: unit tests
+
+1. The seal: an RG of 10k rows; a row with a writer in flight
+   or prepared skipped; TOAST chunks erased; the RG key and the
+   filter keys put.
+2. A snapshot before a seal and one after see each row once.
+3. A scan: the projection, the bounds, the merge of delete
+   markers, and the delta store.
+4. An update and a delete of a row in an RG: the delete marker,
+   the reinsert, the TID `(rg_id, _id)`, and the follow of `_id`
+   after `SEALED`.
+5. The locks of §9.1: a row lock and a SIREAD range on delta key
+   `_id`, across a seal and across RG compaction.
+6. RG compaction: the trigger at 20%; the merge of small RGs;
+   the moved markers and their follow; the give-up on a writer
+   in flight or prepared.
+7. A bulk load: whole RGs, the rest in the delta store, an
+   abort, and a rollback to a savepoint.
+8. `ANALYZE`: the exact row count and null fraction; the sample.
+9. DDL: `TRUNCATE`; `ADD COLUMN` with no CG in old RGs; `DROP
+   COLUMN`; a rewrite.
+10. **A column store table agrees with a row store table.** Run
+    one random workload on both, at each isolation level and
+    with seals and RG compactions between, and compare every
+    scan.
+
+### 15.4 rel and digres
+
+`rel/test`, through `sm.h`: a column store table across
+sessions; a seal between statements; an abort; a new attach,
+after which the sweep runs; 2PC across a restart.
+
+`dg/test`:
+
+- `.sql` files for `run.sh`: `CREATE TABLE ... WITH (storage =
+  column)`; the warnings of §14.1, and the `NOT NULL` kept from
+  an ignored `PRIMARY KEY`; a foreign key that references a
+  column store table, which fails; queries with bounds, whose
+  results equal a row store table's; `COPY`; `TRUNCATE`;
+  `ALTER TABLE`; `ANALYZE`.
+- `server.sh`: an RR update while a seal runs, which succeeds;
+  a SERIALIZABLE scan and a concurrent bulk load, which make a
+  phantom.
+
+### 15.5 Layers with no test
+
+- **aa** has no change.
+- **sq** has no change: `WITH (storage = column)` is a
+  reloption, which its grammar parses already.
+- **pgregress** has no test of a column store table, as
+  PostgreSQL has no such table.
 
 ---
 

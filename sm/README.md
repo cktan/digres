@@ -123,6 +123,8 @@ of each.
   compaction filter, the `CF:txn` sweep
 - [`ROWSTORE.md`](ROWSTORE.md) — Row Store: row keys, versions,
   chains, the read and write paths
+- [`COLSTORE.md`](COLSTORE.md) — Column Store: a table kept
+  column by column in immutable files, for analytics
 - [`TOAST.md`](TOAST.md) — TOAST: a datum stored out of line
 - [`LSMINDEX.md`](LSMINDEX.md) — LSM Index: an index whose
   entries are sm1 keys
