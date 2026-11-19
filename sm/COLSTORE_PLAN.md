@@ -23,14 +23,12 @@ scratch.
 - **A module that nothing calls yet is tested by its unit
   tests.** The full suites (sm, then sq, then dg) run before
   each commit from the step that wires the Column Store into
-  digres (step 14), and in every step that changes a path a row
-  store table uses: the transparent move and SSI (steps 2 and
-  3).
+  digres (step 13), and in the step that changes a path a row
+  store table uses: the transparent move (step 2).
 - **The row store must not get slower.** The transparent move
-  and SSI (steps 2 and 3) change sm1's write path and SSI. Each
-  of them compares the instructions for each statement of the
-  row store benchmark, before and after, with `perf stat` on
-  the release build.
+  (step 2) changes sm1's write path. It compares the
+  instructions for each statement of the row store benchmark,
+  before and after, with `perf stat` on the release build.
 
 ---
 
@@ -40,7 +38,7 @@ The user took these on 2026-11-19.
 
 | Decision | Decided | Not taken |
 | --- | --- | --- |
-| the order of steps 6 to 14 | as below: every part of sm3, then the C API, then digres | a thin slice first: a table, a bulk load, a scan with no pruning, end to end through digres; then the rest in sm3. It shows the whole path early, but each later step touches every level again |
+| the order of steps 5 to 13 | as below: every part of sm3, then the C API, then digres | a thin slice first: a table, a bulk load, a scan with no pruning, end to end through digres; then the rest in sm3. It shows the whole path early, but each later step touches every level again |
 | one flag for both moves | `version_sealed`, `0x40`, on a sealed tombstone (a chained key) and on a moved marker (a versioned key); one rule in the write path | two flags; they would have the same rule |
 | zstd | link `libzstd`, which RocksDB links already | none: the design needs it |
 | the builder queue | give a job a kind: an index build, a seal, or RG compaction | a second queue and its own threads |
@@ -60,8 +58,7 @@ The user took these on 2026-11-19.
    `sm1/src/chain.h`; relids `0x0002` to `0x0004` are free in a
    table with no index.
 4. Record the row store benchmark's instructions for each
-   statement, for the transparent move and SSI (steps 2
-   and 3).
+   statement, for the transparent move (step 2).
 
 → verify: every suite passes, or its failures are the known
 ones of `main`. The values are free.
@@ -91,19 +88,7 @@ stores; every existing scenario passes unchanged; the full
 suites pass; the row store's instructions for each statement do
 not change.
 
-### Step 3: sm1, SSI for moves and loads
-
-1. Run the seal and RG compaction at READ COMMITTED. A writer
-   below SERIALIZABLE takes no part in SSI (`ssi_on_write` in
-   `sm1/src/ssi.cc`), so no option is needed.
-2. Add `sm1::ssi_write_range`, a write over a range of keys,
-   beside `sm1::ssi_write_key` (`sm1/src/ssi.cc`), and the driver
-   verb `ssiwrite <lo> <hi>`.
-3. Add the scenarios of §15.1 that test SSI.
-
-→ verify: as for the transparent move (step 2).
-
-### Step 4: sm1, file sets
+### Step 3: sm1, file sets
 
 [`COLSTORE.md`](COLSTORE.md) §4.5 and §13.
 
@@ -126,7 +111,7 @@ not change.
 → verify: the new unit tests pass, under the thread sanitizer
 too. Nothing calls file sets yet, so the unit tests suffice.
 
-### Step 5: sm2, the CG file and its statistics
+### Step 4: sm2, the CG file and its statistics
 
 [`COLSTORE.md`](COLSTORE.md) §5 and §6.
 
@@ -146,32 +131,33 @@ too. Nothing calls file sets yet, so the unit tests suffice.
 → verify: the unit tests pass. Nothing calls sm2's new code
 yet.
 
-### Step 6: sm3, the catalog
+### Step 5: sm3, the catalog
 
 1. Record the table's kind, row store or column store, in its
    `TABLE` entry, and make the sequence `sm3.rg.<oid>`.
 2. Refuse an index, a primary key and a unique key on a column
    store table. digres ignores them before they reach sm3
-   (step 14, digres), so sm3 only refuses.
-3. Test the kind across a restart, and the refusals.
+   (step 13, digres), so sm3 only refuses.
+3. Refuse a read and a write of a column store table in a
+   SERIALIZABLE transaction ([`COLSTORE.md`](COLSTORE.md) §9.1).
+4. Test the kind across a restart, and the refusals.
 
 → verify: the sm3 unit tests pass.
 
-### Step 7: sm3, inserts and bulk loads
+### Step 6: sm3, inserts and bulk loads
 
 [`COLSTORE.md`](COLSTORE.md) §9 and §9.2.
 
 1. Insert a row into the delta store: the keyless row store as
    it is, under relid `0x0001`.
 2. Write RGs from a bulk load: `_id`s in batches of 10k, CG
-   files and long-value files, the file set key, the filter
-   keys, and the report to SSI. Put the rest into the delta
-   store.
+   files and long-value files, the file set key, and the filter
+   keys. Put the rest into the delta store.
 3. Test an abort and a rollback to a savepoint of a load.
 
 → verify: the sm3 unit tests of a load pass.
 
-### Step 8: sm3, the scan
+### Step 7: sm3, the scan
 
 [`COLSTORE.md`](COLSTORE.md) §12.
 
@@ -179,22 +165,20 @@ yet.
 2. Read the projected CGs through sm1, and merge the delete
    markers with the `_id` CG.
 3. Scan the delta store after the RGs.
-4. Take the SIREAD ranges of §9.1, and merge ranges that touch.
-5. Hand out one row at a time, as datums.
-6. Test the scan, and start the test that a column store table
+4. Hand out one row at a time, as datums.
+5. Test the scan, and start the test that a column store table
    agrees with a row store table, for inserts and loads.
 
-→ verify: the sm3 tests pass; the agreement test passes at each
-isolation level.
+→ verify: the sm3 tests pass; the agreement test passes at READ
+COMMITTED and REPEATABLE READ.
 
-### Step 9: sm3, updates and deletes
+### Step 8: sm3, updates and deletes
 
 [`COLSTORE.md`](COLSTORE.md) §8, §9 and §9.1.
 
 1. Name a row by `(rg_id, _id)`, with `rg_id` 0 in the delta
    store.
-2. Delete a row in an RG with a marker, and report the write to
-   SSI on delta key `_id`.
+2. Delete a row in an RG with a marker.
 3. Update a row in an RG: the marker, and the reinsert with its
    long values copied into TOAST.
 4. Look up `_id` by a scan with `_id = n`, and follow it after
@@ -205,7 +189,7 @@ isolation level.
 → verify: the sm3 tests pass; the agreement test passes with
 updates and deletes.
 
-### Step 10: sm3, the seal
+### Step 9: sm3, the seal
 
 [`COLSTORE.md`](COLSTORE.md) §10.
 
@@ -222,7 +206,7 @@ updates and deletes.
 → verify: the sm3 tests pass; the agreement test passes with
 seals; the RR and RC cases of §15.1 hold for a whole table.
 
-### Step 11: sm3, RG compaction
+### Step 10: sm3, RG compaction
 
 [`COLSTORE.md`](COLSTORE.md) §11.
 
@@ -236,7 +220,7 @@ seals; the RR and RC cases of §15.1 hold for a whole table.
 → verify: the sm3 tests pass; the agreement test passes with
 RG compaction; a writer in flight makes RG compaction give up.
 
-### Step 12: sm3, ANALYZE and DDL
+### Step 11: sm3, ANALYZE and DDL
 
 [`COLSTORE.md`](COLSTORE.md) §7, §12.1 and §14.
 
@@ -248,7 +232,7 @@ RG compaction; a writer in flight makes RG compaction give up.
 
 → verify: the sm3 tests of §15.3 all pass.
 
-### Step 13: the C API, and rel
+### Step 12: the C API, and rel
 
 1. Add to `include/sm.h` and `src/sm.cc`: the table's kind at
    create, a scan with a projection and bounds, and the row
@@ -259,7 +243,7 @@ RG compaction; a writer in flight makes RG compaction give up.
 
 → verify: `make test` of sm passes, the rel tests included.
 
-### Step 14: digres
+### Step 13: digres
 
 1. Add the reloption `storage`, with the values `row` and
    `column`, in `access/common/reloptions.c`.
@@ -277,7 +261,7 @@ RG compaction; a writer in flight makes RG compaction give up.
 
 → verify: the full suites pass, sm, then sq, then dg.
 
-### Step 15: the documents
+### Step 14: the documents
 
 1. Change [`COLSTORE.md`](COLSTORE.md) to describe the code as
    it stands, with its code paths, and remove its status line.

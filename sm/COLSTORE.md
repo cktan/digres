@@ -81,7 +81,8 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | row identity | `_id`, drawn at insert, kept for the row's life, stored as a hidden CG | §8 |
 | a lookup by `_id` | a scan with `_id = n`, pruned by the `_id` CG's zonemap and bloom filter; no map from `_id` to `rg_id` | §8 |
 | the TID that digres carries | `(rg_id, _id)`; `rg_id` 0 for a row in the delta store | §8 |
-| locks | row locks and SIREAD locks on delta key `_id`; a read RG locks its `_id` range | §9.1 |
+| locks | row locks on delta key `_id` | §9.1 |
+| isolation | READ COMMITTED and REPEATABLE READ; a SERIALIZABLE transaction that reads or writes a column store table fails | §9.1 |
 | how digres makes one | `CREATE TABLE ev (...) WITH (storage = column)`; sm3's catalog records the kind | §3 |
 | the executor | PostgreSQL's, a row at a time, until the Column Store is stable; then an executor for columnar operations | §3 |
 | `relpages` | the bytes of all CGs and of the delta store, divided by 8 KB | §7 |
@@ -93,7 +94,7 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | encodings | plain, dictionary, delta for sorted integers; zstd on each CG | §5 |
 | long values | out of line, in a long-value file of the RG's file set; left out of the filter, kept in min and max | §5.4 |
 | RG size | 10k rows | §7 |
-| the seal | pessimistic; its tombstones are transparent to first-committer-wins; exempt from SSI | §10 |
+| the seal | pessimistic; its tombstones are transparent to first-committer-wins | §10 |
 | RG compaction | moved markers, transparent in the same way | §11 |
 
 The constants (10k rows, 1024 bytes, 32 bytes, 4 KB, 20%, 50%)
@@ -104,7 +105,7 @@ so a change of a constant does not make an existing file wrong.
 
 | Part | Level | Why |
 | --- | --- | --- |
-| the sealed tombstone; the moved marker's rule in first-committer-wins; the seal's exemption from SSI; a range form of `ssi_write_key` | sm1 | rules of the write path and of SSI; sm1 knows no table |
+| the sealed tombstone, and the moved marker's rule in first-committer-wins | sm1 | rules of the write path; sm1 knows no table |
 | file sets: the file I/O of CGs, their key class, their GC and the sweep at open; later S3 and the local file cache | sm1, beside the Buffer Manager | sm1 owns the I/O of every byte, the order of fsync and RG key, and GC (§4.5) |
 | the CG file format, the encodings, the dictionary, the zonemap and the filter, and the pruning test on key bytes | sm2 | they need types and `encode()`; the pruning test compares key bytes and knows no type |
 | the RG keys, the seal, RG compaction, the scan, the lookup by `_id`, and the locks of §9.1 | sm3 | they need the table, its columns and predicates, as the `tbl_*` calls of a row store table do |
@@ -489,48 +490,19 @@ be64(_id)`. That key space is `_id` space.
 `_id` with `sm1::lock_row`, wherever the row is. A move never
 takes a lock's row away.
 
-**SIREAD locks.** These sm1 calls give each one:
+**No SERIALIZABLE transaction uses a column store table.** A
+read or a write of one in a SERIALIZABLE transaction fails with
+`SM_ERR_INVALID`, and digres reports it as a feature not
+supported. A column store table is for analytics, which runs at
+READ COMMITTED or REPEATABLE READ. The refusal frees the Column
+Store from SSI:
 
-| Event | SIREAD lock or check |
-| --- | --- |
-| a scan of the delta store | its range, as `sm1::scan` registers it |
-| a scan reads RG `r` | `sm1::ssi_read_range` over delta keys `[_id min of r, _id max of r]` |
-| a scan skips RG `r` by pruning | none |
-| an update of a row in an RG | none more: the reinsert writes delta key `_id` |
-| a delete of a row in an RG | `sm1::ssi_write_key` of delta key `_id`, with the marker; a check with no RocksDB write |
-| the seal, RG compaction | none (§10.3) |
-
-- **A skipped RG needs no lock.** Its zonemap proves that no row
-  of it matches. A write that makes a row of it match is an
-  update, and its reinsert writes delta key `_id`, which the
-  scan's delta range covers.
-- **A scan merges adjacent ranges as it goes.** RGs that seals
-  made in `_id` order have ranges that touch, so a full scan
-  registers one range or a few. Each write walks a store's
-  ranges in a list ([`XCTMGR.md`](XCTMGR.md) §7.7), so one
-  range for each RG would cost too much.
-- **An RG of reinserted rows has a wide `_id` range.** A lock on
-  it costs false serialization failures, which can be retried.
-  RG compaction narrows the range. PostgreSQL takes a lock on
-  the whole relation for a sequential scan, so this lock is
-  finer than PostgreSQL's.
-- **A unit smaller than an RG is of no use.** A scan reads a
-  whole RG.
-
-An example of the rule:
-
-```sql
--- R, SERIALIZABLE, snapshot 100
-SELECT * FROM ev WHERE kind = 'x';
-    -- reads delta row 900: SIREAD on the delta range
--- The seal commits at 105: row 900 goes to RG 1.
--- W
-DELETE FROM ev WHERE _id = 900;
-    -- the marker (rg 1, _id 900), and ssi_write_key of delta
-    -- key 900: R's range covers it, so the edge R -rw-> W is
-    -- made. A lock on RG 1 would miss it: R's snapshot does
-    -- not see RG 1.
-```
+- A scan takes no SIREAD lock, so pruning, the merge of delete
+  markers, and a later batch interface need no lock rule.
+- A delete of a row in an RG, which writes only a marker, needs
+  no report to SSI of the delta key it does not write.
+- A bulk load needs no report of the `_id`s of its RGs.
+- A move of a row never meets a SIREAD lock.
 
 ### 9.2 A bulk load
 
@@ -543,10 +515,8 @@ statement. They do not pass through the delta store.
    into its long-value file as the row is added.
 3. Write the CG files, and put the file set key and the filter
    keys of a new RG (§4.5).
-4. Report a write over the RG's `_id` range in the delta key
-   space to SSI.
-5. Repeat until fewer than 10k rows are left.
-6. Insert the rows that are left into the delta store, as
+4. Repeat until fewer than 10k rows are left.
+5. Insert the rows that are left into the delta store, as
    `INSERT` does. A later seal takes them.
 
 - **A table with rows can take a bulk load.** A new RG
@@ -554,10 +524,6 @@ statement. They do not pass through the delta store.
   lock beyond what an `INSERT` takes.
 - **An RG's `_id`s are contiguous**, as they come from one
   batch. So its `_id` range is tight.
-- **The report to SSI makes a load a phantom** for a
-  SERIALIZABLE scan whose range of delta keys covers the RG's
-  `_id`s (§9.1). It needs a form of `sm1::ssi_write_key` that
-  takes a range of keys.
 - **An abort or a rollback to a savepoint** unlinks the files,
   from the transaction's list, and the undo list removes the
   keys (§13).
@@ -640,14 +606,12 @@ UPDATE ev SET amount = 4 WHERE _id = 900;
     -- Write the marker (rg 1, _id 900) and delta key 900.
 ```
 
-### 10.3 SSI
+### 10.3 Isolation of the seal
 
-**The seal's writes do not feed SSI.** A reader of a delta row
-would otherwise get an rw-edge to the seal. A move that changes
-nothing could then make the reader the pivot of a dangerous
-structure, and fail it. The seal runs at READ COMMITTED, and a
-writer below SERIALIZABLE takes no part in SSI
-([`XCTMGR.md`](XCTMGR.md) §7.5).
+**The seal runs at READ COMMITTED.** No SERIALIZABLE transaction
+uses the table (§9.1), and a writer below SERIALIZABLE takes no
+part in SSI ([`XCTMGR.md`](XCTMGR.md) §7.5). So the seal makes
+no rw-edge.
 
 ### 10.4 When the seal runs
 
@@ -686,7 +650,7 @@ It is GC, not a write path.
 - **The `rg_id` of the new RG is new.** Its files have new
   names. The long values of the rows that it moves are copied
   into the new RG's long-value files.
-- **Its writes do not feed SSI**, for the reason of §10.3.
+- **It runs at READ COMMITTED**, as the seal does (§10.3).
 
 **RG compaction cannot skip a row.** It erases the old RG key,
 so each row of the old RG must move or be dead. A row with a
@@ -855,7 +819,7 @@ A listing of a directory or of S3 never decides it.
   instance, as for a row store table
   ([`TEMPTABLE.md`](TEMPTABLE.md)). Its files are in
   `colstore/` under the temporary instance's home, and never go
-  to S3. A temporary store takes no SIREAD lock.
+  to S3.
 
 ### 14.1 Keys, indexes and constraints
 
@@ -891,10 +855,9 @@ the one line that says what it proves.
 New scenarios in `sm1/mvcc/in`, a series of their own. Each runs
 twice, on versioned and on chained stores, as every scenario
 does, and the rule is the same on both. The driver gets the
-verbs `seal <row>`, an erase with a sealed tombstone,
-`sealput <row> <value>`, a moved marker, and `ssiwrite <lo>
-<hi>`, a write of a range for SSI alone. The sessions that seal
-run at READ COMMITTED, and take no part in SSI.
+verbs `seal <row>`, an erase with a sealed tombstone, and
+`sealput <row> <value>`, a moved marker. The sessions that seal
+run at READ COMMITTED.
 
 | Scenario | Expected |
 | --- | --- |
@@ -904,10 +867,9 @@ run at READ COMMITTED, and take no part in SSI.
 | an RC writer waits on a seal in flight, and the seal aborts | `BLOCK`, then the write succeeds |
 | a reader before and after the seal's commit | the row, then no row |
 | an insert over a sealed tombstone | `ok` |
-| a SERIALIZABLE reader of a row, then a seal of it | no rw-edge: the reader commits |
 | the same with a plain erase (negative) | the reader fails with a serialization failure |
 | a seal meets a writer in flight, or prepared | the seal skips the row; the writer is not blocked |
-| a write over a range that a SERIALIZABLE scan read, by the range form of `ssi_write_key` | an rw-edge; out of the range, none |
+| a plain erase in the seal's place (negative) | the RR writer gets `conflict` |
 
 The Column Store's notions above sm1, such as RGs, scans and
 pruning, cannot be expressed here. §15.3 and §15.4 test them.
@@ -955,8 +917,9 @@ pruning, cannot be expressed here. §15.3 and §15.4 test them.
 4. An update and a delete of a row in an RG: the delete marker,
    the reinsert, the TID `(rg_id, _id)`, and the follow of `_id`
    after `SEALED`.
-5. The locks of §9.1: a row lock and a SIREAD range on delta key
-   `_id`, across a seal and across RG compaction.
+5. The locks of §9.1: a row lock on delta key `_id`, across a
+   seal and across RG compaction; a SERIALIZABLE read and write
+   refused, and READ COMMITTED and REPEATABLE READ allowed.
 6. RG compaction: the trigger at 20%; the merge of small RGs;
    the moved markers and their follow; the give-up on a writer
    in flight or prepared.
@@ -983,10 +946,9 @@ after which the sweep runs; 2PC across a restart.
   an ignored `PRIMARY KEY`; a foreign key that references a
   column store table, which fails; queries with bounds, whose
   results equal a row store table's; `COPY`; `TRUNCATE`;
-  `ALTER TABLE`; `ANALYZE`.
-- `server.sh`: an RR update while a seal runs, which succeeds;
-  a SERIALIZABLE scan and a concurrent bulk load, which make a
-  phantom.
+  `ALTER TABLE`; `ANALYZE`; a read of a column store table in a
+  SERIALIZABLE transaction, which fails.
+- `server.sh`: an RR update while a seal runs, which succeeds.
 
 ### 15.5 Layers with no test
 
