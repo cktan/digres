@@ -604,8 +604,11 @@ The seal does not change a row's content. So it must not fail a
 user's transaction. PostgreSQL does not fail a transaction
 because VACUUM ran, and the seal keeps to the same rule.
 
-A sealed tombstone is a tombstone with a new flag, bit3. In the
-write path ([`ROWSTORE.md`](ROWSTORE.md) §4):
+A sealed tombstone is a tombstone with a new flag, `0x40`,
+`version_sealed`. The flags `0x01` to `0x08` of a version, and
+`0x10` and `0x20` of an OLD entry, are in use, and a CURR
+version keeps its flags when it moves to OLD. In the write path
+([`ROWSTORE.md`](ROWSTORE.md) §4):
 
 - **A reader** sees it as any tombstone. The row is in the RG.
 - **First-committer-wins sees through it.** The check of a
@@ -674,10 +677,10 @@ puts the live rows into a new RG and erases the old RG key.
 It is GC, not a write path.
 
 - **It writes a moved marker at `(old rg, _id)` for each row
-  that it moves.** A moved marker is a delete marker with a
-  flag. It is transparent as a sealed tombstone is (§10.2):
-  first-committer-wins judges against the row's own commit,
-  and a writer follows `_id` to the new RG.
+  that it moves.** A moved marker is a delete marker with the
+  flag `version_sealed`. It is transparent as a sealed
+  tombstone is (§10.2): first-committer-wins judges against the
+  row's own commit, and a writer follows `_id` to the new RG.
 - **The `rg_id` of the new RG is new.** Its files have new
   names. The long values of the rows that it moves are copied
   into the new RG's long-value files.
