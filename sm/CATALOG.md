@@ -1149,8 +1149,17 @@ catalog of their own.
   kind, the **dependency index**. What is built is each kind's
   own, a view's reads and a foreign key's parent, both derived in
   memory and stored nowhere.
-- **`DROP COLLATION`** itself. A namespace that has held a
-  collation therefore stays.
+- **`DROP COLLATION`** itself. sm3 has `create_collation` and
+  `cat_put_collation`, but no drop and no `cat_del_collation`: a
+  collation, once committed, stays in the Catalog for good.
+  `drop_namespace` fails with `SM_ERR_INUSE` while a collation is
+  in the namespace, because it checks each collation's namespace.
+  Thus a namespace that has held a collation can never be
+  dropped. For example, after `CREATE SCHEMA lang` and `CREATE
+  COLLATION lang.plain (locale = 'en-US')`, `DROP SCHEMA lang`
+  fails, now and after a restart. A drop of a collation also
+  needs the dependency check above, to refuse a drop while a
+  column or an index key uses the collation.
 - **Startup cost for thousands of tables** is unmeasured: load
   time and memory for a schema with many partitions. `cat_open`'s
   scan of every name adds to it.
