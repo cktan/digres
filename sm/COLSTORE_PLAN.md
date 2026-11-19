@@ -93,10 +93,12 @@ not change.
 
 ### Step 3: sm1, SSI for moves and loads
 
-1. Add a transaction option that makes its writes feed no SSI,
-   for the seal and RG compaction.
+1. Run the seal and RG compaction at READ COMMITTED. A writer
+   below SERIALIZABLE takes no part in SSI (`ssi_on_write` in
+   `sm1/src/ssi.cc`), so no option is needed.
 2. Add `sm1::ssi_write_range`, a write over a range of keys,
-   beside `sm1::ssi_write_key` (`sm1/src/ssi.cc`).
+   beside `sm1::ssi_write_key` (`sm1/src/ssi.cc`), and the driver
+   verb `ssiwrite <lo> <hi>`.
 3. Add the scenarios of §15.1 that test SSI.
 
 → verify: as for the transparent move (step 2).

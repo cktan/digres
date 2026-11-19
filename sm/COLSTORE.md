@@ -645,7 +645,9 @@ UPDATE ev SET amount = 4 WHERE _id = 900;
 **The seal's writes do not feed SSI.** A reader of a delta row
 would otherwise get an rw-edge to the seal. A move that changes
 nothing could then make the reader the pivot of a dangerous
-structure, and fail it.
+structure, and fail it. The seal runs at READ COMMITTED, and a
+writer below SERIALIZABLE takes no part in SSI
+([`XCTMGR.md`](XCTMGR.md) §7.5).
 
 ### 10.4 When the seal runs
 
@@ -888,11 +890,11 @@ the one line that says what it proves.
 
 New scenarios in `sm1/mvcc/in`, a series of their own. Each runs
 twice, on versioned and on chained stores, as every scenario
-does: the sealed tombstone is the chained form of the rule, and
-the moved marker the versioned form. The driver gets a verb
-`seal <row>`, an erase with a sealed tombstone, and a session
-kind whose writes do not feed SSI, for the seal and RG
-compaction.
+does, and the rule is the same on both. The driver gets the
+verbs `seal <row>`, an erase with a sealed tombstone,
+`sealput <row> <value>`, a moved marker, and `ssiwrite <lo>
+<hi>`, a write of a range for SSI alone. The sessions that seal
+run at READ COMMITTED, and take no part in SSI.
 
 | Scenario | Expected |
 | --- | --- |
