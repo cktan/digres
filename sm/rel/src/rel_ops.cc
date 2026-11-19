@@ -2745,7 +2745,7 @@ static Janet cfun_delete(int32_t argc, Janet *argv) {
  * over its keys; op names the command in a panic. Sets p_tdef to the
  * table.
  */
-static sm_rel_scan_t *open_rel_cursor(session_ctx_t *s, int32_t argc,
+static sm_row_scan_t *open_rel_cursor(session_ctx_t *s, int32_t argc,
                                       Janet *argv, const char *op,
                                       table_def_t *&p_tdef) {
   std::string tbl_name = identifier_of(argv[0]);
@@ -2782,7 +2782,7 @@ static sm_rel_scan_t *open_rel_cursor(session_ctx_t *s, int32_t argc,
     }
   }
 
-  sm_rel_scan_t *rscan = nullptr;
+  sm_row_scan_t *rscan = nullptr;
   if (pk == nullptr) {
     if (sm_tbl_scan(p_tdef->tbl, first, last, &rscan) != 0) {
       panic_sm_error((std::string(op) + " sm_tbl_scan").c_str());
@@ -2806,7 +2806,7 @@ static Janet cfun_scan(int32_t argc, Janet *argv) {
   janet_arity(argc, 1, -1);
   session_ctx_t *s = require_session();
   table_def_t *p_tdef = nullptr;
-  sm_rel_scan_t *rscan = open_rel_cursor(s, argc, argv, "scan", p_tdef);
+  sm_row_scan_t *rscan = open_rel_cursor(s, argc, argv, "scan", p_tdef);
   sm_tbl_t *tbl = p_tdef->tbl;
   const index_def_t *pk = primary_of(p_tdef);
 
@@ -2817,13 +2817,13 @@ static Janet cfun_scan(int32_t argc, Janet *argv) {
   size_t ncols = p_tdef->columns.size();
 
   int rc;
-  while ((rc = sm_rel_scannxt(rscan, &rowno, &tuple, &len)) == 0) {
+  while ((rc = sm_row_scannxt(rscan, &rowno, &tuple, &len)) == 0) {
     Janet *vals = janet_tuple_begin(ncols);
     for (size_t i = 0; i < ncols; i++) {
       sm_datum_t val = 0;
       bool isnull = false;
       if (sm_tbl_decode(tbl, tuple, len, i, &val, &isnull) != 0) {
-        sm_rel_scanend(rscan);
+        sm_row_scanend(rscan);
         panic_sm_error("scan sm_tbl_decode");
       }
       vals[i] = value_to_janet(val, isnull, p_tdef->columns[i].type_code,
@@ -2840,39 +2840,39 @@ static Janet cfun_scan(int32_t argc, Janet *argv) {
   // the scan's rows. One the engine's abort closed is not ended.
   if (rc < 0) {
     if (!engine_aborted()) {
-      sm_rel_scanend(rscan);
+      sm_row_scanend(rscan);
     }
-    panic_sm_error("scan sm_rel_scannxt");
+    panic_sm_error("scan sm_row_scannxt");
   }
-  sm_rel_scanend(rscan);
+  sm_row_scanend(rscan);
   return janet_wrap_array(rows);
 }
 
 /*
  * (scan-count table [:from first] [:to last]): the rows (scan) gives,
  * counted, none decoded. Each is stepped to in the cursor's pin, as
- * digres's scans step (sm_rel_scannxt with a ref).
+ * digres's scans step (sm_row_scannxt with a ref).
  */
 static Janet cfun_scan_count(int32_t argc, Janet *argv) {
   janet_arity(argc, 1, -1);
   session_ctx_t *s = require_session();
   table_def_t *p_tdef = nullptr;
-  sm_rel_scan_t *rscan = open_rel_cursor(s, argc, argv, "scan-count", p_tdef);
+  sm_row_scan_t *rscan = open_rel_cursor(s, argc, argv, "scan-count", p_tdef);
   uint64_t rowno = 0;
   sm_pin_ref_t ref;
   int64_t n = 0;
   int rc;
-  while ((rc = sm_rel_scannxt(rscan, &rowno, &ref)) == 0) {
+  while ((rc = sm_row_scannxt(rscan, &rowno, &ref)) == 0) {
     n++;
   }
   // As (scan): a failed cursor's count is not the scan's.
   if (rc < 0) {
     if (!engine_aborted()) {
-      sm_rel_scanend(rscan);
+      sm_row_scanend(rscan);
     }
-    panic_sm_error("scan-count sm_rel_scannxt");
+    panic_sm_error("scan-count sm_row_scannxt");
   }
-  sm_rel_scanend(rscan);
+  sm_row_scanend(rscan);
   return janet_wrap_number(static_cast<double>(n));
 }
 
@@ -2887,7 +2887,7 @@ static sm_idx_scan_t *open_idx_cursor(session_ctx_t *s, int32_t argc,
                                       Janet *argv, const char *op,
                                       table_def_t *&p_tdef,
                                       index_def_t *&p_idef,
-                                      sm_rel_scan_t **rows = nullptr) {
+                                      sm_row_scan_t **rows = nullptr) {
   std::string idx_name = identifier_of(argv[0]);
 
   std::tie(p_tdef, p_idef) = need_index(s, idx_name, SM_LOCKMODE_IS, op);
@@ -3055,7 +3055,7 @@ static Janet cfun_idx_rows(int32_t argc, Janet *argv) {
   session_ctx_t *s = require_session();
   table_def_t *p_tdef = nullptr;
   index_def_t *p_idef = nullptr;
-  sm_rel_scan_t *rscan = nullptr;
+  sm_row_scan_t *rscan = nullptr;
   open_idx_cursor(s, argc, argv, "idx-rows", p_tdef, p_idef, &rscan);
   sm_tbl_t *tbl = p_tdef->tbl;
   const index_def_t *pk = primary_of(p_tdef);
@@ -3065,13 +3065,13 @@ static Janet cfun_idx_rows(int32_t argc, Janet *argv) {
   size_t len = 0;
   size_t ncols = p_tdef->columns.size();
   int rc;
-  while ((rc = sm_rel_scannxt(rscan, &rowno, &tuple, &len)) == 0) {
+  while ((rc = sm_row_scannxt(rscan, &rowno, &tuple, &len)) == 0) {
     Janet *vals = janet_tuple_begin(ncols);
     for (size_t i = 0; i < ncols; i++) {
       sm_datum_t val = 0;
       bool isnull = false;
       if (sm_tbl_decode(tbl, tuple, len, i, &val, &isnull) != 0) {
-        sm_rel_scanend(rscan);
+        sm_row_scanend(rscan);
         panic_sm_error("idx-rows sm_tbl_decode");
       }
       vals[i] = value_to_janet(val, isnull, p_tdef->columns[i].type_code,
@@ -3086,17 +3086,17 @@ static Janet cfun_idx_rows(int32_t argc, Janet *argv) {
   // As (scan): a failed cursor's rows are not the scan's.
   if (rc < 0) {
     if (!engine_aborted()) {
-      sm_rel_scanend(rscan);
+      sm_row_scanend(rscan);
     }
-    panic_sm_error("idx-rows sm_rel_scannxt");
+    panic_sm_error("idx-rows sm_row_scannxt");
   }
-  sm_rel_scanend(rscan);
+  sm_row_scanend(rscan);
   return janet_wrap_array(rows);
 }
 
 /*
  * (idx-only idx_name [:ge lo] [:gt lo] [:le hi] [:lt hi]): a tree's
- * index-only scan, as digres's (sm_rel_scan_entries): {:keys, each
+ * index-only scan, as digres's (sm_row_scan_entries): {:keys, each
  * entry's key columns, decoded from its key, :unread, how many came
  * with no row read, their leaves all visible (../BTREEINDEX.md §8)}.
  */
@@ -3105,11 +3105,11 @@ static Janet cfun_idx_only(int32_t argc, Janet *argv) {
   session_ctx_t *s = require_session();
   table_def_t *p_tdef = nullptr;
   index_def_t *p_idef = nullptr;
-  sm_rel_scan_t *rscan = nullptr;
+  sm_row_scan_t *rscan = nullptr;
   open_idx_cursor(s, argc, argv, "idx-only", p_tdef, p_idef, &rscan);
-  if (0 != sm_rel_scan_entries(rscan)) {
-    sm_rel_scanend(rscan);
-    panic_sm_error("idx-only sm_rel_scan_entries");
+  if (0 != sm_row_scan_entries(rscan)) {
+    sm_row_scanend(rscan);
+    panic_sm_error("idx-only sm_row_scan_entries");
   }
   size_t nkeys = p_idef->keys.size();
   std::vector<sm_datum_t> vals(nkeys);
@@ -3119,10 +3119,10 @@ static Janet cfun_idx_only(int32_t argc, Janet *argv) {
   uint64_t rowno = 0;
   sm_pin_ref_t ref;
   int rc;
-  while ((rc = sm_rel_scannxt(rscan, &rowno, &ref)) == 0) {
-    if (0 != sm_rel_scan_cols(rscan, vals.data(), nulls.get(), nkeys)) {
-      sm_rel_scanend(rscan);
-      panic_sm_error("idx-only sm_rel_scan_cols");
+  while ((rc = sm_row_scannxt(rscan, &rowno, &ref)) == 0) {
+    if (0 != sm_row_scan_cols(rscan, vals.data(), nulls.get(), nkeys)) {
+      sm_row_scanend(rscan);
+      panic_sm_error("idx-only sm_row_scan_cols");
     }
     Janet *key = janet_tuple_begin(static_cast<int32_t>(nkeys));
     for (size_t i = 0; i < nkeys; i++) {
@@ -3135,11 +3135,11 @@ static Janet cfun_idx_only(int32_t argc, Janet *argv) {
   }
   if (rc < 0) {
     if (!engine_aborted()) {
-      sm_rel_scanend(rscan);
+      sm_row_scanend(rscan);
     }
-    panic_sm_error("idx-only sm_rel_scannxt");
+    panic_sm_error("idx-only sm_row_scannxt");
   }
-  sm_rel_scanend(rscan);
+  sm_row_scanend(rscan);
   JanetKV *out = janet_struct_begin(2);
   janet_struct_put(out, janet_ckeywordv("keys"), janet_wrap_array(keys));
   janet_struct_put(out, janet_ckeywordv("unread"),

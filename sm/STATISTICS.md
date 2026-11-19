@@ -1391,7 +1391,7 @@ truncate itself.
 | sm3 | `cat_get_stats(session, table oid, out)` | §9.7's read; null if never analyzed |
 | top | `sm_tbl_analyze`, `sm_tbl_tryanalyze`, `sm_tbl_stats` | the same, in `include/sm.h`; `sm_tbl_stats` hands out `cat_get_stats`'s object itself, `stats_t` being the root's `sm_stats_t` |
 | top | `sm_tbl_size`, `sm_tbl_idx_size`, `sm_tbl_rowno_limit`, `sm_tbl_probes` | the four live calls |
-| top | `sm_tbl_keys_at`, `sm_rel_scan_seek_key` | for digres's TABLESAMPLE |
+| top | `sm_tbl_keys_at`, `sm_row_scan_seek_key` | for digres's TABLESAMPLE |
 | top | `sm_datum_of_bytes` | a kept value as a datum |
 | `rel` | `analyze`, `stats` | testing |
 

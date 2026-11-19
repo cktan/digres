@@ -479,7 +479,7 @@ template <typename F>
 static int read_rows(sm_session_t *session, const char *name, size_t natts,
                      F row) {
   sm_tbl_t *tbl;
-  sm_rel_scan_t *scan;
+  sm_row_scan_t *scan;
   const void *tuple;
   size_t len;
   uint64_t table, id;
@@ -495,7 +495,7 @@ static int read_rows(sm_session_t *session, const char *name, size_t natts,
     return aa_sm_failed("read a table");
   }
   /* 1 at the end of the rows, -1 on an error. */
-  while (0 == (rc = sm_rel_scannxt(scan, &id, &tuple, &len))) {
+  while (0 == (rc = sm_row_scannxt(scan, &id, &tuple, &len))) {
     row_t r(natts);
 
     if (0 != sm_tbl_deform(tbl, tuple, len, r.v.data(), r.isnull.get(), natts))
@@ -505,7 +505,7 @@ static int read_rows(sm_session_t *session, const char *name, size_t natts,
       break;
     }
   }
-  sm_rel_scanend(scan);
+  sm_row_scanend(scan);
   sm_tbl_close(tbl);
   if (1 == rc)
     return 0;

@@ -513,7 +513,7 @@ hold:
 
 - digres asked for it: the index is a tree of key columns alone
   (`indnatts == indnkeyatts`), and it called
-  `sm_rel_scan_entries()` (`tbl_scan_entries_only()`). An index
+  `sm_row_scan_entries()` (`tbl_scan_entries_only()`). An index
   with INCLUDE columns reads them from the row.
 - the leaf was all visible when the batch was copied
   (`idx_scan_visible()`);
@@ -1488,7 +1488,7 @@ and its time is not measured again.
 | sm3, `src/btree_reaper/` | the circular queue, the filter, the workers, `btree_reaper_budget()`, and `btree_reaper_run_once()` for tests |
 | sm3, `src/catalog/` | `sm3::begin()` counts in `begins`; the index's kind in its definition, and every index operation branching on it (LSMINDEX.md) |
 | sm, `src/sm.cc` | attaches and detaches the btree reaper beside the builder; `sm_set_reaper_workers()` and `sm_reaper_run()`, for tests |
-| dg | the index access method's costs; `sm_rel_scan_entries()` for an index-only scan. The btree reaper needs no dg code: `smstore_index_eval()` adopts any sm thread by `session_thread_adopt()` |
+| dg | the index access method's costs; `sm_row_scan_entries()` for an index-only scan. The btree reaper needs no dg code: `smstore_index_eval()` adopts any sm thread by `session_thread_adopt()` |
 
 ### 11.3 What a tree asks of sm1
 

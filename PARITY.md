@@ -76,7 +76,7 @@ key and rechecked the equality on it. Now:
 
 1. The planner sets `IndexOnlyScan.nocols` when nothing above
    reads a column and the scan checks none (`createplan.c`).
-2. `sm_rel_scan_plain` tells, with no decoding, that a tree
+2. `sm_row_scan_plain` tells, with no decoding, that a tree
    entry's key is whole: not cut, and it gives its columns back.
 3. `smstore_index_getentry` returns such an entry at once if
    every scan key is an exact bound, or an equality on a text

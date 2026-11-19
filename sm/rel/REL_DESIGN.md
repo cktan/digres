@@ -465,9 +465,9 @@ one must abort.
 1. Defaults: `first = 1`, `last = UINT64_MAX`.
 2. Calls `sm_tbl_scan(tbl, first, last, &rscan)`, the scan of
    a keyless table by `_id`.
-3. Loops `sm_rel_scannxt(rscan, &id, &tuple, &len)` until 1.
+3. Loops `sm_row_scannxt(rscan, &id, &tuple, &len)` until 1.
 4. Decodes each column of a tuple via `sm_tbl_decode`.
-5. Calls `sm_rel_scanend(rscan)`.
+5. Calls `sm_row_scanend(rscan)`.
 6. Returns list of pairs:
    `([id_1 tuple_1] [id_2 tuple_2] ...)`.
 

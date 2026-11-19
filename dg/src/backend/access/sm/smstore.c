@@ -3221,7 +3221,7 @@ struct smstore_scan_t {
   IndexScanInstrumentation *instr;
   /* The table's oid, each row's tableoid, as WHERE CURRENT OF checks. */
   Oid relid;
-  sm_rel_scan_t *cursor;
+  sm_row_scan_t *cursor;
   sm_idx_scan_t *icursor;
   /*
    * A cursor over rows' last row, in the cursor's pin: a sequential or a
@@ -3339,7 +3339,7 @@ struct smstore_scan_t {
   /*
    * An index-only scan's tree of key columns alone: its cursor hands out
    * an entry with its row unread where vacuum found its leaf all visible
-   * (../sm/BTREEINDEX.md section 8, sm_rel_scan_entries()).
+   * (../sm/BTREEINDEX.md section 8, sm_row_scan_entries()).
    */
   bool entries_only;
   bool ra_point;
@@ -3600,7 +3600,7 @@ bool smstore_getnext(smstore_scan_t *scan, TupleTableSlot *slot) {
   slot->tts_tableOid = scan->relid;
   scan->cur = false;
   /* Into the cursor's pin, which its next row makes stale. */
-  switch (sm_rel_scannxt(scan->cursor, &rowno, &scan->row_ref)) {
+  switch (sm_row_scannxt(scan->cursor, &rowno, &scan->row_ref)) {
   case 0:
     break;
   case 1:
@@ -3624,7 +3624,7 @@ void smstore_scan_seek(smstore_scan_t *scan, uint64 rowno) {
   if (scan->at_end || (scan->ahead && scan->ahead_rowno >= rowno))
     return;
   scan->ahead = false;
-  if (sm_rel_scan_seek(scan->cursor, rowno) != 0)
+  if (sm_row_scan_seek(scan->cursor, rowno) != 0)
     sm_error("move a table's scan");
 }
 
@@ -3641,7 +3641,7 @@ bool smstore_scan_row(smstore_scan_t *scan, uint64 rowno,
   /* Its cursor reads ahead, so is on no row it handed out. */
   scan->cur = false;
   while (!scan->at_end && (!scan->ahead || scan->ahead_rowno < rowno)) {
-    switch (sm_rel_scannxt(scan->cursor, &scan->ahead_rowno, &scan->ahead_ref)) {
+    switch (sm_row_scannxt(scan->cursor, &scan->ahead_rowno, &scan->ahead_ref)) {
     case 0:
       scan->ahead = true;
       break;
@@ -3736,13 +3736,13 @@ void smstore_sample_slot(smstore_scan_t *scan, uint64 slot, uint64 nslots) {
   if (scan->at_end || next)
     return;
   if (scan->ahead) {
-    if (0 != sm_rel_scan_key(scan->cursor, &key, &len))
+    if (0 != sm_row_scan_key(scan->cursor, &key, &len))
       sm_error("read a table's key");
     if (std::string_view((const char *)key, len) >= keys[0])
       return;
   }
   scan->ahead = false;
-  if (0 != sm_rel_scan_seek_key(scan->cursor, keys[0].data(), keys[0].size()))
+  if (0 != sm_row_scan_seek_key(scan->cursor, keys[0].data(), keys[0].size()))
     sm_error("move a table's scan");
 }
 
@@ -3761,7 +3761,7 @@ bool smstore_sample_row(smstore_scan_t *scan, TupleTableSlot *slot) {
   scan->cur = false;
   if (!scan->ahead && !scan->at_end) {
     switch (
-        sm_rel_scannxt(scan->cursor, &scan->ahead_rowno, &scan->ahead_ref)) {
+        sm_row_scannxt(scan->cursor, &scan->ahead_rowno, &scan->ahead_ref)) {
     case 0:
       scan->ahead = true;
       break;
@@ -3775,7 +3775,7 @@ bool smstore_sample_row(smstore_scan_t *scan, TupleTableSlot *slot) {
   if (!scan->ahead)
     return false;
   if (scan->slot_end) {
-    if (0 != sm_rel_scan_key(scan->cursor, &key, &len))
+    if (0 != sm_row_scan_key(scan->cursor, &key, &len))
       sm_error("read a table's key");
     if (std::string_view((const char *)key, len) >=
         std::string_view(scan->slot_end, scan->slot_end_len))
@@ -3802,7 +3802,7 @@ bool smstore_scan_nth(smstore_scan_t *scan, uint64 n, TupleTableSlot *slot) {
   scan->cur = false;
   while (!scan->at_end && (!scan->ahead || scan->ahead_nth < n)) {
     switch (
-        sm_rel_scannxt(scan->cursor, &scan->ahead_rowno, &scan->ahead_ref)) {
+        sm_row_scannxt(scan->cursor, &scan->ahead_rowno, &scan->ahead_ref)) {
     case 0:
       scan->ahead = true;
       scan->ahead_nth = ++scan->nread;
@@ -3827,7 +3827,7 @@ bool smstore_scan_nth(smstore_scan_t *scan, uint64 n, TupleTableSlot *slot) {
 /* End a scan; the table stays open until the transaction ends. */
 void smstore_endscan(smstore_scan_t *scan) {
   std::erase(open_scans, scan);
-  sm_rel_scanend(scan->cursor);
+  sm_row_scanend(scan->cursor);
   sm_idx_scanend(scan->icursor);
   /* The row it read last by rowno is no one's now, nor those read ahead. */
   sm_unpin(&scan->ref);
@@ -8667,12 +8667,12 @@ static void open_probe(smstore_scan_t *scan) {
   count_searches(scan, 1);
   /* A tree's cursor is aimed at the next probe's bounds, not made anew. */
   if (scan->tree && scan->cursor != NULL) {
-    if (sm_rel_scan_rebound(scan->cursor, scan->lo.n > 0 ? &scan->lo : NULL,
+    if (sm_row_scan_rebound(scan->cursor, scan->lo.n > 0 ? &scan->lo : NULL,
                             scan->hi.n > 0 ? &scan->hi : NULL) != 0)
       sm_error("scan an index");
     return;
   }
-  sm_rel_scanend(scan->cursor);
+  sm_row_scanend(scan->cursor);
   sm_idx_scanend(scan->icursor);
   scan->cursor = NULL;
   scan->icursor = NULL;
@@ -8721,7 +8721,7 @@ static void open_probe(smstore_scan_t *scan) {
                             scan->hi.n > 0 ? &scan->hi : NULL, NULL,
                             &scan->icursor) != 0)
     sm_error("scan an index");
-  if (scan->entries_only && 0 != sm_rel_scan_entries(scan->cursor))
+  if (scan->entries_only && 0 != sm_row_scan_entries(scan->cursor))
     sm_error("scan an index");
 }
 
@@ -9271,7 +9271,7 @@ static inline bool probe_row(smstore_scan_t *scan) {
   }
   /* A primary key's: its next row, into the cursor's pin. */
   if (scan->cursor != NULL) {
-    switch (sm_rel_scannxt(scan->cursor, &scan->cur_rowno, &scan->row_ref)) {
+    switch (sm_row_scannxt(scan->cursor, &scan->cur_rowno, &scan->row_ref)) {
     case 0:
       scan->cur = true;
       scan->cur_pinned = true;
@@ -9389,7 +9389,7 @@ bool smstore_index_getentry(smstore_scan_t *scan, TupleTableSlot *slot) {
   if (scan->tree && !scan->entries_only &&
       scan->form->indnatts == scan->form->indnkeyatts) {
     scan->entries_only = true;
-    if (NULL != scan->cursor && 0 != sm_rel_scan_entries(scan->cursor))
+    if (NULL != scan->cursor && 0 != sm_row_scan_entries(scan->cursor))
       sm_error("scan an index");
   }
   while (smstore_index_getrowno(scan)) {
@@ -9401,7 +9401,7 @@ bool smstore_index_getentry(smstore_scan_t *scan, TupleTableSlot *slot) {
      * plan wants no column (smstore_index_nocols()).
      */
     if (scan->nocols && scan->entries_only && scan->cursor != NULL &&
-        sm_rel_scan_plain(scan->cursor)) {
+        sm_row_scan_plain(scan->cursor)) {
       memset(slot->tts_isnull, true,
              slot->tts_tupleDescriptor->natts * sizeof(bool));
       ExecStoreVirtualTuple(slot);
@@ -9411,7 +9411,7 @@ bool smstore_index_getentry(smstore_scan_t *scan, TupleTableSlot *slot) {
     switch (scan->point ? 1
             : scan->cursor != NULL
                 ? (scan->entries_only
-                       ? sm_rel_scan_cols(scan->cursor,
+                       ? sm_row_scan_cols(scan->cursor,
                                           (sm_datum_t *)slot->tts_values,
                                           slot->tts_isnull,
                                           scan->form->indnkeyatts)
@@ -9632,7 +9632,7 @@ static void scan_key(smstore_scan_t *scan, const void **key, size_t *len) {
     *len = scan->point_len;
   } else if (scan != NULL &&
              (scan->cursor != NULL
-                  ? sm_rel_scan_key(scan->cursor, key, len)
+                  ? sm_row_scan_key(scan->cursor, key, len)
                   : sm_idx_scan_row(scan->icursor, key, len)) != 0)
     sm_error("read a row's key");
 }

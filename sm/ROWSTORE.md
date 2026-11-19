@@ -1925,7 +1925,7 @@ Why it is laid out so:
 - **`sm_pin_deform(ref, from, n, values, isnull)`,
   `sm_pin_decode(ref, ordinal, val, isnull)`,
   `sm_pin_tuple(ref, tuple, len)`** read a pinned row.
-- **`sm_rel_scannxt`** has a form that hands back the row's ref,
+- **`sm_row_scannxt`** has a form that hands back the row's ref,
   not its bytes.
 - **`sm_tbl_read`, `sm_tbl_read_latest`, `sm_tbl_update`,
   `sm_tbl_delete`** take a ref and hand back a view.

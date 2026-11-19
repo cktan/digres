@@ -502,7 +502,7 @@ This is a reading, not a run. The spike is what tests it.
 | Path | The executor calls | The stack's calls | Fit |
 | --- | --- | --- | --- |
 | Open a relation | `table_open` with a lock mode | `sm_tbl_open(session, oid, IS or IX)` | fits; the lock is the table-oid lock |
-| Sequential scan | `table_beginscan`, `table_scan_getnextslot`, `table_rescan`, `table_endscan` | `sm_tbl_scan`, `sm_rel_scannxt`, `sm_rel_scanend`, then `sm_tbl_deform` into the slot | fits, forward only; a rescan is a new cursor |
+| Sequential scan | `table_beginscan`, `table_scan_getnextslot`, `table_rescan`, `table_endscan` | `sm_tbl_scan`, `sm_row_scannxt`, `sm_row_scanend`, then `sm_tbl_deform` into the slot | fits, forward only; a rescan is a new cursor |
 | Index scan | `index_beginscan`, `index_rescan` with scan keys, `index_getnext_slot`: a TID from the index, then `table_index_fetch_tuple` | `sm_tbl_idx_scan` with a low and a high bound, `sm_idx_scannxt` for a rowno, then `sm_tbl_read` | fits for ranges on a key prefix; see gaps 2, 5, 6 |
 | Insert | `table_tuple_insert`, then `ExecInsertIndexTuples` calling `index_insert` on each index | `sm_tbl_insert`, which writes the heap row and every index | fits, and simpler: the fork skips its own index maintenance |
 | Update | `table_tuple_update`, returning a `TM_Result` and saying which indexes to update | `sm_tbl_update` | fits; results map as in §9.2 |
@@ -546,7 +546,7 @@ the same error either way, and must not abort twice.
    side of a join, an index's heap fetch, the insert of
    `INSERT … SELECT`. By that promise every such row had to
    be copied. The stack in fact did better, and the header
-   now promises it: a row from `sm_rel_scannxt` or
+   now promises it: a row from `sm_row_scannxt` or
    `sm_idx_scannxt` lasts until the next call on that
    *cursor*, which is exactly what a scan slot needs, and a
    test holds it to that. A row from `sm_tbl_read` is the
@@ -641,7 +641,7 @@ What the fork calls, start to finish:
 | once a backend | `sm_opendb` |
 | `CREATE TABLE` | `sm_begin`, `sm_cat_create_table` with type codes 2, 3 or 4 ([`sm2/TYPE.md`](sm2/TYPE.md#3-the-types) §3), `sm_commit`; the fork keeps the oid it gets back |
 | `INSERT` | `sm_begin`, `sm_stmt_begin`, `sm_tbl_open` in IX, `sm_tbl_insert` with the slot's values and null flags, `sm_tbl_close`, `sm_commit` |
-| `SELECT` | `sm_begin`, `sm_stmt_begin`, `sm_tbl_open` in IS, `sm_tbl_scan` over every rowno, then for each row `sm_rel_scannxt` and `sm_tbl_deform` into the slot, `sm_rel_scanend`, `sm_tbl_close`, `sm_commit` |
+| `SELECT` | `sm_begin`, `sm_stmt_begin`, `sm_tbl_open` in IS, `sm_tbl_scan` over every rowno, then for each row `sm_row_scannxt` and `sm_tbl_deform` into the slot, `sm_row_scanend`, `sm_tbl_close`, `sm_commit` |
 
 Every call in it exists. One thing the fork has to mind even
 here, and one it no longer does:

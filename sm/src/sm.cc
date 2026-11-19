@@ -267,7 +267,7 @@ void view_out(std::string_view v, const void **data, size_t *len) {
 namespace {
 
 /* The sm3 cursor behind a C heap cursor. */
-sm3::scan_t *rel_scan_of(sm_rel_scan_t *scan) {
+sm3::scan_t *rel_scan_of(sm_row_scan_t *scan) {
   return reinterpret_cast<sm3::scan_t *>(scan);
 }
 
@@ -1246,7 +1246,7 @@ const char *sm_collation_version(const sm_collation_t *collation) {
  * The next row. A cursor call writes nothing, so it passes no
  * session: there is no half-done change for an abort to undo.
  */
-int sm_rel_scannxt(sm_rel_scan_t *scan, uint64_t *id, const void **tuple,
+int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, const void **tuple,
                    size_t *len) {
   return guard(nullptr, [&] {
     std::string_view v;
@@ -1259,7 +1259,7 @@ int sm_rel_scannxt(sm_rel_scan_t *scan, uint64_t *id, const void **tuple,
 }
 
 /* The next row, in the cursor's pin, which *ref then names. */
-int sm_rel_scannxt(sm_rel_scan_t *scan, uint64_t *id, sm_pin_ref_t *ref) {
+int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, sm_pin_ref_t *ref) {
   return guard(nullptr, [&] {
     sm3::pin_ref_t r;
     std::string_view v;
@@ -1270,27 +1270,27 @@ int sm_rel_scannxt(sm_rel_scan_t *scan, uint64_t *id, sm_pin_ref_t *ref) {
 }
 
 /* Move a table's cursor forward to _id id. */
-int sm_rel_scan_seek(sm_rel_scan_t *scan, uint64_t id) {
+int sm_row_scan_seek(sm_row_scan_t *scan, uint64_t id) {
   return guard(nullptr,
                [&] { return sm3::tbl_scan_seek(rel_scan_of(scan), id); });
 }
 
 /* Make a tree's cursor of rows an index-only scan's. */
-int sm_rel_scan_entries(sm_rel_scan_t *scan) {
+int sm_row_scan_entries(sm_row_scan_t *scan) {
   return guard(nullptr, [&] {
     if (!scan) {
-      return null_arg("sm_rel_scan_entries", "scan");
+      return null_arg("sm_row_scan_entries", "scan");
     }
     return sm3::tbl_scan_entries_only(rel_scan_of(scan));
   });
 }
 
 /* The key columns of a tree's cursor's last entry. */
-int sm_rel_scan_cols(sm_rel_scan_t *scan, sm_datum_t *values, bool *isnull,
+int sm_row_scan_cols(sm_row_scan_t *scan, sm_datum_t *values, bool *isnull,
                      size_t n) {
   return guard(nullptr, [&] {
     if (!scan || (n && (!values || !isnull))) {
-      return null_arg("sm_rel_scan_cols", !scan     ? "scan"
+      return null_arg("sm_row_scan_cols", !scan     ? "scan"
                                           : !values ? "values"
                                                     : "isnull");
     }
@@ -1301,18 +1301,18 @@ int sm_rel_scan_cols(sm_rel_scan_t *scan, sm_datum_t *values, bool *isnull,
 }
 
 /* Whether a tree's cursor's last entry is whole; see sm.h. */
-int sm_rel_scan_plain(const sm_rel_scan_t *scan) {
-  return sm3::tbl_scan_plain(rel_scan_of(const_cast<sm_rel_scan_t *>(scan)))
+int sm_row_scan_plain(const sm_row_scan_t *scan) {
+  return sm3::tbl_scan_plain(rel_scan_of(const_cast<sm_row_scan_t *>(scan)))
              ? 1
              : 0;
 }
 
 /* Aim a tree's cursor of rows at new bounds. */
-int sm_rel_scan_rebound(sm_rel_scan_t *scan, const sm_bound_t *lo,
+int sm_row_scan_rebound(sm_row_scan_t *scan, const sm_bound_t *lo,
                         const sm_bound_t *hi) {
   return guard(nullptr, [&] {
     if (bad_bound(lo) || bad_bound(hi)) {
-      return null_arg("sm_rel_scan_rebound", "a bound's prefix or isnull");
+      return null_arg("sm_row_scan_rebound", "a bound's prefix or isnull");
     }
     sm2::bound_t lo_b, hi_b;
     if (lo != nullptr) {
@@ -1328,10 +1328,10 @@ int sm_rel_scan_rebound(sm_rel_scan_t *scan, const sm_bound_t *lo,
 }
 
 /* The key of a cursor's last row. */
-int sm_rel_scan_key(sm_rel_scan_t *scan, const void **key, size_t *len) {
+int sm_row_scan_key(sm_row_scan_t *scan, const void **key, size_t *len) {
   return guard(nullptr, [&] {
     if (!scan || !key || !len) {
-      return null_arg("sm_rel_scan_key", !scan ? "scan" : !key ? "key" : "len");
+      return null_arg("sm_row_scan_key", !scan ? "scan" : !key ? "key" : "len");
     }
     view_out(sm3::tbl_scan_key(rel_scan_of(scan)), key, len);
     return 0;
@@ -1339,10 +1339,10 @@ int sm_rel_scan_key(sm_rel_scan_t *scan, const void **key, size_t *len) {
 }
 
 /* Move a cursor in key order forward to a key. */
-int sm_rel_scan_seek_key(sm_rel_scan_t *scan, const void *key, size_t len) {
+int sm_row_scan_seek_key(sm_row_scan_t *scan, const void *key, size_t len) {
   return guard(nullptr, [&] {
     if (!scan || (len && !key)) {
-      return null_arg("sm_rel_scan_seek_key", !scan ? "scan" : "key");
+      return null_arg("sm_row_scan_seek_key", !scan ? "scan" : "key");
     }
     return sm3::tbl_scan_seek_key(
         rel_scan_of(scan),
@@ -1351,7 +1351,7 @@ int sm_rel_scan_seek_key(sm_rel_scan_t *scan, const void *key, size_t len) {
 }
 
 /* Close a heap cursor, and release its pin. */
-void sm_rel_scanend(sm_rel_scan_t *scan) {
+void sm_row_scanend(sm_row_scan_t *scan) {
   sm3::tbl_scanend(rel_scan_of(scan));
 }
 
@@ -1370,7 +1370,7 @@ int sm_tup_encode(const std::vector<sm_attribute_t> &schema,
   });
 }
 
-/* The next entry; no session, as sm_rel_scannxt. */
+/* The next entry; no session, as sm_row_scannxt. */
 int sm_idx_scannxt(sm_idx_scan_t *scan, uint64_t *id, bool *cut,
                    const void **value, size_t *len) {
   return guard(nullptr, [&] {
@@ -2482,13 +2482,13 @@ int sm_tbl_truncate(sm_tbl_t *tbl) {
 
 /* Open a cursor over a table's rows. */
 int sm_tbl_scan(sm_tbl_t *tbl, uint64_t first, uint64_t last,
-                sm_rel_scan_t **out) {
+                sm_row_scan_t **out) {
   return guard(tbl->session, [&] {
     sm3::scan_t *scan = nullptr;
     if (sm3::tbl_scan(tbl->table, first, last, scan) != 0) {
       return -1;
     }
-    *out = reinterpret_cast<sm_rel_scan_t *>(scan);
+    *out = reinterpret_cast<sm_row_scan_t *>(scan);
     return 0;
   });
 }
@@ -2575,13 +2575,13 @@ int sm_tbl_idx_scan(sm_tbl_t *tbl, uint64_t index, const sm_bound_t *lo,
 }
 
 /* Open a cursor over every row of the table, in its key's order. */
-int sm_tbl_scan_rows(sm_tbl_t *tbl, sm_rel_scan_t **out) {
+int sm_tbl_scan_rows(sm_tbl_t *tbl, sm_row_scan_t **out) {
   return guard(tbl->session, [&] {
     sm3::scan_t *scan = nullptr;
     if (sm3::tbl_scan_rows(tbl->table, scan) != 0) {
       return -1;
     }
-    *out = reinterpret_cast<sm_rel_scan_t *>(scan);
+    *out = reinterpret_cast<sm_row_scan_t *>(scan);
     return 0;
   });
 }
@@ -2589,7 +2589,7 @@ int sm_tbl_scan_rows(sm_tbl_t *tbl, sm_rel_scan_t **out) {
 /* Open a cursor over the rows of the table's primary key. */
 int sm_tbl_idx_scan_rows(sm_tbl_t *tbl, uint64_t index, const sm_bound_t *lo,
                          const sm_bound_t *hi, bool *widened,
-                         sm_rel_scan_t **out) {
+                         sm_row_scan_t **out) {
   return guard(tbl->session, [&] {
     if (bad_bound(lo) || bad_bound(hi)) {
       return null_arg("sm_tbl_idx_scan_rows", "a bound's prefix or isnull");
@@ -2607,7 +2607,7 @@ int sm_tbl_idx_scan_rows(sm_tbl_t *tbl, uint64_t index, const sm_bound_t *lo,
             hi != nullptr ? &hi_b : nullptr, scan, widened) != 0) {
       return -1;
     }
-    *out = reinterpret_cast<sm_rel_scan_t *>(scan);
+    *out = reinterpret_cast<sm_row_scan_t *>(scan);
     return 0;
   });
 }

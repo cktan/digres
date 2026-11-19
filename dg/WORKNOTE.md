@@ -13479,3 +13479,22 @@ A check hook took the new value as a `char **`, to change it with
   `ssl_key_file`, and `server.sh` reloads `log_filename` with
   `logging_collector` on; both cover the moved settings. A race
   does not show in SQL.
+
+## Step 445: sm_rel_scan_t is sm_row_scan_t
+
+- **The name misled**: `rel` is sm2's word for its codec over a
+  store, and nothing else in `sm.h` used it. A host opens the
+  cursor from a table, and it gives rows: of the table, or of a
+  tree's rows in index order.
+- **The rename**: `sm_rel_scan_t` is `sm_row_scan_t`, and each
+  `sm_rel_scan*` call is `sm_row_scan*`, as `sm_row_scannxt`
+  and `sm_row_scanend`. `sm_idx_scan_t` gives index entries, so
+  the two cursors read as a row scan and an entry scan.
+- **Left on purpose**: the openers keep their names
+  (`sm_tbl_scan`, `sm_tbl_scan_rows`, `sm_tbl_idx_scan_rows`).
+  As `sm_tbl_scan_t`, the cursor's calls would sit among them,
+  `sm_tbl_scan_seek` next to `sm_tbl_scan_rows`, with different
+  handles. sm2's own `rel_scan_t` keeps its name: sm2 opens it
+  from an `sm2::rel_t`, so there the prefix names its handle.
+- **Older steps keep the old names**: they record the code as
+  it was named when each step was taken.

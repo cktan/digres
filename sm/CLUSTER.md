@@ -311,7 +311,7 @@ key pays a lookup a row. The arguments for a heap, answered:
   executor's fetch of a row a scan of the statement just handed
   out takes it from the scan's pin, with no read (`smstore.c`'s
   `scan_at()`). The scan is found by the key's encoding
-  (`sm_tbl_row_key`, `sm_rel_scan_key`, `sm_idx_scan_row`). The
+  (`sm_tbl_row_key`, `sm_row_scan_key`, `sm_idx_scan_row`). The
   key survives a sort or a hash.
 - **No bitmap scan is planned** of a table in sm (§10, question
   6): an index in sm has no `amgetbitmap`, and `smtable.c` no

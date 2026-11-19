@@ -106,7 +106,7 @@ DDL, and `rel` and `dg` cannot read `CF:meta`.
 
 **Closed 2026-11-08:** a cursor ended after its transaction was a
 double free: the end of a transaction freed sm1's cursor, and
-`sm_rel_scanend` and `sm_idx_scanend` then freed it again. The
+`sm_row_scanend` and `sm_idx_scanend` then freed it again. The
 end of a transaction now closes its cursors and frees none. A
 read on one fails with `SM_ERR_SCANCLOSED`; the caller's end
 frees it, and the session's next begin or its close frees one

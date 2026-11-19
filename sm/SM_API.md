@@ -107,17 +107,17 @@ sm_commit(sess);
 // 5. In a third transaction, scan the table and print each row.
 sm_begin(sess, SM_XCT_READ_COMMITTED, 1);      // 1: read only
 sm_tbl_open(sess, oid, SM_LOCKMODE_IS, &tbl);  // IS: we will read
-sm_rel_scan_t* scan;
+sm_row_scan_t* scan;
 sm_tbl_scan(tbl, 0, UINT64_MAX, &scan);        // every _id
 const void* tuple;
 size_t len;
-while (sm_rel_scannxt(scan, &id, &tuple, &len) == 0) {
+while (sm_row_scannxt(scan, &id, &tuple, &len) == 0) {
     sm_datum_t d;
     bool isnull;
     sm_tbl_deform(tbl, tuple, len, &d, &isnull, 1);
     printf("%lld\n", (long long)SM_DATUM_TO_INT64(d));
 }
-sm_rel_scanend(scan);                          // end the cursor first
+sm_row_scanend(scan);                          // end the cursor first
 sm_tbl_close(tbl);
 sm_commit(sess);
 
@@ -252,7 +252,7 @@ After it, a failed allocation ends the process.
 | `sm_env_t` | `sm_attach` | `sm_detach` | the attached home directory, and each database's catalog |
 | `sm_session_t` | `sm_opendb` | `sm_closedb`, or a forced `sm_detach` | one session on one database |
 | `sm_tbl_t` | `sm_tbl_open`, `sm_tbl_tryopen` | `sm_tbl_close` | one transaction; close it before or after that transaction ends |
-| `sm_rel_scan_t` | `sm_tbl_scan`, `sm_tbl_scan_rows`, `sm_tbl_idx_scan_rows` | `sm_rel_scanend` | one transaction; end it before the session's next begin |
+| `sm_row_scan_t` | `sm_tbl_scan`, `sm_tbl_scan_rows`, `sm_tbl_idx_scan_rows` | `sm_row_scanend` | one transaction; end it before the session's next begin |
 | `sm_idx_scan_t` | `sm_tbl_idx_scan` | `sm_idx_scanend` | one transaction; end it before the session's next begin |
 | `sm_stmt_t` | `sm_stmt_begin_inner`, `sm_stmt_resume`, `sm_stmt_save` | `sm_stmt_end`, or `sm_stmt_free` for a saved view | one transaction |
 | `sm_collation_t` | `sm_collation_open` | `sm_collation_close` | no session or environment |
@@ -264,7 +264,7 @@ A handle given to a call must not be NULL. Some calls check and
 fail with `SM_ERR_INVALID`, and the others read through it. These
 calls take NULL and do nothing: `sm_detach`, `sm_closedb`,
 `sm_unpin`, `sm_release_all_pins`, `sm_stmt_free`,
-`sm_collation_close`, `sm_rel_scanend`, `sm_idx_scanend` and
+`sm_collation_close`, `sm_row_scanend`, `sm_idx_scanend` and
 `sm_tbl_close`.
 
 ### Memory
@@ -282,12 +282,12 @@ it in place and copy only what it keeps:
 
 | Handed out by | Stays valid until |
 | --- | --- |
-| a cursor: `sm_rel_scannxt`, `sm_idx_scannxt` | the next call on that cursor, its close, or the end of its transaction; for `sm_rel_scannxt`, also `sm_release_all_pins` |
+| a cursor: `sm_row_scannxt`, `sm_idx_scannxt` | the next call on that cursor, its close, or the end of its transaction; for `sm_row_scannxt`, also `sm_release_all_pins` |
 | a point read: `sm_tbl_read`, `sm_tbl_read_latest` without a ref | the next call on the same session |
 | a read into a pin ref, or the old row of a write | the pin's release: the next read into the same ref, `sm_unpin`, `sm_release_all_pins`, `sm_prepare`, or the end of the transaction |
-| a cursor into a pin ref: `sm_rel_scannxt` with a ref | as the cursor's row: the ref goes stale with it |
+| a cursor into a pin ref: `sm_row_scannxt` with a ref | as the cursor's row: the ref goes stale with it |
 | `sm_tbl_deform`, `sm_tbl_decode`, `sm_tbl_idx_deform`, `sm_pin_deform`, `sm_pin_decode` | the life of the row given to them |
-| `sm_rel_scan_cols`, `sm_idx_scan_key` | the next call on the cursor |
+| `sm_row_scan_cols`, `sm_idx_scan_key` | the next call on the cursor |
 
 Other calls on the session, on its tables and on its other
 cursors leave a cursor's row alone. A cursor's current row
@@ -762,7 +762,7 @@ void sm_release_all_pins(sm_session_t* session);
 
 Releases every pin the session holds, and leaves the transaction
 open. Every ref to them goes stale. The current row of each
-`sm_rel_scan_t` of the session goes too, and its refs go stale,
+`sm_row_scan_t` of the session goes too, and its refs go stale,
 but the cursor keeps its pin.
 
 ### `sm_view_latest`
@@ -1270,9 +1270,9 @@ canonical text into `text`, as the type's typoutput does.
 ## Cursors over rows and index entries
 
 **In short.** To read many rows, open a cursor with a call from
-[Tables](#tables), then call `sm_rel_scannxt` (rows) or
+[Tables](#tables), then call `sm_row_scannxt` (rows) or
 `sm_idx_scannxt` (index entries) until it returns 1. Seek to move
-the cursor, and end it with `sm_rel_scanend` or `sm_idx_scanend`
+the cursor, and end it with `sm_row_scanend` or `sm_idx_scanend`
 before the next `sm_begin`. `sm_tup_encode` builds a tuple.
 
 The Row Store and the index modules hold the design
@@ -1284,19 +1284,19 @@ table, never through a heap or an index of its own. So no caller
 can change a row and leave its index entries behind
 ([`INDEXBUILD.md`](INDEXBUILD.md#2-the-protocol) §2).
 
-`sm_rel_scan_t` is a cursor over a table's rows, in their key's
+`sm_row_scan_t` is a cursor over a table's rows, in their key's
 order: `_id` order in a keyless table, the primary key's in a
 table with one. A tree's rows come in the tree's order.
 `sm_idx_scan_t` is a cursor over an index's entries, in key
 order. `sm_tbl_scan`, `sm_tbl_scan_rows`, `sm_tbl_idx_scan_rows`
 and `sm_tbl_idx_scan`, under Tables, open them.
 
-### `sm_rel_scannxt`
+### `sm_row_scannxt`
 
 ```cpp
-int sm_rel_scannxt(sm_rel_scan_t* scan, uint64_t* id, const void** tuple,
+int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, const void** tuple,
                    size_t* len);
-int sm_rel_scannxt(sm_rel_scan_t* scan, uint64_t* id, sm_pin_ref_t* ref);
+int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, sm_pin_ref_t* ref);
 ```
 
 Moves to the next row. Returns 0 with it, 1 at the end, or -1.
@@ -1307,15 +1307,15 @@ Moves to the next row. Returns 0 with it, 1 at the end, or -1.
   names it, for `sm_pin_deform`. `*ref` is zero on 1 or -1. The
   cursor's next call, its close, `sm_release_all_pins` and the
   end of its transaction make the ref stale.
-- On a cursor set by `sm_rel_scan_entries`, an entry with its row
+- On a cursor set by `sm_row_scan_entries`, an entry with its row
   unread leaves `*ref` zero on 0.
 
 Errors: `SM_ERR_SCANCLOSED`.
 
-### `sm_rel_scan_seek`
+### `sm_row_scan_seek`
 
 ```cpp
-int sm_rel_scan_seek(sm_rel_scan_t* scan, uint64_t id);
+int sm_row_scan_seek(sm_row_scan_t* scan, uint64_t id);
 ```
 
 Moves a cursor over a keyless table's rows forward to `_id` `id`.
@@ -1323,52 +1323,52 @@ Moves a cursor over a keyless table's rows forward to `_id` `id`.
 Errors: `SM_ERR_INVALID` (a backward move, a cursor in key order,
 or a tree's cursor).
 
-### `sm_rel_scan_entries`
+### `sm_row_scan_entries`
 
 ```cpp
-int sm_rel_scan_entries(sm_rel_scan_t* scan);
+int sm_row_scan_entries(sm_row_scan_t* scan);
 ```
 
 Makes a cursor of a tree's rows an index-only scan's
 ([`BTREEINDEX.md`](BTREEINDEX.md#8-the-in-doubt-bit-and-the-all-visible-flag)
 §8). An entry on a leaf vacuum found all
 visible, whose key gives its columns back, then comes with its
-row unread. `sm_rel_scannxt`'s `*ref` names no row for such an
-entry, and `sm_rel_scan_cols` gives its columns.
+row unread. `sm_row_scannxt`'s `*ref` names no row for such an
+entry, and `sm_row_scan_cols` gives its columns.
 
 Errors: `SM_ERR_INVALID` (any other cursor).
 
-### `sm_rel_scan_cols`
+### `sm_row_scan_cols`
 
 ```cpp
-int sm_rel_scan_cols(sm_rel_scan_t* scan, sm_datum_t* values, bool* isnull,
+int sm_row_scan_cols(sm_row_scan_t* scan, sm_datum_t* values, bool* isnull,
                      size_t n);
 ```
 
 Gives the key columns of the entry of a tree's rows that
-`sm_rel_scannxt` last gave, as `sm_idx_scan_key` does. `n` is the
+`sm_row_scannxt` last gave, as `sm_idx_scan_key` does. `n` is the
 index's key column count. Returns 0, or 1 if the key does not
 give them back and the row, which the cursor read, has them.
 
 Errors: `SM_ERR_INVALID` (not a tree's cursor, no entry yet, or
 the wrong `n`).
 
-### `sm_rel_scan_plain`
+### `sm_row_scan_plain`
 
 ```cpp
-int sm_rel_scan_plain(const sm_rel_scan_t* scan);
+int sm_row_scan_plain(const sm_row_scan_t* scan);
 ```
 
-Tells whether the entry of a tree's rows that `sm_rel_scannxt`
+Tells whether the entry of a tree's rows that `sm_row_scannxt`
 last gave is whole. Returns 1 if its key is not cut and gives its
-columns back, so that `sm_rel_scan_cols` would return 0. Returns
+columns back, so that `sm_row_scan_cols` would return 0. Returns
 0 otherwise, and if the cursor has no entry. It decodes nothing.
 
 A host whose scan bounds already hold a key of every whole entry,
 and whose plan reads no column, calls this in place of
-`sm_rel_scan_cols`. A cut entry still needs its row.
+`sm_row_scan_cols`. A cut entry still needs its row.
 
-### `sm_rel_scan_rebound`
+### `sm_row_scan_rebound`
 
 ```cpp
 struct sm_bound_t {
@@ -1378,7 +1378,7 @@ struct sm_bound_t {
     bool                  inclusive;
 };
 
-int sm_rel_scan_rebound(sm_rel_scan_t* scan, const sm_bound_t* lo,
+int sm_row_scan_rebound(sm_row_scan_t* scan, const sm_bound_t* lo,
                         const sm_bound_t* hi);
 ```
 
@@ -1387,27 +1387,27 @@ columns, with a null flag for each. `inclusive` says whether an
 entry equal to them is inside the bound. Bounds are in the
 index's own order, after direction and null ordering.
 
-`sm_rel_scan_rebound` aims a cursor of a tree's rows at the rows
+`sm_row_scan_rebound` aims a cursor of a tree's rows at the rows
 between `lo` and `hi`, as if opened anew: an IN list's next
 probe, with no new cursor. Either bound may be NULL for none.
 
 Errors: `SM_ERR_INVALID` (any other cursor, or a bound with `n`
 and no arrays).
 
-### `sm_rel_scan_key`
+### `sm_row_scan_key`
 
 ```cpp
-int sm_rel_scan_key(sm_rel_scan_t* scan, const void** key, size_t* len);
+int sm_row_scan_key(sm_row_scan_t* scan, const void** key, size_t* len);
 ```
 
-Gives the row key of the row `sm_rel_scannxt` last gave, as
+Gives the row key of the row `sm_row_scannxt` last gave, as
 `sm_tbl_row_key` encodes a row's name. Call it only after
-`sm_rel_scannxt` returned a row. The key is valid as the row is.
+`sm_row_scannxt` returned a row. The key is valid as the row is.
 
-### `sm_rel_scan_seek_key`
+### `sm_row_scan_seek_key`
 
 ```cpp
-int sm_rel_scan_seek_key(sm_rel_scan_t* scan, const void* key, size_t len);
+int sm_row_scan_seek_key(sm_row_scan_t* scan, const void* key, size_t len);
 ```
 
 Moves a cursor in key order forward to `key`, a row key as
@@ -1416,10 +1416,10 @@ it.
 
 Errors: `SM_ERR_INVALID` (a backward move, or a tree's cursor).
 
-### `sm_rel_scanend`
+### `sm_row_scanend`
 
 ```cpp
-void sm_rel_scanend(sm_rel_scan_t* scan);
+void sm_row_scanend(sm_row_scan_t* scan);
 ```
 
 Closes a cursor and releases its pin.
@@ -2608,7 +2608,7 @@ int sm_tbl_row_key(sm_tbl_t* tbl, const sm_row_key_t& key, std::string& out);
 ```
 
 Sets `out` to the row key of the row `key` names, past the
-table's relid: what `sm_rel_scan_key` gives of a row a cursor is
+table's relid: what `sm_row_scan_key` gives of a row a cursor is
 on, to tell two rows apart.
 
 ### `sm_tbl_truncate`
@@ -2632,7 +2632,7 @@ Errors: `SM_ERR_INVALID` (the handle does not hold the table
 
 ```cpp
 int sm_tbl_scan(sm_tbl_t* tbl, uint64_t first, uint64_t last,
-                sm_rel_scan_t** out);
+                sm_row_scan_t** out);
 ```
 
 Opens a cursor over the rows with `_id` `first` to `last`, both
@@ -2755,7 +2755,7 @@ Errors: `SM_ERR_NOTFOUND` (the table has no such index),
 ### `sm_tbl_scan_rows`
 
 ```cpp
-int sm_tbl_scan_rows(sm_tbl_t* tbl, sm_rel_scan_t** out);
+int sm_tbl_scan_rows(sm_tbl_t* tbl, sm_row_scan_t** out);
 ```
 
 Opens a cursor over each row of the table, in its key's order:
@@ -2768,7 +2768,7 @@ sequential scan reads this.
 ```cpp
 int sm_tbl_idx_scan_rows(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
                          const sm_bound_t* hi, bool* widened,
-                         sm_rel_scan_t** out);
+                         sm_row_scan_t** out);
 ```
 
 Opens a cursor over the rows of `index`, between `lo` and `hi` as
