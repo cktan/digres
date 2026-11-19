@@ -33,40 +33,40 @@
 #     the transaction as it does on any table.
 (session-use s1)
 (begin :rc)
-(temp-table-create scratch (columns (id :int4 :not-null) (v :text)))
-(index-create scratch_id (table scratch) (key (id :asc)) :unique true)
-(insert scratch [1 "one"])
-(insert scratch [2 "two"])
+    (temp-table-create scratch (columns (id :int4 :not-null) (v :text)))
+    (index-create scratch_id (table scratch) (key (id :asc)) :unique true)
+    (insert scratch [1 "one"])
+    (insert scratch [2 "two"])
 (commit)
 (begin :rc)
-(assert-count 2 (scan scratch))
-(assert-count 2 (idx-scan scratch_id))
-(assert-eq
-  (fails? (fn [] (temp-table-create scratch (columns (id :int4)))))
-  true)
+    (assert-count 2 (scan scratch))
+    (assert-count 2 (idx-scan scratch_id))
+    (assert-eq
+      (fails? (fn [] (temp-table-create scratch (columns (id :int4)))))
+      true)
 (commit)
 (begin :rc)
-(assert-eq (fails? (fn [] (insert scratch [2 "again"]))) true)
+    (assert-eq (fails? (fn [] (insert scratch [2 "again"]))) true)
 
-# 2. Another session.
-# 2.1 s2 cannot scan scratch, and its list of tables has none.
-# 2.2 s2 creates its own scratch, which starts empty.
-# 2.3 s1 still has its two rows, and s2 its one.
-(session-use s2)
+    # 2. Another session.
+    # 2.1 s2 cannot scan scratch, and its list of tables has none.
+    # 2.2 s2 creates its own scratch, which starts empty.
+    # 2.3 s1 still has its two rows, and s2 its one.
+    (session-use s2)
 (begin :rc)
-(assert-eq (fails? (fn [] (scan scratch))) true)
-(assert-count 0 (list-tables))
-(temp-table-create scratch (columns (id :int4 :not-null)))
-(assert-count 0 (scan scratch))
-(insert scratch [9])
+    (assert-eq (fails? (fn [] (scan scratch))) true)
+    (assert-count 0 (list-tables))
+    (temp-table-create scratch (columns (id :int4 :not-null)))
+    (assert-count 0 (scan scratch))
+    (insert scratch [9])
 (commit)
 (session-use s1)
 (begin :rc)
-(assert-count 2 (scan scratch))
+    (assert-count 2 (scan scratch))
 (commit)
 (session-use s2)
 (begin :rc)
-(assert-count 1 (scan scratch))
+    (assert-count 1 (scan scratch))
 (commit)
 
 # 3. Abort and savepoints.
@@ -75,23 +75,23 @@
 # 3.3 A temporary table created and aborted is gone.
 (session-use s1)
 (begin :rc)
-(insert scratch [3 "three"])
+    (insert scratch [3 "three"])
 (abort)
 (begin :rc)
-(assert-count 2 (scan scratch))
-(def sp (savepoint))
-(insert scratch [3 "three"])
-(assert-count 3 (scan scratch))
-(rollback sp)
-(assert-count 2 (scan scratch))
-(assert-count 2 (idx-scan scratch_id))
+    (assert-count 2 (scan scratch))
+    (def sp (savepoint))
+        (insert scratch [3 "three"])
+        (assert-count 3 (scan scratch))
+    (rollback sp)
+    (assert-count 2 (scan scratch))
+    (assert-count 2 (idx-scan scratch_id))
 (commit)
 (begin :rc)
-(temp-table-create gone (columns (x :int4)))
-(insert gone [1])
+    (temp-table-create gone (columns (x :int4)))
+    (insert gone [1])
 (abort)
 (begin :rc)
-(assert-eq (fails? (fn [] (scan gone))) true)
+    (assert-eq (fails? (fn [] (scan gone))) true)
 (commit)
 
 # 4. A temporary table hides one in public.
@@ -100,21 +100,21 @@
 # 4.3 s2 still finds the public one, with its row.
 # 4.4 s1 drops the temporary one, and finds the public one again.
 (begin :rc)
-(table-create shared (columns (x :int4)))
-(insert shared [1])
+    (table-create shared (columns (x :int4)))
+    (insert shared [1])
 (commit)
 (begin :rc)
-(temp-table-create shared (columns (x :int4)))
-(assert-count 0 (scan shared))
+    (temp-table-create shared (columns (x :int4)))
+    (assert-count 0 (scan shared))
 (commit)
 (session-use s2)
 (begin :rc)
-(assert-count 1 (scan shared))
+    (assert-count 1 (scan shared))
 (commit)
 (session-use s1)
 (begin :rc)
-(table-drop shared)
-(assert-count 1 (scan shared))
+    (table-drop shared)
+    (assert-count 1 (scan shared))
 (commit)
 
 # 5. A read-only transaction.
@@ -122,20 +122,20 @@
 # 5.2 It creates a temporary table, inserts a row and commits.
 # 5.3 The row is there afterwards.
 (begin :rc :read-only)
-(assert-eq (fails? (fn [] (insert shared [2]))) true)
+    (assert-eq (fails? (fn [] (insert shared [2]))) true)
 (abort)
 (begin :rc :read-only)
-(temp-table-create ro (columns (x :int4)))
-(insert ro [1])
+    (temp-table-create ro (columns (x :int4)))
+    (insert ro [1])
 (commit)
 (begin :rc)
-(assert-count 1 (scan ro))
+    (assert-count 1 (scan ro))
 (commit)
 
 # 6. No prepare after a write to a temporary table.
 (begin :rc)
-(insert ro [2])
-(assert-eq (fails? (fn [] (prepare "g_temp"))) true)
+    (insert ro [2])
+    (assert-eq (fails? (fn [] (prepare "g_temp"))) true)
 (abort)
 
 # 7. The end of the session.
@@ -145,9 +145,9 @@
 (session-open s1 "tmpdb")
 (session-use s1)
 (begin :rc)
-(assert-eq (fails? (fn [] (scan scratch))) true)
-(assert-eq (fails? (fn [] (scan ro))) true)
-(assert-count 1 (scan shared))
+    (assert-eq (fails? (fn [] (scan scratch))) true)
+    (assert-eq (fails? (fn [] (scan ro))) true)
+    (assert-count 1 (scan shared))
 (commit)
 
 (session-close s1)

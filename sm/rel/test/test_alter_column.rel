@@ -20,45 +20,45 @@
 (db-open "acdb")
 
 (begin :rc)
-(table-create t
-  (columns (k :int4)
-           (a :int4 :not-null)
-           (b :text)
-           (c :timestamptz :default "CURRENT_TIMESTAMP"
-              :on-update "CURRENT_TIMESTAMP"))
-  (primary-key k))
+    (table-create t
+      (columns (k :int4)
+               (a :int4 :not-null)
+               (b :text)
+               (c :timestamptz :default "CURRENT_TIMESTAMP"
+                  :on-update "CURRENT_TIMESTAMP"))
+      (primary-key k))
 (commit)
 
 # 1. NOT NULL dropped, then set again.
 (begin :rc)
-(drop-not-null t a)
-(def r1 (insert t [1 nil nil nil]))
+    (drop-not-null t a)
+    (def r1 (insert t [1 nil nil nil]))
 (commit)
 (begin :rc)
-(insert t [2 2 nil nil])
-(assert-err :err-notnull (set-not-null t a))
+    (insert t [2 2 nil nil])
+    (assert-err :err-notnull (set-not-null t a))
 (abort)
 
 # 2. A column with a null keeps nullable; one without is NOT NULL.
 (begin :rc)
-(assert-err :err-notnull (set-not-null t b))
+    (assert-err :err-notnull (set-not-null t b))
 (abort)
 (begin :rc)
-(update t r1 [1 1 "x" nil])
-(set-not-null t a)
-(assert-err :err-notnull (insert t [3 nil "y" nil]))
+    (update t r1 [1 1 "x" nil])
+    (set-not-null t a)
+    (assert-err :err-notnull (insert t [3 nil "y" nil]))
 (abort)
 
 # 3. A primary key's column.
 (begin :rc)
-(assert-err :err-inuse (drop-not-null t k))
+    (assert-err :err-inuse (drop-not-null t k))
 (abort)
 
 # 4. A default set, then replaced.
 (begin :rc)
-(set-default t b "'none'")
-(set-default t b "'empty'")
-(set-default t c "LOCALTIMESTAMP")
+    (set-default t b "'none'")
+    (set-default t b "'empty'")
+    (set-default t c "LOCALTIMESTAMP")
 (commit)
 
 # 5. After a reopen; then a default dropped.
@@ -67,15 +67,15 @@
 (env-attach test-dir)
 (db-open "acdb")
 (begin :rc)
-(assert-eq ((describe-table t) :columns)
-           '[[k :int4 :not-null]
-             [a :int4]
-             [b :text :default "'empty'"]
-             [c :timestamptz :default "LOCALTIMESTAMP"
-                :on-update "CURRENT_TIMESTAMP"]])
-(set-default t c)
-(assert-eq (((describe-table t) :columns) 3)
-           '[c :timestamptz :on-update "CURRENT_TIMESTAMP"])
+    (assert-eq ((describe-table t) :columns)
+               '[[k :int4 :not-null]
+                 [a :int4]
+                 [b :text :default "'empty'"]
+                 [c :timestamptz :default "LOCALTIMESTAMP"
+                    :on-update "CURRENT_TIMESTAMP"]])
+    (set-default t c)
+    (assert-eq (((describe-table t) :columns) 3)
+               '[c :timestamptz :on-update "CURRENT_TIMESTAMP"])
 (commit)
 
 (db-close)

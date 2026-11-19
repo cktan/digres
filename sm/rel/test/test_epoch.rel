@@ -24,8 +24,8 @@
 # A table to read and write, made before the epochs are noted.
 (session-use s1)
 (begin :rc)
-(table-create jobs (columns (id :int4 :not-null) (owner :text)))
-(for i 1 201 (insert jobs [i (string "w" (% i 7))]))
+    (table-create jobs (columns (id :int4 :not-null) (owner :text)))
+    (for i 1 201 (insert jobs [i (string "w" (% i 7))]))
 (commit)
 
 # 1. No DDL, no move.
@@ -33,8 +33,8 @@
 # 1.2 The epoch is as it was, in both sessions.
 (def e0 (cat-epoch))
 (begin :rc)
-(insert jobs [201 "w0"])
-(assert-count 201 (scan jobs))
+    (insert jobs [201 "w0"])
+    (assert-count 201 (scan jobs))
 (commit)
 (assert-eq (cat-epoch) e0)
 (session-use s2)
@@ -46,9 +46,9 @@
 # 2.3 Committed, the epoch has moved, and s2 reads the same.
 (session-use s1)
 (begin :rc)
-(table-create more (columns (id :int4)))
-(assert-eq (cat-epoch) :own)
-(session-use s2)
+    (table-create more (columns (id :int4)))
+    (assert-eq (cat-epoch) :own)
+    (session-use s2)
 (assert-eq (cat-epoch) e0)
 (session-use s1)
 (commit)
@@ -63,22 +63,22 @@
 #     until then, e1 after, though the transaction goes on.
 (session-use s1)
 (begin :rc)
-(table-create gone (columns (id :int4)))
+    (table-create gone (columns (id :int4)))
 (abort)
 (assert-eq (cat-epoch) e1)
 (begin :rc)
-(def sp (savepoint))
-(table-create gone (columns (id :int4)))
-(assert-eq (cat-epoch) :own)
-(rollback sp)
-(assert-eq (cat-epoch) e1)
+    (def sp (savepoint))
+        (table-create gone (columns (id :int4)))
+        (assert-eq (cat-epoch) :own)
+    (rollback sp)
+    (assert-eq (cat-epoch) e1)
 (commit)
 (assert-eq (cat-epoch) e1)
 
 # 4. An analyze: :own until it commits, then moved.
 (begin :rc)
-(analyze jobs 10)
-(assert-eq (cat-epoch) :own)
+    (analyze jobs 10)
+    (assert-eq (cat-epoch) :own)
 (commit)
 (def e2 (cat-epoch))
 (assert-eq (> e2 e1) true)
@@ -87,7 +87,7 @@
 #    publish and its being made valid another, and each moves the
 #    epoch by one, so once it is valid the epoch is two past.
 (begin :rc)
-(index-create jobs_owner (table jobs) (key (owner :asc)) :unique false)
+    (index-create jobs_owner (table jobs) (key (owner :asc)) :unique false)
 (commit)
 (index-wait jobs_owner)
 (def e4 (cat-epoch))
@@ -98,8 +98,8 @@
 # 6.2 s2 reads the epoch as it was.
 # 6.3 s1 drops it: moved again for s1, not for s2.
 (begin :rc)
-(temp-table-create scratch (columns (id :int4)))
-(assert-eq (cat-epoch) :own)
+    (temp-table-create scratch (columns (id :int4)))
+    (assert-eq (cat-epoch) :own)
 (commit)
 (def e5 (cat-epoch))
 (assert-eq (> e5 e4) true)
@@ -107,7 +107,7 @@
 (assert-eq (cat-epoch) e4)
 (session-use s1)
 (begin :rc)
-(table-drop scratch)
+    (table-drop scratch)
 (commit)
 (assert-eq (> (cat-epoch) e5) true)
 (session-use s2)

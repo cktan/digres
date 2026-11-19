@@ -26,13 +26,13 @@
 
 # 1. Made with update defaults.
 (begin :rc)
-(table-create job
-  (columns (id :int8 :not-null)
-           (state :int4 :not-null :on-update "1")
-           (mtime :timestamptz :on-update "CURRENT_TIMESTAMP")
-           (note :text :on-update "'changed'")
-           (ctime :timestamptz)))
-(assert-eq (describe-table job) described)
+    (table-create job
+      (columns (id :int8 :not-null)
+               (state :int4 :not-null :on-update "1")
+               (mtime :timestamptz :on-update "CURRENT_TIMESTAMP")
+               (note :text :on-update "'changed'")
+               (ctime :timestamptz)))
+    (assert-eq (describe-table job) described)
 (commit)
 
 # 2. Kept across a reopen.
@@ -41,15 +41,15 @@
 (env-attach test-dir)
 (db-open "oudb")
 (begin :rc)
-(assert-eq (describe-table job) described)
+    (assert-eq (describe-table job) described)
 (commit)
 
 # 3. :on-update takes a string.
 (begin :rc)
-(def msg (try (do (table-create bad (columns (t :int4 :on-update :now)))
-                  "no error")
-              ([e] (string e))))
-(assert-eq msg "table-create: column 't' takes :on-update and a string")
+    (def msg (try (do (table-create bad (columns (t :int4 :on-update :now)))
+                      "no error")
+                  ([e] (string e))))
+    (assert-eq msg "table-create: column 't' takes :on-update and a string")
 (abort)
 
 (db-close)

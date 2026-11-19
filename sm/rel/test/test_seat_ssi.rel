@@ -54,19 +54,19 @@
 
 (session-use "default")
 (begin :rc)
-(table-create enr_tree
-  (columns (student_id :int8 :not-null) (class_id :int8 :not-null))
-  (primary-key student_id class_id))
-(index-create enr_tree_class (table enr_tree)
-  (key (class_id :asc) (student_id :asc)) :tree true)
-(table-create enr_lsm
-  (columns (student_id :int8 :not-null) (class_id :int8 :not-null))
-  (primary-key student_id class_id))
-(index-create enr_lsm_class (table enr_lsm)
-  (key (class_id :asc) (student_id :asc)))
-(each row [[1 1] [2 1] [3 2] [4 2]]
-  (insert enr_tree row)
-  (insert enr_lsm row))
+    (table-create enr_tree
+      (columns (student_id :int8 :not-null) (class_id :int8 :not-null))
+      (primary-key student_id class_id))
+    (index-create enr_tree_class (table enr_tree)
+      (key (class_id :asc) (student_id :asc)) :tree true)
+    (table-create enr_lsm
+      (columns (student_id :int8 :not-null) (class_id :int8 :not-null))
+      (primary-key student_id class_id))
+    (index-create enr_lsm_class (table enr_lsm)
+      (key (class_id :asc) (student_id :asc)))
+    (each row [[1 1] [2 1] [3 2] [4 2]]
+      (insert enr_tree row)
+      (insert enr_lsm row))
 (commit)
 (index-wait enr_tree_class)
 (index-wait enr_lsm_class)

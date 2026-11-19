@@ -398,6 +398,11 @@ constants in `sm.h`.
   as the session sees them.
 - `sm3/test/test_view.cc`: a Namespace holding a view.
 - `rel/test/test_catalog.rel`: Namespaces through the C API:
-  create, abort, a taken name, a built-in refused.
+  create, abort, a rollback to a savepoint, a taken name, a
+  built-in refused.
+- `rel/test/test_blocking.rel`: two sessions create one name; the
+  second blocks, then fails if the first commits, and goes ahead
+  if it aborts. A drop and a create in the Namespace: the second
+  blocks, then fails once the first commits.
 - `../dg/test/server.sh`: a new schema replans a held session, by
   the epoch.

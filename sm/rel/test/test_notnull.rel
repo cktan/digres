@@ -19,25 +19,25 @@
 
 # 1. Named by sm.
 (begin :rc)
-(table-create t
-  (columns (k :int4) (a :int4 :not-null) (b :text) (c :text))
-  (primary-key k))
-(assert-eq (not-nulls t) '[[k "t_k_not_null"] [a "t_a_not_null"]])
+    (table-create t
+      (columns (k :int4) (a :int4 :not-null) (b :text) (c :text))
+      (primary-key k))
+    (assert-eq (not-nulls t) '[[k "t_k_not_null"] [a "t_a_not_null"]])
 (commit)
 
 # 2. Named by the caller.
 (begin :rc)
-(set-not-null t b b_set)
-(assert-err :err-dupkey (set-not-null t c b_set))
+    (set-not-null t b b_set)
+    (assert-err :err-dupkey (set-not-null t c b_set))
 (abort)
 (begin :rc)
-(set-not-null t b b_set)
+    (set-not-null t b b_set)
 (commit)
 
 # 3. Renamed.
 (begin :rc)
-(rename-not-null t b b_given)
-(assert-err :err-dupkey (rename-not-null t a t_k_not_null))
+    (rename-not-null t b b_given)
+    (assert-err :err-dupkey (rename-not-null t a t_k_not_null))
 (commit)
 
 # 4. After a reopen; then one dropped.
@@ -46,10 +46,10 @@
 (env-attach test-dir)
 (db-open "nndb")
 (begin :rc)
-(assert-eq (not-nulls t)
-           '[[k "t_k_not_null"] [a "t_a_not_null"] [b "b_given"]])
-(drop-not-null t a)
-(assert-eq (not-nulls t) '[[k "t_k_not_null"] [b "b_given"]])
+    (assert-eq (not-nulls t)
+               '[[k "t_k_not_null"] [a "t_a_not_null"] [b "b_given"]])
+    (drop-not-null t a)
+    (assert-eq (not-nulls t) '[[k "t_k_not_null"] [b "b_given"]])
 (commit)
 
 (db-close)

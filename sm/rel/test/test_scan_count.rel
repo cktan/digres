@@ -22,31 +22,31 @@
 
 # 2. 50 rows, every fifth deleted.
 (begin :rc)
-(table-create t (columns (n :int4 :not-null) (v :text)))
-(def ids (seq [i :range [0 50]] (insert t [i (string "row " i)])))
+    (table-create t (columns (n :int4 :not-null) (v :text)))
+    (def ids (seq [i :range [0 50]] (insert t [i (string "row " i)])))
 (commit)
 (begin :rc)
-(eachp [i id] ids
-  (when (zero? (% i 5)) (delete t id)))
+    (eachp [i id] ids
+      (when (zero? (% i 5)) (delete t id)))
 (commit)
 
 # 3. Each range counted as scan gives it.
 (begin :rc)
-(defn same [& bounds]
-  (def n (length (scan t ;bounds)))
-  (assert-eq (scan-count t ;bounds) n)
-  n)
-(assert-eq (same) 40)
-(assert-eq (same :from (ids 10) :to (ids 29)) 16)
-(assert-eq (same :from (ids 11) :to (ids 11)) 1)
-(assert-eq (same :from (ids 10) :to (ids 10)) 0)
-(assert-eq (same :from (+ (last ids) 1)) 0)
+    (defn same [& bounds]
+      (def n (length (scan t ;bounds)))
+      (assert-eq (scan-count t ;bounds) n)
+      n)
+    (assert-eq (same) 40)
+    (assert-eq (same :from (ids 10) :to (ids 29)) 16)
+    (assert-eq (same :from (ids 11) :to (ids 11)) 1)
+    (assert-eq (same :from (ids 10) :to (ids 10)) 0)
+    (assert-eq (same :from (+ (last ids) 1)) 0)
 (commit)
 
 # 4. No such table.
 (begin :rc)
-(def err (try (do (scan-count nosuch) "no error") ([e] (string e))))
-(assert-eq (truthy? (string/find "scan-count: table 'nosuch' not found" err)) true)
+    (def err (try (do (scan-count nosuch) "no error") ([e] (string e))))
+    (assert-eq (truthy? (string/find "scan-count: table 'nosuch' not found" err)) true)
 (abort)
 
 (db-close)

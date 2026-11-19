@@ -332,12 +332,12 @@ and never recycled on abort.
 
 Define and manage tables, their primary keys, and secondary
 indexes. Tables and indexes live in sm3's catalog, in the
-`public` namespace. Every DDL statement runs in the active
-transaction: it is undone by `(abort)` or `(rollback sp)`, seen
-by other sessions only once committed, and kept across a
-restart.
+`public` namespace unless `table-create` names another. Every
+DDL statement runs in the active transaction: it is undone by
+`(abort)` or `(rollback sp)`, seen by other sessions only once
+committed, and kept across a restart.
 
-### `(table-create name (columns ...) [(primary-key c...)])`
+### `(table-create name (columns ...) [(primary-key c...)] [:namespace nsp])`
 Defines and creates a table, backed by a store and an `_id`
 sequence of its own. Without `(primary-key ...)` its rows are
 named by `_id`. With it, the columns named are the table's
@@ -347,6 +347,12 @@ table's rows are keyed by it ([`../CLUSTER.md`](../CLUSTER.md)),
 named by their
 key's values (§6). A second `(primary-key ...)` clause, one of
 no column, or one of a column not there, panics.
+
+With `:namespace nsp`, the table is made in the namespace `nsp`,
+not in `public`. A namespace not there panics. The other
+primitives look up a table in `public` alone, so they do not
+find such a table by its name: it is there to hold its
+namespace, as a test of a namespace's drop needs.
 
 Supported column types:
 - Integer: `:int2`, `:int4`, `:int8`
@@ -460,8 +466,7 @@ transaction. A name another namespace has is refused.
 (namespace-create app)
 ```
 
-Tables are still made in `public`: `rel` has no way to name
-another namespace for one.
+`(table-create ... :namespace app)` makes a table in it.
 
 ### `(namespace-drop name)`
 Drops the namespace `name`. One that holds a table or a
@@ -1095,4 +1100,51 @@ To expect any error, catch it with `try`:
 
 ```janet
 (assert-eq (try (do (insert users [1 "Bob"]) false) ([err] true)) true)
+```
+
+---
+
+## 9. Script Layout
+
+The tests in `test/*.rel` show each transaction and savepoint by
+indentation. The rules apply to top-level forms. A form inside a
+`defn` or a loop keeps Janet's own indentation.
+
+- A form is indented 4 spaces while the active session has an
+  open transaction.
+- `(begin ...)`, `(commit)`, `(abort)` and `(prepare gid)` stay
+  at column 0.
+- A savepoint adds 4 spaces, from `(def sp (savepoint))` to its
+  `(rollback sp)` or `(forget sp)`. The savepoint and its
+  rollback or forget are at the indent of the transaction around
+  them. A rollback or forget closes the savepoints inside it
+  too.
+- Each session has its own indent. A `(session-use s1)` inside
+  s2's transaction is indented, and the forms after it take s1's
+  indent.
+- A comment takes the indent of the form after it.
+- The lines of a multi-line form move with its first line.
+
+An error that ends a transaction, such as a failed serializable
+commit, leaves no `(commit)` or `(abort)`. The forms after it
+stay indented until the next `(begin ...)`.
+
+```janet
+(session-use s1)
+(begin :rc)
+    (table-create orders (columns (x :int4)) :namespace lang)
+    (session-use s2)
+(begin :rc)
+    (assert-err :err-blocked (namespace-drop lang))
+    (session-use s1)
+(commit)
+(session-use s2)
+    (assert-err :err-inuse (namespace-drop lang))
+(abort)
+(begin :rc)
+    (def sp (savepoint))
+        (namespace-create tmp)
+    (rollback sp)
+    (forget sp)
+(commit)
 ```

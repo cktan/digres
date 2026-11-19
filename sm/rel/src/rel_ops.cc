@@ -686,8 +686,8 @@ static std::vector<int32_t> key_places(const std::vector<col_def_t> &columns,
 }
 
 /*
- * (table-create name (columns ...) [(primary-key c...)]) and
- * (temp-table-create ...)
+ * (table-create name (columns ...) [(primary-key c...)] [:namespace nsp])
+ * and (temp-table-create ...)
  */
 static Janet table_create(int32_t argc, Janet *argv, bool temp) {
   janet_arity(argc, 2, -1);
@@ -721,6 +721,25 @@ static Janet table_create(int32_t argc, Janet *argv, bool temp) {
   } else {
     for (int32_t i = 1; i < argc; i++) {
       clauses.push_back(argv[i]);
+    }
+  }
+
+  // :namespace name: the table is made there, not in public.
+  uint64_t nspoid = SM_NSP_PUBLIC;
+  for (size_t i = 0; i < clauses.size(); i++) {
+    if (!janet_checktype(clauses[i], JANET_KEYWORD) ||
+        identifier_of(clauses[i]) != "namespace") {
+      continue;
+    }
+    if (temp) {
+      janet_panicf("%s: a temporary table is in no namespace", op);
+    }
+    if (i + 1 >= clauses.size()) {
+      janet_panicf("%s: :namespace takes a name", op);
+    }
+    std::string nsp = identifier_of(clauses[i + 1]);
+    if (sm_cat_namespace_oid(s->session, nsp.c_str(), &nspoid) != 0) {
+      janet_panicf("%s: namespace '%s' does not exist", op, nsp.c_str());
     }
   }
 
@@ -833,8 +852,8 @@ static Janet table_create(int32_t argc, Janet *argv, bool temp) {
   uint64_t oid = 0;
   int rc =
       temp ? sm_cat_create_temp_table(s->session, tbl_name.c_str(), specs, &oid)
-           : sm_cat_create_table(s->session, SM_NSP_PUBLIC, tbl_name.c_str(),
-                                 specs, &oid);
+           : sm_cat_create_table(s->session, nspoid, tbl_name.c_str(), specs,
+                                 &oid);
   if (rc != 0) {
     panic_sm_error(op);
   }

@@ -8,6 +8,12 @@
 #    nothing.
 # 3. DDL blocks on a writer of the table, and goes ahead after it commits.
 # 4. A writer blocks on uncommitted DDL, and goes ahead after it commits.
+# 5. A row lock, as a foreign key's check takes, blocks a delete.
+# 6. Two sessions create one namespace name: the second blocks on the
+#    first's, then fails if the first commits, and goes ahead if it
+#    aborts.
+# 7. A namespace's drop and a create in it: whichever is second
+#    blocks, then fails once the first commits.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_blocking"))
 (rm-rf test-dir)
@@ -21,14 +27,14 @@
 
 (session-use s1)
 (begin :rc)
-(table-create jobs
-  (columns
-    (id :int4 :not-null)
-    (state :text :not-null)
-    (owner :text)))
-(index-create jobs_state (table jobs) (key (state :asc)) :unique false)
-(insert jobs [7 "free" nil])
-(insert jobs [8 "free" nil])
+    (table-create jobs
+      (columns
+        (id :int4 :not-null)
+        (state :text :not-null)
+        (owner :text)))
+    (index-create jobs_state (table jobs) (key (state :asc)) :unique false)
+    (insert jobs [7 "free" nil])
+    (insert jobs [8 "free" nil])
 (commit)
 
 (session-use s2)
@@ -37,88 +43,88 @@
 # 1. s1 claims job 7; its write is uncommitted.
 (session-use s1)
 (begin :rc)
-(assert-eq (read jobs 1) [7 "free" nil])
-(update jobs 1 [7 "taken" "w1"])
+    (assert-eq (read jobs 1) [7 "free" nil])
+    (update jobs 1 [7 "taken" "w1"])
 
-# s2 saw the job free and marks it done: the write would wait.
-(session-use s2)
+    # s2 saw the job free and marks it done: the write would wait.
+    (session-use s2)
 (begin :rc)
-(assert-eq (read jobs 1) [7 "free" nil])
-(assert-err :err-blocked (update jobs 1 [7 "done" nil]))
-(assert-eq (sm:retryable) false)
-# Still blocked when asked again, and the transaction is still usable.
-(assert-err :err-blocked (update jobs 1 [7 "done" nil]))
-(assert-eq (read jobs 2) [8 "free" nil])
+    (assert-eq (read jobs 1) [7 "free" nil])
+    (assert-err :err-blocked (update jobs 1 [7 "done" nil]))
+    (assert-eq (sm:retryable) false)
+    # Still blocked when asked again, and the transaction is still usable.
+    (assert-err :err-blocked (update jobs 1 [7 "done" nil]))
+    (assert-eq (read jobs 2) [8 "free" nil])
 
-# s1 commits and lets go.
-(session-use s1)
+    # s1 commits and lets go.
+    (session-use s1)
 (commit)
 
 # s2 repeats the write: no longer blocked, but the row has changed.
 (session-use s2)
-(assert-err :err-updated (update jobs 1 [7 "done" nil]))
-# It reads the latest image; state <> "done" still holds, so it writes.
-(assert-eq (read-latest jobs 1) [7 "taken" "w1"])
-(update jobs 1 [7 "done" "w1"])
+    (assert-err :err-updated (update jobs 1 [7 "done" nil]))
+    # It reads the latest image; state <> "done" still holds, so it writes.
+    (assert-eq (read-latest jobs 1) [7 "taken" "w1"])
+    (update jobs 1 [7 "done" "w1"])
 (commit)
 
 # The heap and the index agree: one entry for the row, under "done".
 (begin :rc)
-(assert-eq (read jobs 1) [7 "done" "w1"])
-(assert-count 0 (idx-scan jobs_state :ge ["taken"] :le ["taken"]))
-(assert-count 1 (idx-scan jobs_state :ge ["done"] :le ["done"]))
-(assert-count 1 (idx-scan jobs_state :ge ["free"] :le ["free"]))
+    (assert-eq (read jobs 1) [7 "done" "w1"])
+    (assert-count 0 (idx-scan jobs_state :ge ["taken"] :le ["taken"]))
+    (assert-count 1 (idx-scan jobs_state :ge ["done"] :le ["done"]))
+    (assert-count 1 (idx-scan jobs_state :ge ["free"] :le ["free"]))
 (commit)
 
 # 2. Two workers claim job 8. s1 goes first.
 (session-use s1)
 (begin :rc)
-(update jobs 2 [8 "taken" "w1"])
+    (update jobs 2 [8 "taken" "w1"])
 
-(session-use s2)
+    (session-use s2)
 (begin :rc)
-(assert-eq (read jobs 2) [8 "free" nil])
-(assert-err :err-blocked (update jobs 2 [8 "taken" "w2"]))
+    (assert-eq (read jobs 2) [8 "free" nil])
+    (assert-err :err-blocked (update jobs 2 [8 "taken" "w2"]))
 
-(session-use s1)
+    (session-use s1)
 (commit)
 
 # s2 is let through to the re-check, which fails: state is not "free".
 (session-use s2)
-(assert-err :err-updated (update jobs 2 [8 "taken" "w2"]))
-(assert-eq (read-latest jobs 2) [8 "taken" "w1"])
+    (assert-err :err-updated (update jobs 2 [8 "taken" "w2"]))
+    (assert-eq (read-latest jobs 2) [8 "taken" "w1"])
 # So s2 writes nothing, and the job is claimed once.
 (commit)
 (begin :rc)
-(assert-eq (read jobs 2) [8 "taken" "w1"])
-(assert-count 1 (idx-scan jobs_state :ge ["taken"] :le ["taken"]))
+    (assert-eq (read jobs 2) [8 "taken" "w1"])
+    (assert-count 1 (idx-scan jobs_state :ge ["taken"] :le ["taken"]))
 (commit)
 
 # 3. s1 writes the table and has not committed.
 (session-use s1)
 (begin :rc)
-(insert jobs [9 "free" nil])
+    (insert jobs [9 "free" nil])
 
-# s2's DDL on the table would wait for the writer.
-(session-use s2)
+    # s2's DDL on the table would wait for the writer.
+    (session-use s2)
 (begin :rc)
-(assert-err :err-blocked
-  (index-create jobs_owner (table jobs) (key (owner :asc)) :unique false))
+    (assert-err :err-blocked
+      (index-create jobs_owner (table jobs) (key (owner :asc)) :unique false))
 
-(session-use s1)
+    (session-use s1)
 (commit)
 
 # The writer is gone: the DDL goes ahead.
 (session-use s2)
-(index-create jobs_owner (table jobs) (key (owner :asc)) :unique false)
+    (index-create jobs_owner (table jobs) (key (owner :asc)) :unique false)
 
-# 4. s2's DDL is not committed; s1, a writer, would wait for it.
-(session-use s1)
+    # 4. s2's DDL is not committed; s1, a writer, would wait for it.
+    (session-use s1)
 (qa-nowait true)
 (begin :rc)
-(assert-err :err-blocked (insert jobs [10 "free" nil]))
+    (assert-err :err-blocked (insert jobs [10 "free" nil]))
 
-(session-use s2)
+    (session-use s2)
 (commit)
 # The index was made on a table with rows, so it is built in the
 # background; wait for that, or the build's own locks could meet the
@@ -127,7 +133,7 @@
 
 # The DDL is committed: the writer goes ahead.
 (session-use s1)
-(insert jobs [10 "free" nil])
+    (insert jobs [10 "free" nil])
 (commit)
 
 # 5. A foreign key, checked as a host would check it: the child's
@@ -136,43 +142,120 @@
 (session-use s1)
 (qa-nowait false)
 (begin :rc)
-(table-create owners (columns (id :int4 :not-null) (name :text)))
-(table-create pets (columns (id :int4 :not-null) (owner :int4 :not-null)))
-(def o1 (insert owners [1 "Ann"]))
+    (table-create owners (columns (id :int4 :not-null) (name :text)))
+    (table-create pets (columns (id :int4 :not-null) (owner :int4 :not-null)))
+    (def o1 (insert owners [1 "Ann"]))
 (commit)
 
 # s1 is to add a pet of owner 1: it finds the owner and locks its row.
 (begin :rc)
-(assert-eq (read owners o1) [1 "Ann"])
-(lock-row owners o1 :shared)
-# A second child of the same parent shares the lock; a delete of the
-# parent would wait.
-(session-use s2)
+    (assert-eq (read owners o1) [1 "Ann"])
+    (lock-row owners o1 :shared)
+    # A second child of the same parent shares the lock; a delete of the
+    # parent would wait.
+    (session-use s2)
 (begin :rc)
-(lock-row owners o1 :shared)
+    (lock-row owners o1 :shared)
 (commit)
 (begin :rc)
-(assert-err :err-blocked (delete owners o1))
-# s1 inserts the pet and commits, and its lock ends.
-(session-use s1)
-(insert pets [100 1])
+    (assert-err :err-blocked (delete owners o1))
+    # s1 inserts the pet and commits, and its lock ends.
+    (session-use s1)
+    (insert pets [100 1])
 (commit)
 # The delete is no longer blocked. A host would now look for the
 # parent's children before deleting it, and find one.
 (session-use s2)
-(assert-count 1 (scan pets))
-(delete owners o1)
+    (assert-count 1 (scan pets))
+    (delete owners o1)
 (abort)
 # An exclusive lock, as SELECT ... FOR UPDATE takes, shuts out a
 # shared one.
 (session-use s1)
 (begin :rc)
-(lock-row owners o1 :exclusive)
-(session-use s2)
+    (lock-row owners o1 :exclusive)
+    (session-use s2)
 (begin :rc)
-(assert-err :err-blocked (lock-row owners o1 :shared))
+    (assert-err :err-blocked (lock-row owners o1 :shared))
 (commit)
 (session-use s1)
+(commit)
+
+# 6. Prove a namespace name is held by its uncommitted create.
+# 6.1 s1 creates app and does not commit.
+# 6.2 s2's create of app blocks, and blocks again when repeated.
+# 6.3 s1 commits: s2's create, repeated, is ERR_DUPKEY.
+# 6.4 s1 creates lang and aborts: s2's create of lang, blocked
+#     until then, goes ahead and commits.
+(begin :rc)
+    (namespace-create app)
+    (session-use s2)
+(begin :rc)
+    (assert-err :err-blocked (namespace-create app))
+    (assert-err :err-blocked (namespace-create app))
+    (session-use s1)
+(commit)
+(session-use s2)
+    (assert-err :err-dupkey (namespace-create app))
+(abort)
+(session-use s1)
+(begin :rc)
+    (namespace-create lang)
+    (session-use s2)
+(begin :rc)
+    (assert-err :err-blocked (namespace-create lang))
+    (session-use s1)
+(abort)
+(session-use s2)
+    (namespace-create lang)
+(commit)
+(begin :rc)
+    (assert-eq (list-namespaces) @["app" "lang" "pg_catalog" "public"])
+(commit)
+
+# The error text running thunk raises, or nil if it does not fail.
+(defn error-of [thunk]
+  (try (do (thunk) nil) ([err] (string err))))
+
+# 7. Prove a namespace's drop and a create in it wait for each other.
+# 7.1 s1 creates a table in lang and does not commit.
+# 7.2 s2's drop of lang blocks; s1 commits; the drop, repeated, is
+#     ERR_INUSE, and lang stays.
+# 7.3 s1 drops app and does not commit.
+# 7.4 s2's create of a table in app blocks; s1 commits; the create,
+#     repeated, fails as app is gone.
+(session-use s1)
+(begin :rc)
+    (table-create orders (columns (x :int4)) :namespace lang)
+    (session-use s2)
+(begin :rc)
+    (assert-err :err-blocked (namespace-drop lang))
+    (session-use s1)
+(commit)
+(session-use s2)
+    (assert-err :err-inuse (namespace-drop lang))
+(abort)
+(begin :rc)
+    (assert-eq (list-namespaces) @["app" "lang" "pg_catalog" "public"])
+(commit)
+(session-use s1)
+(begin :rc)
+    (namespace-drop app)
+    (session-use s2)
+(begin :rc)
+    (assert-err :err-blocked
+      (table-create items (columns (x :int4)) :namespace app))
+    (session-use s1)
+(commit)
+(session-use s2)
+    (def err (error-of
+      (fn [] (table-create items (columns (x :int4)) :namespace app))))
+    (assert-eq (truthy? (and err (string/find "namespace 'app' does not exist"
+                                              err)))
+               true)
+(abort)
+(begin :rc)
+    (assert-eq (list-namespaces) @["lang" "pg_catalog" "public"])
 (commit)
 
 (session-close s1)

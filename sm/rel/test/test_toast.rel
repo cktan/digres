@@ -38,21 +38,21 @@
 # 1.4 The index finds the row by its title, with the body.
 (session-use s1)
 (begin :rc)
-(table-create docs
-  (columns
-    (id :int4 :not-null)
-    (title :text)
-    (body :text)))
-(index-create docs_title (table docs) (key (title :asc)) :include [body])
-(def r1 (insert docs [1 title1 body1]))
-(assert-eq (read docs r1) [1 title1 body1])
-(def all (scan docs))
-(assert-count 1 all)
-(assert-eq ((all 0) 1) [1 title1 body1])
-(def hits (idx-scan docs_title :ge [title1] :le [title1]))
-(assert-count 1 hits)
-(assert-eq ((hits 0) 0) r1)
-(assert-eq ((hits 0) 2) [body1])
+    (table-create docs
+      (columns
+        (id :int4 :not-null)
+        (title :text)
+        (body :text)))
+    (index-create docs_title (table docs) (key (title :asc)) :include [body])
+    (def r1 (insert docs [1 title1 body1]))
+    (assert-eq (read docs r1) [1 title1 body1])
+    (def all (scan docs))
+    (assert-count 1 all)
+    (assert-eq ((all 0) 1) [1 title1 body1])
+    (def hits (idx-scan docs_title :ge [title1] :le [title1]))
+    (assert-count 1 hits)
+    (assert-eq ((hits 0) 0) r1)
+    (assert-eq ((hits 0) 2) [body1])
 (commit)
 
 # 2. An update.
@@ -61,18 +61,18 @@
 # 2.2 The new values read back, and the index finds the row by the
 #     new title and not by the old.
 (begin :rc)
-(def old (update docs r1 [1 title2 body2]))
-(assert-eq old [1 :toast :toast])
-(assert-eq (read docs r1) [1 title2 body2])
-(assert-count 0 (idx-scan docs_title :ge [title1] :le [title1]))
-(assert-count 1 (idx-scan docs_title :ge [title2] :le [title2]))
+    (def old (update docs r1 [1 title2 body2]))
+    (assert-eq old [1 :toast :toast])
+    (assert-eq (read docs r1) [1 title2 body2])
+    (assert-count 0 (idx-scan docs_title :ge [title1] :le [title1]))
+    (assert-count 1 (idx-scan docs_title :ge [title2] :le [title2]))
 (commit)
 
 # 3. A row past 64 KB, in a table with no index to hold it.
 (begin :rc)
-(table-create notes (columns (id :int4 :not-null) (note :text)))
-(def r2 (insert notes [1 huge]))
-(assert-eq (read notes r2) [1 huge])
+    (table-create notes (columns (id :int4 :not-null) (note :text)))
+    (def r2 (insert notes [1 huge]))
+    (assert-eq (read notes r2) [1 huge])
 (commit)
 
 # 4. Another session, and an abort.
@@ -80,12 +80,12 @@
 # 4.2 s2 replaces the body and aborts: the first body is back.
 (session-use s2)
 (begin :rc)
-(assert-eq (read docs r1) [1 title2 body2])
-(update docs r1 [1 title2 "short"])
-(assert-eq (read docs r1) [1 title2 "short"])
+    (assert-eq (read docs r1) [1 title2 body2])
+    (update docs r1 [1 title2 "short"])
+    (assert-eq (read docs r1) [1 title2 "short"])
 (abort)
 (begin :rc)
-(assert-eq (read docs r1) [1 title2 body2])
+    (assert-eq (read docs r1) [1 title2 body2])
 (commit)
 
 # 5. After a restart.
@@ -96,10 +96,10 @@
 (session-open s1 "tdb")
 (session-use s1)
 (begin :rc)
-(assert-eq (read docs r1) [1 title2 body2])
-(assert-eq (read notes r2) [1 huge])
-(assert-eq (delete docs r1) [1 :toast :toast])
-(assert-count 0 (scan docs))
+    (assert-eq (read docs r1) [1 title2 body2])
+    (assert-eq (read notes r2) [1 huge])
+    (assert-eq (delete docs r1) [1 :toast :toast])
+    (assert-count 0 (scan docs))
 (commit)
 (session-close s1)
 (env-detach)
@@ -109,8 +109,8 @@
 (session-open s1 "tdb")
 (session-use s1)
 (begin :rc)
-(table-create plain (columns (id :int4 :not-null) (note :text)))
-(assert-eq (fails? (fn [] (insert plain [1 huge]))) true)
+    (table-create plain (columns (id :int4 :not-null) (note :text)))
+    (assert-eq (fails? (fn [] (insert plain [1 huge]))) true)
 (abort)
 (session-close s1)
 (env-detach)

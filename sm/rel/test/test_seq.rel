@@ -10,7 +10,7 @@
 
 # 1. Create a sequence with start=100 and step=5
 (begin :rc)
-(seq-create s1 100 5)
+    (seq-create s1 100 5)
 (commit)
 
 # 2. First value outside transaction is start
@@ -18,8 +18,8 @@
 
 # 3. Nextseq values inside a transaction that aborts
 (begin :rc)
-(assert-eq (nextseq s1) 105)
-(assert-eq (nextseq s1) 110)
+    (assert-eq (nextseq s1) 105)
+    (assert-eq (nextseq s1) 110)
 (abort)
 
 # 4. Values after abort must strictly increment, never reused
@@ -27,20 +27,20 @@
 
 # 5. Nextseq inside a transaction with savepoint rollback
 (begin :rr)
-(assert-eq (nextseq s1) 120)
-(def sp (savepoint))
-(assert-eq (nextseq s1) 125)
-(rollback sp)
-(forget sp)
-# 125 was permanently consumed despite savepoint rollback
-(assert-eq (nextseq s1) 130)
+    (assert-eq (nextseq s1) 120)
+    (def sp (savepoint))
+        (assert-eq (nextseq s1) 125)
+    (rollback sp)
+    (forget sp)
+    # 125 was permanently consumed despite savepoint rollback
+    (assert-eq (nextseq s1) 130)
 (commit)
 
 (assert-eq (nextseq s1) 135)
 
 # 6. Two-phase commit prepared and then aborted
 (begin :rr)
-(assert-eq (nextseq s1) 140)
+    (assert-eq (nextseq s1) 140)
 (prepare "tx_seq_2pc")
 
 (session-open s2 "seqdb")
@@ -53,65 +53,65 @@
 
 # 7. Heap table row numbers (drawn from sequence) across aborts
 (begin :rc)
-(table-create items
-  (columns
-    (id :int4)
-    (name :text)))
+    (table-create items
+      (columns
+        (id :int4)
+        (name :text)))
 (commit)
 
 # Committed insert draws rowno 1
 (begin :rc)
-(def r1 (insert items [1 "first"]))
-(assert-eq r1 1)
+    (def r1 (insert items [1 "first"]))
+    (assert-eq r1 1)
 (commit)
 
 # Aborted transaction draws rowno 2 and 3
 (begin :rc)
-(def r2 (insert items [2 "second"]))
-(def r3 (insert items [3 "third"]))
-(assert-eq r2 2)
-(assert-eq r3 3)
+    (def r2 (insert items [2 "second"]))
+    (def r3 (insert items [3 "third"]))
+    (assert-eq r2 2)
+    (assert-eq r3 3)
 (abort)
 
 # Next transaction draws rowno 4, skipping aborted 2 and 3
 (begin :rc)
-(def r4 (insert items [4 "fourth"]))
-(assert-eq r4 4)
+    (def r4 (insert items [4 "fourth"]))
+    (assert-eq r4 4)
 (commit)
 
 # 8. Names starting "sm3." are sm3's own, a table's _id sequence
 #    among them: each sequence call refuses one. The steps below
 #    show the table still draws its rownos, none taken here.
 (begin :rc)
-(assert-err :err-invalid (seq-create sm3.mine 1 1))
-(assert-err :err-invalid (seq-drop sm3.id.1))
+    (assert-err :err-invalid (seq-create sm3.mine 1 1))
+    (assert-err :err-invalid (seq-drop sm3.id.1))
 (commit)
 (assert-err :err-invalid (nextseq sm3.oid))
 
 # Savepoint rollback inside table insert
 (begin :rc)
-(def r5 (insert items [5 "fifth"]))
-(assert-eq r5 5)
-(def sp2 (savepoint))
-(def r6 (insert items [6 "sixth"]))
-(assert-eq r6 6)
-(rollback sp2)
-(forget sp2)
-# Next insert gets rowno 7 (6 was consumed and never reused)
-(def r7 (insert items [7 "seventh"]))
-(assert-eq r7 7)
+    (def r5 (insert items [5 "fifth"]))
+    (assert-eq r5 5)
+    (def sp2 (savepoint))
+        (def r6 (insert items [6 "sixth"]))
+        (assert-eq r6 6)
+    (rollback sp2)
+    (forget sp2)
+    # Next insert gets rowno 7 (6 was consumed and never reused)
+    (def r7 (insert items [7 "seventh"]))
+    (assert-eq r7 7)
 (commit)
 
 # Verify table rows: exactly 1, 4, 5, 7 exist
 (begin :rc)
-(def all-rows (scan items))
-(assert-count 4 all-rows)
-(assert-eq (map (fn [r] (r 0)) all-rows) [1 4 5 7])
+    (def all-rows (scan items))
+    (assert-count 4 all-rows)
+    (assert-eq (map (fn [r] (r 0)) all-rows) [1 4 5 7])
 (commit)
 
 # 8. Drop sequence and verify SM_ERR_NOTFOUND
 (begin :rc)
-(seq-drop s1)
+    (seq-drop s1)
 (commit)
 (assert-err :notfound (nextseq s1))
 
@@ -123,19 +123,19 @@
 #    3. In the same statement, make a table, advance, insert a row.
 #    4. After the commit the row is there.
 (begin :rc)
-(stmt-begin)
-(seq-create s3 10 1)
-(assert-err :notfound (nextseq s3))
-(stmt-advance)
-(assert-eq (nextseq s3) 10)
-(table-create made
-  (columns
-    (id :int4)))
-(stmt-advance)
-(assert-eq (insert made [1]) 1)
+    (stmt-begin)
+    (seq-create s3 10 1)
+    (assert-err :notfound (nextseq s3))
+    (stmt-advance)
+    (assert-eq (nextseq s3) 10)
+    (table-create made
+      (columns
+        (id :int4)))
+    (stmt-advance)
+    (assert-eq (insert made [1]) 1)
 (commit)
 (begin :rc)
-(assert-eq (map (fn [r] (r 0)) (scan made)) [1])
+    (assert-eq (map (fn [r] (r 0)) (scan made)) [1])
 (commit)
 
 (db-close)
