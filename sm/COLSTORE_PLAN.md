@@ -53,7 +53,7 @@ The user took these on 2026-11-19.
 1. Pull `main`, and build the debug build of every level.
 2. Run the suites of sm, sq and dg, each to its own log under
    `bench/build`, and keep the logs.
-3. Confirm the values that later steps take: key class `0x03`
+3. Confirm the values that later steps take: key class `0x05`
    and version flag `0x40` are unused in `sm1/src/version.h` and
    `sm1/src/chain.h`; relids `0x0002` to `0x0004` are free in a
    table with no index.
@@ -92,7 +92,7 @@ not change.
 
 [`COLSTORE.md`](COLSTORE.md) §4.5 and §13.
 
-1. Add key class `0x03`, a versioned key of a file set, to the
+1. Add key class `0x05`, a versioned key of a file set, to the
    comparator and the prefix extractor.
 2. Write the files of a file set under `<db home>/colstore/`,
    through sm0's VFD, and fsync each file and its directory.

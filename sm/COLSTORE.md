@@ -167,11 +167,16 @@ set keys of sm1 (§4.5), in a key class of their own:
 | relid `0x0003` | unused | | |
 | relid `0x0004` | filter keys | `0x00 ‖ 0x0004 ‖ be64(rg_id) ‖ be16(col) ‖ ~wts ‖ ~seq` | versioned |
 | relid `0xFFFF` | TOAST of delta rows | as in a row store table | versioned |
-| class `0x03` | RG keys: sm1's file set keys | `0x03 ‖ be64(rg_id) ‖ ~wts ‖ ~seq` | versioned, of sm1's file set class |
+| class `0x05` | RG keys: sm1's file set keys | `0x05 ‖ be64(rg_id) ‖ ~wts ‖ ~seq` | versioned, of sm1's file set class |
 
 - **RG keys and filter keys are apart**, so a scan of RG keys
   reads no filter key.
-- **A snapshot's set of RGs is a scan of class `0x03` at the
+- **The class is `0x05`, past the pages' `0x04`.** sm1 takes
+  every key below `0x04` for a row version: a store's emptiness,
+  a rollback's range delete of a load, and the newest OLD id of
+  a chained store all read that range. A file set key must stay
+  out of it.
+- **A snapshot's set of RGs is a scan of class `0x05` at the
   snapshot.** It needs no visibility rule of its own.
 - **An RG key and its filter keys are put once and erased
   once.** The seal or RG compaction puts them. RG compaction
@@ -213,7 +218,7 @@ sm1 does the whole life of a file:
 4. Erase the file set key in the caller's transaction.
 5. Delete the files in GC, when no version of the key is
    committed and visible to a snapshot, or prepared (§13).
-6. At open, scan class `0x03` of each store, and delete the
+6. At open, scan class `0x05` of each store, and delete the
    files that no version names (§13).
 
 - **sm3 never uses a file path.** It reads a CG through sm1, by
