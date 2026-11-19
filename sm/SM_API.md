@@ -28,11 +28,11 @@ The count is the number of entries.
 | [Two-phase commit](#two-phase-commit) | Prepare, list, commit and abort a prepared transaction | 4 |
 | [Sequences, below the catalog](#sequences-below-the-catalog) | Counters with a name and no namespace | 3 |
 | [Types and collations](#types-and-collations) | Types, collations, datums, text in and out | 12 |
-| [Cursors over rows and index entries](#cursors-over-rows-and-index-entries) | Scan a table or an index; encode a tuple | 15 |
+| [Cursors over rows and index entries](#cursors-over-rows-and-index-entries) | Open, read and close a cursor over a table or an index; encode a tuple | 19 |
 | [The catalog](#the-catalog) | Look up and create namespaces, relations, sequences | 22 |
 | [Views](#views) | Create, read and drop a view | 9 |
 | [Index builds, TOAST and the btree reaper](#index-builds-toast-and-the-btree-reaper) | Build an index; TOAST; clean a B-tree | 6 |
-| [Tables](#tables) | Open a table; read and write rows | 36 |
+| [Tables](#tables) | Open a table; read and write rows | 32 |
 | [Statistics](#statistics) | Sizes, counters and planner statistics | 9 |
 | [Table and index DDL](#table-and-index-ddl) | Create, alter and drop a table, a column, an index or a constraint | 27 |
 
@@ -1269,12 +1269,12 @@ canonical text into `text`, as the type's typoutput does.
 
 ## Cursors over rows and index entries
 
-**In short.** To read many rows, open a cursor with a call from
-[Tables](#tables), then call `sm_row_scannxt` (rows) or
-`sm_idx_scannxt` (index entries) until it returns 1. Seek to move
-the cursor, and close it with `sm_row_scanclose` or
-`sm_idx_scanclose` before the next `sm_begin`. `sm_tup_encode`
-builds a tuple.
+**In short.** To read many rows, open a cursor on an open table
+with `sm_row_scanopen*` (rows) or `sm_idx_scanopen` (index
+entries). Then call `sm_row_scannxt` or `sm_idx_scannxt` until it
+returns 1. Seek to move the cursor, and close it with
+`sm_row_scanclose` or `sm_idx_scanclose` before the next
+`sm_begin`. `sm_tup_encode` builds a tuple.
 
 The Row Store and the index modules hold the design
 ([`ROWSTORE.md`](ROWSTORE.md), [`LSMINDEX.md`](LSMINDEX.md),
@@ -1289,9 +1289,64 @@ can change a row and leave its index entries behind
 order: `_id` order in a keyless table, the primary key's in a
 table with one. A tree's rows come in the tree's order.
 `sm_idx_scan_t` is a cursor over an index's entries, in key
-order. `sm_row_scanopen_idrange`, `sm_row_scanopen`,
-`sm_row_scanopen_with_index` and `sm_idx_scanopen`, under Tables,
-open them.
+order. Each cursor opens and closes under its own prefix:
+
+| Call | Cursor | Over | In what order |
+| --- | --- | --- | --- |
+| `sm_row_scanopen` | `sm_row_scan_t` | every row of the table | the key's: the primary key's, or `_id`'s |
+| `sm_row_scanopen_idrange` | `sm_row_scan_t` | the rows with `_id` `first` to `last`, in a keyless table | `_id`'s |
+| `sm_row_scanopen_with_index` | `sm_row_scan_t` | the rows between `lo` and `hi` of the primary key or a tree | that index's |
+| `sm_idx_scanopen` | `sm_idx_scan_t` | the entries between `lo` and `hi` of any index | that index's |
+
+An LSM secondary index has no row cursor. Open its entries with
+`sm_idx_scanopen`, take each entry's row key with
+`sm_idx_scan_row`, and read the row with `sm_tbl_read_key`, or
+many rows with `sm_tbl_read_keys`.
+
+### `sm_row_scanopen`
+
+```cpp
+int sm_row_scanopen(sm_tbl_t* tbl, sm_row_scan_t** out);
+```
+
+Opens a cursor over each row of the table, in its key's order:
+its primary key's, or with none its `_id`'s
+([`CLUSTER.md`](CLUSTER.md#5-reading) §5). A
+sequential scan reads this.
+
+### `sm_row_scanopen_idrange`
+
+```cpp
+int sm_row_scanopen_idrange(sm_tbl_t* tbl, uint64_t first,
+                            uint64_t last, sm_row_scan_t** out);
+```
+
+Opens a cursor over the rows with `_id` `first` to `last`, both
+included, of a keyless table.
+
+Errors: `SM_ERR_INVALID` (a table with a primary key).
+
+### `sm_row_scanopen_with_index`
+
+```cpp
+int sm_row_scanopen_with_index(sm_tbl_t* tbl, uint64_t index,
+                               const sm_bound_t* lo, const sm_bound_t* hi,
+                               bool* widened, sm_row_scan_t** out);
+```
+
+Opens a cursor over the rows of `index`, between `lo` and `hi` as
+`sm_idx_scanopen` takes them, in key order.
+
+- On the table's primary key, it gives the rows themselves, one
+  sorted run ([`CLUSTER.md`](CLUSTER.md#5-reading) §5). It seeks
+  no `_id`.
+- On a tree ([`BTREEINDEX.md`](BTREEINDEX.md#5-reads) §5), it
+  gives each entry's row as the transaction sees it, while the
+  row still has the entry's key, in the tree's order. A tree's
+  cursor seeks nothing.
+
+Errors: `SM_ERR_NOTFOUND` (no such index), `SM_ERR_INVALID`
+(neither of the two, or `sm_tbl_index_usable` is false).
 
 ### `sm_row_scannxt`
 
@@ -1452,6 +1507,22 @@ of `schema`, into `tuple`. A dropped attribute must be null.
 
 Errors: `SM_ERR_INVALID`, `SM_ERR_ROWTOOLONG`. On either, `tuple`
 stays as it was.
+
+### `sm_idx_scanopen`
+
+```cpp
+int sm_idx_scanopen(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
+                    const sm_bound_t* hi, bool* widened,
+                    sm_idx_scan_t** out);
+```
+
+Opens a cursor over the entries of the table's `index`, by oid,
+between `lo` and `hi`, either NULL for no bound. A bound too long
+to encode widens the scan, and `*widened`, if `widened` is not
+NULL, says so.
+
+Errors: `SM_ERR_NOTFOUND` (the table has no such index),
+`SM_ERR_INVALID` (`sm_tbl_index_usable` is false).
 
 ### `sm_idx_scannxt`
 
@@ -2212,9 +2283,9 @@ says read (`SM_LOCKMODE_IS`) or write (`SM_LOCKMODE_IX`).
 Write with `sm_tbl_insert`, `sm_tbl_update` and
 `sm_tbl_delete`, or load many rows with `sm_tbl_load_*`. Read one
 row with `sm_tbl_read`, or many with a cursor
-(`sm_row_scanopen_idrange`, `sm_idx_scanopen`). Unpack a row with
-`sm_tbl_deform`. Close the table with `sm_tbl_close`; its lock
-stays until the transaction ends.
+([Cursors](#cursors-over-rows-and-index-entries)). Unpack a row
+with `sm_tbl_deform`. Close the table with `sm_tbl_close`; its
+lock stays until the transaction ends.
 
 An open table `sm_tbl_t` is a table's definition under the
 table-oid lock, its heap and its indexes. A write through it
@@ -2630,18 +2701,6 @@ empty, as in PostgreSQL.
 Errors: `SM_ERR_INVALID` (the handle does not hold the table
 `SM_LOCKMODE_EX`, from its open or a bulk load).
 
-### `sm_row_scanopen_idrange`
-
-```cpp
-int sm_row_scanopen_idrange(sm_tbl_t* tbl, uint64_t first,
-                            uint64_t last, sm_row_scan_t** out);
-```
-
-Opens a cursor over the rows with `_id` `first` to `last`, both
-included, of a keyless table.
-
-Errors: `SM_ERR_INVALID` (a table with a primary key).
-
 ### `sm_tbl_deform`
 
 ```cpp
@@ -2737,55 +2796,6 @@ keeps the store from being dropped.
 
 Errors: `SM_ERR_INVALID` (not a pointer), `SM_ERR_NOTFOUND` (the
 value is gone).
-
-### `sm_idx_scanopen`
-
-```cpp
-int sm_idx_scanopen(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
-                    const sm_bound_t* hi, bool* widened,
-                    sm_idx_scan_t** out);
-```
-
-Opens a cursor over the entries of the table's `index`, by oid,
-between `lo` and `hi`, either NULL for no bound. A bound too long
-to encode widens the scan, and `*widened`, if `widened` is not
-NULL, says so.
-
-Errors: `SM_ERR_NOTFOUND` (the table has no such index),
-`SM_ERR_INVALID` (`sm_tbl_index_usable` is false).
-
-### `sm_row_scanopen`
-
-```cpp
-int sm_row_scanopen(sm_tbl_t* tbl, sm_row_scan_t** out);
-```
-
-Opens a cursor over each row of the table, in its key's order:
-its primary key's, or with none its `_id`'s
-([`CLUSTER.md`](CLUSTER.md#5-reading) §5). A
-sequential scan reads this.
-
-### `sm_row_scanopen_with_index`
-
-```cpp
-int sm_row_scanopen_with_index(sm_tbl_t* tbl, uint64_t index,
-                               const sm_bound_t* lo, const sm_bound_t* hi,
-                               bool* widened, sm_row_scan_t** out);
-```
-
-Opens a cursor over the rows of `index`, between `lo` and `hi` as
-`sm_idx_scanopen` takes them, in key order.
-
-- On the table's primary key, it gives the rows themselves, one
-  sorted run ([`CLUSTER.md`](CLUSTER.md#5-reading) §5). It seeks
-  no `_id`.
-- On a tree ([`BTREEINDEX.md`](BTREEINDEX.md#5-reads) §5), it
-  gives each entry's row as the transaction sees it, while the
-  row still has the entry's key, in the tree's order. A tree's
-  cursor seeks nothing.
-
-Errors: `SM_ERR_NOTFOUND` (no such index), `SM_ERR_INVALID`
-(neither of the two, or `sm_tbl_index_usable` is false).
 
 ### `sm_tbl_index_usable`
 

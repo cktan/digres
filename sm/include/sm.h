@@ -624,6 +624,38 @@ struct sm_bound_t {
  */
 typedef struct sm_row_scan_t sm_row_scan_t;
 
+/* An open table, sm_tbl_open's (below); a cursor opens on one. */
+struct sm_tbl_t;
+
+/*
+ * Open a cursor over every row of the table, in its key's order: its
+ * primary key's, or with none its _id's (../CLUSTER.md section 5),
+ * as sm_row_scannxt hands them out. What a sequential scan reads.
+ */
+int sm_row_scanopen(sm_tbl_t* tbl, sm_row_scan_t** out);
+
+/*
+ * Open a cursor over the rows with _id first..last, both included, of
+ * a table without a primary key; SM_ERR_INVALID in one with.
+ */
+int sm_row_scanopen_idrange(sm_tbl_t* tbl, uint64_t first,
+                            uint64_t last, sm_row_scan_t** out);
+
+/*
+ * Open a cursor over the rows of the table's primary key, index,
+ * between lo and hi as sm_idx_scanopen takes them, in key order:
+ * the rows themselves, as sm_row_scannxt hands them out, with their
+ * _id, one sorted run (../CLUSTER.md section 5). Or of a tree
+ * (../BTREEINDEX.md section 5): each entry's row as the transaction sees
+ * it, while it still has the entry's key, in the tree's order; a
+ * tree's cursor seeks nothing. SM_ERR_INVALID if index is neither,
+ * or not usable; SM_ERR_NOTFOUND if there is no such index. It
+ * seeks no _id.
+ */
+int sm_row_scanopen_with_index(sm_tbl_t* tbl, uint64_t index,
+                               const sm_bound_t* lo, const sm_bound_t* hi,
+                               bool* widened, sm_row_scan_t** out);
+
 /*
  * The next row: 0 with it, and *id its _id, 0 for a row of a table
  * with a primary key, which has none; 1 at the end, or -1. The
@@ -712,6 +744,16 @@ int sm_tup_encode(const std::vector<sm_attribute_t>& schema,
  * opens one.
  */
 typedef struct sm_idx_scan_t sm_idx_scan_t;
+
+/*
+ * Open a cursor over the entries of the table's index, by oid,
+ * between lo and hi, either NULL for no bound; SM_ERR_NOTFOUND if
+ * the table has no such index. A bound too long to encode widens
+ * the scan, and *widened, if widened is not NULL, says so.
+ */
+int sm_idx_scanopen(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
+                    const sm_bound_t* hi, bool* widened,
+                    sm_idx_scan_t** out);
 
 /*
  * The next entry: 0 with it, and *id its row's _id, 0 for a row of a
@@ -1625,13 +1667,6 @@ int sm_tbl_trylock(sm_tbl_t* tbl, const sm_row_key_t& key,
 int sm_tbl_truncate(sm_tbl_t* tbl);
 
 /*
- * Open a cursor over the rows with _id first..last, both included, of
- * a table without a primary key; SM_ERR_INVALID in one with.
- */
-int sm_row_scanopen_idrange(sm_tbl_t* tbl, uint64_t first,
-                            uint64_t last, sm_row_scan_t** out);
-
-/*
  * The first n attributes of a row's tuple into values and isnull,
  * n of each, one per column, n at most the table's column count.
  * Every column checks the whole tuple; fewer, only what is read.
@@ -1689,38 +1724,6 @@ int sm_tbl_fetch(sm_tbl_t* tbl, sm_datum_t val, std::string* out);
  * the value is gone.
  */
 int sm_toast_fetch(sm_session_t* session, sm_datum_t val, std::string* out);
-
-/*
- * Open a cursor over the entries of the table's index, by oid,
- * between lo and hi, either NULL for no bound; SM_ERR_NOTFOUND if
- * the table has no such index. A bound too long to encode widens
- * the scan, and *widened, if widened is not NULL, says so.
- */
-int sm_idx_scanopen(sm_tbl_t* tbl, uint64_t index, const sm_bound_t* lo,
-                    const sm_bound_t* hi, bool* widened,
-                    sm_idx_scan_t** out);
-
-/*
- * Open a cursor over every row of the table, in its key's order: its
- * primary key's, or with none its _id's (../CLUSTER.md section 5),
- * as sm_row_scannxt hands them out. What a sequential scan reads.
- */
-int sm_row_scanopen(sm_tbl_t* tbl, sm_row_scan_t** out);
-
-/*
- * Open a cursor over the rows of the table's primary key, index,
- * between lo and hi as sm_idx_scanopen takes them, in key order:
- * the rows themselves, as sm_row_scannxt hands them out, with their
- * _id, one sorted run (../CLUSTER.md section 5). Or of a tree
- * (../BTREEINDEX.md section 5): each entry's row as the transaction sees
- * it, while it still has the entry's key, in the tree's order; a
- * tree's cursor seeks nothing. SM_ERR_INVALID if index is neither,
- * or not usable; SM_ERR_NOTFOUND if there is no such index. It
- * seeks no _id.
- */
-int sm_row_scanopen_with_index(sm_tbl_t* tbl, uint64_t index,
-                               const sm_bound_t* lo, const sm_bound_t* hi,
-                               bool* widened, sm_row_scan_t** out);
 
 /*
  * Whether the session may scan the table's index now. Not while it

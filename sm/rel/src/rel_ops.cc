@@ -80,7 +80,7 @@ static sm_env_t *require_env() {
  *    the caller skips.
  * 2. Leave it alone after a retryable error: the engine has aborted
  *    it already.
- * 3. End the cursors, which the abort would close under them.
+ * 3. Close the cursors, which the abort would close under them.
  * 4. Abort.
  */
 static void abort_failed_write(session_ctx_t *s) {
@@ -89,7 +89,7 @@ static void abort_failed_write(session_ctx_t *s) {
     return;
   }
   // The abort would close the cursors under them.
-  end_cursors(s);
+  close_cursors(s);
   // A successful abort leaves the error state as the write set it.
   sm_abort(s->session);
 }
@@ -380,7 +380,7 @@ static Janet cfun_commit(int32_t argc, Janet *argv) {
   (void)argv;
   session_ctx_t *s = require_session();
   // The transaction's end closes its cursors: end them first.
-  end_cursors(s);
+  close_cursors(s);
   // Commit transaction.
   if (sm_commit(s->session) != 0) {
     panic_sm_error("commit");
@@ -394,7 +394,7 @@ static Janet cfun_abort(int32_t argc, Janet *argv) {
   (void)argv;
   session_ctx_t *s = require_session();
   // The transaction's end closes its cursors: end them first.
-  end_cursors(s);
+  close_cursors(s);
   // Abort transaction.
   if (sm_abort(s->session) != 0) {
     panic_sm_error("abort");
@@ -564,7 +564,7 @@ static Janet cfun_prepare(int32_t argc, Janet *argv) {
   session_ctx_t *s = require_session();
   const char *gid = janet_getcstring(argv, 0);
   // The transaction's end closes its cursors: end them first.
-  end_cursors(s);
+  close_cursors(s);
   if (sm_prepare(s->session, gid) != 0) {
     panic_sm_error("prepare");
   }
@@ -2745,7 +2745,7 @@ static Janet cfun_delete(int32_t argc, Janet *argv) {
  * over its keys; op names the command in a panic. Sets p_tdef to the
  * table.
  */
-static sm_row_scan_t *open_rel_cursor(session_ctx_t *s, int32_t argc,
+static sm_row_scan_t *open_row_cursor(session_ctx_t *s, int32_t argc,
                                       Janet *argv, const char *op,
                                       table_def_t *&p_tdef) {
   std::string tbl_name = identifier_of(argv[0]);
@@ -2807,7 +2807,7 @@ static Janet cfun_scan(int32_t argc, Janet *argv) {
   janet_arity(argc, 1, -1);
   session_ctx_t *s = require_session();
   table_def_t *p_tdef = nullptr;
-  sm_row_scan_t *rscan = open_rel_cursor(s, argc, argv, "scan", p_tdef);
+  sm_row_scan_t *rscan = open_row_cursor(s, argc, argv, "scan", p_tdef);
   sm_tbl_t *tbl = p_tdef->tbl;
   const index_def_t *pk = primary_of(p_tdef);
 
@@ -2858,7 +2858,7 @@ static Janet cfun_scan_count(int32_t argc, Janet *argv) {
   janet_arity(argc, 1, -1);
   session_ctx_t *s = require_session();
   table_def_t *p_tdef = nullptr;
-  sm_row_scan_t *rscan = open_rel_cursor(s, argc, argv, "scan-count", p_tdef);
+  sm_row_scan_t *rscan = open_row_cursor(s, argc, argv, "scan-count", p_tdef);
   uint64_t rowno = 0;
   sm_pin_ref_t ref;
   int64_t n = 0;
@@ -3244,7 +3244,7 @@ static Janet cfun_cursor_close(int32_t argc, Janet *argv) {
   janet_fixarity(argc, 1);
   session_ctx_t *s = require_session();
   need_cursor(s, argv, 0, "cursor-close");
-  // End the cursor, then close the table handle it read through.
+  // Close the cursor, then the table handle it read through.
   s->cursors.erase(janet_getinteger(argv, 0));
   return janet_wrap_nil();
 }
@@ -3483,7 +3483,7 @@ static const JanetReg s_rel_cfuns[] = {
     {"_idx-open", cfun_idx_open, "internal"},
     {"cursor-next", cfun_cursor_next,
      "(cursor-next c) -- the cursor's next index entry, or nil at its end"},
-    {"cursor-close", cfun_cursor_close, "(cursor-close c) -- end the cursor"},
+    {"cursor-close", cfun_cursor_close, "(cursor-close c) -- close the cursor"},
 
     {"sm:errnum", cfun_sm_errnum, "(sm:errnum) -- last error code"},
     {"sm:errname", cfun_sm_errname, "(sm:errname) -- last error name"},

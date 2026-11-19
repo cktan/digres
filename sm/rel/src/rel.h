@@ -121,8 +121,8 @@ struct session_ctx_t {
   int32_t next_cursor = 0; /* the last handle given out */
 };
 
-/* End every cursor s has open, before its transaction ends. */
-void end_cursors(session_ctx_t *s);
+/* Close every cursor s has open, before its transaction ends. */
+void close_cursors(session_ctx_t *s);
 
 /*
  * Forget every cursor s has open without ending it: the engine

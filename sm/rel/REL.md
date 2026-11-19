@@ -937,8 +937,8 @@ nor checked: a tree's dead entries among them, until
 ### `(idx-open index [:ge lo] [:gt lo] [:le hi] [:lt hi])`
 Opens a cursor over the index, with `idx-scan`'s bounds, and
 returns its handle, an integer. The cursor stays open across
-calls until `cursor-close` ends it, or the transaction's end
-does: `commit`, `abort` and `prepare` end the cursors still
+calls until `cursor-close` closes it, or the transaction's end
+does: `commit`, `abort` and `prepare` close the cursors still
 open, as do `session-close` and `env-detach`. It reads at the
 view it opened with, so rows written after it are not among
 its entries.
@@ -951,7 +951,7 @@ as its old view cannot be recreated. A handle that names no
 open cursor panics.
 
 ### `(cursor-close c)`
-Ends the cursor; its handle names none after.
+Closes the cursor; its handle names none after.
 
 ```janet
 (def c (idx-open idx_users_email :ge ["alice@"]))
