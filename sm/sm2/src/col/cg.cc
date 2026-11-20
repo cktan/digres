@@ -833,6 +833,12 @@ bool sm2::cg_may_match(const cg_column_t &col, const cg_stats_t &st,
   if (!b.has_lo && !b.has_hi && !b.has_in) {
     return true;
   }
+  // Keys of another version of the collation may sort otherwise:
+  // min, max and the filter say nothing (../../COLSTORE.md §6.2).
+  if (col.collation &&
+      st.collation_version != collation_version(col.collation)) {
+    return true;
+  }
   const specials_t sp = specials_of(col);
   if (b.has_lo && !may_be_above(st, sp, b.lo, b.lo_incl)) {
     return false;

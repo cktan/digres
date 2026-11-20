@@ -369,7 +369,7 @@ in place of a document.
 | `has_pos_inf`, `has_neg_inf` | bits; the types of `has_nan`, and `date`, `timestamp`, `timestamptz` | `x = 'infinity'`, and ranges with finite min and max |
 | `has_long` | bit: the CG holds a long value (§5.4) | tells the filter's rule of §6.3 |
 | `sorted` | bit: the CG is in ascending key order | nothing reads it yet |
-| collation version | for each collated column | recorded; nothing compares it yet ([`NEXT.md`](NEXT.md)) |
+| collation version | for each collated column | turns off pruning by value for a CG whose version is not the column's |
 
 These follow and need no field:
 
@@ -384,12 +384,11 @@ These follow and need no field:
   skip a CG if and only if `max <= c`, `has_nan` is clear and
   `has_pos_inf` is clear. The other comparisons follow by
   symmetry.
-- **A CG records the version of its column's collation.** The
-  min and max of `text` begin with the collation's sort key, and
-  a new ICU version can change it. A check that turns off
-  pruning for a CG of another version is not built
-  ([`NEXT.md`](NEXT.md)): until then, an ICU upgrade can make a
-  scan skip rows that match.
+- **A collation version that is not the column's turns off
+  pruning by value for the CG** (`sm2::cg_may_match`). The min
+  and max of `text` begin with the collation's sort key, and a
+  new ICU version can change it. Without this rule, a scan would
+  skip rows that match. The null count still prunes.
 
 ### 6.3 The filter of a CG
 
@@ -998,7 +997,8 @@ file is corruption; a dropped store's directory goes.
 a CG of each encoding read back; a changed byte is corruption;
 NaN and infinity in the flags; pruning skips only CGs that
 cannot match; a long value with a short key is not skipped by
-the filter; **pruning never skips a match**, for random CGs and
+the filter; a CG of another collation version is not pruned by
+value; **pruning never skips a match**, for random CGs and
 random bounds, against a test of every value.
 
 ### 15.3 sm3: unit tests

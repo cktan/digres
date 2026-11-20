@@ -261,6 +261,48 @@ TEST_CASE("a long value with a short key is not skipped by the filter") {
   CHECK_FALSE(sm2::cg_may_match(col, b.stats, b.filter, eq("c")));
 }
 
+// Verify that a CG of another version of its column's collation is
+// not pruned by its values: their keys may sort otherwise now.
+// 1. Build a text CG of "b" and "c" under an ICU collation.
+// 2. With the version it was built with, = 'a' and > 'x' skip it.
+// 3. With another version recorded, neither skips it; IS NULL still
+//    does, as the CG holds no null.
+TEST_CASE("a CG of another collation version is not pruned by value") {
+  // 1. The CG.
+  sm2::collation_t *coll = nullptr;
+  REQUIRE_MESSAGE(sm2::collation_open("en-US", true, "", coll) == 0,
+                  sm1::errmsg());
+  sm2::cg_column_t col{&sm2::type_text, -1, coll};
+  sm2::cg_built_t b;
+  REQUIRE(sm2::cg_build(
+              col,
+              values({datum(sm2::type_text, "b"), datum(sm2::type_text, "c")}),
+              b) == 0);
+  REQUIRE(b.stats.collation_version == sm2::collation_version(coll));
+  auto k = [&](std::string_view s) {
+    std::string out;
+    REQUIRE(sm2::type_text.key_encode(datum(sm2::type_text, s), -1, coll,
+                                      out) == 0);
+    return out;
+  };
+  sm2::cg_bound_t eq, above, null;
+  eq.not_null = eq.has_in = true;
+  eq.in = {k("a")};
+  above.not_null = above.has_lo = true;
+  above.lo = k("x");
+  null.is_null = true;
+  // 2. The same version.
+  CHECK_FALSE(sm2::cg_may_match(col, b.stats, b.filter, eq));
+  CHECK_FALSE(sm2::cg_may_match(col, b.stats, b.filter, above));
+  // 3. Another version.
+  sm2::cg_stats_t old = b.stats;
+  old.collation_version = "0.0-old";
+  CHECK(sm2::cg_may_match(col, old, b.filter, eq));
+  CHECK(sm2::cg_may_match(col, old, b.filter, above));
+  CHECK_FALSE(sm2::cg_may_match(col, old, b.filter, null));
+  sm2::collation_close(coll);
+}
+
 // Verify that pruning never skips a CG holding a match.
 // 1. Build random int4 CGs, some with nulls.
 // 2. For random ranges, equalities and IN lists, compare the

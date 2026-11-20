@@ -433,11 +433,6 @@ Owed, and blocking nothing above:
 - **The Column Store's parts not built**
   ([`COLSTORE.md`](COLSTORE.md)). Each is owed; none blocks the
   table's use:
-  - **The collation version is not checked.** A CG records its
-    column's collation version, and nothing compares it: after
-    an ICU upgrade, a scan can skip an RG whose `text` min and
-    max sort differently. The check turns off pruning for a CG
-    of another version (§6.2).
   - **A scan hands out sm2 tuples**, so a row of more than
     64 KB fails in a scan. Datums handed out with no tuple
     remove the limit (§12).
@@ -465,7 +460,7 @@ Owed, and blocking nothing above:
       corrupt;
     - sm2: the choice of a dictionary by size; the exact set at
       4 KB and a bloom filter above it; the hash of a
-      non-deterministic collation's key; the collation version;
+      non-deterministic collation's key;
     - sm3: TOAST chunks erased by the seal; a prepared writer
       skipped by the seal and given up on by RG compaction; a
       row lock across RG compaction; a bulk load's rollback to
