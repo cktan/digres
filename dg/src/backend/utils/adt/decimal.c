@@ -44,6 +44,7 @@
 #include "utils/numeric.h"
 #include "utils/pg_lsn.h"
 #include "utils/sortsupport.h"
+#include "ty_decimal.h"
 
 typedef __int128 i128;
 typedef unsigned __int128 u128;
@@ -3365,12 +3366,19 @@ static int d64_common_scale(Datum a, Datum b, i128 *x, i128 *y) {
   return sa;
 }
 
-/* a + b, a decimal128, in 128 bits: no wide path, one palloc. */
+/*
+ * a + b, a decimal128: ty adds the values in 128 bits, and the result is
+ * packed here, with one palloc.
+ */
 Datum decimal64_add(PG_FUNCTION_ARGS) {
-  i128 x, y;
-  int s = d64_common_scale(PG_GETARG_DATUM(0), PG_GETARG_DATUM(1), &x, &y);
+  Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
+  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
+  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
+  ty_decimal128_t r;
 
-  PG_RETURN_NUMERIC(dec_make(x + y, s));
+  /* The addition is ty's: it takes the two parts of each decimal64. */
+  ty_decimal64_add(&a, &b, &r);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* a - b, a decimal128, in 128 bits. */

@@ -4,6 +4,8 @@
 # ty -- the operations of the SQL types, for sm and digres to call.
 #
 #   make -j4         build build/libty.a and the test binary
+#   make build/libty-release.a   the library, optimized: what digres's
+#                    release build links
 #   make test        build, and run the tests in test/
 #   make tsan        the tests under the thread sanitizer
 #   make clean       remove build/
@@ -69,6 +71,20 @@ $(BUILD)/test/%.o: test/%.cc $(FLAGS_FILE)
 test: all
 	$(TEST_BIN)
 
+# The library again, optimized, its objects apart in build/rel: what
+# digres's release build links, as it links sq's.
+REL_OBJS     := $(LIB_OBJS:$(BUILD)/%=$(BUILD)/rel/%)
+REL_CXXFLAGS := -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc -MMD -MP \
+                -O2 -DNDEBUG
+
+$(BUILD)/libty-release.a: $(REL_OBJS)
+	rm -f $@
+	$(AR) rcs $@ $^
+
+$(BUILD)/rel/src/%.o: src/%.cc
+	@mkdir -p $(dir $@)
+	$(CXX) $(REL_CXXFLAGS) -c -o $@ $<
+
 # The tests again, with the library built into them under the thread
 # sanitizer. setarch -R stops the kernel's randomisation from moving
 # the sanitizer's shadow memory.
@@ -85,4 +101,4 @@ clean:
 format:
 	clang-format -i src/*.cc src/*.h test/*.cc
 
--include $(LIB_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
+-include $(LIB_OBJS:.o=.d) $(TEST_OBJS:.o=.d) $(REL_OBJS:.o=.d)

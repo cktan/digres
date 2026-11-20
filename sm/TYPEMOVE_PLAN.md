@@ -64,8 +64,8 @@ Settled on 2026-11-20. Three kinds of result, three answers:
 
 | Result | Example | Memory |
 | --- | --- | --- |
-| By value | `decimal64 + decimal64`, `int4 * int4` | none: it is the return value |
-| Fixed width by reference | `decimal128`, `uuid`, `interval` | the caller's storage: an out-parameter |
+| By value | `int4 * int4`, `-decimal64` | none: it is the return value |
+| Fixed width by reference | `decimal64 + decimal64` (a `decimal128`), `uuid`, `interval` | the caller's storage: an out-parameter |
 | Variable width | `text || text`, `replace()`, `repeat()` | the calling thread's alloc function, below |
 
 The first two need no design. A variable-width result gets its
@@ -212,8 +212,10 @@ session lookup, and a statement's instructions do not move.
 - The call is a C-style function in [`ty/include/ty.h`](
   ../ty/include/ty.h), or a header of ty's beside it: not in the
   2,103 lines of `sm.h`. Proposed name pattern:
-  `ty_dec128_add(const ty_dec128_t*, const ty_dec128_t*,
-  ty_dec128_t* result)`.
+  `ty_decimal64_add(const ty_decimal64_t*, const ty_decimal64_t*,
+  ty_decimal128_t* result)`. A decimal is a value and a scale:
+  the host packs it into a Datum, as digres does, and ty takes
+  the two parts.
 - sm2's `type_t` table stays for storage. The operations are
   not entries in it. sm2 calls ty where it evaluates one.
 - digres's wrapper keeps `PG_FUNCTION_ARGS`, the fmgr, the
@@ -247,10 +249,14 @@ copied from PostgreSQL keeps its copyright notice
    numeric regression files. → verify: numbers saved, files
    pass.
 2. **One function end to end.** Move `decimal64` add into ty
-   with decision 1's by-value result and decision 2's error. →
-   verify: the regression files pass unchanged, and the
+   (`ty_decimal64_add`, in `ty/include/ty_decimal.h`). Its result
+   is a `decimal128`, by reference, so it goes in the caller's
+   storage, an out-parameter. It cannot fail: two decimal64 add
+   exactly in 128 bits, so decision 2's error is not used yet.
+   → verify: the regression files pass unchanged, and the
    instruction count is within the limit of the open question
-   below.
+   below. Built on 2026-11-20; the instruction count waits for
+   the baseline, which `perf` cannot take on this box.
 3. **The rest of decimal's core**, in groups: arithmetic, then
    rounding, then functions of the exponent. → verify: the
    same, after each group.
@@ -278,7 +284,9 @@ copied from PostgreSQL keeps its copyright notice
 4. How does sm report a ty error that reaches one of its calls?
    One `SM_ERR_TYPE` and a copy of ty's message, or a mapping
    of each ty kind to an `SM_ERR_` code.
-5. The header names and places for the operations inside ty.
+5. The header names for the operations inside ty: one header
+   for a type, `ty_decimal.h`, with `ty_decimal64_t` and
+   `ty_decimal128_t`. Is that the pattern for the next types?
 6. Does `sm_toast_fetch` change to return a datum from the
    thread's alloc function, or does a new call do it, so that
    `std::string` callers stay as they are?

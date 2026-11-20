@@ -55,6 +55,10 @@ LDLIBS = $(LINK_ROCKSDB) -lssl -lcrypto -licui18n -licuuc -licudata -lm \
 SQ := ../sq
 LIBSQ := $(SQ)/build/libsq.a
 LIBSQ_REL := $(SQ)/build/libsq-release.a
+# The operations of the SQL types, a library of its own too (../ty).
+TY := ../ty
+LIBTY := $(TY)/build/libty.a
+LIBTY_REL := $(TY)/build/libty-release.a
 # The storage stack, a library of its own too (../sm). Its level 0,
 # sm0, holds the system services digres builds on (sm_sys.h), so this
 # one library brings them.
@@ -113,6 +117,7 @@ OPT := -O2
 ASSERT := -DNDEBUG
 SERVER := build/digres-release
 LIBSQ := $(LIBSQ_REL)
+LIBTY := $(LIBTY_REL)
 LINK_SM := $(LIBSM_REL)
 LINK_AA := $(LIBAA_REL)
 else
@@ -131,6 +136,7 @@ $(OBJDIR)/backend/storage/file/%.o: CPPFLAGS += -I$(SM)/include
 $(OBJDIR)/backend/storage/ipc/%.o:  CPPFLAGS += -I$(SM)/include
 $(OBJDIR)/backend/utils/init/%.o:   CPPFLAGS += -I$(SM)/include
 $(OBJDIR)/backend/parser/%.o:       CPPFLAGS += -I$(SQ)/include
+$(OBJDIR)/backend/utils/adt/%.o:    CPPFLAGS += -I$(TY)/include
 $(OBJDIR)/backend/main/%.o:         CPPFLAGS += -I$(SM)/include -I$(SQ)/include
 
 # The flags the server's objects are built with, which "digres --build"
@@ -198,7 +204,7 @@ gen: $(GEN)
 .PHONY: server
 server: $(SERVER)
 
-$(SERVER): $(OBJS) $(LIBSQ) $(LINK_SM) $(LINK_AA) $(ROCKSDB_LIB)
+$(SERVER): $(OBJS) $(LIBSQ) $(LIBTY) $(LINK_SM) $(LINK_AA) $(ROCKSDB_LIB)
 	@mkdir -p build
 	$(CHECK_GLOBALS)
 	# What it says of the RocksDB it links, for "digres --build"
@@ -208,7 +214,7 @@ $(SERVER): $(OBJS) $(LIBSQ) $(LINK_SM) $(LINK_AA) $(ROCKSDB_LIB)
 	    -DDG_ROCKSDB_BUILD="\"static, $$(cat $(dir $(ROCKSDB_LIB))flags)\"" \
 	    -c -o $(OBJDIR)/rocksdb_build.o src/backend/main/rocksdb_build.cc
 	$(CXX) $(OPT) -o $@ $(OBJDIR)/rocksdb_build.o $(OBJS) \
-	    $(LIBSQ) $(LINK_AA) $(LINK_SM) $(LDLIBS)
+	    $(LIBSQ) $(LIBTY) $(LINK_AA) $(LINK_SM) $(LDLIBS)
 
 $(OBJDIR)/%.o: src/%.c
 	@mkdir -p $(dir $@)
@@ -219,9 +225,9 @@ $(OBJDIR)/%.o: src/%.c
 # sessions, and test/server.sh run on it. The sanitizer cannot map its
 # memory with the address space randomised, hence setarch -R. Every
 # library that runs threads is instrumented: sm, sm_sys.h's services
-# among it, and RocksDB, built by ../ext. sq, the parser, is not.
+# among it, and RocksDB, built by ../ext. sq, the parser, and ty are not.
 .PHONY: tsan
-tsan: $(LIBSQ) $(LIBSM_TSAN) $(LIBAA_TSAN) $(ROCKSDB_TSAN)
+tsan: $(LIBSQ) $(LIBTY) $(LIBSM_TSAN) $(LIBAA_TSAN) $(ROCKSDB_TSAN)
 	$(MAKE) gen
 	$(MAKE) server FLAVOR=tsan
 	DIGRES="setarch $$(uname -m) -R build/digres-tsan" test/run.sh
@@ -312,7 +318,7 @@ slt-corpus:
 # (../bench.old/DESIGN.md section 2). "digres-release --init" makes a data
 # directory.
 .PHONY: release
-release: $(LIBSQ_REL) $(LIBSM_REL) $(LIBAA_REL) $(ROCKSDB_REL)
+release: $(LIBSQ_REL) $(LIBTY_REL) $(LIBSM_REL) $(LIBAA_REL) $(ROCKSDB_REL)
 	$(MAKE) gen
 	$(MAKE) server FLAVOR=rel
 
@@ -322,6 +328,13 @@ $(LIBSQ):
 	$(MAKE) -C $(SQ) build/libsq.a
 $(LIBSQ_REL):
 	$(MAKE) -C $(SQ) build/libsq-release.a
+
+# So does ty.
+.PHONY: $(LIBTY) $(LIBTY_REL)
+$(LIBTY):
+	$(MAKE) -C $(TY) build/libty.a
+$(LIBTY_REL):
+	$(MAKE) -C $(TY) build/libty-release.a
 
 # So does sm, plain, for the thread sanitizer, and for the release build.
 .PHONY: $(LIBSM) $(LIBSM_TSAN) $(LIBSM_REL)
