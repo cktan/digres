@@ -73,10 +73,10 @@ general: nothing in it is specific to PostgreSQL.
 ### 3.1 The hook
 
 ```
-typedef void* (*sm_alloc_fn)(void* arg, size_t size) noexcept;
-typedef void  (*sm_free_fn)(void* arg, void* p) noexcept;
+typedef void* (*sm_alloc_fn)(size_t size) noexcept;
+typedef void  (*sm_free_fn)(void* p) noexcept;
 
-int  sm_set_alloc(sm_alloc_fn alloc, sm_free_fn free, void* arg);
+int  sm_set_alloc(sm_alloc_fn alloc, sm_free_fn free);
 void sm_free(void* p);
 ```
 
@@ -100,7 +100,7 @@ void sm_free(void* p);
    are `noexcept`, as `sm_log_fn` is. A host whose allocator
    throws wraps it: the wrapper catches and returns NULL.
 3. Be safe to call on every host thread that calls sm.
-4. In `free`, accept any pointer that `alloc` returned. sm
+4. `free` takes a pointer that `alloc` returned before. sm
    never passes NULL.
 
 Why NULL and not an exception: no exception crosses `sm.h`'s
@@ -158,8 +158,8 @@ allocate with `malloc()` and `free()`, or with an `arena_t`. A
 datum made on one of them never goes to the host.
 
 So inside sm, code that makes a datum takes its allocator as
-an argument, `sm_mem_t`: an alloc function, a free function
-and an arg. An entry point on a host thread passes the
+an argument, `sm_mem_t`: an alloc function and a free
+function. An entry point on a host thread passes the
 installed hook. sm's own threads pass `malloc()` and `free()`.
 The argument is explicit, so a worker cannot use the hook by
 mistake. `sm_mem_t` is a small new type in sm0.

@@ -163,7 +163,11 @@ typedef void (*sq_notice_fn)(void* arg, const sq_notice_t* notice);
  *     cannot. It must return normally: it must not throw or longjmp.
  *     sq reports a NULL as SQ_ERR_NOMEM.
  *   - free gives back a piece that sq no longer uses: a list's array
- *     that a bigger one replaced. It must not throw or longjmp.
+ *     that a bigger one replaced. It takes a pointer that alloc
+ *     returned before, and sq never passes NULL. It must not throw
+ *     or longjmp.
+ *   - alloc and free are safe to call from any thread that parses: a
+ *     number of threads may parse at once with the same allocator.
  *   - sq frees nothing else. The tree's nodes, lists and text, and
  *     the tree's store, stay allocated when the tree is destroyed,
  *     and when a parse fails. The caller frees them: it keeps track

@@ -208,6 +208,10 @@ arena. The two have the signatures of `malloc` and `free`.
   as it reports any error.
 - alloc and free must return normally: they must not throw or
   `longjmp` (§5).
+- free takes a pointer that alloc returned before. sq never
+  passes NULL.
+- alloc and free must be safe to call from any thread that
+  parses. Threads may parse at once with the same allocator.
 
 **WARNING: do not put digres's nodes in an arena.** digres needs
 the allocator, because PostgreSQL does not treat the tree as
