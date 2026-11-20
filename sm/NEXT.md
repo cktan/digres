@@ -510,6 +510,24 @@ Owed, and blocking nothing above:
   delete nothing. Designed, and not to be built for now: we
   lean towards the capped undo list, for the reasons at the
   top of that file.
+- **Replace `PG_TRY`, `PG_CATCH`, `PG_FINALLY`, `PG_END_TRY`
+  and `PG_RE_THROW` with C++ constructs** in dg. The macros, in
+  `../dg/src/include/utils/elog.h`, are a `try` and a
+  `catch (const pg_error_t &)` already, and they save and
+  restore `PG_exception_handled` and `error_context_stack`.
+  There are 45 `PG_TRY` blocks in 28 files of `../dg/src`. Each
+  becomes:
+  - a `try`, and a `catch (const pg_error_t &)` for `PG_CATCH`;
+  - a guard object whose destructor restores the two globals,
+    in place of the macros' saved copies;
+  - a scope guard for `PG_FINALLY`, which runs on every exit;
+  - `throw;` for `PG_RE_THROW()` in a catch.
+
+  Then a `return`, `break` or `continue` out of the block is
+  safe, and the rule against it in
+  [`../dg/CODE.md`](../dg/CODE.md#2-c-compiled-as-c) §2 goes.
+  To decide: whether the macros stay for PostgreSQL code ported
+  later from `REL_18_STABLE`, or go.
 
 ---
 
