@@ -162,3 +162,31 @@ TEST_CASE("decimal64 mul is exact, and fails past 17 digits or places") {
   CHECK(7 == r.value);
   CHECK(7 == r.scale);
 }
+
+// Verify negate, absolute value and sign of a decimal64.
+// 1. Negate a positive, a negative, and zero.
+// 2. Take the absolute value of a positive, a negative, and zero.
+// 3. Take the sign of each: 1, -1 and 0, at any scale.
+TEST_CASE("decimal64 neg, abs and sign keep the scale") {
+  ty_decimal64_t pos = {125, 2};
+  ty_decimal64_t neg = {-125, 2};
+  ty_decimal64_t zero = {0, 5};
+
+  // 1. Negate a positive, a negative, and zero.
+  CHECK(-125 == ty_decimal64_neg(pos).value);
+  CHECK(2 == ty_decimal64_neg(pos).scale);
+  CHECK(125 == ty_decimal64_neg(neg).value);
+  CHECK(0 == ty_decimal64_neg(zero).value);
+  CHECK(5 == ty_decimal64_neg(zero).scale);
+
+  // 2. Take the absolute value of a positive, a negative, and zero.
+  CHECK(125 == ty_decimal64_abs(pos).value);
+  CHECK(125 == ty_decimal64_abs(neg).value);
+  CHECK(2 == ty_decimal64_abs(neg).scale);
+  CHECK(0 == ty_decimal64_abs(zero).value);
+
+  // 3. Take the sign of each: 1, -1 and 0, at any scale.
+  CHECK(1 == ty_decimal64_sign(pos));
+  CHECK(-1 == ty_decimal64_sign(neg));
+  CHECK(0 == ty_decimal64_sign(zero));
+}

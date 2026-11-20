@@ -15,7 +15,8 @@
  *     error; the code and message are then read with ty_errnum()
  *     and ty_errmsg(). The error state is per thread.
  *   - A call that yields a value hands it back through its last
- *     parameter, set only on success.
+ *     parameter, set only on success. A call that cannot fail
+ *     returns its result.
  *   - A result of variable width is the caller's: ty allocates it
  *     with the thread's alloc function (ty_set_alloc), and never
  *     frees it. ty frees only what it allocated and did not

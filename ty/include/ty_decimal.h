@@ -35,6 +35,27 @@ typedef struct ty_decimal128_t {
     int         scale;
 } ty_decimal128_t;
 
+/*
+ * A call that cannot fail returns its result, and is inline: the host's
+ * wrapper then costs no call. Its argument is a decimal64 that holds at
+ * most 17 digits.
+ */
+
+/* -a. */
+static inline ty_decimal64_t ty_decimal64_neg(ty_decimal64_t a) {
+    return {-a.value, a.scale};
+}
+
+/* |a|. */
+static inline ty_decimal64_t ty_decimal64_abs(ty_decimal64_t a) {
+    return {a.value < 0 ? -a.value : a.value, a.scale};
+}
+
+/* -1, 0 or 1: the sign of a. */
+static inline int ty_decimal64_sign(ty_decimal64_t a) {
+    return (a.value > 0) - (a.value < 0);
+}
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DECIMAL64_MAX_DIGITS 17
 #define TY_DECIMAL64_MAX_SCALE  17

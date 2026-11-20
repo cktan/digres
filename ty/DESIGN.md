@@ -38,6 +38,9 @@ The interface is C in style and compiled as C++, as `sm.h` is.
 - A call returns 0 on success and -1 on failure. A call that
   yields a value gives it through its last parameter, set only on
   success.
+- A call that cannot fail returns its result, and may be an
+  inline function in the header, so that a host's wrapper costs
+  no call: `ty_decimal64_neg`, `_abs` and `_sign` are.
 - The error state is per thread: `ty_errnum()`, `ty_errmsg()`,
   `ty_errname()`. A message is copied into a buffer of the
   thread, so an error can be recorded when memory has run out.

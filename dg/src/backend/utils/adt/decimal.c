@@ -3429,17 +3429,18 @@ Datum decimal64_div(PG_FUNCTION_ARGS) {
 
 /* -a. */
 Datum decimal64_uminus(PG_FUNCTION_ARGS) {
-  Datum a = PG_GETARG_DATUM(0);
+  Datum da = PG_GETARG_DATUM(0);
+  ty_decimal64_t r = ty_decimal64_neg({d64_value(da), d64_scale(da)});
 
-  return d64_make(-d64_value(a), d64_scale(a));
+  return d64_make(r.value, r.scale);
 }
 
 /* |a|. */
 Datum decimal64_abs(PG_FUNCTION_ARGS) {
-  Datum a = PG_GETARG_DATUM(0);
+  Datum da = PG_GETARG_DATUM(0);
+  ty_decimal64_t r = ty_decimal64_abs({d64_value(da), d64_scale(da)});
 
-  return d64_make(d64_value(a) < 0 ? -d64_value(a) : d64_value(a),
-                  d64_scale(a));
+  return d64_make(r.value, r.scale);
 }
 
 /* Accumulate a decimal64 for sum and avg (agg_fast_accum()). */
@@ -3557,9 +3558,9 @@ Datum decimal64_mod(PG_FUNCTION_ARGS) {
 
 /* sign(decimal64): -1, 0 or 1, at scale 0, as numeric's. */
 Datum decimal64_sign(PG_FUNCTION_ARGS) {
-  int64 v = d64_value(PG_GETARG_DATUM(0));
+  Datum da = PG_GETARG_DATUM(0);
 
-  return d64_make((v > 0) - (v < 0), 0);
+  return d64_make(ty_decimal64_sign({d64_value(da), d64_scale(da)}), 0);
 }
 
 /* The greatest common divisor of the magnitudes of x and y, by Euclid. */
