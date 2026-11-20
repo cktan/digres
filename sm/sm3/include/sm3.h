@@ -1672,6 +1672,18 @@ int tbl_delete_at(table_t* table, uint64_t rg_id, uint64_t id);
  * is sealed: sealed is false, and nothing is left written.
  */
 int tbl_seal(table_t* table, bool& sealed);
+
+/*
+ * Compact row groups rgs of a column store table into new ones
+ * (../COLSTORE.md §11), in the caller's transaction, at READ
+ * COMMITTED: their live rows, each marked moved in its old row group,
+ * into new row groups of at most rg_max_rows rows, and the old row
+ * groups gone. A row with a writer in flight or prepared gives up:
+ * done is false, and nothing is left written. A writer of a moved
+ * row follows it to its new row group.
+ */
+int tbl_compact_rgs(table_t* table, std::span<const uint64_t> rgs,
+                    bool& done);
 int tbl_update_at(table_t* table, uint64_t rg_id, uint64_t id,
                   std::span<const sm2::datum_t> values,
                   std::span<const bool> isnull);

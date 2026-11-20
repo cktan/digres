@@ -548,6 +548,12 @@ int col_scan_next(col_scan_t *c, uint64_t &id, std::string_view &tuple) {
         return -1;
       }
       c->open = true;
+      // A row group a fifth dead is queued for its compaction: a
+      // restart loses the markers' counts (../COLSTORE.md §11.1).
+      if (c->rg.deleted.size() * 5 >= c->rg.meta.rows) {
+        sealer_enqueue_rg(tbl_session(c->table)->cat, tbl_def(c->table).oid,
+                          rg_id);
+      }
     }
     int r = rg_read_next(c->table, c->rg, id, c->values,
                          std::span<bool>(c->isnull.get(), ncols));
@@ -600,6 +606,106 @@ int col_find_latest(table_t *table, uint64_t id, uint64_t &rg_id) {
   }
   sm1::view_latest(s, was);
   return rc;
+}
+
+/* Compact row groups; see colstore.h. */
+int col_compact(table_t *table, std::span<const uint64_t> rgs, bool &done) {
+  done = false;
+  const table_def_t &def = tbl_def(table);
+  sm1::session_t *s = tbl_session(table)->sm1;
+  // 1. A savepoint, so a give-up leaves nothing; the newest committed
+  //    state, so no delete committed since a snapshot is missed.
+  int depth = sm1::savepoint(s);
+  if (depth < 0) {
+    return -1;
+  }
+  bool was = false;
+  if (sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  auto give_up = [&](int rc) {
+    sm1::view_latest(s, was);
+    if (sm1::rollback(s, depth) != 0) {
+      return -1;
+    }
+    return rc;
+  };
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  if (sm1::fileset_list(s, def.storeid, sets) != 0) {
+    return give_up(-1);
+  }
+  rg_build_t b;
+  rg_build_begin(b, table);
+  const size_t ncols = def.columns.size();
+  std::vector<sm2::datum_t> values(ncols);
+  std::unique_ptr<bool[]> isnull(new bool[ncols]);
+  std::vector<rg_meta_t> olds;
+  for (uint64_t rg_id : rgs) {
+    const std::string *value = nullptr;
+    for (const auto &[id, v] : sets) {
+      if (id == rg_id) {
+        value = &v;
+      }
+    }
+    if (!value) {
+      return give_up(
+          sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                      "column store: no row group " + std::to_string(rg_id)));
+    }
+    rg_meta_t meta;
+    if (rg_meta_decode(*value, meta) != 0) {
+      return give_up(-1);
+    }
+    olds.push_back(meta);
+    rg_read_t r;
+    if (rg_read_open(table, rg_id, std::move(meta), {}, r) != 0) {
+      rg_read_close(r);
+      return give_up(-1);
+    }
+    // 2. Each live row: its lock, its moved marker, its values.
+    uint64_t id;
+    int rc;
+    while ((rc = rg_read_next(table, r, id, values,
+                              std::span<bool>(isnull.get(), ncols))) == 0) {
+      int got = tbl_trylock(table, id, sm1::SM_LOCKMODE_EX);
+      if (got != 0) {
+        rg_read_close(r);
+        return give_up(got < 0 ? -1 : 0);
+      }
+      if (sm1::insert_sealed(s, def.storeid, marker_key(rg_id, id), "") != 0 ||
+          rg_build_add(b, id, values,
+                       std::span<const bool>(isnull.get(), ncols)) != 0) {
+        rg_read_close(r);
+        return give_up(-1);
+      }
+      if (b.ids.size() >= rg_max_rows && rg_build_flush(b) != 0) {
+        rg_read_close(r);
+        return give_up(-1);
+      }
+    }
+    rg_read_close(r);
+    if (rc < 0) {
+      return give_up(-1);
+    }
+  }
+  // 3. The new row group, then the old ones' keys and filters.
+  if (rg_build_flush(b) != 0) {
+    return give_up(-1);
+  }
+  for (size_t i = 0; i < olds.size(); i++) {
+    uint64_t rg_id = rgs[i];
+    if (sm1::fileset_erase(s, def.storeid, rg_id) != 0) {
+      return give_up(-1);
+    }
+    for (const rg_col_t &c : olds[i].cols) {
+      if (sm1::erase(s, def.storeid, filter_key(rg_id, c.attnum)) != 0) {
+        return give_up(-1);
+      }
+    }
+  }
+  sm1::view_latest(s, was);
+  done = true;
+  return sm1::forget(s, depth);
 }
 
 /* Close the row group part of a scan; see colstore.h. */

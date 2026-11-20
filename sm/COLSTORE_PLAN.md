@@ -1,6 +1,7 @@
 # COLSTORE_PLAN — building the Column Store
 
-Status: steps 1 to 9 are built; of step 12 the C API of a
+Status: steps 1 to 9 are built; of step 10 all but the merge of
+small RGs by itself; of step 12 the C API of a
 table's kind, its rows by name and its seal, with rel's
 `:column-store`, `seal`, `rg-of` and `delete-at`, not a scan's
 columns and bounds.

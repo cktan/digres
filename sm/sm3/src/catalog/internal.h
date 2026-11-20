@@ -248,6 +248,12 @@ struct sm3::session_t {
    * (../COLSTORE.md §10.4).
    */
   std::unordered_map<uint64_t, uint64_t> col_inserts;
+  /*
+   * The delete markers the transaction put on each row group, by
+   * (table oid, rg_id), for RG compaction's counts at its commit
+   * (../COLSTORE.md §11.1).
+   */
+  std::map<std::pair<uint64_t, uint64_t>, uint64_t> col_marks;
   bool in_txn = false;      /* between begin and commit or abort */
   uint64_t snap_seq = 0;    /* cat->seq, noted before the snapshot */
   bool stmt_pinned = false; /* stmt_begin was called: statement snapshots */

@@ -431,6 +431,7 @@ int begin(session_t *s, sm1::xctlevel_t level, bool read_only) {
   }
   s->drop_nsps.clear();
   s->col_inserts.clear();
+  s->col_marks.clear();
   s->level = level;
   s->depth = 0;
   s->snap_seq = seq;
@@ -656,12 +657,18 @@ int commit(session_t *s) {
   s->drop_nsps.clear();
   std::unordered_map<uint64_t, uint64_t> inserts = std::move(s->col_inserts);
   s->col_inserts.clear();
+  std::map<std::pair<uint64_t, uint64_t>, uint64_t> marks =
+      std::move(s->col_marks);
+  s->col_marks.clear();
   if (commit_txn(s) != 0) {
     return -1;
   }
   // The rows are committed: they count toward each table's seal.
   for (const auto &[oid, n] : inserts) {
     sealer_count(s->cat, oid, n);
+  }
+  for (const auto &[key, n] : marks) {
+    sealer_count_marks(s->cat, key.first, key.second, n);
   }
   // The drop is durable; a sequence it missed is dropped now.
   if (!nsps.empty()) {
@@ -693,6 +700,7 @@ int prepare(session_t *s, std::string_view gid) {
 int abort(session_t *s) {
   s->drop_nsps.clear();
   s->col_inserts.clear();
+  s->col_marks.clear();
   close_tree_scans(s);
   release_all_pins(s);
   drop_from(s, 0);

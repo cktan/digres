@@ -630,3 +630,153 @@ TEST_CASE("the seal's job seals a delta store at a row group's worth") {
   CHECK(scan_rows(db, c).size() == 10000);
   sm3::sealer_detach(db.cat);
 }
+
+namespace {
+
+/* Compact row groups rgs of c in a transaction of its own; done. */
+bool compact(sm3::session_t *ss, uint64_t c, std::vector<uint64_t> rgs) {
+  REQUIRE(sm3::begin(ss, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  bool done = false;
+  REQUIRE_MESSAGE(sm3::tbl_compact_rgs(t, rgs, done) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss) == 0);
+  return done;
+}
+
+/* Delete rows a = from .. to - 1 of c by their names. */
+void delete_rows(col_db_t &db, uint64_t c, int from, int to) {
+  std::vector<std::pair<uint64_t, uint64_t>> names;
+  for (int a = from; a < to; a++) {
+    names.push_back(where(db, c, a));
+  }
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  for (auto [rg, id] : names) {
+    REQUIRE(sm3::tbl_delete_at(t, rg, id) == 0);
+  }
+  sm3::tbl_close(t);
+  db.commit();
+}
+
+} // namespace
+
+// Verify RG compaction rewrites a row group's live rows into a new
+// one, and gives up on a row with a writer in flight.
+// 1. Load 10,000 rows: one row group; delete a = 0 .. 29.
+// 2. S2 locks a = 50: compaction gives up, and nothing changes.
+// 3. S2 commits: compaction makes a new row group of 9,970 rows, and
+//    the old one is gone; a scan gives 9,970 rows, a = 50 among them.
+TEST_CASE("RG compaction rewrites live rows, and gives up on a writer") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows, some deleted.
+  load_rows(db, c, 10000);
+  uint64_t rg = where(db, c, 100).first;
+  REQUIRE(rg != 0);
+  delete_rows(db, c, 0, 30);
+  // 2. A writer in flight.
+  sm1::session_t *s2 = db.open();
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t2 = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  REQUIRE(sm3::tbl_lock(t2, where(db, c, 50).second, sm1::SM_LOCKMODE_EX) == 0);
+  sm1::session_t *s3 = db.open();
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
+  CHECK_FALSE(compact(ss3, c, {rg}));
+  CHECK(where(db, c, 100).first == rg);
+  sm3::tbl_close(t2);
+  REQUIRE(sm3::commit(ss2) == 0);
+  // 3. Now.
+  CHECK(compact(ss3, c, {rg}));
+  CHECK(row_groups(db, c) == 1);
+  uint64_t rg2 = where(db, c, 100).first;
+  CHECK(rg2 != 0);
+  CHECK(rg2 != rg);
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 9970);
+  CHECK(rows.count(50) == 1);
+  CHECK(rows.count(10) == 0);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify a writer whose snapshot is older than RG compaction follows
+// a moved row to its new row group.
+// 1. Load 10,000 rows; R (REPEATABLE READ) reads; RG compaction runs.
+// 2. R deletes a = 7 at its old name: it follows the moved marker to
+//    the new row group, and commits.
+// 3. A scan gives 9,999 rows, and no a = 7.
+TEST_CASE("a writer follows a row RG compaction moved") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  load_rows(db, c, 10000);
+  auto [rg7, id7] = where(db, c, 7);
+  // 1. R, then RG compaction.
+  sm1::session_t *s2 = db.open();
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  sm3::table_t *t2 = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  std::string_view tuple;
+  CHECK(sm3::tbl_read(t2, id7, tuple) == 1);
+  sm1::session_t *s3 = db.open();
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
+  CHECK(compact(ss3, c, {rg7}));
+  // 2. R's delete at the old name.
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t2, rg7, id7) == 0, sm1::errmsg());
+  sm3::tbl_close(t2);
+  REQUIRE(sm3::commit(ss2) == 0);
+  // 3. Gone.
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 9999);
+  CHECK(rows.count(7) == 0);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify the sealer compacts a row group that committed delete
+// markers have made a fifth dead.
+// 1. Attach a sealer; load 10,000 rows: one row group.
+// 2. Delete 1,999 of its rows: not yet a fifth; nothing is queued.
+// 3. Delete one more: the row group is queued and compacted into a
+//    new one of 8,000 rows.
+TEST_CASE("the sealer compacts a row group a fifth dead") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The sealer, and the rows.
+  sm1::env_t *env = db.env();
+  REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+            sm1::session_t *s = nullptr;
+            return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+          }) == 0);
+  load_rows(db, c, 10000);
+  uint64_t rg = where(db, c, 5000).first;
+  REQUIRE(rg != 0);
+  // 2. Not yet.
+  delete_rows(db, c, 0, 1999);
+  sm3::sealer_wait_idle(db.cat);
+  CHECK(where(db, c, 5000).first == rg);
+  // 3. Now.
+  delete_rows(db, c, 1999, 2000);
+  sm3::sealer_wait_idle(db.cat);
+  uint64_t rg2 = where(db, c, 5000).first;
+  CHECK(rg2 != 0);
+  CHECK(rg2 != rg);
+  CHECK(row_groups(db, c) == 1);
+  CHECK(scan_rows(db, c).size() == 8000);
+  sm3::sealer_detach(db.cat);
+}

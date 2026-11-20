@@ -9,9 +9,11 @@ match, from statistics kept in RocksDB.
 **Status.** Built in part, in sm1, sm2 and sm3
 ([`COLSTORE_PLAN.md`](COLSTORE_PLAN.md) has the steps): the
 sealed tombstone, file sets, the CG file, the catalog's kind,
-bulk loads, scans, deletes and updates, the seal and its job,
-and their C API. Not built: RG compaction, `ANALYZE`, the DDL
-of §14, a scan's columns and bounds in the C API, and digres.
+bulk loads, scans, deletes and updates, the seal and its job, RG
+compaction and its trigger, and their C API. Not built: the merge
+of small RGs by itself (`tbl_compact_rgs` merges the RGs it is
+given), `ANALYZE`, the DDL of §14, a scan's columns and bounds in
+the C API, and digres.
 Where the code differs from this design today:
 
 - A scan hands out sm2 tuples, not datums, so a row of more than

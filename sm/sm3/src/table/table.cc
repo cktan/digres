@@ -1630,10 +1630,24 @@ static int mark_deleted(table_t *table, uint64_t rg_id, uint64_t id) {
       0 != sm2::rel_lock(table->rel, key, sm1::SM_LOCKMODE_EX, false)) {
     return -1;
   }
-  // 2. The marker.
+  // 2. The marker. A moved marker there, RG compaction's, sends the
+  //    write to the row's new row group (../COLSTORE.md §11).
   sm1::session_t *s = table->session->sm1;
-  if (sm1::insert(s, table->def->storeid, marker_key(rg_id, id), "") == 0) {
-    return 0;
+  for (int follows = 0;; follows++) {
+    if (sm1::insert(s, table->def->storeid, marker_key(rg_id, id), "") == 0) {
+      // Counted at the commit, for RG compaction (§11.1).
+      table->session->col_marks[{table->def->oid, rg_id}]++;
+      return 0;
+    }
+    if (sm1::errnum() != sm1::SM_ERR_SEALED || follows >= 8) {
+      break;
+    }
+    int f = col_find_latest(table, id, rg_id);
+    if (f != 0) {
+      return f < 0 ? -1
+                   : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                                 "column store: the row was deleted");
+    }
   }
   if (sm1::errnum() != sm1::SM_ERR_DUPKEY) {
     return -1;
@@ -1793,6 +1807,19 @@ int tbl_seal(table_t *table, bool &sealed) {
   }
   sealed = true;
   return sm1::forget(s, depth);
+}
+
+/* Compact a column store table's row groups; see sm3.h. */
+int tbl_compact_rgs(table_t *table, std::span<const uint64_t> rgs, bool &done) {
+  done = false;
+  if (!table->def->column_store) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "table: " + table->def->name +
+                                                " is no column store table");
+  }
+  if (need_writable(table) != 0) {
+    return -1;
+  }
+  return col_compact(table, rgs, done);
 }
 
 /* The rg_id of a scan's last row; see sm3.h. */

@@ -10,7 +10,8 @@
  * own. The insert path counts the rows put into a column store
  * table's delta store, and queues the table at rg_max_rows; a scan
  * that reads that many of them queues it too, for counts a restart
- * lost.
+ * lost. The same worker compacts a row group that delete markers
+ * committed on it have made a fifth dead (../../COLSTORE.md §11.1).
  */
 
 #include "colstore.h"
@@ -19,10 +20,11 @@
 
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace sm3 {
 
@@ -34,8 +36,11 @@ struct sealer_t {
   std::function<sm1::session_t *()> open;
   std::mutex mu;
   std::condition_variable cv;
-  std::deque<uint64_t> queue;                    /* tables to seal, in order */
-  std::unordered_set<uint64_t> queued;           /* the tables in queue */
+  /* Jobs, in order: (table, 0) a seal, (table, rg_id) a compaction. */
+  std::deque<std::pair<uint64_t, uint64_t>> queue;
+  std::set<std::pair<uint64_t, uint64_t>> queued; /* the jobs in queue */
+  /* Delete markers committed on a row group, by (table, rg_id). */
+  std::map<std::pair<uint64_t, uint64_t>, uint64_t> marks;
   std::unordered_map<uint64_t, uint64_t> counts; /* delta rows put */
   bool stop = false;
   bool busy = false; /* a table is being sealed */
@@ -53,9 +58,9 @@ sealer_t *sealer_of(const catalog_t *cat) {
 }
 
 /* Queue table oid on z, once; under z->mu. */
-void enqueue_locked(sealer_t *z, uint64_t oid) {
-  if (z->queued.insert(oid).second) {
-    z->queue.push_back(oid);
+void enqueue_locked(sealer_t *z, uint64_t oid, uint64_t rg_id = 0) {
+  if (z->queued.insert({oid, rg_id}).second) {
+    z->queue.push_back({oid, rg_id});
     z->cv.notify_one();
   }
 }
@@ -100,7 +105,37 @@ void seal_table(sealer_t *z, session_t *ss, uint64_t oid) {
   }
 }
 
-/* The worker: take a table from the queue, and seal it. */
+/*
+ * Compact row group rg_id of table oid, in a READ COMMITTED
+ * transaction of its own. A writer in flight makes it give up: the
+ * next delete markers committed on the row group queue it again.
+ */
+void compact_rg(session_t *ss, uint64_t oid, uint64_t rg_id) {
+  if (begin(ss, sm1::xctlevel_t::read_committed) != 0) {
+    return;
+  }
+  table_t *t = nullptr;
+  bool done = false;
+  uint64_t rgs[1] = {rg_id};
+  int rc = tbl_open(ss, oid, sm1::SM_LOCKMODE_IX, t);
+  if (rc == 0) {
+    rc = tbl_compact_rgs(t, rgs, done);
+    tbl_close(t);
+  }
+  if (rc == 0 && commit(ss) == 0) {
+    return;
+  }
+  // A row group gone since, by a compaction before, ends the job.
+  if (sm1::errnum() != sm1::SM_ERR_NOTFOUND) {
+    sm0::log_msg(sm1::loglevel_t::warn,
+                 "column store: the compaction of row group {} of table "
+                 "{} failed: {}",
+                 rg_id, oid, sm1::errmsg());
+  }
+  abort(ss);
+}
+
+/* The worker: take a job from the queue, and do it. */
 void work(sealer_t *z) {
   std::unique_lock<std::mutex> g(z->mu);
   for (;;) {
@@ -108,16 +143,20 @@ void work(sealer_t *z) {
     if (z->stop) {
       return;
     }
-    uint64_t oid = z->queue.front();
+    auto [oid, rg_id] = z->queue.front();
     z->queue.pop_front();
-    z->queued.erase(oid);
+    z->queued.erase({oid, rg_id});
     z->busy = true;
     g.unlock();
     // A session of its own on the database, for this job.
     sm1::session_t *s = z->open();
     session_t *ss = nullptr;
     if (s && session_open(z->cat, s, ss) == 0) {
-      seal_table(z, ss, oid);
+      if (rg_id == 0) {
+        seal_table(z, ss, oid);
+      } else {
+        compact_rg(ss, oid, rg_id);
+      }
       session_close(ss);
     }
     if (s) {
@@ -180,6 +219,34 @@ void sealer_count(const catalog_t *cat, uint64_t oid, uint64_t rows) {
   if (n >= rg_max_rows) {
     n = 0;
     enqueue_locked(z, oid);
+  }
+}
+
+/* Count delete markers committed on a row group; see colstore.h. */
+void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t rg_id,
+                        uint64_t marks) {
+  std::lock_guard<std::mutex> g(g_mu);
+  sealer_t *z = sealer_of(cat);
+  if (!z) {
+    return;
+  }
+  std::lock_guard<std::mutex> h(z->mu);
+  uint64_t &n = z->marks[{oid, rg_id}];
+  n += marks;
+  // A fifth of a row group's rows (../COLSTORE.md §11.1).
+  if (n >= rg_max_rows / 5) {
+    z->marks.erase({oid, rg_id});
+    enqueue_locked(z, oid, rg_id);
+  }
+}
+
+/* Queue a row group for its compaction; see colstore.h. */
+void sealer_enqueue_rg(const catalog_t *cat, uint64_t oid, uint64_t rg_id) {
+  std::lock_guard<std::mutex> g(g_mu);
+  sealer_t *z = sealer_of(cat);
+  if (z) {
+    std::lock_guard<std::mutex> h(z->mu);
+    enqueue_locked(z, oid, rg_id);
   }
 }
 

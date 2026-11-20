@@ -182,10 +182,31 @@ std::string marker_key(uint64_t rg_id, uint64_t id);
 int col_find_latest(table_t *table, uint64_t id, uint64_t &rg_id);
 
 /*
+ * Compact row groups rgs of table into new ones (../COLSTORE.md §11),
+ * at the newest committed state: each live row locked if free now,
+ * marked moved in its old row group, and added to the new; then the
+ * old row groups' keys erased. A row with a writer in flight or
+ * prepared makes it give up, done false, with nothing left written.
+ * Returns 0 or -1.
+ */
+int col_compact(table_t *table, std::span<const uint64_t> rgs, bool &done);
+
+/*
  * Count rows put into table oid's delta store; at rg_max_rows the
  * table is queued for its seal (sealer.cc). A no-op with no sealer.
  */
 void sealer_count(const catalog_t *cat, uint64_t oid, uint64_t rows);
+
+/*
+ * Count delete markers committed on row group rg_id of table oid; at
+ * a fifth of a row group's rows, the row group is queued for its
+ * compaction (sealer.cc). A no-op with no sealer.
+ */
+void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t rg_id,
+                        uint64_t marks);
+
+/* Queue row group rg_id of table oid for its compaction. */
+void sealer_enqueue_rg(const catalog_t *cat, uint64_t oid, uint64_t rg_id);
 
 /* Queue table oid for its seal; a no-op with no sealer. */
 void sealer_enqueue(const catalog_t *cat, uint64_t oid);
