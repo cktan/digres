@@ -980,6 +980,7 @@ struct sm_table_def_t {
     std::vector<sm_fkey_def_t>   fkeys;         /* its own */
     std::vector<sm_fkey_ref_t>   referenced_by; /* those that reference it */
     std::vector<sm_check_def_t>  checks;        /* its check constraints */
+    bool column_store = false; /* a column store table (../COLSTORE.md) */
 };
 
 /*
@@ -1886,7 +1887,7 @@ int sm_cat_create_table(sm_session_t* session, uint64_t nspoid,
  */
 int sm_cat_create_temp_table(sm_session_t* session, const char* name,
                              const std::vector<sm_column_spec_t>& columns,
-                             uint64_t* oid);
+                             uint64_t* oid, bool column_store = false);
 
 /*
  * Drop the table oid: its store, rows, indexes and sequence. One a

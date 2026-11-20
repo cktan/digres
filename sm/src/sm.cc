@@ -322,9 +322,17 @@ sm_fkey_def_t api_fkey(const sm3::fkey_rec_t &fk) {
  * filling is building.
  */
 sm_table_def_t api_def(const sm3::session_t *ss, const sm3::table_def_t &d) {
-  sm_table_def_t out{
-      d.oid, d.nspoid, d.name, {}, {}, {}, sm3::cat_table_version(ss, d.oid),
-      {},    {},       {}};
+  sm_table_def_t out{d.oid,
+                     d.nspoid,
+                     d.name,
+                     {},
+                     {},
+                     {},
+                     sm3::cat_table_version(ss, d.oid),
+                     {},
+                     {},
+                     {},
+                     d.column_store};
   for (const sm3::column_def_t &c : d.columns) {
     out.columns.push_back({c.name, c.type->code, c.typmod, c.not_null,
                            c.dropped, c.default_expr.has_value(),
@@ -2832,7 +2840,7 @@ int sm_cat_create_table(sm_session_t *session, uint64_t nspoid,
 /* Create a temporary table in the session's transaction. */
 int sm_cat_create_temp_table(sm_session_t *session, const char *name,
                              const std::vector<sm_column_spec_t> &columns,
-                             uint64_t *oid) {
+                             uint64_t *oid, bool column_store) {
   return guard(session, [&] {
     if (!oid) {
       return null_arg("sm_cat_create_temp_table", "oid");
@@ -2849,7 +2857,8 @@ int sm_cat_create_temp_table(sm_session_t *session, const char *name,
            c.not_null_name ? c.not_null_name : "", c.generated,
            c.generated_reads});
     }
-    return sm3::create_temp_table(session->sm3, name_of(name), cols, *oid);
+    return sm3::create_temp_table(session->sm3, name_of(name), cols, *oid,
+                                  column_store);
   });
 }
 

@@ -13523,3 +13523,36 @@ A check hook took the new value as a `char **`, to change it with
 - **Left on purpose**: an opener still takes the table as its
   first argument. sm2's `rel_scan` and `rel_scanend` keep their
   names.
+
+## Step 447: a column store table, made WITH (storage = columnar)
+
+- **What it is**: `CREATE TABLE ... WITH (storage = columnar)`
+  makes a column store table of sm's
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md)).
+  `storage = 'row'` is a row store table, as no option is. ROW
+  is a keyword, so the value `row` is quoted. Another value is
+  refused. `check_storage_options()` in `access/sm/smstore.c`
+  reads the option, as it reads `fillfactor`: dg's tables keep
+  no reloptions, so `reloptions.c` does not take it.
+- **Keys taken, not made**: a column store table has no index
+  and no foreign key (COLSTORE §14.1). A PRIMARY KEY, UNIQUE,
+  EXCLUDE, REFERENCES or CREATE INDEX on one is a WARNING, and
+  nothing is made. `smstore_create_index()` and `add_fkey()`
+  return first for such a table. The NOT NULL of a primary key
+  holds, as parse analysis puts it on the columns already.
+- **Loads**: INSERT ... SELECT, CREATE TABLE AS and COPY are
+  bulk loads into row groups, as they are for a row store
+  table. A single INSERT puts its row into the delta store.
+- **Refused for now**: UPDATE, DELETE, a row lock (SELECT ...
+  FOR UPDATE) and a read of a row by its `_id`
+  (`smstore_fetch_row()`). A row of a row group is named by its
+  row group with its `_id`, and the `RowKey` carries the `_id`
+  alone. Without the row group, sm would not find the row, and
+  the statement would change nothing, without an error.
+  `refuse_column_store()` makes it an error instead.
+- **sm's C API**: `sm_table_def_t` says whether a table is a
+  column store table (`column_store`), and
+  `sm_cat_create_temp_table` takes `column_store` too.
+- **Left on purpose**: the row name in the `RowKey`, a scan's
+  columns and bounds, and `ANALYZE` of a column store table.
+  `\d+` shows no `storage` option, as it shows no other.

@@ -1766,6 +1766,7 @@ struct sm_table_def_t {
     std::vector<sm_fkey_def_t>   fkeys;         /* its own */
     std::vector<sm_fkey_ref_t>   referenced_by; /* those that reference it */
     std::vector<sm_check_def_t>  checks;        /* its check constraints */
+    bool column_store = false; /* a column store table (../COLSTORE.md) */
 };
 
 struct sm_column_def_t {
@@ -3113,11 +3114,12 @@ Errors:
 ```cpp
 int sm_cat_create_temp_table(sm_session_t* session, const char* name,
                              const std::vector<sm_column_spec_t>& columns,
-                             uint64_t* oid);
+                             uint64_t* oid, bool column_store = false);
 ```
 
 Creates the temporary table `name` with these columns
-([`TEMPTABLE.md`](TEMPTABLE.md)). It is the session's alone, seen
+([`TEMPTABLE.md`](TEMPTABLE.md)), a column store table if
+`column_store` is true ([`COLSTORE.md`](COLSTORE.md)). It is the session's alone, seen
 by no other, and gone when the session closes. It is in no
 namespace, and is found by name with `SM_NSP_TEMP`. Its rows are
 never logged and take no locks, but follow the session's

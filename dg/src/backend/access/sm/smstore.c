@@ -1716,8 +1716,9 @@ static void name_not_nulls(const CreateStmt *stmt, const char *relname,
  * their values checked as PostgreSQL checks them, and kept nowhere.  Any
  * other storage parameter is refused.
  */
-static void check_storage_options(List *options) {
+static bool check_storage_options(List *options) {
   List *fill = NIL;
+  bool columnar = false;
   ListCell *l;
 
   foreach (l, options) {
@@ -1727,7 +1728,22 @@ static void check_storage_options(List *options) {
     if (opt->defnamespace == NULL && strcmp(opt->defname, "fillfactor") == 0)
       fill = lappend(fill, opt);
     else if (opt->defnamespace == NULL &&
-             strcmp(opt->defname, "autovacuum_enabled") == 0) {
+             strcmp(opt->defname, "storage") == 0) {
+      /* row, the default, or columnar (../../../../../sm/COLSTORE.md). */
+      const char *value = NULL != opt->arg ? defGetString(opt) : "";
+
+      if (0 == pg_strcasecmp(value, "columnar"))
+        columnar = true;
+      else if (0 == pg_strcasecmp(value, "row"))
+        columnar = false;
+      else
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("invalid value for option \"storage\": %s", value),
+                 errhint("Valid values are \"row\" and "
+                         "\"columnar\".")));
+    } else if (opt->defnamespace == NULL &&
+               strcmp(opt->defname, "autovacuum_enabled") == 0) {
       /* A bare name means true, as transformRelOptions() takes it. */
       const char *value = opt->arg != NULL ? defGetString(opt) : "true";
 
@@ -1741,14 +1757,16 @@ static void check_storage_options(List *options) {
                errmsg("storage parameter \"%s%s%s\" is not supported",
                       opt->defnamespace != NULL ? opt->defnamespace : "",
                       opt->defnamespace != NULL ? "." : "", opt->defname),
-               errdetail("CREATE TABLE takes only fillfactor and "
-                         "autovacuum_enabled, and ignores them.")));
+               errdetail("CREATE TABLE takes only storage, fillfactor "
+                         "and autovacuum_enabled, and ignores the last "
+                         "two.")));
   }
   /* PostgreSQL's own check of fillfactor: its range, and given once. */
   if (fill != NIL)
     (void)heap_reloptions(
         RELKIND_RELATION,
         transformRelOptions((Datum)0, fill, NULL, NULL, false, false), true);
+  return columnar;
 }
 
 /*
@@ -1764,8 +1782,11 @@ static bool only_checks(List *constraints) {
   return true;
 }
 
-/* Refuse what a CREATE TABLE asks that sm's tables do not have yet. */
-static void check_create_table(const CreateStmt *stmt) {
+/*
+ * Refuse what a CREATE TABLE asks that sm's tables do not have yet; whether
+ * it asks for a column store table.
+ */
+static bool check_create_table(const CreateStmt *stmt) {
   if (stmt->inhRelations != NIL || stmt->partbound != NULL ||
       stmt->partspec != NULL || stmt->ofTypename != NULL ||
       !only_checks(stmt->constraints) || stmt->tablespacename != NULL ||
@@ -1774,7 +1795,7 @@ static void check_create_table(const CreateStmt *stmt) {
     ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
                     errmsg("CREATE TABLE supports only columns, NOT NULL, "
                            "PRIMARY KEY, UNIQUE and TEMPORARY yet")));
-  check_storage_options(stmt->options);
+  return check_storage_options(stmt->options);
 }
 
 /*
@@ -2225,7 +2246,7 @@ ObjectAddress smstore_create_table(CreateStmt *stmt) {
   ObjectAddress address;
   ListCell *l;
 
-  check_create_table(stmt);
+  bool columnar = check_create_table(stmt);
   nspoid = RangeVarGetCreationNamespace(stmt->relation);
   check_system_namespace(stmt->relation->relname, nspoid);
   /* A table in pg_temp is temporary, and a temporary one is in no other. */
@@ -2297,9 +2318,9 @@ ObjectAddress smstore_create_table(CreateStmt *stmt) {
   /* A temporary table is the session's alone, in no namespace of sm's. */
   if (waiting([&] {
         return temp ? sm_cat_create_temp_table(s, stmt->relation->relname,
-                                               columns, &oid)
+                                               columns, &oid, columnar)
                     : sm_cat_create_table(s, nspoid, stmt->relation->relname,
-                                          columns, &oid);
+                                          columns, &oid, columnar);
       }) != 0) {
     if (sm_errnum() == SM_ERR_DUPKEY)
       ereport(ERROR, (errcode(ERRCODE_DUPLICATE_TABLE),
@@ -2611,6 +2632,26 @@ static sm_tbl_t *open_table(Oid oid, sm_lockmode_t mode) {
   /* Kept until the transaction ends, which closes it. */
   open_tables()[oid].push_back({mode, tbl, GetCurrentTransactionNestLevel()});
   return tbl;
+}
+
+/* Whether relid is a column store table (../../../../../sm/COLSTORE.md). */
+static bool is_column_store(Oid relid) {
+  sm_tbl_t *tbl = open_table(relid, SM_LOCKMODE_IS);
+
+  return NULL != tbl && sm_tbl_def(tbl)->column_store;
+}
+
+/*
+ * Refuse what of a column store table needs a row's name, its row group's
+ * with its _id (../../../../../sm/COLSTORE.md §8), which digres does not
+ * carry yet: without it, a row of a row group would not be found.
+ */
+static void refuse_column_store(Relation rel, const char *what) {
+  if (is_column_store(RelationGetRelid(rel)))
+    ereport(ERROR,
+            (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+             errmsg("%s of column store table \"%s\" is not supported yet",
+                    what, RelationGetRelationName(rel))));
 }
 
 /*
@@ -5705,6 +5746,15 @@ static void add_fkey(Oid relid, const char *relname, Constraint *con) {
   int numfks = 0, numpks = 0, numdelset = 0;
   ListCell *l;
 
+  /* A column store table has no foreign key (§14.1): taken, not made. */
+  if (is_column_store(relid)) {
+    ereport(WARNING,
+            (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+             errmsg("column store table \"%s\" has no foreign key: it is "
+                    "not made",
+                    relname)));
+    return;
+  }
   if (con->fk_with_period || con->pk_with_period)
     ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
                     errmsg("a foreign key using PERIOD is not supported")));
@@ -8147,6 +8197,23 @@ ObjectAddress smstore_create_index(Oid relid, IndexStmt *stmt) {
   std::string eval;
 
   check_owner(relid, stmt->relation->relname, false);
+  /*
+   * A column store table has no index (../../../../../sm/COLSTORE.md
+   * §14.1): a PRIMARY KEY, UNIQUE, EXCLUDE or CREATE INDEX is taken, and
+   * not made. A primary key's NOT NULL is the table's already.
+   */
+  if (is_column_store(relid)) {
+    const char *what = stmt->primary                 ? "primary key"
+                       : NIL != stmt->excludeOpNames ? "exclusion constraint"
+                       : stmt->isconstraint          ? "unique constraint"
+                                                     : "index";
+
+    ereport(WARNING,
+            (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+             errmsg("column store table \"%s\" has no %s: it is not made",
+                    stmt->relation->relname, what)));
+    return InvalidObjectAddress;
+  }
   check_create_index(stmt);
   rel = relation_open(relid, NoLock);
   /* The INCLUDE columns name the index too, as DefineIndex() has it. */
@@ -9673,6 +9740,7 @@ static bool scan_tuple(smstore_scan_t *scan, const void **tuple, size_t *len) {
  */
 bool smstore_fetch_row(Relation rel, const RowKey *key, int natts,
                        TupleTableSlot *slot) {
+  refuse_column_store(rel, "UPDATE, or a read of a row by its _id,");
   sm_tbl_t *tbl = open_table(RelationGetRelid(rel), SM_LOCKMODE_IS);
   sm_datum_t vals[INDEX_MAX_KEYS];
 
@@ -9752,6 +9820,7 @@ static TM_Result write_result(Relation rel, const std::string &key, int rc,
  */
 TM_Result smstore_update(Relation rel, const RowKey *key, TupleTableSlot *slot,
                          TM_FailureData *tmfd) {
+  refuse_column_store(rel, "UPDATE");
   sm_tbl_t *tbl = table_to_write(rel);
   sm_datum_t vals[INDEX_MAX_KEYS];
   sm_row_key_t sk = key_to_sm(rel, key, vals);
@@ -9809,6 +9878,7 @@ TM_Result smstore_update(Relation rel, const RowKey *key, TupleTableSlot *slot,
  */
 TM_Result smstore_delete(Relation rel, const RowKey *key,
                          TM_FailureData *tmfd) {
+  refuse_column_store(rel, "DELETE");
   sm_tbl_t *tbl = table_to_write(rel);
   sm_datum_t vals[INDEX_MAX_KEYS];
   sm_row_key_t sk = key_to_sm(rel, key, vals);
@@ -9850,6 +9920,7 @@ TM_Result smstore_delete(Relation rel, const RowKey *key,
 TM_Result smstore_lock_row(Relation rel, const RowKey *key,
                            TupleTableSlot *slot, LockTupleMode mode,
                            LockWaitPolicy wait_policy, TM_FailureData *tmfd) {
+  refuse_column_store(rel, "a row lock");
   Oid oid = RelationGetRelid(rel);
   bool share = mode == LockTupleShare || mode == LockTupleKeyShare;
   sm_tbl_t *tbl =
