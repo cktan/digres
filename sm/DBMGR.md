@@ -1254,7 +1254,7 @@ value:
 | Module | Codes |
 | --- | --- |
 | Database Manager | `SM_ERR_NOTFOUND` (store, database or home); `SM_ERR_EXISTS` (home, database, sequence or gid); `SM_ERR_INUSE`; `SM_ERR_VERSION`; `SM_ERR_CORRUPT` (§9.4, or a malformed record) |
-| Row Store | `SM_ERR_CONFLICT`, `SM_ERR_UPDATED`, `SM_ERR_NOTFOUND` (key), `SM_ERR_DUPKEY`, `SM_ERR_MOVED` |
+| Row Store | `SM_ERR_CONFLICT`, `SM_ERR_UPDATED`, `SM_ERR_NOTFOUND` (key), `SM_ERR_DUPKEY`, `SM_ERR_MOVED`, `SM_ERR_SEALED` |
 | Transaction Manager | `SM_ERR_SERIALIZATION`, `SM_ERR_READONLY`, `SM_ERR_NOSAVEPOINT`, `SM_ERR_UNDOLIMIT`, `SM_ERR_DOOMED`, `SM_ERR_SCANCLOSED`, `SM_ERR_SELFMODIFIED`, `SM_ERR_NOTRANS`, `SM_ERR_INTRANS`, `SM_ERR_PREPARED` |
 | Lock Manager | `SM_ERR_DEADLOCK`, `SM_ERR_BLOCKED`, `SM_ERR_INTERRUPTED` |
 | any | `SM_ERR_INVALID` (a bad argument, or a call the state forbids); `SM_ERR_IO`, `SM_ERR_NOMEM`, `SM_ERR_PERMISSION`, `SM_ERR_DISKFULL`, from a RocksDB status (`set_status_error()`) or `errno` |
@@ -1265,9 +1265,9 @@ already aborted the transaction. The caller must not call
 `sm1::abort`, and retries by beginning a fresh transaction. Under
 `sm1::xctlevel_t::serializable` they are a normal outcome.
 
-`SM_ERR_UPDATED`, `SM_ERR_MOVED`, `SM_ERR_BLOCKED`,
-`SM_ERR_INTERRUPTED`, `SM_ERR_READONLY`, `SM_ERR_SCANCLOSED` and
-`SM_ERR_SELFMODIFIED` do not abort.
+`SM_ERR_UPDATED`, `SM_ERR_MOVED`, `SM_ERR_SEALED`,
+`SM_ERR_BLOCKED`, `SM_ERR_INTERRUPTED`, `SM_ERR_READONLY`,
+`SM_ERR_SCANCLOSED` and `SM_ERR_SELFMODIFIED` do not abort.
 
 `sm1::errnum()` and `sm1::errmsg()` read the code and the message
 of the last error on the calling thread. Two consequences follow:

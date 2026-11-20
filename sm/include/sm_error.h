@@ -130,8 +130,17 @@ typedef enum sm_errnum_t {
      */
     SM_ERR_MOVED         = 32,  /* the row moved to another key */
 
+    /*
+     * sm1's, and not an abort: a write or a newest read of a key
+     * whose newest version a move of sm's own wrote, a sealed
+     * tombstone or a moved marker (sm1::erase_sealed,
+     * sm1::insert_sealed). The row lives on elsewhere, unchanged,
+     * and the caller follows it there (../COLSTORE.md §10.2).
+     */
+    SM_ERR_SEALED        = 33,  /* a move of sm's own took the row */
+
     /* The highest code, for code that walks them all. */
-    SM_ERR_LAST          = SM_ERR_MOVED
+    SM_ERR_LAST          = SM_ERR_SEALED
 } sm_errnum_t;
 
 #endif /* SM_ERROR_H */

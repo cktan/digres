@@ -1,0 +1,22 @@
+# s03 -- READ COMMITTED: a writer waits for a seal in flight, and
+# is told `sealed` when it commits.
+#
+# S's sealed tombstone, in flight, is its lock: T1 blocks on it.
+# S commits; T1's write then finds the sealed tombstone as the
+# newest version, and gets `sealed`: the row lives on elsewhere,
+# unchanged. A delete taken again gets `sealed` too.
+
+
+== pairing RR/RR == T1=RC S=RC
+@1 S begin -> ok
+@2 S seal R1 -> ok
+@3 T1 begin -> ok
+@4 T1 write R1 1 blocks -> blocked
+@5 S commit -> ok
+@4 T1 write R1 1 blocks -> sealed (resumed)
+@6 check last T1 sealed -> satisfied
+@7 T1 delete R1 -> sealed
+@7 check last T1 sealed -> satisfied
+@8 T1 commit -> ok
+@9 check committed S T1 -> satisfied
+@9 check row R1 - -> satisfied

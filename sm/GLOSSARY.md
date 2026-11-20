@@ -271,7 +271,12 @@ tombstone** (`sm1::erase_moved`) records a primary key change:
 a reader sees it as any tombstone, and a writer that meets it
 fails with `SM_ERR_MOVED` ([`DBMGR.md`](DBMGR.md#62-key-classes)
 §6.2, [`LOCKMGR.md`](LOCKMGR.md#17-a-write) §1.7;
-[`ROWSTORE.md`](ROWSTORE.md#25-a-key-change) §2.5).
+[`ROWSTORE.md`](ROWSTORE.md#25-a-key-change) §2.5). A **sealed
+tombstone** (`sm1::erase_sealed`) records a move of sm's own,
+which changed no row: first-committer-wins looks through it to
+the version under it, and a writer that passes fails with
+`SM_ERR_SEALED`
+([`COLSTORE.md`](COLSTORE.md#102-the-sealed-tombstone) §10.2).
 
 **snapshot** — one number, `snapshot_ts`, taken as
 `visible_ts`. A reader sees every version whose commit is at

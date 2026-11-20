@@ -403,14 +403,19 @@ struct view_t {
 /*
  * Write operations, for access_write(). WRITE_INSERT_NEW is an insert
  * of a key no version of was ever written (sm1::insert_new);
- * WRITE_MOVE a delete of a row that moved (sm1::erase_moved).
+ * WRITE_MOVE a delete of a row that moved (sm1::erase_moved);
+ * WRITE_SEAL a delete whose tombstone is sealed (sm1::erase_sealed);
+ * WRITE_INSERT_SEALED an insert of a sealed version
+ * (sm1::insert_sealed).
  */
 enum write_op_t {
   WRITE_INSERT,
   WRITE_INSERT_NEW,
   WRITE_UPDATE,
   WRITE_DELETE,
-  WRITE_MOVE
+  WRITE_MOVE,
+  WRITE_SEAL,
+  WRITE_INSERT_SEALED
 };
 
 /* Fail with NOTRANS unless session has an active transaction. */

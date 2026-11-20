@@ -210,13 +210,15 @@ const store_t &chained_store(sm1::session_t *s, uint64_t storeid) {
  * newest version not written by a dead transaction, in CURR or in OLD.
  */
 struct checked_t {
-  bool found = false;     /* a version decides: own, committed, or in flight */
-  bool live = false;      /* it exists and is no tombstone */
-  bool moved = false;     /* it is a move's tombstone */
-  uint64_t commit_ts = 0; /* its commit_ts; 0 for an own version or none */
-  uint32_t own_seq = 0;   /* an own version's seq, else 0 */
-  bool own_kept = false;  /* an own version flagged version_key_kept */
-  uint64_t inflight = 0;  /* another's uncommitted writer, to wait for */
+  bool found = false;  /* a version decides: own, committed, or in flight */
+  bool live = false;   /* it exists and is no tombstone */
+  bool moved = false;  /* it is a move's tombstone */
+  bool sealed = false; /* it is committed, and a move of sm's own */
+  uint64_t sealed_prev = 0;   /* then the OLD id of the version under it */
+  uint64_t commit_ts = 0;     /* its commit_ts; 0 for an own version or none */
+  uint32_t own_seq = 0;       /* an own version's seq, else 0 */
+  bool own_kept = false;      /* an own version flagged version_key_kept */
+  uint64_t inflight = 0;      /* another's uncommitted writer, to wait for */
   bool inflight_kept = false; /* its version kept the key, no tombstone */
   bool head_dead = false;     /* CURR holds a dead transaction's version */
   uint64_t at = 0; /* the OLD id of the version found, 0 if in CURR */
@@ -277,6 +279,8 @@ int chain_latest(sm1::session_t *s, const store_t &st, rocksdb::Slice key,
       c->found = true;
       c->live = !(v->flags & version_tombstone);
       c->moved = v->flags & version_moved;
+      c->sealed = v->flags & version_sealed;
+      c->sealed_prev = v->prev;
       c->commit_ts = ts;
       return 0;
     }
@@ -302,6 +306,49 @@ int chain_latest(sm1::session_t *s, const store_t &st, rocksdb::Slice key,
     }
     v = &c->version;
   }
+}
+
+/*
+ * The commit_ts first-committer-wins judges a sealed version by
+ * (../COLSTORE.md §10.2): that of the newest committed version in
+ * the chain from OLD id prev on, past other sealed ones, into *ts.
+ * None, as GC dropped what every snapshot passes, is 0: no
+ * snapshot is older than it. Returns 0 or -1.
+ */
+int chain_under_commit_ts(sm1::session_t *s, const store_t &st, uint64_t prev,
+                          uint64_t *ts) {
+  *ts = 0;
+  // Hold a read epoch until the writers' statuses are resolved: the
+  // CF:txn sweep waits for it.
+  uint64_t epoch = db_read_enter(s->db);
+  defer { db_read_leave(s->db, epoch); };
+  while (prev != 0) {
+    chain_version_t v;
+    rocksdb::PinnableSlice buf;
+    int r = get_old(st, prev, &buf, &v);
+    if (r < 0) {
+      return -1;
+    }
+    // Unlinked and dropped: nothing older is anyone's.
+    if (r == 1) {
+      return 0;
+    }
+    uint64_t at = v.commit_ts;
+    xct_state_t state = XCT_COMMITTED;
+    if (!(v.flags & version_stamped)) {
+      state = xct_status(s->db, v.xid, &at);
+    }
+    if (XCT_ERROR == state) {
+      return -1;
+    }
+    // A committed version that is no move's decides.
+    if (XCT_COMMITTED == state && !(v.flags & version_sealed)) {
+      *ts = at;
+      return 0;
+    }
+    prev = v.prev;
+  }
+  return 0;
 }
 
 /* The row c found, in CURR or in OLD: what a write replaces. */
@@ -369,8 +416,10 @@ int chain_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
   // Check the key and put the version under its latch, so no other
   // write of it comes between (../LOCKMGR.md §1.7).
   std::unique_lock<std::mutex> latch(lock_latch(s->db, storeid, key));
-  const bool inserting = op == WRITE_INSERT || op == WRITE_INSERT_NEW;
-  const bool erasing = op == WRITE_DELETE || op == WRITE_MOVE;
+  const bool inserting =
+      op == WRITE_INSERT || op == WRITE_INSERT_NEW || op == WRITE_INSERT_SEALED;
+  const bool erasing =
+      op == WRITE_DELETE || op == WRITE_MOVE || op == WRITE_SEAL;
   std::unique_ptr<checked_t> cp;
   // The write's mode: X, or NKU for an update that keeps its key.
   sm1::lockmode_t mode = sm1::SM_LOCKMODE_EX;
@@ -438,6 +487,12 @@ int chain_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
     return set_error(sm1::SM_ERR_SELFMODIFIED,
                      "the row was already changed by this statement");
   }
+  // A move of sm's own changed no row: first-committer-wins judges
+  // the version under it (../COLSTORE.md §10.2).
+  if (c.sealed &&
+      0 != chain_under_commit_ts(s, st, c.sealed_prev, &c.commit_ts)) {
+    return -1;
+  }
   // Something committed after we began (../ROWSTORE.md §4.4).
   if (c.commit_ts > s->snapshot_ts) {
     if (s->level == sm1::xctlevel_t::read_committed) {
@@ -459,6 +514,11 @@ int chain_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
           "key was changed by a transaction that committed after "
           "this one began");
     }
+  }
+  // Over a move's version the row is elsewhere, and the caller
+  // follows it; only an insert goes in over a sealed tombstone.
+  if (c.sealed && (c.live || !inserting)) {
+    return set_error(sm1::SM_ERR_SEALED, "a move took the row elsewhere");
   }
   if (inserting && c.live) {
     return set_error(sm1::SM_ERR_DUPKEY, "key already exists");
@@ -484,9 +544,11 @@ int chain_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
     return -1;
   }
   chain_version_t nv;
-  nv.flags = !erasing           ? 0
-             : op == WRITE_MOVE ? version_tombstone | version_moved
-                                : version_tombstone;
+  nv.flags = op == WRITE_INSERT_SEALED ? version_sealed
+             : !erasing                ? 0
+             : op == WRITE_MOVE        ? version_tombstone | version_moved
+             : op == WRITE_SEAL        ? version_tombstone | version_sealed
+                                       : version_tombstone;
   // KS passes over it (../LOCKMGR.md §1.13).
   if (sm1::SM_LOCKMODE_NKU == mode) {
     nv.flags |= version_key_kept;
@@ -647,6 +709,10 @@ int read_latest_chained(sm1::session_t *s, uint64_t storeid,
   if (c.moved) {
     return set_error(sm1::SM_ERR_MOVED, "the row moved to another key");
   }
+  // A move of sm's own took it: the caller follows the row.
+  if (c.sealed) {
+    return set_error(sm1::SM_ERR_SEALED, "a move took the row elsewhere");
+  }
   if (!c.live) {
     return 1;
   }
@@ -749,6 +815,11 @@ int lock_chained(sm1::session_t *s, uint64_t storeid, std::string_view key,
       }
       inflight = c.inflight;
       commit_ts = c.commit_ts;
+      // A move's version changed no row: judge by the one under it.
+      if (c.sealed &&
+          chain_under_commit_ts(s, st, c.sealed_prev, &commit_ts) != 0) {
+        return -1;
+      }
       // KS passes over another's version in flight that kept the key,
       // and checks against the newest committed one under it
       // (../LOCKMGR.md §1.13).
@@ -1644,6 +1715,19 @@ int sm1::chain_erase_moved(sm1::session_t *session, uint64_t storeid,
                            std::string_view key, sm1::rawpin_t *pin,
                            std::string_view &old) {
   return write_chained(session, WRITE_MOVE, storeid, key, {}, pin, &old);
+}
+
+/* Delete a chained key a move of sm's own takes; see sm1.h. */
+int sm1::chain_erase_sealed(sm1::session_t *session, uint64_t storeid,
+                            std::string_view key, sm1::rawpin_t *pin,
+                            std::string_view &old) {
+  return write_chained(session, WRITE_SEAL, storeid, key, {}, pin, &old);
+}
+
+/* Insert a chained version a move of sm's own writes; see sm1.h. */
+int sm1::chain_insert_sealed(sm1::session_t *session, uint64_t storeid,
+                             std::string_view key, std::string_view data) {
+  return write_chained(session, WRITE_INSERT_SEALED, storeid, key, data);
 }
 
 /* Read a chained key's newest committed version; see sm1.h. */

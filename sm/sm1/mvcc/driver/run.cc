@@ -62,6 +62,7 @@ const errinfo_t errtab[] = {
     {sm1::SM_ERR_UPDATED, "updated", "abort"},
     {sm1::SM_ERR_READONLY, "readonly", "abort"},
     {sm1::SM_ERR_MOVED, "moved", "serialize"},
+    {sm1::SM_ERR_SEALED, "sealed", "abort"},
     {sm1::SM_ERR_SELFMODIFIED, "selfmodified", "abort"},
 };
 
@@ -119,6 +120,20 @@ int row_erase_moved(sm1::session_t *s, uint64_t store, std::string_view key,
                     sm1::rawpin_t *pin, std::string_view &old) {
   return g_chained ? sm1::chain_erase_moved(s, store, key, pin, old)
                    : sm1::erase_moved(s, store, key, pin, old);
+}
+
+/* sm1::erase_sealed, or sm1::chain_erase_sealed in chained mode. */
+int row_erase_sealed(sm1::session_t *s, uint64_t store, std::string_view key,
+                     sm1::rawpin_t *pin, std::string_view &old) {
+  return g_chained ? sm1::chain_erase_sealed(s, store, key, pin, old)
+                   : sm1::erase_sealed(s, store, key, pin, old);
+}
+
+/* sm1::insert_sealed, or sm1::chain_insert_sealed in chained mode. */
+int row_insert_sealed(sm1::session_t *s, uint64_t store, std::string_view key,
+                      std::string_view data) {
+  return g_chained ? sm1::chain_insert_sealed(s, store, key, data)
+                   : sm1::insert_sealed(s, store, key, data);
 }
 
 /* sm1::scan, or sm1::chain_scan in chained mode. */
@@ -253,6 +268,21 @@ std::string execute(worker_t *w, const item_t &it) {
     std::string_view old;
     int rc = row_erase_moved(w->sess, w->store, a[0], pin, old);
     sm1::rawpin_free(pin);
+    return 0 == rc ? "ok" : error_name();
+  }
+  if (it.verb == "seal") {
+    // seal <row>: the erase of a row a move of sm's own takes
+    // elsewhere, its tombstone sealed (sm1::erase_sealed).
+    sm1::rawpin_t *pin = sm1::rawpin_new();
+    std::string_view old;
+    int rc = row_erase_sealed(w->sess, w->store, a[0], pin, old);
+    sm1::rawpin_free(pin);
+    return 0 == rc ? "ok" : error_name();
+  }
+  if (it.verb == "sealput") {
+    // sealput <row> <value>: the insert of a moved marker, a live
+    // version a move of sm's own writes (sm1::insert_sealed).
+    int rc = row_insert_sealed(w->sess, w->store, a[0], a[1]);
     return 0 == rc ? "ok" : error_name();
   }
   if (it.verb == "update-where") {

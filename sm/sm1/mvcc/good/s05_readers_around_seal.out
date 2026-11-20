@@ -1,0 +1,23 @@
+# s05 -- a reader sees a sealed tombstone as any tombstone.
+#
+# T1 began before S's seal, T2 after it. T1 still reads the row,
+# as the seal committed after its snapshot; T2 sees no row in this
+# store, as the row lives on elsewhere. A scan agrees.
+
+
+== pairing RR/RR == T1=RR T2=RR S=RC
+@1 T1 begin -> ok
+@2 S begin -> ok
+@3 S seal R1 -> ok
+@4 S commit -> ok
+@5 T2 begin -> ok
+@6 T1 read R1 -> 0
+@6 check last T1 0 -> satisfied
+@7 T2 read R1 -> -
+@7 check last T2 - -> satisfied
+@8 T1 scan R1 R2 -> {R1, R2}
+@9 T2 scan R1 R2 -> {R2}
+@10 T1 commit -> ok
+@11 T2 commit -> ok
+@12 check row R1 - -> satisfied
+@12 check row R2 0 -> satisfied

@@ -47,6 +47,15 @@ constexpr uint8_t version_moved =
     0x04; /* a tombstone of a row that moved to another key */
 /* A chained update that kept its row's key (../LOCKMGR.md §1.13). */
 constexpr uint8_t version_key_kept = 0x08;
+/*
+ * A version that a move of sm's own wrote, which changed no row
+ * (../COLSTORE.md §10.2, §11): a sealed tombstone, or a live
+ * version, a moved marker. A write and a row lock judge
+ * first-committer-wins by the version under it. 0x10 and 0x20 are
+ * an OLD entry's flags, and a CURR version keeps its flags when it
+ * moves to OLD, so this flag is apart from them.
+ */
+constexpr uint8_t version_sealed = 0x40;
 
 /* A version key or value, decoded. Slices borrow the input. */
 struct version_t {

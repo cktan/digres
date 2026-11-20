@@ -1270,6 +1270,31 @@ int erase_moved(session_t* session, uint64_t storeid,
                 std::string_view key, rawpin_t* pin, std::string_view& old);
 
 /*
+ * sm1::erase of a row that a move of sm's own takes elsewhere,
+ * changing nothing in it (../COLSTORE.md §10.2): its tombstone is
+ * sealed. A reader sees it as any tombstone. A write or a row lock
+ * that meets it as the key's newest committed version judges
+ * first-committer-wins by the committed version under it, not by
+ * the move. An sm1::update or sm1::erase that passes then fails
+ * with SM_ERR_SEALED, and so does sm1::read_latest; an insert goes
+ * in over it. The row erased is pinned into pin, as sm1::erase's.
+ */
+int erase_sealed(session_t* session, uint64_t storeid,
+                 std::string_view key, rawpin_t* pin, std::string_view& old);
+
+/*
+ * sm1::insert of a live version that a move of sm's own writes, a
+ * moved marker (../COLSTORE.md §11): sealed, as sm1::erase_sealed's
+ * tombstone is. A reader sees it as any version. A write or a row
+ * lock that meets it as the key's newest committed version judges
+ * first-committer-wins by the version under it; every write that
+ * passes, an insert too, then fails with SM_ERR_SEALED, and so does
+ * sm1::read_latest.
+ */
+int insert_sealed(session_t* session, uint64_t storeid,
+                  std::string_view key, std::string_view data);
+
+/*
  * Read one key.
  *
  * Returns 0 if the key exists, and data then views the value.
@@ -1505,6 +1530,13 @@ int chain_erase(session_t* session, uint64_t storeid,
 int chain_erase_moved(session_t* session, uint64_t storeid,
                       std::string_view key, rawpin_t* pin,
                       std::string_view& old);
+/* sm1::erase_sealed, of a chained key. */
+int chain_erase_sealed(session_t* session, uint64_t storeid,
+                       std::string_view key, rawpin_t* pin,
+                       std::string_view& old);
+/* sm1::insert_sealed, of a chained key. */
+int chain_insert_sealed(session_t* session, uint64_t storeid,
+                        std::string_view key, std::string_view data);
 /* sm1::read, of a chained key; with pin, the row read into it. */
 int chain_read(session_t* session, uint64_t storeid,
                std::string_view key, rawpin_t* pin,

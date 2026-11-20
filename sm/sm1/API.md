@@ -1760,7 +1760,9 @@ COMMITTED; not retryable, the transaction stays active; call
 `sm1::read_latest`, then write again), `SM_ERR_NOTFOUND` (store
 or, for update/delete, key), `SM_ERR_MOVED` (update/delete of
 a key a move erased, `sm1::erase_moved`; not an abort),
-`SM_ERR_DUPKEY` (insert), `SM_ERR_NOTRANS`, `SM_ERR_PREPARED`,
+`SM_ERR_SEALED` (a write of a key whose newest committed
+version a move of sm's own wrote, `sm1::erase_sealed` and
+`sm1::insert_sealed`; not an abort), `SM_ERR_DUPKEY` (insert), `SM_ERR_NOTRANS`, `SM_ERR_PREPARED`,
 `SM_ERR_INVALID`, `SM_ERR_DISKFULL`, `SM_ERR_IO`.
 
 ### int sm1::insert_new(sm1::session_t* session, uint64_t storeid, std::string_view key, std::string_view data)
@@ -1787,6 +1789,31 @@ is `SM_ERR_NOTFOUND`, and so does `sm1::read_latest` where a
 plain one returns 1: at READ COMMITTED, after `SM_ERR_UPDATED`,
 the writer learns the row lives on elsewhere. The row erased is
 pinned into `pin`, as `sm1::erase`'s. Errors as `sm1::erase`'s.
+
+### int sm1::erase_sealed(sm1::session_t* session, uint64_t storeid, std::string_view key, sm1::rawpin_t* pin, std::string_view& old)
+
+`sm1::erase` of a row that a move of sm's own takes elsewhere,
+changing nothing in it ([`../COLSTORE.md`](../COLSTORE.md) §10.2):
+its tombstone is sealed, flag `0x40`. A reader sees it as any
+tombstone. A write or a row lock that meets it as the key's
+newest committed version judges first-committer-wins by the
+committed version under it, not by the move; none under it, as GC
+dropped what every snapshot passes, is no conflict. An
+`sm1::update` or `sm1::erase` that passes the check then fails
+with `SM_ERR_SEALED`, and so does `sm1::read_latest`; an
+`sm1::insert` goes in over it. The row erased is pinned into
+`pin`, as `sm1::erase`'s. Errors as `sm1::erase`'s.
+
+### int sm1::insert_sealed(sm1::session_t* session, uint64_t storeid, std::string_view key, std::string_view data)
+
+`sm1::insert` of a live version that a move of sm's own writes, a
+moved marker ([`../COLSTORE.md`](../COLSTORE.md) §11): sealed, as
+`sm1::erase_sealed`'s tombstone is. A reader sees it as any
+version. A write or a row lock that meets it as the key's newest
+committed version is judged by the version under it, as over a
+sealed tombstone; every write that passes, an insert too, then
+fails with `SM_ERR_SEALED`, and so does `sm1::read_latest`.
+Errors as `sm1::insert`'s.
 
 ---
 
@@ -2132,7 +2159,8 @@ bytes are two keys.
 Each call is the call of its name without `chain_`, with the
 same checks, conflicts, waits and errors (`sm1::insert`,
 `sm1::insert_new`, `sm1::update`, `sm1::erase`,
-`sm1::erase_moved`, `sm1::read`, `sm1::read_latest`,
+`sm1::erase_moved`, `sm1::erase_sealed`, `sm1::insert_sealed`,
+`sm1::read`, `sm1::read_latest`,
 `sm1::lock_row` and `sm1::trylock_row`), and
 `SM_ERR_INVALID` besides on a store that is not chained. An
 abort leaves its versions for readers to pass and GC to
@@ -2156,6 +2184,11 @@ int chain_erase(session_t* session, uint64_t storeid,
 int chain_erase_moved(session_t* session, uint64_t storeid,
                       std::string_view key, rawpin_t* pin,
                       std::string_view& old);
+int chain_erase_sealed(session_t* session, uint64_t storeid,
+                       std::string_view key, rawpin_t* pin,
+                       std::string_view& old);
+int chain_insert_sealed(session_t* session, uint64_t storeid,
+                        std::string_view key, std::string_view data);
 int chain_read(session_t* session, uint64_t storeid,
                std::string_view key, rawpin_t* pin,
                std::string_view& data);

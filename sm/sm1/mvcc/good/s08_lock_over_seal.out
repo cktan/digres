@@ -1,0 +1,26 @@
+# s08 -- REPEATABLE READ: a row lock over a sealed tombstone is
+# judged by the version under it.
+#
+# S seals R1, unchanged since T1's snapshot: T1's exclusive lock on
+# it is granted, as FOR UPDATE of a row the seal moved must be
+# (COLSTORE.md §9.1). T2 updates R2 after T1 began, then S seals
+# it: T1's lock on R2 is a conflict, as over the update itself.
+
+
+== pairing RR/RR == T1=RR T2=RC S=RC
+@1 T1 begin -> ok
+@2 T1 read R1 -> 0
+@3 S begin -> ok
+@4 S seal R1 -> ok
+@5 S commit -> ok
+@6 T1 lock R1 exclusive -> ok
+@6 check last T1 ok -> satisfied
+@7 T2 begin -> ok
+@8 T2 write R2 1 -> ok
+@9 T2 commit -> ok
+@10 S begin -> ok
+@11 S seal R2 -> ok
+@12 S commit -> ok
+@13 T1 lock R2 exclusive -> conflict
+@13 check last T1 conflict -> satisfied
+@14 check committed T2 S -> satisfied
