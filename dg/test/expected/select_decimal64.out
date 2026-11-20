@@ -95,11 +95,11 @@ SELECT oprname, oprcode, oprresult FROM pg_operator WHERE oprleft IN (0, 1700) A
  oprname |     oprcode      | oprresult 
 ---------+------------------+-----------
  %       | decimal64_mod    |      1700
- *       | decimal64_mul    |      8383
- +       | decimal64_add    |      8383
- -       | decimal64_sub    |      8383
+ *       | decimal64_mul    |      1700
+ +       | decimal64_add    |      1700
+ -       | decimal64_sub    |      1700
  -       | decimal64_uminus |      1700
- /       | decimal64_div    |      8383
+ /       | decimal64_div    |      1700
  <       | decimal64_lt     |        16
  <=      | decimal64_le     |        16
  <>      | decimal64_ne     |        16
@@ -136,7 +136,7 @@ SELECT proname, prosrc, prorettype, pronargs FROM pg_proc WHERE proargtypes[0] =
 SELECT pg_typeof(-x)::oid, pg_typeof(abs(x))::oid, pg_typeof(sign(x))::oid, pg_typeof(x % x)::oid, pg_typeof(mod(x, x))::oid, pg_typeof(gcd(x, x))::oid, pg_typeof(round(x))::oid, pg_typeof(round(x, 1))::oid, pg_typeof(trunc(x))::oid, pg_typeof(trunc(x, 1))::oid, pg_typeof(ceil(x))::oid, pg_typeof(ceiling(x))::oid, pg_typeof(floor(x))::oid, pg_typeof(x + x)::oid, pg_typeof(x * x)::oid, pg_typeof(lcm(x, x))::oid FROM (VALUES (1.5)) v(x);
  pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof | pg_typeof 
 -----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------
-      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      8383 |      8383 |      8383
+      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      1700 |      8383
 (1 row)
 
 SELECT pg_typeof(min(x))::oid, pg_typeof(max(x))::oid, pg_typeof(sum(x))::oid, pg_typeof(avg(x))::oid FROM (VALUES (1.5)) v(x);

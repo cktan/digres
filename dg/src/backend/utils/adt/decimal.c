@@ -3352,7 +3352,7 @@ Datum decimal64_cash(PG_FUNCTION_ARGS) {
 
 /*
  * a and b's values at the larger of their scales, which 128 bits hold:
- * their sum or difference, at that scale, is a decimal128 as it is.
+ * what %, gcd and lcm compute in.
  */
 static int d64_common_scale(Datum a, Datum b, i128 *x, i128 *y) {
   int sa = d64_scale(a), sb = d64_scale(b);
@@ -3367,44 +3367,64 @@ static int d64_common_scale(Datum a, Datum b, i128 *x, i128 *y) {
 }
 
 /*
- * a + b, a decimal128: ty adds the values in 128 bits, and the result is
- * packed here, with one palloc.
+ * a + b, a decimal64, by value: past 17 digits it is an error, and a
+ * caller who wants more adds a decimal128 to a decimal64.
  */
 Datum decimal64_add(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
   ty_decimal64_t a = {d64_value(da), d64_scale(da)};
   ty_decimal64_t b = {d64_value(db), d64_scale(db)};
-  ty_decimal128_t r;
+  ty_decimal64_t r;
 
   /* The addition is ty's: it takes the two parts of each decimal64. */
-  ty_decimal64_add(&a, &b, &r);
-  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
+  if (ty_decimal64_add(&a, &b, &r) != 0)
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("numeric field overflow")));
+  return d64_make(r.value, r.scale);
 }
 
-/* a - b, a decimal128, in 128 bits. */
+/* a - b, a decimal64: past 17 digits it is an error, as a + b's is. */
 Datum decimal64_sub(PG_FUNCTION_ARGS) {
-  i128 x, y;
-  int s = d64_common_scale(PG_GETARG_DATUM(0), PG_GETARG_DATUM(1), &x, &y);
+  Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
+  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
+  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
+  ty_decimal64_t r;
 
-  PG_RETURN_NUMERIC(dec_make(x - y, s));
+  /* The subtraction is ty's: it takes the two parts of each decimal64. */
+  if (ty_decimal64_sub(&a, &b, &r) != 0)
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("numeric field overflow")));
+  return d64_make(r.value, r.scale);
 }
 
-/* a * b at the sum of their scales, a decimal128, in 128 bits. */
+/*
+ * a * b at the sum of their scales, a decimal64: exact, or an error past 17
+ * digits or 17 places, as a + b is.
+ */
 Datum decimal64_mul(PG_FUNCTION_ARGS) {
-  Datum a = PG_GETARG_DATUM(0), b = PG_GETARG_DATUM(1);
+  Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
+  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
+  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
+  ty_decimal64_t r;
 
-  PG_RETURN_NUMERIC(dec_make((i128)d64_value(a) * d64_value(b),
-                             d64_scale(a) + d64_scale(b)));
+  /* The multiplication is ty's: it takes the two parts of each decimal64. */
+  if (ty_decimal64_mul(&a, &b, &r) != 0)
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("numeric field overflow")));
+  return d64_make(r.value, r.scale);
 }
 
-/* a / b at numeric's scale, a decimal128, without casting either. */
+/*
+ * a / b at numeric's scale, a decimal64: a quotient is not exact, so its
+ * places past 17 digits are rounded away, as a cast to decimal64 does; it
+ * is an error only if the integer part has more than 17 digits.
+ */
 Datum decimal64_div(PG_FUNCTION_ARGS) {
   wide_t a = d64_wide(PG_GETARG_DATUM(0)), b = d64_wide(PG_GETARG_DATUM(1));
 
   if (wide_is_zero(b))
     division_by_zero(NULL);
-  PG_RETURN_NUMERIC(dec_from_wide(wide_div(a, b, select_div_scale(a, b),
-                                           false)));
+  return d64_from_wide(wide_div(a, b, select_div_scale(a, b), false));
 }
 
 /* -a. */

@@ -35,11 +35,29 @@ typedef struct ty_decimal128_t {
     int         scale;
 } ty_decimal128_t;
 
+/* The most digits, and the most places, a decimal64 holds. */
+#define TY_DECIMAL64_MAX_DIGITS 17
+#define TY_DECIMAL64_MAX_SCALE  17
+
 /*
- * *result = a + b, at the larger of their scales. Two decimal64 add
- * exactly in 128 bits, so it cannot fail and returns 0.
+ * *result = a + b, at the larger of their scales. Fails with
+ * TY_ERR_RANGE if the sum needs more than 17 digits: *result is then
+ * not set. To add without that limit, the caller makes one operand a
+ * decimal128 and adds a decimal128 to a decimal64.
  */
 int ty_decimal64_add(const ty_decimal64_t* a, const ty_decimal64_t* b,
-                     ty_decimal128_t* result);
+                     ty_decimal64_t* result);
+
+/* *result = a - b, as ty_decimal64_add() adds. */
+int ty_decimal64_sub(const ty_decimal64_t* a, const ty_decimal64_t* b,
+                     ty_decimal64_t* result);
+
+/*
+ * *result = a * b, at the sum of their scales. Fails with TY_ERR_RANGE
+ * if the product needs more than 17 digits, or more than 17 places:
+ * *result is then not set. It is exact or an error, as add and sub are.
+ */
+int ty_decimal64_mul(const ty_decimal64_t* a, const ty_decimal64_t* b,
+                     ty_decimal64_t* result);
 
 #endif /* TY_DECIMAL_H */

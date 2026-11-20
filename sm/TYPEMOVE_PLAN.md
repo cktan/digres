@@ -64,8 +64,8 @@ Settled on 2026-11-20. Three kinds of result, three answers:
 
 | Result | Example | Memory |
 | --- | --- | --- |
-| By value | `int4 * int4`, `-decimal64` | none: it is the return value |
-| Fixed width by reference | `decimal64 + decimal64` (a `decimal128`), `uuid`, `interval` | the caller's storage: an out-parameter |
+| By value | `decimal64 + - * / decimal64`, `int4 * int4` | none: it is the return value |
+| Fixed width by reference | `decimal128 + decimal128`, `uuid`, `interval` | the caller's storage: an out-parameter |
 | Variable width | `text || text`, `replace()`, `repeat()` | the calling thread's alloc function, below |
 
 The first two need no design. A variable-width result gets its
@@ -213,7 +213,7 @@ session lookup, and a statement's instructions do not move.
   ../ty/include/ty.h), or a header of ty's beside it: not in the
   2,103 lines of `sm.h`. Proposed name pattern:
   `ty_decimal64_add(const ty_decimal64_t*, const ty_decimal64_t*,
-  ty_decimal128_t* result)`. A decimal is a value and a scale:
+  ty_decimal64_t* result)`. A decimal is a value and a scale:
   the host packs it into a Datum, as digres does, and ty takes
   the two parts.
 - sm2's `type_t` table stays for storage. The operations are
@@ -249,14 +249,21 @@ copied from PostgreSQL keeps its copyright notice
    numeric regression files. → verify: numbers saved, files
    pass.
 2. **One function end to end.** Move `decimal64` add into ty
-   (`ty_decimal64_add`, in `ty/include/ty_decimal.h`). Its result
-   is a `decimal128`, by reference, so it goes in the caller's
-   storage, an out-parameter. It cannot fail: two decimal64 add
-   exactly in 128 bits, so decision 2's error is not used yet.
-   → verify: the regression files pass unchanged, and the
-   instruction count is within the limit of the open question
-   below. Built on 2026-11-20; the instruction count waits for
-   the baseline, which `perf` cannot take on this box.
+   (`ty_decimal64_add`, in `ty/include/ty_decimal.h`). Its
+   result is a `decimal64`, by value, and it fails with
+   `TY_ERR_RANGE` past 17 digits, as decided on 2026-11-20: a
+   by-reference `decimal128` result cost a `palloc` a row. A
+   caller who wants more digits adds a `decimal128` to a
+   `decimal64`. `-` and `*` follow in ty (`ty_decimal64_sub`,
+   `_mul`), exact or an error; `/` stays in digres's wide path,
+   rounded to 17 digits, until the 512-bit magnitude moves. This
+   is decision 2's first error. → verify: the regression files
+   pass, and the instruction count is within the limit of the
+   open question below. The files that print a result's type, or
+   a sum past 17 digits, are changed on purpose
+   (`select_decimal64`, `select_numeric`). Built on 2026-11-20;
+   the instruction count waits for the baseline, which `perf`
+   cannot take on this box.
 3. **The rest of decimal's core**, in groups: arithmetic, then
    rounding, then functions of the exponent. → verify: the
    same, after each group.

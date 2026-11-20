@@ -206,12 +206,37 @@ Results are exact or an error, never silently wrong.
   places where the integer part still fits, else an error.
 - **`/`**: PostgreSQL's choice of scale (`select_div_scale()`,
   at least 16 significant digits, at most 36 in all), rounded.
-- **A result that may pass 17 digits is a `decimal128`**.
-  `decimal64`'s `+`, `-` and `*` compute it in 128 bits, its
-  `/` without casting; `decimal128`'s `+`, `-` and `*` take the
-  same 128-bit path while the result fits 36 digits. Only past
-  that, and for the rest, is the 512-bit wide path taken.
-  What `decimal64` does itself is listed in §2.8.
+- **`decimal64` `+`, `-`, `*` and `/` give a `decimal64`**, by
+  value (decided 2026-11-20, replacing the `decimal128` result:
+  a by-reference result costs a `palloc` a row). A caller who
+  wants more digits casts one side to `decimal128`: the
+  operation is then `decimal128` with `decimal128`, by the
+  implicit cast.
+  - `+`, `-` and `*` are exact or an error: past 17 digits, or
+    for `*` past 17 places, it is "numeric field overflow".
+    They are `ty_decimal64_add`, `_sub` and `_mul`, in ty. A
+    sum of two 17-digit values may need 18, so it is an error
+    where PostgreSQL's is not; this is the cost of a result
+    with no `palloc`.
+  - `/` is not exact in any decimal, so its places past 17
+    digits are rounded away, half away from zero, as a cast to
+    `decimal64` rounds them. It is an error only if the integer
+    part has more than 17 digits. It runs in the wide path.
+    So `70.0 / 70` prints `1.0000000000000000`, where
+    PostgreSQL prints 20 places; the ported `numeric` file marks
+    it `--dg-differs`.
+  - DuckDB gives the same answer for `+`, `-` and `*` (exact or
+    an error) but keeps width and scale in the type, so it
+    widens the result type at bind time: `DECIMAL(18,3) +
+    DECIMAL(18,3)` is `DECIMAL(19,3)`, in 128 bits, and an
+    error comes only past 38 digits. Its `/` gives a `DOUBLE`.
+    A digres operand does not carry width and scale (§2.1), so
+    its operator has one result type and cannot widen.
+- **A result of `decimal128` that may pass 17 digits** is
+  computed in 128 bits for `decimal128`'s own `+`, `-` and `*`
+  while the result fits 36 digits. Only past that, and for the
+  rest, is the 512-bit wide path taken. What `decimal64` does
+  itself is listed in §2.8.
 - **`%`, `div`, `abs`, `sign`, `ceil`, `floor`, `round(x, n)`,
   `trunc(x, n)`, `gcd`, `lcm`, `factorial`, `min`, `max`**:
   exact, as PostgreSQL's.
@@ -277,8 +302,8 @@ column, which holds no value of more than 17 digits anyway.
 | `ceil`, `ceiling`, `floor` | `decimal64` | in 64 bits; a value with places has at most 16 digits before the point, so never past 17 |
 | `%`, `mod`, `gcd` | `decimal64` | in 128 bits at the larger scale; no more digits than the smaller operand's before the point, nor places than the larger scale |
 | `round(x)`, `round(x, n)`, `trunc(x)`, `trunc(x, n)` | `decimal64` | as numeric's; past 17 digits or places, as a carry or `n` past 17 makes, an error, not a `decimal128` |
-| `+`, `-`, `*` | `decimal128` | in 128 bits, one palloc for the result |
-| `/` | `decimal128` | the wide path, without casting either side |
+| `+`, `-`, `*` | `decimal64` | `ty_decimal64_add`, `_sub` and `_mul`, in 64 bits (the product in 128); past 17 digits, an error, not a `decimal128` |
+| `/` | `decimal64` | the wide path, without casting either side; places past 17 digits rounded away |
 | `lcm` | `decimal128` | in 128 bits, the wide path only past them |
 | `sum`, `avg` | `decimal128` | a 128-bit sum in the state, no palloc a row |
 | `to_char(x, fmt)` | `text` | numeric's, on a `decimal128` built on the stack |
@@ -340,10 +365,14 @@ the alternative it turned down:
    beside a new `decimal64`, then the 8-byte one beside a new
    `decimal128`.
 7. **Arithmetic**: a `decimal128` result, by native
-   `__int128` paths (§2.5). A `decimal64` result, fully by
-   value, fails past 17 digits where PostgreSQL would not, and
-   most of its speed comes from native integer arithmetic,
-   which the 128-bit paths have anyway.
+   `__int128` paths (§2.5). Reversed for `decimal64`'s `+`,
+   `-`, `*` and `/` on 2026-11-20: each gives a `decimal64`,
+   as the `palloc` of a by-reference result costs more than
+   the arithmetic. The text below was the first reason: a
+   `decimal64` result, fully by value, fails past 17 digits
+   where PostgreSQL would not, and most of its speed comes
+   from native integer arithmetic, which the 128-bit paths
+   have anyway. The cost of a `palloc` a row won over it.
 8. **A bare `numeric`**: a `decimal64` with no typmod, its
    value keeping its scale (§2.1). It was first `decimal64(17,
    3)` everywhere, a cast included, until `x::numeric` rounding

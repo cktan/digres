@@ -9,28 +9,84 @@
 
 #include "ty_decimal.h"
 
+#include "error.h"
+
+namespace {
+
+/* The largest value of a decimal64: 10^17 - 1. */
+constexpr int64_t d64_max = 99999999999999999;
+
+/* Record that a result does not fit a decimal64; returns -1. */
+int range_error() {
+  return ty_internal::set_error(TY_ERR_RANGE, "decimal64 result out of range");
+}
+
 /*
- * *result = a + b, at the larger of the two scales.
- * 1. Widen both values to 128 bits.
- * 2. Multiply the one of the smaller scale by 10 until the scales are
- *    equal. A decimal64 has at most 17 digits and a scale of at most 17,
- *    so 128 bits hold the result.
- * 3. Add them.
+ * *result = a + b, or a - b if subtract, at the larger of the scales.
+ * 1. Multiply the value of the smaller scale by 10 until the scales
+ *    are equal; if that does not fit 64 bits, fail.
+ * 2. Add or subtract them; if that does not fit 64 bits, fail.
+ * 3. If the result has more than 17 digits, fail.
+ * 4. Set the result.
  */
-int ty_decimal64_add(const ty_decimal64_t *a, const ty_decimal64_t *b,
-                     ty_decimal128_t *result) {
-  ty_int128_t x = a->value;
-  ty_int128_t y = b->value;
+int add_or_sub(const ty_decimal64_t *a, const ty_decimal64_t *b, bool subtract,
+               ty_decimal64_t *result) {
+  int64_t x = a->value;
+  int64_t y = b->value;
   int sa = a->scale;
   int sb = b->scale;
 
   for (; sa < sb; sa++) {
-    x *= 10;
+    if (__builtin_mul_overflow(x, 10, &x)) {
+      return range_error();
+    }
   }
   for (; sb < sa; sb++) {
-    y *= 10;
+    if (__builtin_mul_overflow(y, 10, &y)) {
+      return range_error();
+    }
   }
-  result->value = x + y;
+  int64_t r;
+  bool overflow = subtract ? __builtin_sub_overflow(x, y, &r)
+                           : __builtin_add_overflow(x, y, &r);
+  if (overflow || r > d64_max || r < -d64_max) {
+    return range_error();
+  }
+  result->value = r;
   result->scale = sa;
+  return 0;
+}
+
+} // namespace
+
+/* *result = a + b; fails past 17 digits. */
+int ty_decimal64_add(const ty_decimal64_t *a, const ty_decimal64_t *b,
+                     ty_decimal64_t *result) {
+  return add_or_sub(a, b, false, result);
+}
+
+/* *result = a - b; fails past 17 digits. */
+int ty_decimal64_sub(const ty_decimal64_t *a, const ty_decimal64_t *b,
+                     ty_decimal64_t *result) {
+  return add_or_sub(a, b, true, result);
+}
+
+/*
+ * *result = a * b, at the sum of the scales.
+ * 1. Multiply in 128 bits: two values of 64 bits always fit.
+ * 2. If the product has more than 17 digits, or the scale is above 17,
+ *    fail.
+ * 3. Set the result.
+ */
+int ty_decimal64_mul(const ty_decimal64_t *a, const ty_decimal64_t *b,
+                     ty_decimal64_t *result) {
+  ty_int128_t p = (ty_int128_t)a->value * b->value;
+  int s = a->scale + b->scale;
+
+  if (s > TY_DECIMAL64_MAX_SCALE || p > d64_max || p < -d64_max) {
+    return range_error();
+  }
+  result->value = (int64_t)p;
+  result->scale = s;
   return 0;
 }

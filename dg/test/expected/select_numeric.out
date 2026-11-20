@@ -34,9 +34,9 @@ SELECT 1e300, 3.4e38, 1e35;
 (1 row)
 
 SELECT 1.5 + 2.25, 1.5 - 2.25, 1.5 * 2.25, 10 / 3.0, 1 / 3::numeric, 2.0 / 3;
- ?column? | ?column? | ?column? |      ?column?      |        ?column?        |        ?column?        
-----------+----------+----------+--------------------+------------------------+------------------------
-     3.75 |    -0.75 |    3.375 | 3.3333333333333333 | 0.33333333333333333333 | 0.66666666666666666667
+ ?column? | ?column? | ?column? |      ?column?      |      ?column?       |      ?column?       
+----------+----------+----------+--------------------+---------------------+---------------------
+     3.75 |    -0.75 |    3.375 | 3.3333333333333333 | 0.33333333333333333 | 0.66666666666666667
 (1 row)
 
 SELECT 7.5 % 2, -7.5 % 2, div(7.5, 2), 1.5 = 1.50, 1.5 < 1.51, abs(-2.5), -(2.5);
@@ -138,7 +138,7 @@ SELECT numeric_send(1.5), numeric_send(-0.0001), numeric_send(0::numeric), numer
  \x000200000000000100011388 | \x0001ffff400000040001 | \x0000000000000000 | \x000300010000000104d2162e2328
 (1 row)
 
-SELECT a * b, a % b, mod(b, a), sign(a), gcd(a, b), lcm(a, b), bool_and(gcd(a, b)::text = gcd(a::decimal128, b::decimal128)::text AND lcm(a, b)::text = lcm(a::decimal128, b::decimal128)::text AND (a + b)::text = (a::decimal128 + b::decimal128)::text AND (a - b)::text = (a::decimal128 - b::decimal128)::text AND (a * b)::text = (a::decimal128 * b::decimal128)::text AND (a / b)::text = (a::decimal128 / b::decimal128)::text AND (-a)::text = (-(a::decimal128))::text AND abs(a)::text = abs(a::decimal128)::text AND (a % b)::text = (a::decimal128 % b::decimal128)::text AND mod(b, a)::text = mod(b::decimal128, a::decimal128)::text AND sign(a)::text = sign(a::decimal128)::text) OVER () FROM (VALUES (1.5, 2.25), (-99999999999999.999, 0.001), (12345678901234567::numeric(17,0), -3), (0.00000000000000001, 7), (99999999999999999::numeric(17,0), 99999999999999999::numeric(17,0))) v(a, b);
+SELECT a::decimal128 * b, a % b, mod(b, a), sign(a), gcd(a, b), lcm(a, b), bool_and(gcd(a, b)::text = gcd(a::decimal128, b::decimal128)::text AND lcm(a, b)::text = lcm(a::decimal128, b::decimal128)::text AND (-a)::text = (-(a::decimal128))::text AND abs(a)::text = abs(a::decimal128)::text AND (a % b)::text = (a::decimal128 % b::decimal128)::text AND mod(b, a)::text = mod(b::decimal128, a::decimal128)::text AND sign(a)::text = sign(a::decimal128)::text) OVER () FROM (VALUES (1.5, 2.25), (-99999999999999.999, 0.001), (12345678901234567::numeric(17,0), -3), (0.00000000000000001, 7), (99999999999999999::numeric(17,0), 99999999999999999::numeric(17,0))) v(a, b);
               ?column?              |      ?column?       |         mod         | sign |         gcd         |         lcm         | bool_and 
 ------------------------------------+---------------------+---------------------+------+---------------------+---------------------+----------
                               3.375 |                1.50 |                0.75 |    1 |                0.75 |                4.50 | t
@@ -147,6 +147,35 @@ SELECT a * b, a % b, mod(b, a), sign(a), gcd(a, b), lcm(a, b), bool_and(gcd(a, b
                 0.00000000000000007 | 0.00000000000000001 | 0.00000000000000000 |    1 | 0.00000000000000001 | 7.00000000000000000 | t
  9999999999999999800000000000000001 |                   0 |                   0 |    1 |   99999999999999999 |   99999999999999999 | t
 (5 rows)
+
+-- decimal64 - * / decimal64 are decimal64: - is exact or an error, as +; * and /
+-- round places past 17 digits, and the integer part must fit.
+SELECT a - b, a * b, a / b, pg_typeof(a - b)::oid, pg_typeof(a * b)::oid, pg_typeof(a / b)::oid FROM (VALUES (1.5, 2.25), (-99999999999999.998, 0.001), (12345678901234567::numeric(17,0), -3)) v(a, b);
+      ?column?       |      ?column?       |      ?column?       | pg_typeof | pg_typeof | pg_typeof 
+---------------------+---------------------+---------------------+-----------+-----------+-----------
+               -0.75 |               3.375 | 0.66666666666666667 |      1700 |      1700 |      1700
+ -99999999999999.999 | -99999999999.999998 |  -99999999999999998 |      1700 |      1700 |      1700
+   12345678901234570 |  -37037036703703701 | -4115226300411522.3 |      1700 |      1700 |      1700
+(3 rows)
+
+-- decimal64 + decimal64 is a decimal64; with one side cast to decimal128 it is
+-- a decimal128, and the two agree where the sum has at most 17 digits.
+-- 1. Add pairs of decimal64, and the same with the left side cast.
+-- 2. Add two of 17 digits as decimal128: the sum has 18.
+SELECT a + b, pg_typeof(a + b)::oid, (a::decimal128 + b)::text = (a + b)::text FROM (VALUES (1.5, 2.25), (-99999999999999.999, 0.001), (12345678901234567::numeric(17,0), -3), (99999999999999998::numeric(17,0), 1)) v(a, b);
+      ?column?       | pg_typeof | ?column? 
+---------------------+-----------+----------
+                3.75 |      1700 | t
+ -99999999999999.998 |      1700 | t
+   12345678901234564 |      1700 | t
+   99999999999999999 |      1700 | t
+(4 rows)
+
+SELECT x::decimal128 + x, pg_typeof(x::decimal128 + x)::oid FROM (VALUES (99999999999999999::numeric(17,0))) v(x);
+      ?column?      | pg_typeof 
+--------------------+-----------
+ 199999999999999998 |      8383
+(1 row)
 
 SELECT sum(x), avg(x), sum(x)::text = sum(x::decimal128)::text, avg(x)::text = avg(x::decimal128)::text FROM (VALUES (1.5), (2.25), (-3), (0.001), (99999999999999999::numeric(17,0))) v(x);
           sum          |          avg          | ?column? | ?column? 
@@ -199,3 +228,7 @@ SELECT x, round(x, 1), round(x), round(x, -2), trunc(x, 1), trunc(x), trunc(x, -
  9999999999999999.9 | 9999999999999999.9 | 10000000000000000 | 10000000000000000 | 9999999999999999.9 | 9999999999999999 | 9999999999999900 | 10000000000000000 | 9999999999999999 |  ###,###.## | t
 (8 rows)
 
+-- decimal64 + decimal64 past 17 digits is an error: the last statement, as
+-- psql stops at a file's first error.
+SELECT 99999999999999999::numeric(17,0) + 99999999999999999::numeric(17,0);
+psql:test/select_numeric.sql:61: ERROR:  numeric field overflow
