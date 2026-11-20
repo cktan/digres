@@ -1465,3 +1465,166 @@ TEST_CASE("a bulk load rolled back to a savepoint leaves nothing") {
   CHECK(row_groups(db, c) == 0);
   CHECK(colstore_files(db) == 0);
 }
+
+namespace {
+
+/* Every row of table oid, a to b, in ss's open transaction. */
+std::map<int32_t, std::string> rows_in(sm3::session_t *ss, uint64_t oid) {
+  std::map<int32_t, std::string> out;
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, oid, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  int rc;
+  while ((rc = sm3::tbl_scannxt(scan, id, tuple)) == 0) {
+    sm2::datum_t d[2];
+    bool null[2];
+    REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+    std::string_view bytes;
+    REQUIRE(sm2::datum_bytes(&sm2::type_text, -1, d[1], bytes) == 0);
+    int32_t a = sm2::datum_to_int32(d[0]);
+    CHECK(out.count(a) == 0);
+    out[a] = std::string(sm2::varlena_payload(bytes));
+  }
+  REQUIRE_MESSAGE(rc == 1, sm1::errmsg());
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  return out;
+}
+
+} // namespace
+
+// Verify a column store table agrees with a row store table under one
+// random workload, with seals and RG compactions between, for a scan
+// at each step's end and for an old REPEATABLE READ snapshot, with row
+// groups of 100 rows (../COLSTORE.md §15.3).
+// 1. Make c, a column store table, and r, a row store table; attach a
+//    sealer, which seals and compacts c as its commits queue them.
+// 2. Run 1,500 steps, each in a transaction at READ COMMITTED or
+//    REPEATABLE READ, at random: an insert, an update by _id, an
+//    update by (rg_id, _id), or a delete, of the same row in both.
+//    Now and then, seal or compact c by hand.
+// 3. Every 50 steps, c, r and the model agree.
+// 4. Now and then, S2 takes an RR snapshot and keeps the model as it
+//    was; 40 steps on, S2 reads c and r: both are as kept.
+TEST_CASE("a column store table agrees with a row store table") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  uint64_t r = make(db, "r", false);
+  db.commit();
+  // 1. The sealer.
+  sm1::env_t *env = db.env();
+  REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+            sm1::session_t *s = nullptr;
+            return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+          }) == 0);
+  sm1::session_t *s2 = db.open();
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
+  sm1::session_t *s3 = db.open();
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
+  std::mt19937 rng(20261120);
+  std::map<int32_t, std::string> model, kept;
+  std::map<int32_t, std::pair<uint64_t, uint64_t>> ids; /* a: c's, r's */
+  int next_a = 0, snap_at = -1;
+  auto pick = [&]() {
+    auto it = model.begin();
+    std::advance(it, rng() % model.size());
+    return it->first;
+  };
+  // 2. The steps.
+  for (int step = 0; step < 1500; step++) {
+    unsigned op = model.size() < 50 ? 0 : rng() % 10;
+    db.begin(rng() % 2 ? sm1::xctlevel_t::repeatable_read
+                       : sm1::xctlevel_t::read_committed);
+    sm3::table_t *tc = nullptr, *tr = nullptr;
+    REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, tc) == 0);
+    REQUIRE(sm3::tbl_open(db.ss, r, sm1::SM_LOCKMODE_IX, tr) == 0);
+    if (op < 4) {
+      int32_t a = next_a++;
+      row_t row(a, "i" + std::to_string(step));
+      uint64_t idc = 0, idr = 0;
+      REQUIRE(sm3::tbl_insert(tc, row.d, row.null, idc) == 0);
+      REQUIRE(sm3::tbl_insert(tr, row.d, row.null, idr) == 0);
+      ids[a] = {idc, idr};
+      model[a] = "i" + std::to_string(step);
+    } else if (op < 8) {
+      int32_t a = pick();
+      row_t row(a, "u" + std::to_string(step));
+      if (op < 6) {
+        REQUIRE_MESSAGE(sm3::tbl_update(tc, ids[a].first, row.d, row.null) == 0,
+                        sm1::errmsg());
+      } else {
+        sm3::tbl_close(tc);
+        sm3::tbl_close(tr);
+        db.commit();
+        auto [rg, id] = where(db, c, a);
+        REQUIRE(id == ids[a].first);
+        db.begin(sm1::xctlevel_t::read_committed);
+        REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, tc) == 0);
+        REQUIRE(sm3::tbl_open(db.ss, r, sm1::SM_LOCKMODE_IX, tr) == 0);
+        REQUIRE_MESSAGE(sm3::tbl_update_at(tc, rg, id, row.d, row.null) == 0,
+                        sm1::errmsg());
+      }
+      REQUIRE(sm3::tbl_update(tr, ids[a].second, row.d, row.null) == 0);
+      model[a] = "u" + std::to_string(step);
+    } else {
+      int32_t a = pick();
+      REQUIRE_MESSAGE(sm3::tbl_delete(tc, ids[a].first) == 0, sm1::errmsg());
+      REQUIRE(sm3::tbl_delete(tr, ids[a].second) == 0);
+      model.erase(a);
+      ids.erase(a);
+    }
+    sm3::tbl_close(tc);
+    sm3::tbl_close(tr);
+    db.commit();
+    // By hand: a seal, or an RG compaction of one of c's row groups.
+    // The sealer's jobs end first, so neither takes the other's rows.
+    if (rng() % 25 == 0) {
+      sm3::sealer_wait_idle(db.cat);
+      seal(ss3, c);
+    } else if (rng() % 25 == 0) {
+      sm3::sealer_wait_idle(db.cat);
+      std::vector<uint64_t> rgs = rg_ids(db, c);
+      if (!rgs.empty()) {
+        compact(ss3, c, {rgs[rng() % rgs.size()]});
+      }
+    }
+    // 3. Agreement.
+    if (step % 50 == 49) {
+      sm3::sealer_wait_idle(db.cat);
+      db.begin(sm1::xctlevel_t::repeatable_read);
+      auto in_c = rows_in(db.ss, c);
+      auto in_r = rows_in(db.ss, r);
+      db.commit();
+      REQUIRE(in_r == model);
+      REQUIRE(in_c == model);
+    }
+    // 4. An old snapshot.
+    if (snap_at < 0 && rng() % 60 == 0) {
+      REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+      sm3::table_t *t = nullptr;
+      REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IS, t) == 0);
+      sm3::tbl_close(t);
+      CHECK(rows_in(ss2, r) == model);
+      kept = model;
+      snap_at = step;
+    } else if (snap_at >= 0 && step - snap_at >= 40) {
+      CHECK(rows_in(ss2, c) == kept);
+      CHECK(rows_in(ss2, r) == kept);
+      REQUIRE(sm3::commit(ss2) == 0);
+      snap_at = -1;
+    }
+  }
+  if (snap_at >= 0) {
+    REQUIRE(sm3::commit(ss2) == 0);
+  }
+  CHECK(rg_ids(db, c).size() > 1);
+  sm3::sealer_detach(db.cat);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}

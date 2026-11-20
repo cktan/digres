@@ -1030,6 +1030,12 @@ random CGs and random bounds, against a test of every value.
     RG compaction and the seal until they end.
 11. A bulk load rolled back to a savepoint leaves no row, no RG
     and no file.
+12. **A column store table agrees with a row store table.** One
+    random workload of inserts, updates by `_id` and by `(rg_id,
+    _id)`, and deletes, at READ COMMITTED and REPEATABLE READ,
+    with seals and RG compactions between, runs on both; every
+    50 steps a scan of each gives the model, and an old
+    REPEATABLE READ snapshot gives the model as it was.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.
