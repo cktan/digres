@@ -617,63 +617,99 @@ static nbase_t dec_nbase(const wide_t &w) {
  * ----------------------------------------------------------------------
  */
 
-/* The digits of w's magnitude, at least one. */
-static std::string mag_text(const mag_t &m) {
-  char buf[160];
-  int n = 0;
-  mag_t x = m;
+/*
+ * A number read from text or from the binary form, as its decimal digits:
+ * no leading zeros, and up to 154 of them, so that a typmod can round away
+ * places of a long input. It is not a value yet: dec_in_pack() makes the
+ * value, which has at most 36 digits.
+ */
+#define DEC_IN_MAX 154
+typedef struct dec_in_t {
+  int nd;    /* digits in dig: 0 for zero */
+  int scale; /* places after the point */
+  char dig[DEC_IN_MAX + 2];
+} dec_in_t;
 
-  do {
-    uint64 rem;
-
-    x = mag_div_small(x, 10, &rem);
-    buf[n++] = (char)('0' + rem);
-  } while (!mag_is_zero(x));
-  std::string s(n, '0');
-  for (int i = 0; i < n; i++)
-    s[i] = buf[n - 1 - i];
-  return s;
+/* The digits of u as a dec_in_t at scale 0. */
+static void dec_in_of_u128(dec_in_t *d, u128 u) {
+  d->scale = 0;
+  d->nd = u == 0 ? 0 : dec_digits_text(u, d->dig);
 }
 
-/* w as PostgreSQL prints a numeric: every place of its scale, no exponent. */
-static char *wide_text(const wide_t &w) {
-  std::string digits = mag_text(w.mag);
-  std::string out;
+/*
+ * *d with its last drop places taken off: rounded half away from zero by
+ * the first of them, or cut. A carry out of the top adds a digit.
+ */
+static void dec_in_drop(dec_in_t *d, int drop, bool cut) {
+  bool up = false;
 
-  if ((int)digits.size() <= w.scale)
-    digits.insert(0, w.scale - digits.size() + 1, '0');
-  if (w.neg && !wide_is_zero(w))
-    out += '-';
-  out += digits.substr(0, digits.size() - w.scale);
-  if (w.scale > 0) {
-    out += '.';
-    out += digits.substr(digits.size() - w.scale);
+  if (drop <= 0)
+    return;
+  d->scale -= drop;
+  if (d->nd == 0)
+    return;
+  if (drop > d->nd) {
+    d->nd = 0;
+    return;
   }
-  return pstrdup(out.c_str());
+  up = !cut && d->dig[d->nd - drop] >= '5';
+  d->nd -= drop;
+  if (up) {
+    int i = d->nd - 1;
+
+    while (i >= 0 && d->dig[i] == '9')
+      d->dig[i--] = '0';
+    if (i >= 0)
+      d->dig[i]++;
+    else {
+      memmove(d->dig + 1, d->dig, d->nd);
+      d->dig[0] = '1';
+      d->nd++;
+    }
+  }
+  if (d->nd == 0 && up) {
+    d->dig[0] = '1';
+    d->nd = 1;
+  }
+}
+
+/* *d with zeros added after the point, up to scale; false if too long. */
+static bool dec_in_pad(dec_in_t *d, int scale) {
+  int add = scale - d->scale;
+
+  if (add <= 0)
+    return true;
+  if (d->nd > 0) {
+    if (d->nd + add > DEC_IN_MAX)
+      return false;
+    memset(d->dig + d->nd, '0', add);
+    d->nd += add;
+  }
+  d->scale = scale;
+  return true;
 }
 
 /*
  * Parse a decimal number at cp -- digits, which may be separated by single
- * underscores, a point, more digits and an exponent -- into *w, setting
+ * underscores, a point, more digits and an exponent -- into *d, setting
  * *endp past it.  False with an error saved in escontext if it is not one,
  * or is out of range.
  */
-static bool parse_decimal(const char *str, const char *cp, wide_t *w,
+static bool parse_decimal(const char *str, const char *cp, dec_in_t *d,
                           const char **endp, Node *escontext) {
-  mag_t mag = mag_of(0);
+  int nd = 0;
   int scale = 0;
-  int sig = 0;
   bool have_dp = false, have_digit = false;
   long exponent = 0;
 
   for (;;) {
     if (isdigit((unsigned char)*cp)) {
       /* Leading zeros are not significant digits. */
-      if (sig > 0 || *cp != '0')
-        sig++;
-      if (sig > 154)
-        goto out_of_range;
-      mag = mag_add(mag_mul_small(mag, 10), mag_of(*cp - '0'));
+      if (nd > 0 || *cp != '0') {
+        if (nd >= DEC_IN_MAX)
+          goto out_of_range;
+        d->dig[nd++] = *cp;
+      }
       if (have_dp)
         scale++;
       have_digit = true;
@@ -714,15 +750,14 @@ static bool parse_decimal(const char *str, const char *cp, wide_t *w,
   }
   /* The exponent moves the point: up to the scale, then zeros. */
   scale -= (int)exponent;
-  if (scale < 0 && mag_digits(mag) - scale > 154)
-    goto out_of_range;
-  if (scale < 0) {
-    mag = mag_mul(mag, mag_pow10(-scale));
-    scale = 0;
+  if (scale < 0 && nd > 0) {
+    if (nd - scale > DEC_IN_MAX)
+      goto out_of_range;
+    memset(d->dig + nd, '0', -scale);
+    nd -= scale;
   }
-  w->mag = mag;
-  w->neg = false;
-  w->scale = scale;
+  d->nd = nd;
+  d->scale = scale < 0 ? 0 : scale;
   *endp = cp;
   return true;
 
@@ -738,32 +773,36 @@ out_of_range:
 
 /*
  * Parse an integer in base 16, 8 or 2 at cp, after its prefix, with
- * underscores between digits, into *w, setting *endp past it.
+ * underscores between digits, into *d, setting *endp past it. It must fit
+ * 36 digits, as any value does.
  */
 static bool parse_nondecimal(const char *str, const char *cp, int base,
-                             wide_t *w, const char **endp, Node *escontext) {
-  mag_t mag = mag_of(0);
+                             dec_in_t *d, const char **endp,
+                             Node *escontext) {
+  u128 v = 0;
   bool have_digit = false;
 
   for (;;) {
-    int d;
+    int digit;
 
     if (isxdigit((unsigned char)*cp))
-      d = isdigit((unsigned char)*cp)
-              ? *cp - '0'
-              : (tolower((unsigned char)*cp) - 'a' + 10);
+      digit = isdigit((unsigned char)*cp)
+                  ? *cp - '0'
+                  : (tolower((unsigned char)*cp) - 'a' + 10);
     else if (*cp == '_' && have_digit && isxdigit((unsigned char)cp[1])) {
       cp++;
       continue;
     } else
       break;
-    if (d >= base)
+    if (digit >= base)
       break;
-    mag = mag_add(mag_mul_small(mag, base), mag_of(d));
-    if (mag_digits(mag) > 154)
-      ereturn(escontext, false,
-              (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-               errmsg("value overflows numeric format")));
+    if (__builtin_mul_overflow(v, (u128)base, &v) ||
+        __builtin_add_overflow(v, (u128)digit, &v))
+      ereturn(
+          escontext, false,
+          (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+           errmsg("value overflows numeric format"),
+           errdetail("A numeric value has at most %d digits.", DEC_MAX_DIGITS)));
     have_digit = true;
     cp++;
   }
@@ -772,9 +811,7 @@ static bool parse_nondecimal(const char *str, const char *cp, int base,
         escontext, false,
         (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
          errmsg("invalid input syntax for type %s: \"%s\"", "numeric", str)));
-  w->mag = mag;
-  w->neg = false;
-  w->scale = 0;
+  dec_in_of_u128(d, v);
   *endp = cp;
   return true;
 }
@@ -801,22 +838,26 @@ static int numeric_typmod_scale(int32 typmod) {
 }
 
 /*
- * w rounded to typmod's scale and checked against its precision, as an
+ * *d rounded to typmod's scale and checked against its precision, as an
  * assignment to numeric(p, s) does; false with the error saved in
  * escontext if it has too many digits before the point.
  */
-static bool apply_typmod(wide_t *w, int32 typmod, Node *escontext) {
-  int precision, scale, maxdigits, digits;
+static bool apply_typmod(dec_in_t *d, int32 typmod, Node *escontext) {
+  int precision, scale, maxdigits;
+  bool padded;
 
   if (!is_valid_numeric_typmod(typmod))
     return true;
   precision = numeric_typmod_precision(typmod);
   scale = numeric_typmod_scale(typmod);
   maxdigits = precision - scale;
-  *w = wide_round(*w, scale, false);
+  if (d->scale > scale) {
+    dec_in_drop(d, d->scale - scale, false);
+    padded = true;
+  } else
+    padded = dec_in_pad(d, scale);
   /* Digits before the point, of the rounded value. */
-  digits = mag_digits(w->mag) - w->scale;
-  if (digits > maxdigits)
+  if (!padded || d->nd - d->scale > maxdigits)
     ereturn(escontext, false,
             (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
              errmsg("numeric field overflow"),
@@ -867,23 +908,43 @@ static bool dec_apply_typmod(ty_decimal128_t *v, int32 typmod,
  * ----------------------------------------------------------------------
  */
 
-/*
- * w with places after the point that are zero dropped, down to scale
- * floor at least: exact.
- */
-static wide_t wide_strip_zeros(const wide_t &w, int floor) {
-  wide_t r = w;
-
-  while (r.scale > floor) {
-    uint64 rem;
-    mag_t q = mag_div_small(r.mag, 10, &rem);
-
-    if (rem != 0)
-      break;
-    r.mag = q;
-    r.scale--;
+/* *d with zeros at the end, past the point, dropped one by one. */
+static void dec_in_strip(dec_in_t *d, int floor) {
+  while (d->scale > floor && (d->nd == 0 || d->dig[d->nd - 1] == '0')) {
+    if (d->nd > 0)
+      d->nd--;
+    d->scale--;
   }
-  return r;
+}
+
+/*
+ * *d as a value: places past 36 rounded away, and then digits past 36
+ * pushed out of the places, half away from zero; false if the integer part
+ * has more than 36 digits.
+ */
+static bool dec_in_pack(dec_in_t *d, bool neg, i128 *v, int *scale) {
+  u128 u = 0;
+
+  if (d->scale > NUMERIC_MAX_SCALE)
+    dec_in_drop(d, d->scale - NUMERIC_MAX_SCALE, false);
+  if (d->nd > DEC_MAX_DIGITS) {
+    int drop = d->nd - DEC_MAX_DIGITS;
+
+    if (drop > d->scale)
+      return false;
+    dec_in_drop(d, drop, false);
+    /* Rounding up may add a digit: 99.95 to 100.0. */
+    if (d->nd > DEC_MAX_DIGITS) {
+      if (d->scale == 0)
+        return false;
+      dec_in_drop(d, 1, false);
+    }
+  }
+  for (int i = 0; i < d->nd; i++)
+    u = u * 10 + (u128)(d->dig[i] - '0');
+  *v = neg ? -(i128)u : (i128)u;
+  *scale = d->scale;
+  return true;
 }
 
 /* The error for a value of more than 36 significant digits. */
@@ -909,9 +970,9 @@ Datum numeric_in(PG_FUNCTION_ARGS) {
   Node *escontext = fcinfo->context;
   const char *cp = str;
   bool neg = false;
-  wide_t w;
-  Numeric res;
-  bool have_error = false;
+  dec_in_t d;
+  i128 v;
+  int scale;
 
   /* Skip leading spaces */
   while (*cp && isspace((unsigned char)*cp))
@@ -939,9 +1000,9 @@ Datum numeric_in(PG_FUNCTION_ARGS) {
                : (cp[1] == 'o' || cp[1] == 'O') ? 8
                                                 : 2;
 
-    if (!parse_nondecimal(str, cp + 2, base, &w, &cp, escontext))
+    if (!parse_nondecimal(str, cp + 2, base, &d, &cp, escontext))
       PG_RETURN_NULL();
-  } else if (!parse_decimal(str, cp, &w, &cp, escontext))
+  } else if (!parse_decimal(str, cp, &d, &cp, escontext))
     PG_RETURN_NULL();
   /* Should be nothing left but spaces. */
   while (*cp) {
@@ -952,30 +1013,25 @@ Datum numeric_in(PG_FUNCTION_ARGS) {
            errmsg("invalid input syntax for type %s: \"%s\"", "numeric", str)));
     cp++;
   }
-  w.neg = neg && !wide_is_zero(w);
-  if (!apply_typmod(&w, typmod, escontext))
+  neg = neg && d.nd != 0;
+  if (!apply_typmod(&d, typmod, escontext))
     PG_RETURN_NULL();
   /*
    * Zeros at the end, past the point, are dropped one by one while the
    * value has more than 36 digits or places: no other digit may be.
    */
-  while ((mag_digits(w.mag) > DEC_MAX_DIGITS || w.scale > NUMERIC_MAX_SCALE) &&
-         w.scale > 0) {
-    wide_t t = wide_strip_zeros(w, w.scale - 1);
-
-    if (t.scale == w.scale)
+  while ((d.nd > DEC_MAX_DIGITS || d.scale > NUMERIC_MAX_SCALE) &&
+         d.scale > 0) {
+    if (d.nd > 0 && d.dig[d.nd - 1] != '0')
       break; /* the last place is not a zero */
-    w = t;
+    dec_in_strip(&d, d.scale - 1);
   }
-  if (mag_digits(w.mag) > DEC_MAX_DIGITS || w.scale > NUMERIC_MAX_SCALE) {
+  if (d.nd > DEC_MAX_DIGITS || d.scale > NUMERIC_MAX_SCALE ||
+      !dec_in_pack(&d, neg, &v, &scale)) {
     too_many_digits(escontext);
     PG_RETURN_NULL();
   }
-  if (!dec_pack(w, &res, &have_error)) {
-    too_many_digits(escontext);
-    PG_RETURN_NULL();
-  }
-  PG_RETURN_NUMERIC(res);
+  PG_RETURN_NUMERIC(dec_make(v, scale));
 }
 
 /* Output function for numeric: every place of its scale, no exponent. */
@@ -1048,7 +1104,11 @@ Datum numeric_recv(PG_FUNCTION_ARGS) {
   StringInfo buf = (StringInfo)PG_GETARG_POINTER(0);
   int32 typmod = PG_GETARG_INT32(2);
   int ndigits, weight, sign, dscale;
-  wide_t w;
+  dec_in_t d;
+  char all[4 * 38 + 4];
+  int len = 0, lead = 0;
+  i128 v;
+  int scale;
 
   ndigits = (uint16)pq_getmsgint(buf, sizeof(uint16));
   weight = (int16)pq_getmsgint(buf, sizeof(int16));
@@ -1064,50 +1124,70 @@ Datum numeric_recv(PG_FUNCTION_ARGS) {
   if ((dscale & 0x3FFF) != dscale)
     ereport(ERROR, (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
                     errmsg("invalid scale in external \"numeric\" value")));
-  w.mag = mag_of(0);
-  w.neg = sign == 0x4000;
   for (int i = 0; i < ndigits; i++) {
-    int d = (int16)pq_getmsgint(buf, sizeof(int16));
+    int g = (int16)pq_getmsgint(buf, sizeof(int16));
 
-    if (d < 0 || d >= 10000)
+    if (g < 0 || g >= 10000)
       ereport(ERROR, (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
                       errmsg("invalid digit in external \"numeric\" value")));
     if (i >= 38)
       ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                       errmsg("value overflows numeric format")));
-    w.mag = mag_add(mag_mul_small(w.mag, 10000), mag_of(d));
+    all[len++] = (char)('0' + g / 1000);
+    all[len++] = (char)('0' + g / 100 % 10);
+    all[len++] = (char)('0' + g / 10 % 10);
+    all[len++] = (char)('0' + g % 10);
   }
+  while (lead < len && all[lead] == '0')
+    lead++;
+  d.nd = len - lead;
+  memcpy(d.dig, all + lead, d.nd);
   /* The digits' value is that integer times 10000^(weight - ndigits + 1). */
-  w.scale = 4 * (ndigits - 1 - weight);
-  if (w.scale < 0) {
-    w.mag = mag_mul(w.mag, mag_pow10(-w.scale));
-    w.scale = 0;
+  d.scale = 4 * (ndigits - 1 - weight);
+  if (d.scale < 0) {
+    if (d.nd > 0) {
+      if (d.nd - d.scale > DEC_IN_MAX)
+        ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                        errmsg("value overflows numeric format")));
+      memset(d.dig + d.nd, '0', -d.scale);
+      d.nd -= d.scale;
+    }
+    d.scale = 0;
   }
   /* A display scale hiding digits truncates them, as PostgreSQL's does. */
-  w = wide_round(w, Min(dscale, NUMERIC_MAX_SCALE + 1), true);
-  if (w.scale < dscale && dscale <= NUMERIC_MAX_SCALE)
-    w = wide_scale_up(w, dscale);
-  if (wide_is_zero(w))
-    w.neg = false;
-  (void)apply_typmod(&w, typmod, NULL);
-  PG_RETURN_NUMERIC(dec_from_wide(w));
+  dec_in_drop(&d, d.scale - Min(dscale, NUMERIC_MAX_SCALE + 1), true);
+  if (d.scale < dscale && dscale <= NUMERIC_MAX_SCALE &&
+      !dec_in_pad(&d, dscale))
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("value overflows numeric format")));
+  (void)apply_typmod(&d, typmod, NULL);
+  if (!dec_in_pack(&d, sign == 0x4000 && d.nd != 0, &v, &scale))
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(v, scale));
 }
 
 /* numeric_send - converts numeric to PostgreSQL's binary format. */
 Datum numeric_send(PG_FUNCTION_ARGS) {
-  wide_t w = dec_wide(PG_GETARG_NUMERIC(0));
+  Numeric num = PG_GETARG_NUMERIC(0);
+  i128 v = dec_value(num);
+  int scale = dec_scale(num);
   StringInfoData buf;
   int digits[DEC_MAX_NBASE_DIGITS + 2];
-  int n = 0, first, last, weight;
-  int s4 = (w.scale + 3) / 4 * 4;
-  mag_t m = mag_mul(w.mag, mag_pow10(s4 - w.scale));
+  char full[64];
+  int n = 0, first, last, weight, len, nd;
+  int s4 = (scale + 3) / 4 * 4;
 
-  /* Base-10,000 digits, least significant first, of m / 10^s4. */
-  while (!mag_is_zero(m)) {
-    uint64 rem;
+  /* The digits of |v|, then zeros to scale s4: base-10,000 digits of it. */
+  nd = v == 0 ? 0 : dec_digits_text(v < 0 ? -(u128)v : (u128)v, full);
+  memset(full + nd, '0', s4 - scale);
+  len = nd + (s4 - scale);
+  /* Least significant first. */
+  for (int end = len; nd > 0 && end > 0; end -= 4) {
+    int g = 0;
 
-    m = mag_div_small(m, 10000, &rem);
-    digits[n++] = (int)rem;
+    for (int k = Max(0, end - 4); k < end; k++)
+      g = g * 10 + (full[k] - '0');
+    digits[n++] = g;
   }
   /* The most significant is digits[n - 1], of weight n - 1 - s4 / 4. */
   weight = n - 1 - s4 / 4;
@@ -1123,8 +1203,8 @@ Datum numeric_send(PG_FUNCTION_ARGS) {
     pq_sendint16(&buf, first - last + 1);
     pq_sendint16(&buf, weight);
   }
-  pq_sendint16(&buf, w.neg ? 0x4000 : 0x0000);
-  pq_sendint16(&buf, w.scale);
+  pq_sendint16(&buf, v < 0 ? 0x4000 : 0x0000);
+  pq_sendint16(&buf, scale);
   for (int i = first; n > 0 && i >= last; i--)
     pq_sendint16(&buf, digits[i]);
   PG_RETURN_BYTEA_P(pq_endtypsend(&buf));

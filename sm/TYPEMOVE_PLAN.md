@@ -328,9 +328,13 @@ copied from PostgreSQL keeps its copyright notice
    integer and `pg_lsn`, `random(min, max)`, `min_scale` and
    `trim_scale` are on 128-bit values too: `sum(length(a::text))`
    fell 36.0% and `where a::float8 > 500` 32.8%.
-   Left, still on `mag_t` and `wide_t`: text input with its
-   typmod, the binary forms, the `decimal64` conversion helpers
-   and the aggregates' sums; then the hash.
+   Text input, its typmod, and the binary receive and send are
+   off `wide_t` too: the input reads the digits into a string of
+   up to 154, rounds a long input once by its first dropped digit
+   under a typmod, and then makes a 128-bit value.
+   `where (a::text)::numeric > 500` fell 56.9%.
+   Left, still on `mag_t` and `wide_t`: the aggregates' sums,
+   `variance` and `stddev`; then the hash.
    `/` waits for the 512-bit magnitude. The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from
