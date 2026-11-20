@@ -13613,3 +13613,16 @@ A check hook took the new value as a `char **`, to change it with
 - **Left on purpose**: a `Param` gives no bound, as the scan
   begins with the plan; the cost model does not see the
   projection.
+
+## Step 450: SERIALIZABLE on a column store table is not supported
+
+- **What it is**: a SERIALIZABLE transaction that reads or
+  writes a column store table fails with SQLSTATE `0A000`,
+  feature not supported
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §9.1).
+- **How**: sm3 refuses the table with the new error code
+  `SM_ERR_UNSUPPORTED`. `sm_sqlstate()` in `access/sm/smstore.c`
+  maps it to `ERRCODE_FEATURE_NOT_SUPPORTED`. Before, the code
+  was `SM_ERR_INVALID`, which digres reported as `XX000`, an
+  internal error.
+- **Test**: `test/columnar.sql` prints the SQLSTATE.

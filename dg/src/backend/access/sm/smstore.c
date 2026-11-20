@@ -358,6 +358,8 @@ static int sm_sqlstate(void) {
     return ERRCODE_IN_FAILED_SQL_TRANSACTION;
   case SM_ERR_MOVED:
     return ERRCODE_T_R_SERIALIZATION_FAILURE;
+  case SM_ERR_UNSUPPORTED:
+    return ERRCODE_FEATURE_NOT_SUPPORTED;
   default:
     return sm_retryable() == 1 ? ERRCODE_T_R_SERIALIZATION_FAILURE
                                : ERRCODE_INTERNAL_ERROR;

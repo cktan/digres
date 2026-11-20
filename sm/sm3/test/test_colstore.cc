@@ -131,7 +131,8 @@ TEST_CASE("a column store table refuses an index") {
 // Verify a SERIALIZABLE transaction cannot open a column store table,
 // and the other levels can.
 // 1. At READ COMMITTED and REPEATABLE READ, c opens.
-// 2. At SERIALIZABLE, c's open fails with SM_ERR_INVALID; r opens.
+// 2. At SERIALIZABLE, c's open fails with SM_ERR_UNSUPPORTED; r
+//    opens.
 TEST_CASE("a SERIALIZABLE transaction cannot use a column store table") {
   col_db_t db;
   db.begin();
@@ -150,7 +151,7 @@ TEST_CASE("a SERIALIZABLE transaction cannot use a column store table") {
   // 2. SERIALIZABLE.
   db.begin(sm1::xctlevel_t::serializable);
   CHECK(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == -1);
-  CHECK(sm1::errnum() == sm1::SM_ERR_INVALID);
+  CHECK(sm1::errnum() == sm1::SM_ERR_UNSUPPORTED);
   REQUIRE(sm3::tbl_open(db.ss, r, sm1::SM_LOCKMODE_IS, t) == 0);
   sm3::tbl_close(t);
   db.commit();

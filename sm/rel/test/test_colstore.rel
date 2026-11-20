@@ -63,7 +63,7 @@
 
 # 2. SERIALIZABLE is refused; so is an index.
 (begin :ser)
-    (assert-eq (says (err-of (scan-count ev)) "ERR_INVALID") true
+    (assert-eq (says (err-of (scan-count ev)) "ERR_UNSUPPORTED") true
                "SERIALIZABLE cannot read a column store table")
 (abort)
 (begin :rc)

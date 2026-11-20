@@ -554,7 +554,7 @@ void close_rels(table_t *table) {
  */
 int refuse_serializable(const session_t *session, const table_def_t &def) {
   if (def.column_store && session->level == sm1::xctlevel_t::serializable) {
-    return sm1::seterr(sm1::SM_ERR_INVALID,
+    return sm1::seterr(sm1::SM_ERR_UNSUPPORTED,
                        "a column store table cannot be used in a "
                        "SERIALIZABLE transaction");
   }

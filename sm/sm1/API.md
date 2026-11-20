@@ -114,8 +114,14 @@ typedef enum sm_errnum_t {
     /* sm1's: NOT an abort; the newest version is a move's tombstone */
     SM_ERR_MOVED         = 32,  /* the row moved to another key */
 
+    /* sm1's: NOT an abort; a move of sm's own took the row */
+    SM_ERR_SEALED        = 33,  /* a move of sm's own took the row */
+
+    /* sm3's: NOT an abort; a call sm does not support */
+    SM_ERR_UNSUPPORTED   = 34,  /* the call is not supported */
+
     /* The highest code, for code that walks them all. */
-    SM_ERR_LAST          = SM_ERR_MOVED
+    SM_ERR_LAST          = SM_ERR_UNSUPPORTED
 } sm_errnum_t;
 
 /* sm1.h */

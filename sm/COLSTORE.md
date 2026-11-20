@@ -534,8 +534,8 @@ takes a lock's row away.
 
 **No SERIALIZABLE transaction uses a column store table.** A
 read or a write of one in a SERIALIZABLE transaction fails with
-`SM_ERR_INVALID`, and digres reports it as a feature not
-supported. A column store table is for analytics, which runs at
+`SM_ERR_UNSUPPORTED`, and digres reports it as a feature not
+supported, SQLSTATE `0A000`. A column store table is for analytics, which runs at
 READ COMMITTED or REPEATABLE READ. The refusal frees the Column
 Store from SSI:
 

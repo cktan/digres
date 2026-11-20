@@ -17,7 +17,8 @@
 -- 6. ADD COLUMN with a default, DROP COLUMN, ALTER COLUMN TYPE, a
 --    rewrite, and TRUNCATE.
 -- 7. CREATE TABLE AS and COPY load one too.
--- 8. A SERIALIZABLE transaction cannot read it.
+-- 8. A SERIALIZABLE transaction cannot read it: a feature not
+--    supported, SQLSTATE 0A000.
 -- 9. storage = 'row' is a row store table ('row' quoted, as ROW is a
 --    keyword); another value is refused.
 \set ON_ERROR_STOP off
@@ -98,6 +99,7 @@ select * from columnar_ctas where k = 5 order by id;
 drop table columnar_ctas;
 begin isolation level serializable;
 select count(*) from columnar_t;
+\echo :SQLSTATE
 rollback;
 create temp table columnar_row (a int) with (storage = 'row');
 insert into columnar_row values (1);

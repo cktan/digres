@@ -139,8 +139,15 @@ typedef enum sm_errnum_t {
      */
     SM_ERR_SEALED        = 33,  /* a move of sm's own took the row */
 
+    /*
+     * sm3's, and not an abort: a call sm does not support, such as
+     * a column store table in a SERIALIZABLE transaction
+     * (../COLSTORE.md §9.1).
+     */
+    SM_ERR_UNSUPPORTED   = 34,  /* the call is not supported */
+
     /* The highest code, for code that walks them all. */
-    SM_ERR_LAST          = SM_ERR_SEALED
+    SM_ERR_LAST          = SM_ERR_UNSUPPORTED
 } sm_errnum_t;
 
 #endif /* SM_ERROR_H */

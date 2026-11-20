@@ -17,7 +17,8 @@
 -- 6. ADD COLUMN with a default, DROP COLUMN, ALTER COLUMN TYPE, a
 --    rewrite, and TRUNCATE.
 -- 7. CREATE TABLE AS and COPY load one too.
--- 8. A SERIALIZABLE transaction cannot read it.
+-- 8. A SERIALIZABLE transaction cannot read it: a feature not
+--    supported, SQLSTATE 0A000.
 -- 9. storage = 'row' is a row store table ('row' quoted, as ROW is a
 --    keyword); another value is refused.
 \set ON_ERROR_STOP off
@@ -28,14 +29,14 @@ create temp table columnar_t (
   ref int references columnar_ref (id),
   amount int)
   with (storage = columnar);
-psql:test/columnar.sql:30: WARNING:  column store table "columnar_t" has no primary key: it is not made
-psql:test/columnar.sql:30: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
-psql:test/columnar.sql:30: WARNING:  column store table "columnar_t" has no foreign key: it is not made
+psql:test/columnar.sql:31: WARNING:  column store table "columnar_t" has no primary key: it is not made
+psql:test/columnar.sql:31: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
+psql:test/columnar.sql:31: WARNING:  column store table "columnar_t" has no foreign key: it is not made
 insert into columnar_t values (null, 'x', null, 1);
-psql:test/columnar.sql:31: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
+psql:test/columnar.sql:32: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
 DETAIL:  Failing row contains (null, x, null, 1).
 create index columnar_t_amount on columnar_t (amount);
-psql:test/columnar.sql:32: WARNING:  column store table "columnar_t" has no index: it is not made
+psql:test/columnar.sql:33: WARNING:  column store table "columnar_t" has no index: it is not made
 insert into columnar_t
   select g, 'c' || g, null, g % 10 from generate_series(1, 25000) g;
 insert into columnar_t values (0, 'zero', 7, 0);
@@ -258,9 +259,11 @@ select * from columnar_ctas where k = 5 order by id;
 drop table columnar_ctas;
 begin isolation level serializable;
 select count(*) from columnar_t;
-psql:test/columnar.sql:100: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
+psql:test/columnar.sql:101: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
 LINE 1: select count(*) from columnar_t;
                              ^
+\echo :SQLSTATE
+0A000
 rollback;
 create temp table columnar_row (a int) with (storage = 'row');
 insert into columnar_row values (1);
@@ -271,7 +274,7 @@ select * from columnar_row;
 (1 row)
 
 create temp table columnar_bad (a int) with (storage = banana);
-psql:test/columnar.sql:105: ERROR:  invalid value for option "storage": banana
+psql:test/columnar.sql:107: ERROR:  invalid value for option "storage": banana
 HINT:  Valid values are "row" and "columnar".
 drop table columnar_row;
 drop table columnar_t;
