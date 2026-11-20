@@ -457,7 +457,10 @@ int sm2::cg_build(const cg_column_t &col, std::span<const cg_value_t> values,
       continue;
     }
     std::string_view d = values[i].datum;
-    if (col.type->key_encode(d, col.typmod, col.collation, keys[i]) != 0) {
+    // The key is of the value: a varlena's payload, past its header,
+    // as every key of sm2's is (encode_key).
+    if (col.type->key_encode(varlena ? sm2::varlena_payload(d) : d, col.typmod,
+                             col.collation, keys[i]) != 0) {
       return -1;
     }
     const std::string &k = keys[i];

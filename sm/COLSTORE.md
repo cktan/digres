@@ -65,7 +65,7 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | RG key | the versioned key that holds an RG's metadata and the statistics of its CGs |
 | filter key | the versioned key that holds one CG's bloom filter or exact set |
 | zonemap | a CG's statistics in the RG key: min, max, null count and flags |
-| key bytes | a datum in sm2's order-preserving key encoding, `encode()`; memcmp order is SQL order |
+| key bytes | a datum in sm2's order-preserving key encoding, `encode()`, of a varlena's payload past its header; memcmp order is SQL order |
 | RG compaction | the rewrite of an RG with many delete markers into a new RG |
 | long value | a value of a varlena type longer than 1024 bytes; a CG holds a pointer to it |
 | long-value file | the file that holds the long values of one CG |

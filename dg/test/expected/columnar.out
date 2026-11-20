@@ -166,6 +166,46 @@ union all select 'row', count(*), sum(amount), min(code), max(code)
 (2 rows)
 
 select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code = 'c12345'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code = 'c12345';
+    t     | count | sum |  min   |  max   
+----------+-------+-----+--------+--------
+ columnar |     1 |   5 | c12345 | c12345
+ row      |     1 |   5 | c12345 | c12345
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code > 'c24990'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code > 'c24990';
+    t     | count |  sum  |  min   | max  
+----------+-------+-------+--------+------
+ columnar |  8340 | 37750 | c24991 | zero
+ row      |  8340 | 37750 | c24991 | zero
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code < 'c10'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code < 'c10';
+    t     | count | sum | min | max 
+----------+-------+-----+-----+-----
+ columnar |     1 | 100 | c1  | c1
+ row      |     1 | 100 | c1  | c1
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code in ('c5', 'zero')
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code in ('c5', 'zero');
+    t     | count | sum | min | max  
+----------+-------+-----+-----+------
+ columnar |     2 | 205 | c5  | zero
+ row      |     2 | 205 | c5  | zero
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
   from columnar_t where ref is null and id between 9990 and 10010
 union all select 'row', count(*), sum(amount), min(code), max(code)
   from columnar_rs where ref is null and id between 9990 and 10010;
@@ -261,7 +301,7 @@ select * from columnar_ctas where k = 5 order by id;
 drop table columnar_ctas;
 begin isolation level serializable;
 select count(*) from columnar_t;
-psql:test/columnar.sql:103: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
+psql:test/columnar.sql:119: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
 LINE 1: select count(*) from columnar_t;
                              ^
 \echo :SQLSTATE
@@ -276,10 +316,10 @@ select * from columnar_row;
 (1 row)
 
 create temp table columnar_bad (a int) with (storage = banana);
-psql:test/columnar.sql:109: ERROR:  invalid value for option "storage": banana
+psql:test/columnar.sql:125: ERROR:  invalid value for option "storage": banana
 HINT:  Valid values are "row" and "columnar".
 create temp table columnar_child (r int references columnar_t (id));
-psql:test/columnar.sql:110: ERROR:  there is no unique constraint matching given keys for referenced table "columnar_t"
+psql:test/columnar.sql:126: ERROR:  there is no unique constraint matching given keys for referenced table "columnar_t"
 drop table columnar_row;
 drop table columnar_t;
 drop table columnar_ref;

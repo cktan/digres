@@ -1802,3 +1802,63 @@ TEST_CASE("the seal erases its rows' TOAST chunks") {
   sm3::session_close(ss2);
   sm3::session_close(ss3);
 }
+
+// Verify a scan's bounds on a text column skip only the row groups
+// that cannot match: a CG's keys are of its values' payloads, past
+// their varlena headers, as the bounds' are (../COLSTORE.md §6), with
+// row groups of 100 rows.
+// 1. Load 300 rows: b is "aa" in the first row group, "mm" in the
+//    second, "zz" in the third.
+// 2. b < 'b', 'm' <= b < 'n', and b = 'zz' each give one row group's
+//    100 rows; b > 'zzz' gives none.
+TEST_CASE("a scan's bounds on a text column skip only what cannot match") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  sm3::loader_t *l = nullptr;
+  REQUIRE(sm3::tbl_load_open(t, l) == 0);
+  for (int i = 0; i < 300; i++) {
+    row_t r(i, i < 100 ? "aa" : i < 200 ? "mm" : "zz");
+    uint64_t id = 0;
+    REQUIRE(sm3::tbl_load_add(l, r.d, r.null, id) == 0);
+  }
+  REQUIRE(sm3::tbl_load_close(l) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  REQUIRE(row_groups(db, c) == 3);
+  db.begin();
+  const sm2::collation_t *coll =
+      sm3::cat_get_table(db.ss, c)->columns[1].collation;
+  db.commit();
+  auto key = [&](std::string_view v) {
+    std::string k;
+    REQUIRE(sm2::type_text.key_encode(v, -1, coll, k) == 0);
+    return k;
+  };
+  // 2. The bounds.
+  sm3::col_bound_t lt{1, {}};
+  lt.bound.not_null = lt.bound.has_hi = true;
+  lt.bound.hi_incl = false;
+  lt.bound.hi = key("b");
+  CHECK(scan_rows(db, c, {}, {lt}).size() == 100);
+  sm3::col_bound_t range{1, {}};
+  range.bound.not_null = range.bound.has_lo = range.bound.has_hi = true;
+  range.bound.lo = key("m");
+  range.bound.hi_incl = false;
+  range.bound.hi = key("n");
+  CHECK(scan_rows(db, c, {}, {range}).size() == 100);
+  sm3::col_bound_t eq{1, {}};
+  eq.bound.not_null = eq.bound.has_in = true;
+  eq.bound.in = {key("zz")};
+  CHECK(scan_rows(db, c, {}, {eq}).size() == 100);
+  sm3::col_bound_t past{1, {}};
+  past.bound.not_null = past.bound.has_lo = true;
+  past.bound.lo_incl = false;
+  past.bound.lo = key("zzz");
+  CHECK(scan_rows(db, c, {}, {past}).empty());
+}

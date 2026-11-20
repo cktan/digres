@@ -25,17 +25,22 @@ sm2::cg_column_t column(const sm2::type_t &t) {
   return sm2::cg_column_t{&t, -1, nullptr};
 }
 
-/* The datum of t's canonical text s. */
-std::string datum(const sm2::type_t &t, std::string_view s) {
+/* The bytes of t's canonical text s, as a type function takes them. */
+std::string payload(const sm2::type_t &t, std::string_view s) {
   std::string d;
   REQUIRE(t.in(s, -1, d) == 0);
   return d;
 }
 
+/* The datum of t's canonical text s, as a CG takes it: a varlena whole. */
+std::string datum(const sm2::type_t &t, std::string_view s) {
+  return t.len < 0 ? sm2::make_varlena(payload(t, s)) : payload(t, s);
+}
+
 /* The key of t's canonical text s. */
 std::string key(const sm2::type_t &t, std::string_view s) {
   std::string k;
-  REQUIRE(t.key_encode(datum(t, s), -1, nullptr, k) == 0);
+  REQUIRE(t.key_encode(payload(t, s), -1, nullptr, k) == 0);
   return k;
 }
 
@@ -282,7 +287,7 @@ TEST_CASE("a CG of another collation version is not pruned by value") {
   REQUIRE(b.stats.collation_version == sm2::collation_version(coll));
   auto k = [&](std::string_view s) {
     std::string out;
-    REQUIRE(sm2::type_text.key_encode(datum(sm2::type_text, s), -1, coll,
+    REQUIRE(sm2::type_text.key_encode(payload(sm2::type_text, s), -1, coll,
                                       out) == 0);
     return out;
   };
@@ -413,8 +418,8 @@ TEST_CASE("a non-deterministic collation's filter matches another case") {
   sm2::cg_column_t col{&sm2::type_text, -1, ci};
   auto k = [&](std::string_view s) {
     std::string out;
-    REQUIRE(sm2::type_text.key_encode(datum(sm2::type_text, s), -1, ci, out) ==
-            0);
+    REQUIRE(sm2::type_text.key_encode(payload(sm2::type_text, s), -1, ci,
+                                      out) == 0);
     return out;
   };
   // 1. The exact set.

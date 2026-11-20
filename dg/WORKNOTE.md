@@ -13634,3 +13634,17 @@ A check hook took the new value as a `char **`, to change it with
   column has no unique key
   ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §14.1).
 - **Test**: step 10 of `test/columnar.sql`.
+
+## Step 452: a text bound of a column store scan skips only what cannot match
+
+- **What it is**: a fix in sm, which digres's scans of column store
+  tables reach. A CG's zonemap and filter keys, and a scan's bound
+  keys, were made over a varlena's header and payload, where every
+  other key of sm's is over the payload alone. Keys then sorted by
+  length first, and a digres constant's 4-byte header never met a
+  stored value's 1-byte one: `code = 'c12345'` and `code < 'c10'`
+  skipped row groups that held matches.
+- **How**: `sm2::cg_build` and `sm_row_scanopen_columns` key a
+  varlena's payload ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §6).
+- **Test**: step 5 of `test/columnar.sql`, text bounds against a row
+  store copy.

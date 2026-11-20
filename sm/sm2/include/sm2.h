@@ -1501,7 +1501,10 @@ const char* build_flags();
  * bytes; sm1 stores them (../COLSTORE.md §4.5).
  */
 
-/* One value for a CG: a datum, in the type's form, or null. */
+/*
+ * One value for a CG: a datum's bytes as sm2::datum_bytes gives them,
+ * a varlena's header included, or null.
+ */
 struct cg_value_t {
     std::string_view datum;
     bool             isnull = false;

@@ -70,6 +70,22 @@ select 'columnar' as t, count(*), sum(amount), min(code), max(code)
 union all select 'row', count(*), sum(amount), min(code), max(code)
   from columnar_rs where code = 'c12345' or code = 'zero';
 select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code = 'c12345'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code = 'c12345';
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code > 'c24990'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code > 'c24990';
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code < 'c10'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code < 'c10';
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code in ('c5', 'zero')
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code in ('c5', 'zero');
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
   from columnar_t where ref is null and id between 9990 and 10010
 union all select 'row', count(*), sum(amount), min(code), max(code)
   from columnar_rs where ref is null and id between 9990 and 10010;

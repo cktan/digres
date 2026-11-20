@@ -2680,12 +2680,18 @@ int sm_row_scanopen_columns(sm_tbl_t *tbl, const bool *cols, size_t ncols,
                            "column, or of no values");
       }
       const sm3::column_def_t &c = def.columns[b.attnum];
+      // A bound's key is of its value: a varlena's payload, past its
+      // header, as a CG's keys are (sm2::cg_build).
       auto key = [&](sm_datum_t d, std::string &k) {
         std::string_view bytes;
-        return sm2::datum_bytes(c.type, c.typmod, static_cast<sm2::datum_t>(d),
-                                bytes) != 0
-                   ? -1
-                   : c.type->key_encode(bytes, c.typmod, c.collation, k);
+        if (sm2::datum_bytes(c.type, c.typmod, static_cast<sm2::datum_t>(d),
+                             bytes) != 0) {
+          return -1;
+        }
+        if (c.type->len < 0) {
+          bytes = sm2::varlena_payload(bytes);
+        }
+        return c.type->key_encode(bytes, c.typmod, c.collation, k);
       };
       sm3::col_bound_t x{b.attnum, {}};
       x.bound.is_null = b.is_null;

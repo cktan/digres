@@ -24,6 +24,8 @@
 # 8. Two loads of a row group each into tp, prepared, across a
 #    restart: no snapshot sees their rows before COMMIT PREPARED;
 #    the committed one's row group is read, the aborted one's not.
+# 9. Bounds on a text column through sm.h: of two row groups, b "aa"
+#    and b "zz", b < 'b' and b IN ('zz') each read one.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -194,6 +196,22 @@
 (begin :rr)
     (assert-eq (scan-count tp) 10000 "the committed load's row group")
     (assert-eq (> (rg-of tp 1) 0) true "its rows are in a row group")
+(commit)
+
+# 9. Text bounds.
+(begin :rc)
+    (table-create tt
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (load tt (map (fn [i] [i (if (< i 10000) "aa" "zz")]) (range 20000)))
+(commit)
+(begin :rr)
+    (assert-eq (length (scan-columns tt [] [[:b :< "b"]])) 10000
+               "b < 'b' reads the first row group")
+    (assert-eq (length (scan-columns tt [] [[:b :in ["zz"]]])) 10000
+               "b IN ('zz') reads the second")
 (commit)
 
 (db-close)
