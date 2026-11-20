@@ -1762,8 +1762,9 @@ or, for update/delete, key), `SM_ERR_MOVED` (update/delete of
 a key a move erased, `sm1::erase_moved`; not an abort),
 `SM_ERR_SEALED` (a write of a key whose newest committed
 version a move of sm's own wrote, `sm1::erase_sealed` and
-`sm1::insert_sealed`; not an abort), `SM_ERR_DUPKEY` (insert), `SM_ERR_NOTRANS`, `SM_ERR_PREPARED`,
-`SM_ERR_INVALID`, `SM_ERR_DISKFULL`, `SM_ERR_IO`.
+`sm1::insert_sealed`; not an abort), `SM_ERR_DUPKEY` (insert),
+`SM_ERR_NOTRANS`, `SM_ERR_PREPARED`, `SM_ERR_INVALID`,
+`SM_ERR_DISKFULL`, `SM_ERR_IO`.
 
 ### int sm1::insert_new(sm1::session_t* session, uint64_t storeid, std::string_view key, std::string_view data)
 
@@ -1793,8 +1794,9 @@ pinned into `pin`, as `sm1::erase`'s. Errors as `sm1::erase`'s.
 ### int sm1::erase_sealed(sm1::session_t* session, uint64_t storeid, std::string_view key, sm1::rawpin_t* pin, std::string_view& old)
 
 `sm1::erase` of a row that a move of sm's own takes elsewhere,
-changing nothing in it ([`../COLSTORE.md`](../COLSTORE.md) §10.2):
-its tombstone is sealed, flag `0x40`. A reader sees it as any
+changing nothing in it
+([`../COLSTORE.md`](../COLSTORE.md) §10.2): its tombstone is
+sealed, flag `0x40`. A reader sees it as any
 tombstone. A write or a row lock that meets it as the key's
 newest committed version judges first-committer-wins by the
 committed version under it, not by the move; none under it, as GC
@@ -2360,6 +2362,68 @@ nothing.
 Under serializable, a write of a key that is no version: a
 tree's entry. An rw-edge from every concurrent reader whose
 SIREAD covers it. Below serializable, nothing.
+
+## File set API
+
+A file set is a group of immutable files, named by a versioned
+key of a store, its fsid
+([`../COLSTORE.md`](../COLSTORE.md#45-file-sets) §4.5). Its files are under the store's RocksDB directory, at
+`colstore/<storeid>/<fsid / 1024>/<fsid>.<name>`. The caller
+writes the files, then puts the key, in one transaction; the
+key's versions decide which snapshots see the files. An fsid is used
+once: the caller draws it from a sequence of its own.
+
+- An abort, or a rollback to a savepoint set before a file was
+  written, unlinks the file.
+- GC deletes the files once no snapshot sees the key: when the
+  put is dead, or when the erase is at or below the watermark
+  ([`../GC.md`](../GC.md) §6.1).
+- The open of a database deletes the files no committed or
+  prepared version of their key names.
+- A drop of the store removes its directory.
+
+### int sm1::fileset_write(sm1::session_t* session, uint64_t storeid, uint64_t fsid, std::string_view name, std::string_view bytes)
+
+Write one file, `name`, of file set `fsid`, and make it durable:
+the file and its directory are fsynced, and a directory made for
+it too. A file is written once: an existing one fails with
+`SM_ERR_IO`. `name` is letters, digits, `.` and `_`, at most 64
+bytes. Errors: `SM_ERR_NOTFOUND` (store), `SM_ERR_INVALID`,
+`SM_ERR_IO`, `SM_ERR_DISKFULL`, `SM_ERR_NOTRANS`,
+`SM_ERR_PREPARED`.
+
+### int sm1::fileset_read(sm1::session_t* session, uint64_t storeid, uint64_t fsid, std::string_view name, uint64_t offset, uint64_t length, std::string& out)
+
+Read `length` bytes from `offset` of a file of file set `fsid`
+into `out`; `UINT64_MAX` reads to the end. A missing or short
+file is `SM_ERR_CORRUPT`: a visible key names it. Errors:
+`SM_ERR_NOTFOUND` (store), `SM_ERR_CORRUPT`, `SM_ERR_IO`,
+`SM_ERR_INVALID`, `SM_ERR_NOTRANS`, `SM_ERR_PREPARED`.
+
+### int sm1::fileset_put(sm1::session_t* session, uint64_t storeid, uint64_t fsid, std::string_view payload)
+
+Put the key of file set `fsid`, with `payload`, once its files are
+written. `fsid` is new, so nothing is read. A rollback to a
+savepoint set before it erases it. Errors: `SM_ERR_NOTFOUND`
+(store), `SM_ERR_INVALID`, `SM_ERR_NOTRANS`, `SM_ERR_PREPARED`,
+`SM_ERR_READONLY`.
+
+### int sm1::fileset_erase(sm1::session_t* session, uint64_t storeid, uint64_t fsid)
+
+Erase the key of file set `fsid`. A writer of it in flight is
+waited for. Above READ COMMITTED, a commit of it after the
+snapshot fails with `SM_ERR_CONFLICT`, retryable. Errors:
+`SM_ERR_NOTFOUND` (store, or no live file set), `SM_ERR_CONFLICT`,
+`SM_ERR_DEADLOCK`, `SM_ERR_NOTRANS`, `SM_ERR_PREPARED`,
+`SM_ERR_READONLY`.
+
+### int sm1::fileset_list(sm1::session_t* session, uint64_t storeid, std::vector<std::pair<uint64_t, std::string>>& out)
+
+Every file set of `storeid` the transaction sees, in fsid order,
+as `(fsid, payload)`. Errors: `SM_ERR_NOTFOUND` (store),
+`SM_ERR_CORRUPT`, `SM_ERR_NOTRANS`, `SM_ERR_PREPARED`.
+
+---
 
 ## Page API
 

@@ -1,7 +1,7 @@
 # COLSTORE_PLAN — building the Column Store
 
-Status: steps 1 and 2 are built. [`COLSTORE.md`](COLSTORE.md) is the
-design.
+Status: steps 1 to 3 are built. [`COLSTORE.md`](COLSTORE.md) is
+the design.
 This file says in what order to build it, where each part goes,
 and how each step is checked.
 

@@ -118,8 +118,10 @@ so a change of a constant does not make an existing file wrong.
 
 - **One file for each CG.** A file is written once and never
   changed, renamed, appended to or overwritten.
-- **A file's path is `<db home>/colstore/<storeid>/<rg_id /
-  1024>/<rg_id>.<attnum>`.** `<attnum>` is the column's attnum
+- **A file's path is `colstore/<storeid>/<rg_id /
+  1024>/<rg_id>.<attnum>`**, under the RocksDB directory of the
+  database, or of the temporary instance for a temporary table.
+  `<attnum>` is the column's attnum
   in the Catalog of sm3, which a column keeps for good, and
   which a dropped column does not give back
   ([`CATALOG.md`](CATALOG.md)). `rg_id`s come from a sequence of

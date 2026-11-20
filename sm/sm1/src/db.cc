@@ -640,6 +640,10 @@ db_t *db_open(const std::string &path, const char *dbname,
   if (recover(db.get()) != 0) {
     return nullptr;
   }
+  // Delete the file set files a crash left with no committed or
+  // prepared key, now that the prepared are restored
+  // (../COLSTORE.md §13).
+  fileset_sweep(db.get());
 
   // Everything the compaction filter reads is in place: let it
   // collect, and start the worker that purges and drops.
@@ -980,6 +984,12 @@ int db_drop_store_cf(db_t *db, uint64_t storeid) {
   // Unregister it either way. The handle goes with its last copy: a
   // sweep, statistics or a session may hold one, with no lock.
   db->stores.erase(it);
+  // Its file sets go with it, outside store_mu; a crash before this
+  // is swept at open.
+  guard.unlock();
+  if (s.ok()) {
+    fileset_drop_store(st.rdb, storeid);
+  }
   // Report a failed drop; most callers cannot act on it, so log it.
   if (!s.ok()) {
     log_msg(sm1::loglevel_t::error,

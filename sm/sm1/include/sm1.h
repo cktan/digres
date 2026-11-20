@@ -1869,6 +1869,72 @@ int ssi_read_range(session_t* session, uint64_t storeid, const char* lo,
 int ssi_write_key(session_t* session, uint64_t storeid, std::string_view key);
 
 /*
+ * File sets (../COLSTORE.md §4.5): groups of immutable files, named
+ * by a versioned key of a store, fsid. A file set's files are
+ * written with sm1::fileset_write before its key is put with
+ * sm1::fileset_put, in one transaction; the key's versions decide
+ * which snapshots see the files. sm1 unlinks the files of an abort
+ * or a rollback to a savepoint, deletes them in GC once no snapshot
+ * sees the key, and sweeps them at open. An fsid is used once: the
+ * caller draws it from a sequence.
+ */
+
+/*
+ * Write one file, name, of file set fsid in storeid, and make it
+ * durable: the file and its directory fsynced. A file is written
+ * once: an existing one is SM_ERR_IO. name is letters, digits, '.'
+ * and '_'.
+ *
+ * Errors: SM_ERR_NOTFOUND (store), SM_ERR_INVALID (name),
+ * SM_ERR_IO, SM_ERR_DISKFULL, SM_ERR_NOTRANS, SM_ERR_PREPARED.
+ */
+int fileset_write(session_t* session, uint64_t storeid, uint64_t fsid,
+                  std::string_view name, std::string_view bytes);
+
+/*
+ * Read length bytes from offset of file name of file set fsid, into
+ * out; UINT64_MAX reads to the end. A file a visible key names that
+ * is missing or short is SM_ERR_CORRUPT.
+ *
+ * Errors: SM_ERR_NOTFOUND (store), SM_ERR_CORRUPT, SM_ERR_IO,
+ * SM_ERR_INVALID, SM_ERR_NOTRANS, SM_ERR_PREPARED.
+ */
+int fileset_read(session_t* session, uint64_t storeid, uint64_t fsid,
+                 std::string_view name, uint64_t offset, uint64_t length,
+                 std::string& out);
+
+/*
+ * Put the key of file set fsid, with payload, once its files are
+ * written. fsid is new: nothing is read.
+ *
+ * Errors: SM_ERR_NOTFOUND (store), SM_ERR_INVALID, SM_ERR_NOTRANS,
+ * SM_ERR_PREPARED, SM_ERR_READONLY.
+ */
+int fileset_put(session_t* session, uint64_t storeid, uint64_t fsid,
+                std::string_view payload);
+
+/*
+ * Erase the key of file set fsid. A writer of it in flight is
+ * waited for; above read committed, a commit of it after the
+ * snapshot is SM_ERR_CONFLICT. The files go once no snapshot sees
+ * the key.
+ *
+ * Errors: SM_ERR_NOTFOUND (store or file set), SM_ERR_CONFLICT,
+ * SM_ERR_DEADLOCK, SM_ERR_NOTRANS, SM_ERR_PREPARED, SM_ERR_READONLY.
+ */
+int fileset_erase(session_t* session, uint64_t storeid, uint64_t fsid);
+
+/*
+ * Every file set of storeid the transaction sees, in fsid order, as
+ * (fsid, payload), into out.
+ *
+ * Errors: SM_ERR_NOTFOUND (store), SM_ERR_CORRUPT, SM_ERR_NOTRANS,
+ * SM_ERR_PREPARED.
+ */
+int fileset_list(session_t* session, uint64_t storeid,
+                 std::vector<std::pair<uint64_t, std::string>>& out);
+
+/*
  * Pages (../BTREEINDEX.md §2): keys of a store the level above lays out
  * as B+tree pages, apart from its versions, and none of a
  * transaction's. A page is written outside every transaction, in one

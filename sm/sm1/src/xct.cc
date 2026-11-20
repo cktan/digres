@@ -228,6 +228,8 @@ void reset(sm1::session_t *s) {
   s->temp_seqs_dropped.clear();
   s->undo.clear();
   s->undo_bytes = 0;
+  // A commit or a prepare keeps the files; an abort unlinked them.
+  s->fs_files.clear();
   // Its on_commit functions go with it, run or not.
   s->on_commit.clear();
   // The savepoints end with the transaction.
@@ -298,6 +300,8 @@ void drop_temp_seqs_made(sm1::session_t *s, size_t from) {
 void discard(sm1::session_t *s) {
   // A load still open ends here, and its files with it.
   load_discard(s);
+  // So do the file set files it wrote: no committed key names them.
+  fileset_discard(s, 0);
   // Close the transaction's cursors, and let go of its lent row.
   xct_end_scans(s);
   sm1::unpin(&s->readpin);
@@ -394,6 +398,7 @@ int savepoint(sm1::session_t *s) {
   m.scan_id = s->next_scan_id;
   m.on_commit = s->on_commit.size();
   m.loaded_stores = s->loaded_stores.size();
+  m.fs_files = s->fs_files.size();
   // Mark the lock list: only this session's thread changes it.
   m.locks = s->locks.mark();
   s->savepoints.push_back(m);
@@ -517,7 +522,7 @@ int rollback(sm1::session_t *s, int depth) {
       // Erase the exact version: key, its wts, its seq. It was put
       // once, so by a SingleDelete, as every version key is erased
       // (../PURGE_PLAN.md §3).
-      std::string vkey = version_key(u.key, u.wts, u.seq);
+      std::string vkey = version_key(u.key, u.wts, u.seq, u.cls);
       batches[store.rdb].SingleDelete(store.cf, vkey);
       // The tombstone is in the memtable, written or not below: a
       // failed write fails the transaction, which aborts.
@@ -613,6 +618,9 @@ int rollback(sm1::session_t *s, int depth) {
   s->on_commit.resize(m.on_commit);
   // The loads since the mark are undone.
   s->loaded_stores.resize(m.loaded_stores);
+  // Unlink the file set files written since the mark: their keys
+  // are gone with the undo list above.
+  fileset_discard(s, m.fs_files);
 
   // Stop counting the entries undone.
   for (size_t i = m.undo; i < s->undo.size(); i++) {

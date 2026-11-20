@@ -407,6 +407,7 @@ out. No caller sees it.
 | `0x01` | `key_class_current` | a chained key's newest version | bytewise |
 | `0x02` | `key_class_old` | `be64(id)`: a chained key's older version | bytewise |
 | `0x04` | `key_class_page` | a page, unversioned | bytewise |
+| `0x05` | `key_class_fileset` | `be64(fsid)`, `~wts` (8B), `~seq` (4B): a file set's key | as class `0x00` |
 
 ROWSTORE.md gives the version layouts of classes `0x00` to
 `0x02`, and BTREEINDEX.md the layout of a page. A page is no
@@ -414,17 +415,22 @@ version: the compaction filter keeps it as it is (GC.md), and a
 bulk load's check that a store is empty and a load's rollback
 leave it out ([`BULKLOAD.md`](BULKLOAD.md)).
 
-Pages sort last. So a chained store's last key below class `0x04`
-is its highest old id, which `chain_next_old()` reads at open.
+Pages sort after the versions. So a chained store's last key
+below class `0x04` is its highest old id, which `chain_next_old()`
+reads at open. A file set's key (class `0x05`,
+[`COLSTORE.md`](COLSTORE.md#45-file-sets) §4.5) sorts after the
+pages, so it stays out of every range sm1 takes for row versions.
+It is versioned as a class `0x00` key is, and `src/fileset.cc`
+writes and reads it.
 
 ### 6.3 The comparator
 
 Store CFs use a custom comparator, `sm.store.v2`:
 
 1. Compare the class bytes.
-2. Within class `0x00`, compare the userkeys (the key less the
-   class and the 12-byte tail) with `memcmp`, shorter first on a
-   tie. Then compare the tails with `memcmp`.
+2. Within class `0x00` or `0x05`, compare the userkeys (the key
+   less the class and the 12-byte tail) with `memcmp`, shorter
+   first on a tie. Then compare the tails with `memcmp`.
 3. Within any other class, compare bytewise.
 
 RocksDB's default bytewise comparator is wrong here. It compares
@@ -1402,6 +1408,7 @@ src/access.cc           read / scan / insert / update / delete, visibility
 src/chain.cc            chained stores: codec, chain_ calls, chain_restore,
                         the GC worker's repair
 src/load.cc             bulk load into an empty store (BULKLOAD.md)
+src/fileset.cc          file sets: files, their keys, unlink, sweep (COLSTORE.md)
 src/pin.cc              raw pins (ROWSTORE.md)
 src/page.cc             pages: pin, write, drop (BUFMGR.md)
 src/bufpool.cc          the buffer pool alone: frames, pins, the clock
