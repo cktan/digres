@@ -668,3 +668,98 @@ TEST_CASE("decimal128 mod, gcd and lcm") {
   CHECK(TY_ERR_RANGE == ty_errnum());
   CHECK(7 == r.value);
 }
+
+namespace {
+
+/* ty_decimal128_div of {v1, s1} by {v2, s2} at rscale places. */
+int div128_of(ty_int128_t v1, int s1, ty_int128_t v2, int s2, int rscale,
+              bool cut, ty_decimal128_t *r) {
+  ty_decimal128_t a = {v1, s1};
+  ty_decimal128_t b = {v2, s2};
+  return ty_decimal128_div(&a, &b, rscale, cut, r);
+}
+
+/* ty_decimal64_div of {v1, s1} by {v2, s2} at rscale places. */
+int div64_of(int64_t v1, int s1, int64_t v2, int s2, int rscale,
+             ty_decimal64_t *r) {
+  ty_decimal64_t a = {v1, s1};
+  ty_decimal64_t b = {v2, s2};
+  return ty_decimal64_div(&a, &b, rscale, r);
+}
+
+} // namespace
+
+// Verify decimal128 division in 128 bits: places, signs, rounding, cut.
+// 1. Divide 1 by 3 at 20 places, and 2 by 3: rounded half away from zero.
+// 2. Divide with signs, and with scales that differ.
+// 3. Cut at rscale places: 2 / 3 at 3 places gives 0.666.
+// 4. Divide where the dividend is at a larger scale than the divisor needs
+//    at rscale: e is below 0.
+// 5. Divide by zero: TY_ERR_DIVZERO. Divide to more than 36 digits:
+//    TY_ERR_RANGE.
+TEST_CASE("decimal128 div is made a place at a time, in 128 bits") {
+  ty_decimal128_t r;
+  ty_int128_t big = ten_to(36) - 1;
+
+  // 1. Divide 1 by 3 at 20 places, and 2 by 3: rounded half away from zero.
+  CHECK(0 == div128_of(1, 0, 3, 0, 20, false, &r));
+  CHECK(ten_to(20) / 3 == r.value);
+  CHECK(20 == r.scale);
+  CHECK(0 == div128_of(2, 0, 3, 0, 3, false, &r));
+  CHECK(667 == r.value);
+
+  // 2. Divide with signs, and with scales that differ: -7.5 / 2.5 = -3.
+  CHECK(0 == div128_of(-75, 1, 25, 1, 2, false, &r));
+  CHECK(-300 == r.value);
+  CHECK(0 == div128_of(75, 1, -25, 1, 0, false, &r));
+  CHECK(-3 == r.value);
+  CHECK(0 == div128_of(1500, 3, 4, 0, 2, false, &r));
+  CHECK(38 == r.value);
+
+  // 3. Cut at rscale places: 2 / 3 at 3 places gives 0.666.
+  CHECK(0 == div128_of(2, 0, 3, 0, 3, true, &r));
+  CHECK(666 == r.value);
+  CHECK(0 == div128_of(-2, 0, 3, 0, 3, true, &r));
+  CHECK(-666 == r.value);
+
+  // 4. Divide where rscale is below the scales: e is below 0.
+  CHECK(0 == div128_of(12345, 4, 5, 0, 1, false, &r));
+  CHECK(2 == r.value);
+  CHECK(0 == div128_of(1, 36, big, 0, 0, false, &r));
+  CHECK(0 == r.value);
+
+  // 5. Divide by zero: TY_ERR_DIVZERO. Divide to more than 36 digits:
+  //    TY_ERR_RANGE.
+  CHECK(-1 == div128_of(1, 0, 0, 0, 2, false, &r));
+  CHECK(TY_ERR_DIVZERO == ty_errnum());
+  CHECK(-1 == div128_of(big, 0, 1, 0, 2, false, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+}
+
+// Verify decimal64 division, fitted to a decimal64.
+// 1. Divide 1 by 3 at 20 places: it is 17 places.
+// 2. Divide 70.0 by 70 at 16 places: 1.0000000000000000.
+// 3. Divide 100 by 3 at 20 places: 33.333333333333333, 17 digits.
+// 4. Divide by zero: TY_ERR_DIVZERO.
+TEST_CASE("decimal64 div is rounded to fit 17 digits") {
+  ty_decimal64_t r;
+
+  // 1. Divide 1 by 3 at 20 places: it is 17 places.
+  CHECK(0 == div64_of(1, 0, 3, 0, 20, &r));
+  CHECK(33333333333333333 == r.value);
+  CHECK(17 == r.scale);
+
+  // 2. Divide 70.0 by 70 at 16 places: 1.0000000000000000.
+  CHECK(0 == div64_of(700, 1, 70, 0, 16, &r));
+  CHECK(10000000000000000 == r.value);
+  CHECK(16 == r.scale);
+
+  // 3. Divide 100 by 3 at 20 places: 33.333333333333333, 17 digits.
+  CHECK(0 == div64_of(100, 0, 3, 0, 20, &r));
+  CHECK(33333333333333333 == r.value);
+  CHECK(15 == r.scale);
+
+  // 4. Divide by zero: TY_ERR_DIVZERO.
+  CHECK(-1 == div64_of(1, 0, 0, 0, 2, &r));
+  CHECK(TY_ERR_DIVZERO == ty_errnum());
+}

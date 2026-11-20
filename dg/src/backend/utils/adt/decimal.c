@@ -1488,6 +1488,63 @@ static int select_div_scale(const wide_t &a, const wide_t &b) {
   return rscale;
 }
 
+/* The number of decimal digits of u; 0 has one. */
+static int u128_digits(u128 u) {
+  int n = 1;
+
+  for (; u >= 10; u /= 10)
+    n++;
+  return n;
+}
+
+/* The base-10000 shape of a value v at scale, as dec_nbase() gives it. */
+static nbase_t dec_nbase128(i128 v, int scale) {
+  nbase_t nb = {0, 0, 0, 1};
+  u128 m, head, rest = 0, p = 1;
+  int e, shift;
+
+  if (v == 0)
+    return nb;
+  m = v < 0 ? -(u128)v : (u128)v;
+  /* e is the decimal exponent of the leading digit. */
+  e = u128_digits(m) - 1 - scale;
+  nb.weight = e >= 0 ? e / 4 : -((-e + 3) / 4);
+  /* head is the value / 10000^weight, scaled to keep 8 more digits. */
+  shift = scale + 4 * nb.weight - 8;
+  for (int i = 0; i < (shift >= 0 ? shift : -shift); i++)
+    p *= 10;
+  if (shift >= 0) {
+    head = m / p;
+    rest = m % p;
+  } else {
+    head = m * p;
+  }
+  {
+    uint64 r1 = (uint64)(head % 100000000), r2 = r1 % 10000;
+
+    nb.first = (int)(head / 100000000);
+    nb.second = (int)(r1 / 10000);
+    nb.ndigits = (r1 != 0 || rest != 0 || r2 != 0) ? 2 : 1;
+  }
+  return nb;
+}
+
+/* PostgreSQL's scale for a quotient of two values: select_div_scale(). */
+static int select_div_scale128(i128 va, int sa, i128 vb, int sb) {
+  nbase_t na = dec_nbase128(va, sa), nb = dec_nbase128(vb, sb);
+  int qweight = na.weight - nb.weight;
+  int rscale;
+
+  if (na.first <= nb.first)
+    qweight--;
+  rscale = NUMERIC_MIN_SIG_DIGITS - qweight * 4;
+  rscale = Max(rscale, sa);
+  rscale = Max(rscale, sb);
+  rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
+  rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
+  return rscale;
+}
+
 /* The error of a division by zero, or false with *have_error set. */
 static bool division_by_zero(bool *have_error) {
   if (have_error == NULL)
@@ -1538,17 +1595,20 @@ Numeric numeric_mul_opt_error(Numeric num1, Numeric num2, bool *have_error) {
 
 /* num1 / num2 at PostgreSQL's scale; NULL with *have_error on an error. */
 Numeric numeric_div_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  wide_t a = dec_wide(num1), b = dec_wide(num2);
-  Numeric res;
+  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_decimal128_t r;
 
-  if (wide_is_zero(b)) {
+  if (b.value == 0) {
     division_by_zero(have_error);
     return NULL;
   }
-  return dec_pack(wide_div(a, b, select_div_scale(a, b), false), &res,
-                  have_error)
-             ? res
-             : NULL;
+  /* The quotient is ty's, made in 128 bits, at PostgreSQL's scale. */
+  if (ty_decimal128_div(&a, &b,
+                        select_div_scale128(a.value, a.scale, b.value, b.scale),
+                        false, &r) != 0)
+    return dec_range_error(have_error);
+  return dec_make(r.value, r.scale);
 }
 
 /* num1 mod num2, at the larger scale, the sign of num1. */
@@ -1591,11 +1651,16 @@ Datum numeric_div(PG_FUNCTION_ARGS) {
 
 /* div(num1, num2): the quotient truncated to an integer, scale 0. */
 Datum numeric_div_trunc(PG_FUNCTION_ARGS) {
-  wide_t a = dec_wide(PG_GETARG_NUMERIC(0)), b = dec_wide(PG_GETARG_NUMERIC(1));
+  Numeric n1 = PG_GETARG_NUMERIC(0), n2 = PG_GETARG_NUMERIC(1);
+  ty_decimal128_t a = {dec_value(n1), dec_scale(n1)};
+  ty_decimal128_t b = {dec_value(n2), dec_scale(n2)};
+  ty_decimal128_t r;
 
-  if (wide_is_zero(b))
+  if (b.value == 0)
     division_by_zero(NULL);
-  PG_RETURN_NUMERIC(dec_from_wide(wide_div(a, b, 0, true)));
+  if (ty_decimal128_div(&a, &b, 0, true, &r) != 0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* num1 % num2. */
@@ -3282,6 +3347,16 @@ Datum decimal64_cash(PG_FUNCTION_ARGS) {
                              NumericGetDatum(d64_numeric(PG_GETARG_DATUM(0))));
 }
 
+/* Raise PostgreSQL's ERROR for a rounded value that has too many digits. */
+static void d64_format_overflow(void) {
+  ereport(ERROR,
+          (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+           errmsg("value overflows numeric format"),
+           errdetail("A numeric of precision %d or less has at most %d "
+                     "digits.",
+                     D64_MAX_DIGITS, D64_MAX_DIGITS)));
+}
+
 /* The ERROR for the error that the last call of ty set, in ty_errnum(). */
 static void ty_error_raise(void) {
   if (ty_errnum() == TY_ERR_DIVZERO)
@@ -3341,11 +3416,19 @@ Datum decimal64_mul(PG_FUNCTION_ARGS) {
  * is an error only if the integer part has more than 17 digits.
  */
 Datum decimal64_div(PG_FUNCTION_ARGS) {
-  wide_t a = d64_wide(PG_GETARG_DATUM(0)), b = d64_wide(PG_GETARG_DATUM(1));
+  Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
+  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
+  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
+  ty_decimal64_t r;
 
-  if (wide_is_zero(b))
+  if (b.value == 0)
     division_by_zero(NULL);
-  return d64_from_wide(wide_div(a, b, select_div_scale(a, b), false));
+  /* ty divides in 128 bits at PostgreSQL's scale, and fits 17 digits. */
+  if (ty_decimal64_div(&a, &b,
+                       select_div_scale128(a.value, a.scale, b.value, b.scale),
+                       &r) != 0)
+    d64_format_overflow();
+  return d64_make(r.value, r.scale);
 }
 
 /* -a. */
@@ -3384,16 +3467,6 @@ Datum decimal64_accum_inv(PG_FUNCTION_ARGS) {
   if (!PG_ARGISNULL(1) && !agg_discard(state, d64_wide(PG_GETARG_DATUM(1))))
     PG_RETURN_NULL();
   PG_RETURN_POINTER(state);
-}
-
-/* Raise PostgreSQL's ERROR for a rounded value that has too many digits. */
-static void d64_format_overflow(void) {
-  ereport(ERROR,
-          (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-           errmsg("value overflows numeric format"),
-           errdetail("A numeric of precision %d or less has at most %d "
-                     "digits.",
-                     D64_MAX_DIGITS, D64_MAX_DIGITS)));
 }
 
 /*

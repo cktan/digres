@@ -11,6 +11,17 @@ Reviewed; §4 records the answers. All of §3 is built
 `decimal64` by
 value, which made §2 what it is.
 
+**One rule, decided 2026-11-20:** `decimal64` and `decimal128`
+work as `int32` and `int64` do. An operation of two values of
+one type gives that type, exact, or an error if it does not
+fit. Nothing is widened, and nothing but a quotient is rounded.
+A user who wants more digits casts an operand to the wider
+type. There is no 512-bit arithmetic: a value that would pass
+36 digits is an error. The operations are in `ty/`
+([`../ty/DESIGN.md`](../ty/DESIGN.md)), and
+[`../sm/TYPEMOVE_PLAN.md`](../sm/TYPEMOVE_PLAN.md) says how
+they moved and what they cost.
+
 ## 1. Where digres stands
 
 Where it stood before §3 was built.
@@ -205,7 +216,9 @@ Results are exact or an error, never silently wrong.
 - **`*`**: scale `s1 + s2`; past 36 digits, an error (it was
   rounded to fewer places, before the rule below).
 - **`/`**: PostgreSQL's choice of scale (`select_div_scale()`,
-  at least 16 significant digits, at most 36 in all), rounded.
+  at least 16 significant digits, at most 36 in all), rounded
+  half away from zero. It is the only operation that rounds, as
+  a quotient has no exact decimal form.
 - **`decimal64` `+`, `-`, `*` and `/` give a `decimal64`**, by
   value (decided 2026-11-20, replacing the `decimal128` result:
   a by-reference result costs a `palloc` a row). A caller who
@@ -226,8 +239,8 @@ Results are exact or an error, never silently wrong.
   - `/` is not exact in any decimal, so its places past 17
     digits are rounded away, half away from zero, as a cast to
     `decimal64` rounds them. It is an error only if the integer
-    part has more than 17 digits. It runs in the wide path.
-    So `70.0 / 70` prints `1.0000000000000000`, where
+    part has more than 17 digits. It is `ty_decimal64_div`, in
+    128 bits. So `70.0 / 70` prints `1.0000000000000000`, where
     PostgreSQL prints 20 places; the ported `numeric` file marks
     it `--dg-differs`.
   - DuckDB gives the same answer for `+`, `-` and `*` (exact or
@@ -244,17 +257,31 @@ Results are exact or an error, never silently wrong.
   Nothing is widened, and nothing is rounded: a user who wants
   more digits casts an operand to a wider type, as with
   `int32` and `int64`. A `decimal64` with a `decimal128` is a
-  `decimal128`, by the implicit cast. They are `ty_decimal128_add`,
-  `_sub` and `_mul`, in 128 bits, with no 512-bit path. `/`, `%`,
-  and the functions of the exponent still run in the wide path.
+  `decimal128`, by the implicit cast. In ty, in 128 bits, with
+  no 512-bit path:
+  - `+`, `-` and `*`: `ty_decimal128_add`, `_sub` and `_mul`.
+  - `%`, `gcd` and `lcm`: `ty_decimal128_mod`, `_gcd` and `_lcm`.
+    Where a value does not fit 128 bits at the larger scale, `%`
+    and `gcd` take the remainder a place at a time; an `lcm` of
+    large coprime values is an error, not rounded to fit.
+  - `/` and `div()`: `ty_decimal128_div`, a place or a chunk of
+    places at a time, so that no step passes 128 bits. An error
+    if the quotient passes 36 digits.
+  - `neg`, `abs`, `sign`, the compare of two scales, `round`,
+    `trunc`, `ceil` and `floor`.
   What `decimal64` does itself is listed in §2.8.
 - **`%`, `div`, `abs`, `sign`, `ceil`, `floor`, `round(x, n)`,
   `trunc(x, n)`, `gcd`, `lcm`, `factorial`, `min`, `max`**:
-  exact, as PostgreSQL's.
+  exact, as PostgreSQL's, or an error past 36 digits.
 - **`sqrt`, `ln`, `log`, `exp`, `power`**: computed in
   `long double`, 128-bit IEEE on this aarch64 (some 33
   digits), and rounded to PostgreSQL's choice of scale. Not
-  PostgreSQL's arbitrary precision; enough (§4.3).
+  PostgreSQL's arbitrary precision; enough (§4.3). They, the
+  sums of the aggregates, `generate_series`, `width_bucket`,
+  and the text and binary forms still use the 512-bit
+  magnitude (`mag_t`, `wide_t` in `decimal.c`): the rule above
+  removes it, one piece a commit, and then those too give an
+  error past 36 digits.
 - **Overflow is an error**: "numeric field overflow", as
   PostgreSQL says it past a typmod.
 - **No NaN, no infinity**: `'NaN'::numeric` and division by
@@ -314,7 +341,7 @@ column, which holds no value of more than 17 digits anyway.
 | `%`, `mod`, `gcd` | `decimal64` | `ty_decimal64_mod` and `_gcd`, in 128 bits at the larger scale; no more digits than the smaller operand's before the point, nor places than the larger scale |
 | `round(x)`, `round(x, n)`, `trunc(x)`, `trunc(x, n)` | `decimal64` | `ty_decimal64_round` and `_trunc`, in 64 bits, half away from zero; past 17 digits or places, as a carry or `n` past 17 makes, an error, not a `decimal128` |
 | `+`, `-`, `*` | `decimal64` | `ty_decimal64_add`, `_sub` and `_mul`, in 64 bits (the product in 128); past 17 digits, an error, not a `decimal128` |
-| `/` | `decimal64` | the wide path, without casting either side; places past 17 digits rounded away |
+| `/` | `decimal64` | `ty_decimal64_div`, in 128 bits, without casting either side; places past 17 digits rounded away |
 | `lcm` | `decimal64` | `ty_decimal64_lcm`, in 128 bits; past 17 digits, an error |
 | `sum`, `avg` | `decimal128` | a 128-bit sum in the state, no palloc a row |
 | `to_char(x, fmt)` | `text` | numeric's, on a `decimal128` built on the stack |
@@ -429,9 +456,10 @@ Where it lives:
   `NUMERIC_MAX_PRECISION` 36, an accessor for each.
 - `src/backend/utils/adt/decimal.c`: both types' in, out,
   recv, send, typmod, comparison, hash, sort support and
-  casts; `decimal64`'s native `+`, `-`, `*`, `/`, `sum` and
-  `avg`; `decimal128`'s 128-bit fast path before the 512-bit
-  wide one.
+  casts; `decimal64`'s native `sum` and `avg`; the operations
+  themselves are in `ty/`, called by thin wrappers here, which
+  unpack a datum and raise PostgreSQL's error for ty's. What is
+  left of the 512-bit path, in the list in §2.5, goes away.
 - `src/include/catalog/`: the types, functions, operators,
   casts, opclasses and aggregates; what was `numeric` there is
   `decimal128`'s, but for what §2.8 runs on `decimal64`.

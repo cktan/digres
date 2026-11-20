@@ -308,8 +308,18 @@ copied from PostgreSQL keeps its copyright notice
    place at a time. `where a % (b + 1) > 10` fell 63.0% and
    `where gcd(a, b) > 1` 89.5%. An `lcm` of two coprime
    17-digit values at scale 17 is now an error; it was rounded
-   to fit. Left for `decimal128`: `/`, `div`, the exponent
-   group, and the hash.
+   to fit.
+
+   The 512-bit magnitude is dropped (decided 2026-11-20): a
+   value that would pass 36 digits is an error, and nothing is
+   rounded but a quotient. Division is first: `decimal128` `/`
+   and `div()`, and `decimal64` `/`, are in ty, made a place or
+   a chunk of places at a time in 128 bits. `where a / (b + 1) >
+   1` fell 80.0% on `numeric(30,4)` and 81.7% on `numeric(10,2)`.
+   Left, all still on `mag_t` and `wide_t`: the exponent group,
+   the aggregates' sums, `generate_series`, `width_bucket`, the
+   text and binary forms, `inc` and the factorial; then the
+   hash.
    `/` waits for the 512-bit magnitude. The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from

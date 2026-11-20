@@ -669,3 +669,125 @@ int ty_decimal128_lcm(const ty_decimal128_t *a, const ty_decimal128_t *b,
   result->scale = s;
   return 0;
 }
+
+/*
+ * *result = a / b at rscale places.
+ * 1. If b is zero, fail.
+ * 2. The quotient is |a| * 10^e / |b|, with e = rscale + sb - sa.
+ * 3. If e is not below 0: take |a| / |b| and its remainder, then bring
+ *    down e places in chunks: each time, the remainder times 10^k, where
+ *    |b| * 10^k fits 128 bits, gives the next k places and a new remainder.
+ *    If the quotient passes 36 digits, fail.
+ * 4. Else divide |a| by |b| * 10^-e; if that passes 128 bits, the quotient
+ *    is 0, as |a| is below it.
+ * 5. Round up, unless cut, if the remainder is half of the divisor or more.
+ * 6. Give the quotient the sign of a times the sign of b.
+ */
+int ty_decimal128_div(const ty_decimal128_t *a, const ty_decimal128_t *b,
+                      int rscale, bool cut, ty_decimal128_t *result) {
+  u128 x = magnitude(a->value);
+  u128 y = magnitude(b->value);
+  int e = rscale + b->scale - a->scale;
+  u128 q, rem, den = y;
+
+  if (y == 0) {
+    return ty_internal::set_error(TY_ERR_DIVZERO, "division by zero");
+  }
+  if (e >= 0) {
+    q = x / y;
+    rem = x % y;
+    if (q > (u128)d128_max) {
+      return range_error128();
+    }
+    while (e > 0) {
+      int k = 1;
+      u128 p = 10;
+      /* The most places at once with rem * 10^k below 2^128. */
+      while (k < e && y < (~(u128)0) / (p * 10)) {
+        p *= 10;
+        k++;
+      }
+      u128 t = rem * p;
+      u128 d = t / y;
+      rem = t % y;
+      if (__builtin_mul_overflow(q, p, &q) || q > (u128)d128_max ||
+          (q += d) > (u128)d128_max) {
+        return range_error128();
+      }
+      e -= k;
+    }
+  } else {
+    q = 0;
+    rem = x;
+    if (!(e < -38)) {
+      u128 p = 1;
+      for (int i = 0; i < -e; i++) {
+        p *= 10;
+      }
+      if (!__builtin_mul_overflow(y, p, &den)) {
+        q = x / den;
+        rem = x % den;
+      }
+    }
+  }
+  if (!cut && rem >= den - rem) {
+    q++;
+    if (q > (u128)d128_max) {
+      return range_error128();
+    }
+  }
+  bool neg = (a->value < 0) != (b->value < 0) && q != 0;
+  result->value = neg ? -(ty_int128_t)q : (ty_int128_t)q;
+  result->scale = rscale;
+  return 0;
+}
+
+/*
+ * *result = a / b of two decimal64, fitted to a decimal64.
+ * 1. Divide in 128 bits at rscale places.
+ * 2. If the scale is above 17, round to 17 places.
+ * 3. If there are more than 17 digits and places to spare, round away the
+ *    extra digits as places, and one place more if rounding up adds a digit.
+ * 4. If there are still more than 17 digits, fail.
+ */
+int ty_decimal64_div(const ty_decimal64_t *a, const ty_decimal64_t *b,
+                     int rscale, ty_decimal64_t *result) {
+  ty_decimal128_t x = {a->value, a->scale};
+  ty_decimal128_t y = {b->value, b->scale};
+  ty_decimal128_t q;
+
+  if (ty_decimal128_div(&x, &y, rscale, false, &q) != 0) {
+    return -1;
+  }
+  ty_int128_t v = q.value;
+  int s = q.scale;
+
+  if (s > TY_DECIMAL64_MAX_SCALE) {
+    v = drop_places128(v, s - TY_DECIMAL64_MAX_SCALE, false);
+    s = TY_DECIMAL64_MAX_SCALE;
+  }
+  int digits = 1;
+  for (ty_int128_t t = v; t >= 10 || t <= -10; t /= 10) {
+    digits++;
+  }
+  if (digits > TY_DECIMAL64_MAX_DIGITS &&
+      digits - TY_DECIMAL64_MAX_DIGITS <= s) {
+    int excess = digits - TY_DECIMAL64_MAX_DIGITS;
+    v = drop_places128(v, excess, false);
+    s -= excess;
+    digits = 1;
+    for (ty_int128_t t = v; t >= 10 || t <= -10; t /= 10) {
+      digits++;
+    }
+    if (digits > TY_DECIMAL64_MAX_DIGITS && s > 0) {
+      v = drop_places128(v, 1, false);
+      s--;
+    }
+  }
+  if (v > d64_max || v < -d64_max) {
+    return range_error();
+  }
+  result->value = (int64_t)v;
+  result->scale = s;
+  return 0;
+}

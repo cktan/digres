@@ -145,6 +145,26 @@ int ty_decimal128_gcd(const ty_decimal128_t* a, const ty_decimal128_t* b,
 int ty_decimal128_lcm(const ty_decimal128_t* a, const ty_decimal128_t* b,
                       ty_decimal128_t* result);
 
+/*
+ * *result = a / b at rscale places, rounded half away from zero, or cut at
+ * rscale places if cut. The caller picks rscale (0 to 36). Fails with
+ * TY_ERR_DIVZERO if b is zero, and with TY_ERR_RANGE if the quotient needs
+ * more than 36 digits: *result is then not set. The scales of both are at
+ * most 36. It takes no more than 128 bits: the quotient is made a place
+ * at a time.
+ */
+int ty_decimal128_div(const ty_decimal128_t* a, const ty_decimal128_t* b,
+                      int rscale, bool cut, ty_decimal128_t* result);
+
+/*
+ * *result = a / b of two decimal64, at rscale places and then fitted to a
+ * decimal64: places past 17, and places that digits past 17 push out, are
+ * rounded away, half away from zero; it fails with TY_ERR_RANGE only if
+ * the integer part has more than 17 digits.
+ */
+int ty_decimal64_div(const ty_decimal64_t* a, const ty_decimal64_t* b,
+                     int rscale, ty_decimal64_t* result);
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DECIMAL64_MAX_DIGITS 17
 #define TY_DECIMAL64_MAX_SCALE  17
