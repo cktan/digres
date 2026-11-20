@@ -244,10 +244,25 @@ copied from PostgreSQL keeps its copyright notice
    counting alloc and free, and a second thread that has its
    own. Done on 2026-11-20.
 1. **Baseline.** Record instructions a statement for three
-   decimal queries with `perf stat`, as
-   [`../ISSUE.md`](../ISSUE.md) §2.1 does, and run the
-   numeric regression files. → verify: numbers saved, files
-   pass.
+   decimal queries, as [`../ISSUE.md`](../ISSUE.md) §2.1 does,
+   and run the numeric regression files. → verify: numbers
+   saved, files pass. Taken on 2026-11-20, after step 2, by
+   callgrind: this VM's PMU counts cycles and not instructions,
+   so `perf stat` cannot. The old binary is the release build
+   with the old `decimal.c` and catalog; the new is HEAD. Each
+   ran a prepared `select count(*) from dt where EXPR` over 2,000
+   rows of `numeric(10,2)`, 20 and 60 statements, one run each:
+   the difference over 40 statements is the count a statement.
+
+   | EXPR | old | new | change |
+   | --- | --- | --- | --- |
+   | `a + b > 1000` | 4,726,761 | 3,707,388 | -21.6% |
+   | `a * b > 100000` | 5,394,971 | 4,488,746 | -16.8% |
+   | `(a + b) - (a - b) * 2 > 0` | 5,907,925 | 4,995,572 | -15.4% |
+
+   About 450 to 510 instructions fewer for each row: the
+   `palloc` of a `decimal128` result, and the compare of a
+   `decimal128` with a literal.
 2. **One function end to end.** Move `decimal64` add into ty
    (`ty_decimal64_add`, in `ty/include/ty_decimal.h`). Its
    result is a `decimal64`, by value, and it fails with
@@ -261,9 +276,8 @@ copied from PostgreSQL keeps its copyright notice
    pass, and the instruction count is within the limit of the
    open question below. The files that print a result's type, or
    a sum past 17 digits, are changed on purpose
-   (`select_decimal64`, `select_numeric`). Built on 2026-11-20;
-   the instruction count waits for the baseline, which `perf`
-   cannot take on this box.
+   (`select_decimal64`, `select_numeric`). Built on 2026-11-20.
+   The instruction count is in step 1: it fell.
 3. **The rest of decimal's core**, in groups: arithmetic, then
    rounding, then functions of the exponent. → verify: the
    same, after each group.
