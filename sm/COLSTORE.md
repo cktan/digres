@@ -964,7 +964,7 @@ yet are in [`NEXT.md`](NEXT.md).
 
 ### 15.1 mvcc: the rules of sm1
 
-The scenarios `s01` to `s08` in `sm1/mvcc/in`. Each runs twice,
+The scenarios `s01` to `s09` in `sm1/mvcc/in`. Each runs twice,
 on versioned and on chained stores, as every scenario does. The
 driver has the verbs `seal <row>`, an erase with a sealed
 tombstone, and `sealput <row> <value>`, a moved marker. The
@@ -980,6 +980,7 @@ sessions that seal run at READ COMMITTED.
 | `s06`: a moved marker | every write over it is `sealed`; a reader sees it as any version |
 | `s07`: a plain erase in the seal's place (negative) | the RR writer gets `conflict` |
 | `s08`: a row lock over a sealed tombstone | judged by the version under it |
+| `s09`: a seal waits on a writer in flight, which commits, then on one that aborts | `updated`, and the row keeps the writer's value; then `ok`, and the row is sealed |
 
 The Column Store's notions above sm1, such as RGs, scans and
 pruning, cannot be expressed here. §15.3 and §15.4 test them.
