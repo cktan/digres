@@ -194,14 +194,15 @@ int rg_build_add(rg_build_t &b, uint64_t id,
     if (sm2::datum_bytes(c.type, c.typmod, values[i], bytes) != 0) {
       return -1;
     }
-    // A value out of line is read back: a CG holds no TOAST pointer
-    // (../COLSTORE.md §5).
+    // A value out of line is read back, and made a varlena again, as
+    // tbl_fetch gives its bytes with no header: a CG holds no TOAST
+    // pointer (../COLSTORE.md §5).
     if (c.type->len < 0 && sm2::varlena_is_toast(bytes)) {
       std::string full;
       if (tbl_fetch(b.table, bytes, full) != 0) {
         return -1;
       }
-      b.vals[i].push_back(std::move(full));
+      b.vals[i].push_back(sm2::make_varlena(full));
       continue;
     }
     b.vals[i].emplace_back(bytes);

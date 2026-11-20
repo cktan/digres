@@ -14,6 +14,7 @@
 #include "doctest.h"
 #include "sm3.h"
 
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -27,12 +28,14 @@ namespace {
 
 /*
  * A catalog on a fresh database, loaded, with a session ss over s; its
- * row groups of rg_rows rows, if not 0 (sm3::cat_set_rg_rows).
+ * row groups of rg_rows rows, if not 0 (sm3::cat_set_rg_rows); with
+ * toast, its long datums out of line (sm3::cat_set_toast).
  */
 class col_db_t : public db_t {
 public:
   /* Initialize the catalog of "db", load it, and open a session. */
-  explicit col_db_t(uint32_t rows = 0) : rg_rows(rows) {
+  explicit col_db_t(uint32_t rows = 0, bool toast = false)
+      : rg_rows(rows), toast(toast) {
     s = open();
     REQUIRE(sm3::cat_init(env(), "db") == 0);
     load();
@@ -64,6 +67,7 @@ public:
   sm3::session_t *ss = nullptr;
   sm3::catalog_t *cat = nullptr;
   const uint32_t rg_rows;
+  const bool toast;
 
 private:
   /* Load the catalog, with its row group size; open ss over s. */
@@ -71,6 +75,9 @@ private:
     REQUIRE_MESSAGE(sm3::cat_open(env(), "db", cat) == 0, sm1::errmsg());
     if (rg_rows != 0) {
       REQUIRE(sm3::cat_set_rg_rows(cat, rg_rows) == 0);
+    }
+    if (toast) {
+      REQUIRE(sm3::cat_set_toast(cat, true) == 0);
     }
     REQUIRE(sm3::session_open(cat, s, ss) == 0);
   }
@@ -1625,6 +1632,173 @@ TEST_CASE("a column store table agrees with a row store table") {
   }
   CHECK(rg_ids(db, c).size() > 1);
   sm3::sealer_detach(db.cat);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify ANALYZE's null fraction of a column store table counts the
+// nulls of its row groups and of its delta store (../COLSTORE.md
+// §12.1), with row groups of 100 rows.
+// 1. Load 1,000 rows, b null in every fourth: ten row groups.
+// 2. Insert 50 rows into the delta store, b null in every second.
+// 3. ANALYZE at target 10, whose sample of 3,000 takes every row: a
+//    has no null; b's null fraction is (250 + 25) / 1,050.
+TEST_CASE("ANALYZE's null fraction counts row groups and the delta") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The row groups.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  sm3::loader_t *l = nullptr;
+  REQUIRE(sm3::tbl_load_open(t, l) == 0);
+  for (int i = 0; i < 1000; i++) {
+    row_t r(i, "v");
+    r.null[1] = i % 4 == 0;
+    uint64_t id = 0;
+    REQUIRE(sm3::tbl_load_add(l, r.d, r.null, id) == 0);
+  }
+  REQUIRE(sm3::tbl_load_close(l) == 0);
+  // 2. The delta store.
+  for (int i = 1000; i < 1050; i++) {
+    row_t r(i, "d");
+    r.null[1] = i % 2 == 0;
+    uint64_t id = 0;
+    REQUIRE(sm3::tbl_insert(t, r.d, r.null, id) == 0);
+  }
+  sm3::tbl_close(t);
+  db.commit();
+  REQUIRE(row_groups(db, c) == 10);
+  // 3. ANALYZE.
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  std::mt19937_64 rng(7);
+  REQUIRE_MESSAGE(sm3::analyze_table(t, 10, rng) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  db.commit();
+  db.begin();
+  std::shared_ptr<const sm3::stats_t> st;
+  REQUIRE(sm3::cat_get_stats(db.ss, c, st) == 0);
+  REQUIRE(st != nullptr);
+  CHECK(st->live_rows == 1050.0);
+  CHECK(st->rows_sampled == 1050);
+  REQUIRE(st->stats.size() == 2);
+  CHECK(st->stats[0].null_frac == 0.0f);
+  CHECK(std::abs(st->stats[1].null_frac - 275.0f / 1050.0f) < 0.0001f);
+  db.commit();
+}
+
+namespace {
+
+/* The TOAST chunks of table oid that ss's open transaction sees. */
+size_t toast_chunks(sm3::session_t *ss, sm1::session_t *s, uint64_t oid) {
+  std::shared_ptr<const sm3::table_def_t> def = sm3::cat_get_table(ss, oid);
+  std::string lo = "\xff\xff", hi = lo + std::string(32, '\xff');
+  sm1::scan_t *c = nullptr;
+  REQUIRE(sm1::scan(s, def->storeid, lo.data(), lo.size(), 1, hi.data(),
+                    hi.size(), 1, c) == 0);
+  size_t n = 0;
+  std::string_view k, d;
+  int rc;
+  while ((rc = sm1::scannxt(c, k, d)) == 0) {
+    n++;
+  }
+  sm1::scanend(c);
+  REQUIRE(rc == 1);
+  return n;
+}
+
+/* Every row of table oid, a to b whole, in ss's open transaction. */
+std::map<int32_t, std::string> whole_rows(sm3::session_t *ss, uint64_t oid) {
+  std::map<int32_t, std::string> out;
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, oid, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  int rc;
+  while ((rc = sm3::tbl_scannxt(scan, id, tuple)) == 0) {
+    sm2::datum_t d[2];
+    bool null[2];
+    REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+    std::string_view bytes;
+    REQUIRE(sm2::datum_bytes(&sm2::type_text, -1, d[1], bytes) == 0);
+    // A value out of line is fetched, with no varlena header.
+    std::string full(sm2::varlena_payload(bytes));
+    if (sm2::varlena_is_toast(bytes)) {
+      REQUIRE_MESSAGE(sm3::tbl_fetch(t, bytes, full) == 0, sm1::errmsg());
+    }
+    out[sm2::datum_to_int32(d[0])] = full;
+  }
+  REQUIRE_MESSAGE(rc == 1, sm1::errmsg());
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  return out;
+}
+
+} // namespace
+
+// Verify the seal erases the TOAST chunks of the rows it takes, and a
+// snapshot older than its commit still reads them (../COLSTORE.md
+// §10.1), with row groups of 100 rows and TOAST on.
+// 1. Insert 100 rows whose b is 3,000 bytes: in the delta store, b
+//    out of line, in TOAST chunks.
+// 2. S2 takes an RR snapshot, and reads every row.
+// 3. Seal: a row group of 100 rows; no TOAST chunk is left.
+// 4. A scan gives every b whole, from the row group's long values;
+//    S2 still reads every b whole, from the chunks.
+TEST_CASE("the seal erases its rows' TOAST chunks") {
+  col_db_t db(100, true);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  auto b_of = [](int i) { return std::string(3000, 'a' + i % 26); };
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  for (int i = 0; i < 100; i++) {
+    row_t r(i, b_of(i));
+    uint64_t id = 0;
+    REQUIRE_MESSAGE(sm3::tbl_insert(t, r.d, r.null, id) == 0, sm1::errmsg());
+  }
+  sm3::tbl_close(t);
+  db.commit();
+  db.begin();
+  CHECK(toast_chunks(db.ss, db.s, c) >= 100);
+  db.commit();
+  // 2. An older snapshot.
+  sm1::session_t *s2 = db.open();
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::tbl_close(t);
+  REQUIRE(toast_chunks(ss2, s2, c) >= 100);
+  // 3. The seal.
+  sm1::session_t *s3 = db.open();
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
+  REQUIRE(seal(ss3, c));
+  CHECK(row_groups(db, c) == 1);
+  db.begin();
+  CHECK(toast_chunks(db.ss, db.s, c) == 0);
+  db.commit();
+  // 4. Every b whole, now and at the older snapshot.
+  db.begin(sm1::xctlevel_t::repeatable_read);
+  auto now = whole_rows(db.ss, c);
+  db.commit();
+  REQUIRE(now.size() == 100);
+  auto old = whole_rows(ss2, c);
+  REQUIRE(old.size() == 100);
+  for (int i = 0; i < 100; i++) {
+    CHECK(now[i] == b_of(i));
+    CHECK(old[i] == b_of(i));
+  }
+  REQUIRE(sm3::commit(ss2) == 0);
   sm3::session_close(ss2);
   sm3::session_close(ss3);
 }

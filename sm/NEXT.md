@@ -456,8 +456,6 @@ Owed, and blocking nothing above:
     catches a small RG (§11.1).
   - **Tests not written yet:**
     - mvcc: a seal that meets a writer in flight or prepared;
-    - sm3: TOAST chunks erased by the seal; `ANALYZE`'s null
-      fraction;
     - rel: the sweep after a crash, which rel cannot make;
     - digres: an RR update while a seal runs (`server.sh`); an
       `ANALYZE`, as `run.sh`'s tables are temporary, and sm

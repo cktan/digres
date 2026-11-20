@@ -1036,6 +1036,11 @@ random CGs and random bounds, against a test of every value.
     with seals and RG compactions between, runs on both; every
     50 steps a scan of each gives the model, and an old
     REPEATABLE READ snapshot gives the model as it was.
+13. `ANALYZE`'s null fraction counts the nulls of the RGs and of
+    the delta store.
+14. With TOAST on, the seal reads each value out of line whole,
+    erases its chunks, and a snapshot older than the seal still
+    reads them.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.
@@ -1047,7 +1052,9 @@ across a restart; SERIALIZABLE and an index refused; a delete by
 name and an abort; the seal's job; an update and a delete by
 `_id` alone; a scan of some columns, with bounds; an update
 counted toward the seal; two loads prepared across a restart,
-one committed and one aborted.
+one committed and one aborted. `rel/test/test_toast.rel`, with
+TOAST on: 10k rows of long values inserted one at a time, sealed
+by the seal's job, read back whole.
 
 `dg/test/columnar.sql`: `CREATE TABLE ... WITH (storage =
 columnar)`; the warnings of §14.1, and the `NOT NULL` kept from
