@@ -199,17 +199,64 @@ ty_decimal128_t ceil_or_floor128(ty_decimal128_t a, bool floor) {
 typedef unsigned __int128 u128;
 u128 magnitude(ty_int128_t v) { return v < 0 ? -(u128)v : (u128)v; }
 
-/* gcd of |x| and |y| by Euclid's algorithm; gcd(0, y) is |y|. */
-u128 u128_gcd(ty_int128_t x, ty_int128_t y) {
-  u128 a = magnitude(x);
-  u128 b = magnitude(y);
-
+/* gcd of a and b by Euclid's algorithm; gcd(0, b) is b. */
+u128 gcd_u128(u128 a, u128 b) {
   while (b != 0) {
     u128 t = a % b;
     a = b;
     b = t;
   }
   return a;
+}
+
+/* gcd of |x| and |y|. */
+u128 u128_gcd(ty_int128_t x, ty_int128_t y) {
+  return gcd_u128(magnitude(x), magnitude(y));
+}
+
+/*
+ * v * 10^k mod m, for the magnitudes v and m (m not zero, below 10^37):
+ * one place at a time, so that no step passes 128 bits.
+ */
+u128 mulpow10_mod(u128 v, int k, u128 m) {
+  u128 r = v % m;
+
+  for (; k > 0; k--) {
+    r = r * 10 % m;
+  }
+  return r;
+}
+
+/*
+ * a and b's values at the larger scale, as magnitudes, if both fit 128
+ * bits there: the scale is returned. Else *over is 1 if a's does not, and
+ * 2 if b's does not, and the magnitudes are the originals.
+ */
+int align128(const ty_decimal128_t *a, const ty_decimal128_t *b, u128 *x,
+             u128 *y, int *over, int *k) {
+  int sa = a->scale;
+  int sb = b->scale;
+
+  *over = 0;
+  *x = magnitude(a->value);
+  *y = magnitude(b->value);
+  *k = sa < sb ? sb - sa : sa - sb;
+  for (int i = 0; i < *k; i++) {
+    if (sa < sb) {
+      if (__builtin_mul_overflow(*x, (u128)10, x)) {
+        *over = 1;
+        break;
+      }
+    } else if (__builtin_mul_overflow(*y, (u128)10, y)) {
+      *over = 2;
+      break;
+    }
+  }
+  if (*over != 0) {
+    *x = magnitude(a->value);
+    *y = magnitude(b->value);
+  }
+  return sa > sb ? sa : sb;
 }
 
 /*
@@ -527,4 +574,98 @@ int ty_decimal128_cmp_scaled(ty_decimal128_t a, ty_decimal128_t b) {
     }
   }
   return (x > y) - (x < y);
+}
+
+/*
+ * *result = a % b, at the larger scale, the sign of a.
+ * 1. If b is zero, fail.
+ * 2. If a has the smaller scale, the remainder is the one of |a| * 10^k
+ *    by |b|: take it a place at a time. Else if b at the larger scale does
+ *    not fit 128 bits, |a| is below it, and is the remainder.
+ * 3. Else both fit: take the remainder.
+ */
+int ty_decimal128_mod(const ty_decimal128_t *a, const ty_decimal128_t *b,
+                      ty_decimal128_t *result) {
+  u128 x, y;
+  int over, k;
+  int s = align128(a, b, &x, &y, &over, &k);
+  u128 r;
+
+  if (b->value == 0) {
+    return ty_internal::set_error(TY_ERR_DIVZERO, "division by zero");
+  }
+  if (over == 1) {
+    r = mulpow10_mod(x, k, y);
+  } else if (over == 2) {
+    r = x;
+  } else {
+    r = x % y;
+  }
+  result->value = a->value < 0 ? -(ty_int128_t)r : (ty_int128_t)r;
+  result->scale = s;
+  return 0;
+}
+
+/*
+ * *result = gcd(a, b), at the larger scale.
+ * 1. If both fit 128 bits at the larger scale, take their gcd.
+ * 2. Else the one that does not is a multiple of 10^k of a value below
+ *    10^36: take its remainder by the other a place at a time, and the
+ *    gcd of that and the other. If the other is zero, the gcd is the
+ *    one that does not fit: fail.
+ * 3. If the gcd has more than 36 digits, fail.
+ */
+int ty_decimal128_gcd(const ty_decimal128_t *a, const ty_decimal128_t *b,
+                      ty_decimal128_t *result) {
+  u128 x, y;
+  int over, k;
+  int s = align128(a, b, &x, &y, &over, &k);
+  u128 g;
+
+  if (over == 0) {
+    g = gcd_u128(x, y);
+  } else {
+    u128 big = over == 1 ? x : y;
+    u128 other = over == 1 ? y : x;
+
+    if (other == 0) {
+      return range_error128();
+    }
+    g = gcd_u128(other, mulpow10_mod(big, k, other));
+  }
+  if (g > (u128)d128_max) {
+    return range_error128();
+  }
+  result->value = (ty_int128_t)g;
+  result->scale = s;
+  return 0;
+}
+
+/*
+ * *result = lcm(a, b), at the larger scale.
+ * 1. If either is zero, the lcm is zero.
+ * 2. If either does not fit 128 bits at the larger scale, the lcm is above
+ *    10^36: fail.
+ * 3. Take |x| / gcd * |y|; if it does not fit 128 bits, or has more than
+ *    36 digits, fail.
+ */
+int ty_decimal128_lcm(const ty_decimal128_t *a, const ty_decimal128_t *b,
+                      ty_decimal128_t *result) {
+  u128 x, y;
+  int over, k;
+  int s = align128(a, b, &x, &y, &over, &k);
+  u128 l = 0;
+
+  if (a->value != 0 && b->value != 0) {
+    if (over != 0) {
+      return range_error128();
+    }
+    u128 g = gcd_u128(x, y);
+    if (__builtin_mul_overflow(x / g, y, &l) || l > (u128)d128_max) {
+      return range_error128();
+    }
+  }
+  result->value = (ty_int128_t)l;
+  result->scale = s;
+  return 0;
 }

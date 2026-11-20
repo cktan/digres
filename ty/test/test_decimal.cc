@@ -585,3 +585,86 @@ TEST_CASE("decimal128 round and trunc") {
   CHECK(-1 == round128_of(big, 0, -1, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 }
+
+// Verify decimal128 %, gcd and lcm, including scales that do not align in
+// 128 bits.
+// 1. Take % at one scale, with signs, and at two scales; by zero it fails.
+// 2. Take % where aligning a passes 128 bits, and where aligning b does.
+// 3. Take gcd, at two scales, with zero, and where aligning passes 128 bits.
+// 4. Take lcm, with zero, at two scales; of large coprimes it fails.
+TEST_CASE("decimal128 mod, gcd and lcm") {
+  ty_decimal128_t r;
+  ty_int128_t big = ten_to(36) - 1;
+
+  // 1. Take % at one scale, with signs, and at two scales; by zero it fails.
+  ty_decimal128_t a = {7, 0};
+  ty_decimal128_t b = {3, 0};
+  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(1 == r.value);
+  a = {-7, 0};
+  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(-1 == r.value);
+  a = {75, 1};
+  b = {225, 2};
+  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(75 == r.value);
+  CHECK(2 == r.scale);
+  b = {0, 5};
+  CHECK(-1 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(TY_ERR_DIVZERO == ty_errnum());
+
+  // 2. Take % where aligning a passes 128 bits, and where aligning b does.
+  //    big * 10^36 mod 7 is 0, as 10^6 - 1 divides big. Then 5 mod 11
+  //    with a at 10^36 scale: (5 * 10^0 at scale 36 vs 11 at scale 0).
+  a = {big, 0};
+  b = {7, 36};
+  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(0 == r.value);
+  CHECK(36 == r.scale);
+  a = {big - 1, 0};
+  b = {11, 36};
+  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(((big - 1) % 11 * ten_to(36) % 11) == r.value);
+  a = {5, 36};
+  b = {big, 0};
+  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(5 == r.value);
+
+  // 3. Take gcd, at two scales, with zero, and where aligning passes 128
+  //    bits: big * 10^36 is a multiple of 14, so the gcd with 14 is 14.
+  a = {15, 1};
+  b = {25, 2};
+  CHECK(0 == ty_decimal128_gcd(&a, &b, &r));
+  CHECK(25 == r.value);
+  a = {0, 0};
+  b = {5, 0};
+  CHECK(0 == ty_decimal128_gcd(&a, &b, &r));
+  CHECK(5 == r.value);
+  a = {big, 0};
+  b = {14, 36};
+  CHECK(0 == ty_decimal128_gcd(&a, &b, &r));
+  CHECK(14 == r.value);
+  a = {0, 36};
+  b = {big, 0};
+  CHECK(-1 == ty_decimal128_gcd(&a, &b, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+
+  // 4. Take lcm, with zero, at two scales; of large coprimes it fails.
+  a = {4, 0};
+  b = {6, 0};
+  CHECK(0 == ty_decimal128_lcm(&a, &b, &r));
+  CHECK(12 == r.value);
+  a = {15, 1};
+  b = {25, 2};
+  CHECK(0 == ty_decimal128_lcm(&a, &b, &r));
+  CHECK(150 == r.value);
+  a = {0, 3};
+  CHECK(0 == ty_decimal128_lcm(&a, &b, &r));
+  CHECK(0 == r.value);
+  r = {7, 7};
+  a = {big, 0};
+  b = {big - 1, 0};
+  CHECK(-1 == ty_decimal128_lcm(&a, &b, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(7 == r.value);
+}

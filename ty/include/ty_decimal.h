@@ -130,6 +130,21 @@ int ty_decimal128_trunc(const ty_decimal128_t* a, int n,
 ty_decimal128_t ty_decimal128_ceil(ty_decimal128_t a);
 ty_decimal128_t ty_decimal128_floor(ty_decimal128_t a);
 
+/*
+ * a % b, gcd(a, b) and lcm(a, b) of two decimal128, at the larger of the
+ * scales; the remainder has the sign of a, and an lcm is 0 if either is
+ * zero. % fails with TY_ERR_DIVZERO if b is zero. gcd and lcm fail with
+ * TY_ERR_RANGE if the result needs more than 36 digits, as gcd(0, x) can
+ * at a scale that puts x past them, or an lcm of two large coprimes.
+ * *result is then not set. The scales of both are at most 36.
+ */
+int ty_decimal128_mod(const ty_decimal128_t* a, const ty_decimal128_t* b,
+                      ty_decimal128_t* result);
+int ty_decimal128_gcd(const ty_decimal128_t* a, const ty_decimal128_t* b,
+                      ty_decimal128_t* result);
+int ty_decimal128_lcm(const ty_decimal128_t* a, const ty_decimal128_t* b,
+                      ty_decimal128_t* result);
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DECIMAL64_MAX_DIGITS 17
 #define TY_DECIMAL64_MAX_SCALE  17

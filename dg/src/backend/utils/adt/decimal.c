@@ -1553,21 +1553,16 @@ Numeric numeric_div_opt_error(Numeric num1, Numeric num2, bool *have_error) {
 
 /* num1 mod num2, at the larger scale, the sign of num1. */
 Numeric numeric_mod_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  wide_t a = dec_wide(num1), b = dec_wide(num2);
-  int s = Max(a.scale, b.scale);
-  wide_t r;
-  Numeric res;
+  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_decimal128_t r;
 
-  if (wide_is_zero(b)) {
+  /* The remainder is ty's; its one error is a zero num2. */
+  if (ty_decimal128_mod(&a, &b, &r) != 0) {
     division_by_zero(have_error);
     return NULL;
   }
-  a = wide_scale_up(a, s);
-  b = wide_scale_up(b, s);
-  mag_divmod(a.mag, b.mag, &r.mag);
-  r.neg = a.neg && !mag_is_zero(r.mag);
-  r.scale = s;
-  return dec_pack(r, &res, have_error) ? res : NULL;
+  return dec_make(r.value, r.scale);
 }
 
 /* num1 + num2. */
@@ -1631,33 +1626,19 @@ Datum numeric_larger(PG_FUNCTION_ARGS) {
       DatumGetNumericCopy(NumericGetDatum(dec_cmp(a, b) >= 0 ? a : b)));
 }
 
-/* The greatest common divisor of two magnitudes. */
-static mag_t mag_gcd(mag_t a, mag_t b) {
-  while (!mag_is_zero(b)) {
-    mag_t r;
-
-    mag_divmod(a, b, &r);
-    a = b;
-    b = r;
-  }
-  return a;
-}
-
 /*
  * gcd(num1, num2): the largest value both are whole multiples of, at the
  * larger scale; never negative.
  */
 Datum numeric_gcd(PG_FUNCTION_ARGS) {
-  wide_t a = dec_wide(PG_GETARG_NUMERIC(0)), b = dec_wide(PG_GETARG_NUMERIC(1));
-  int s = Max(a.scale, b.scale);
-  wide_t r;
+  Numeric n1 = PG_GETARG_NUMERIC(0), n2 = PG_GETARG_NUMERIC(1);
+  ty_decimal128_t a = {dec_value(n1), dec_scale(n1)};
+  ty_decimal128_t b = {dec_value(n2), dec_scale(n2)};
+  ty_decimal128_t r;
 
-  a = wide_scale_up(a, s);
-  b = wide_scale_up(b, s);
-  r.mag = mag_gcd(a.mag, b.mag);
-  r.neg = false;
-  r.scale = s;
-  PG_RETURN_NUMERIC(dec_from_wide(r));
+  if (ty_decimal128_gcd(&a, &b, &r) != 0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /*
@@ -1665,19 +1646,14 @@ Datum numeric_gcd(PG_FUNCTION_ARGS) {
  * the larger scale; zero if either is.
  */
 Datum numeric_lcm(PG_FUNCTION_ARGS) {
-  wide_t a = dec_wide(PG_GETARG_NUMERIC(0)), b = dec_wide(PG_GETARG_NUMERIC(1));
-  int s = Max(a.scale, b.scale);
-  wide_t r;
+  Numeric n1 = PG_GETARG_NUMERIC(0), n2 = PG_GETARG_NUMERIC(1);
+  ty_decimal128_t a = {dec_value(n1), dec_scale(n1)};
+  ty_decimal128_t b = {dec_value(n2), dec_scale(n2)};
+  ty_decimal128_t r;
 
-  a = wide_scale_up(a, s);
-  b = wide_scale_up(b, s);
-  r.neg = false;
-  r.scale = s;
-  if (wide_is_zero(a) || wide_is_zero(b))
-    r.mag = mag_of(0);
-  else
-    r.mag = mag_mul(mag_divmod(a.mag, mag_gcd(a.mag, b.mag), NULL), b.mag);
-  PG_RETURN_NUMERIC(dec_from_wide(r));
+  if (ty_decimal128_lcm(&a, &b, &r) != 0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* factorial(n), for n of at most 33, the last whose factorial fits. */

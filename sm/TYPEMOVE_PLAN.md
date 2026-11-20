@@ -302,8 +302,14 @@ copied from PostgreSQL keeps its copyright notice
    in 128 bits and out of the wide path: `where round(a, 2) >
    500` fell 70.9%, `where abs(a - b) > 100` 28.5%, and
    `ORDER BY a` 6.4% (that compare is the equal-scale one, which
-   digres still does itself). Left for `decimal128`: `/`, `%`,
-   `gcd`, `lcm`, `div`, the exponent group, and the hash.
+   digres still does itself). `%`, `gcd` and `lcm` moved as well,
+   in 128 bits, with no 512-bit path: where a value does not
+   fit 128 bits at the larger scale, ty takes the remainder a
+   place at a time. `where a % (b + 1) > 10` fell 63.0% and
+   `where gcd(a, b) > 1` 89.5%. An `lcm` of two coprime
+   17-digit values at scale 17 is now an error; it was rounded
+   to fit. Left for `decimal128`: `/`, `div`, the exponent
+   group, and the hash.
    `/` waits for the 512-bit magnitude. The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from

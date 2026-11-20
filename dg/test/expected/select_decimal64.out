@@ -145,9 +145,9 @@ SELECT pg_typeof(min(x))::oid, pg_typeof(max(x))::oid, pg_typeof(sum(x))::oid, p
       1700 |      1700 |      8383 |      8383
 (1 row)
 
-SELECT lcm(4::numeric, 6::numeric), lcm(1.5, 0.25), lcm(0, 5), lcm(99999999999999999::decimal128, 0.99999999999999997::decimal128), pg_typeof(lcm(4::numeric, 6::numeric))::oid;
- lcm | lcm  | lcm |                  lcm                  | pg_typeof 
------+------+-----+---------------------------------------+-----------
-  12 | 1.50 |   0 | 9999999999999999600000000000000003.00 |      1700
+SELECT lcm(4::numeric, 6::numeric), lcm(1.5, 0.25), lcm(0, 5), lcm(99999999999999999::decimal128, 2::decimal128), pg_typeof(lcm(4::numeric, 6::numeric))::oid;
+ lcm | lcm  | lcm |        lcm         | pg_typeof 
+-----+------+-----+--------------------+-----------
+  12 | 1.50 |   0 | 199999999999999998 |      1700
 (1 row)
 

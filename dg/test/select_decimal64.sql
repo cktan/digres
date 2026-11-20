@@ -33,4 +33,4 @@ SELECT oprname, oprcode, oprresult FROM pg_operator WHERE oprleft IN (0, 1700) A
 SELECT proname, prosrc, prorettype, pronargs FROM pg_proc WHERE proargtypes[0] = 1700 AND prokind = 'f' AND proname NOT LIKE 'decimal64%' AND proname NOT LIKE 'hash%' ORDER BY 1, 4, 3;
 SELECT pg_typeof(-x)::oid, pg_typeof(abs(x))::oid, pg_typeof(sign(x))::oid, pg_typeof(x % x)::oid, pg_typeof(mod(x, x))::oid, pg_typeof(gcd(x, x))::oid, pg_typeof(round(x))::oid, pg_typeof(round(x, 1))::oid, pg_typeof(trunc(x))::oid, pg_typeof(trunc(x, 1))::oid, pg_typeof(ceil(x))::oid, pg_typeof(ceiling(x))::oid, pg_typeof(floor(x))::oid, pg_typeof(x + x)::oid, pg_typeof(x * x)::oid, pg_typeof(lcm(x, x))::oid FROM (VALUES (1.5)) v(x);
 SELECT pg_typeof(min(x))::oid, pg_typeof(max(x))::oid, pg_typeof(sum(x))::oid, pg_typeof(avg(x))::oid FROM (VALUES (1.5)) v(x);
-SELECT lcm(4::numeric, 6::numeric), lcm(1.5, 0.25), lcm(0, 5), lcm(99999999999999999::decimal128, 0.99999999999999997::decimal128), pg_typeof(lcm(4::numeric, 6::numeric))::oid;
+SELECT lcm(4::numeric, 6::numeric), lcm(1.5, 0.25), lcm(0, 5), lcm(99999999999999999::decimal128, 2::decimal128), pg_typeof(lcm(4::numeric, 6::numeric))::oid;
