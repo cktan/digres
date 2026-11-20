@@ -11,20 +11,17 @@ match, from statistics kept in RocksDB.
 sealed tombstone, file sets, the CG file, the catalog's kind,
 bulk loads, scans, deletes and updates, the seal and its job, RG
 compaction and its trigger, and their C API; in digres, `WITH
-(storage = columnar)`, keys taken with a warning, loads, inserts
-and scans. Not built: the merge of small RGs by itself
-(`tbl_compact_rgs` merges the RGs it is given), `ANALYZE`, the
-DDL of §14, a scan's columns and bounds in the C API, and in
-digres the row name `(rg_id, _id)`: until it is carried, digres
-refuses `UPDATE`, `DELETE` and row locks of a column store
-table.
+(storage = columnar)`, keys taken with a warning, loads, inserts,
+scans, updates, deletes and row locks. Not built: the merge of
+small RGs by itself (`tbl_compact_rgs` merges the RGs it is
+given), `ANALYZE`, the DDL of §14, and a scan's columns and
+bounds in the C API.
 Where the code differs from this design today:
 
 - A scan hands out sm2 tuples, not datums, so a row of more than
   64 KB, long values included, fails in a scan.
 - A bulk load draws each row's `_id` from the sequence one at a
   time, as sm1 has no draw of a batch.
-- A read by `_id` (`tbl_read`) sees the delta store alone.
 
 §16 lists the questions that are still open.
 
@@ -474,11 +471,25 @@ A lookup of `_id` is a scan with the predicate `_id = n`:
   ranges, as of an RG of reinserted rows, leave the bloom
   filter to do the work.
 
-**The TID that digres carries is `(rg_id, _id)`.** `rg_id` is 0
-for a row in the delta store. A scan knows the RG of each row it
-returns, so an `UPDATE` or a `DELETE` that a scan drives writes
-`(rg_id, _id)` with no lookup. Only a follow after
-`SM_ERR_SEALED` or a moved marker is a lookup.
+**digres carries the `_id` alone**, as for a keyless row store
+table. A write takes the `rg_id` from the scan instead:
+
+1. If the scan that read the row is still on it, the write names
+   the row `(rg_id, _id)`, with the scan's `rg_id`
+   (`sm_row_scan_rg`): no lookup. A plain `UPDATE ... WHERE` or
+   `DELETE ... WHERE` is so.
+2. Else, as after a join, a sort or a TID scan, the write names
+   the row by its `_id`, and sm reads the delta key `n`. If the
+   delta store has no version of it, or a seal's tombstone, sm
+   looks up the row's RG as above, at the newest committed state.
+3. A follow after `SM_ERR_SEALED` or a moved marker is a lookup
+   too.
+
+- **`rg_id` is 0 for a row in the delta store.**
+- **A read by `_id` is the same**: the delta store, then the
+  lookup, at the snapshot, or newest for `sm_tbl_read_latest`.
+- **A row lock is on the delta key `_id`** wherever the row is
+  (§9.1), so it needs no `rg_id`.
 
 ---
 

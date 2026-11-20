@@ -461,7 +461,7 @@ TEST_CASE("concurrent writers of a row of a row group") {
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
   std::string_view tuple;
   // A read takes the statement's snapshot, before S commits.
-  CHECK(sm3::tbl_read(t, id11, tuple) == 1);
+  CHECK(sm3::tbl_read(t, id11, tuple) == 0);
   REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
   REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
   row_t r10(10, "y");
@@ -729,7 +729,7 @@ TEST_CASE("a writer follows a row RG compaction moved") {
   sm3::table_t *t2 = nullptr;
   REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
   std::string_view tuple;
-  CHECK(sm3::tbl_read(t2, id7, tuple) == 1);
+  CHECK(sm3::tbl_read(t2, id7, tuple) == 0);
   sm1::session_t *s3 = db.open();
   sm3::session_t *ss3 = nullptr;
   REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
@@ -779,4 +779,94 @@ TEST_CASE("the sealer compacts a row group a fifth dead") {
   CHECK(row_groups(db, c) == 1);
   CHECK(scan_rows(db, c).size() == 8000);
   sm3::sealer_detach(db.cat);
+}
+
+namespace {
+
+/* Row tuple's a and b, b "-" if null. */
+std::pair<int32_t, std::string> decode(sm3::table_t *t,
+                                       std::string_view tuple) {
+  sm2::datum_t d[2];
+  bool null[2];
+  REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+  std::string v = "-";
+  if (!null[1]) {
+    std::string_view bytes;
+    REQUIRE(sm2::datum_bytes(&sm2::type_text, -1, d[1], bytes) == 0);
+    v = std::string(sm2::varlena_payload(bytes));
+  }
+  return {null[0] ? -1 : sm2::datum_to_int32(d[0]), v};
+}
+
+} // namespace
+
+// Verify a read and a write of a column store table's row by its _id
+// alone find the row in its row group, as digres names a row it has
+// not just scanned (QUESTION.md 3).
+// 1. Load 15,000 rows: a row group of a 0..9,999, and the delta store.
+// 2. Read a = 5 by its _id: as the snapshot sees it, the newest
+//    under its lock, and into a pin.
+// 3. Update a = 5 by its _id: the new version is in the delta store.
+// 4. Delete a = 6 by its _id, with the row as it was handed back; a
+//    second delete finds no row.
+// 5. After RG compaction moves a = 8, read and delete it by its _id.
+TEST_CASE("a read and a write by _id alone find a row of a row group") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  load_rows(db, c, 15000);
+  auto [rg5, id5] = where(db, c, 5);
+  auto [rg6, id6] = where(db, c, 6);
+  REQUIRE(rg5 != 0);
+  REQUIRE(rg6 == rg5);
+  // 2. The reads, at READ COMMITTED: a newest read needs it.
+  db.begin(sm1::xctlevel_t::read_committed);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  std::string_view tuple;
+  REQUIRE_MESSAGE(sm3::tbl_read(t, id5, tuple) == 0, sm1::errmsg());
+  CHECK(decode(t, tuple) == std::pair<int32_t, std::string>(5, "n5"));
+  // A newest read is under the row's lock, as after a write since.
+  REQUIRE(sm3::tbl_lock(t, id5, sm1::SM_LOCKMODE_SH) == 0);
+  REQUIRE(sm3::tbl_lock(t, id6, sm1::SM_LOCKMODE_SH) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_read_latest(t, id5, tuple) == 0,
+                  std::string(sm1::errmsg()));
+  CHECK(decode(t, tuple).first == 5);
+  sm3::pin_ref_t ref{};
+  REQUIRE(sm3::tbl_read(t, id5, ref, tuple) == 0);
+  CHECK(decode(t, tuple).first == 5);
+  REQUIRE(sm3::tbl_read_latest(t, id6, ref, tuple) == 0);
+  CHECK(decode(t, tuple).first == 6);
+  // 3. The update.
+  row_t r5(5, "five");
+  REQUIRE_MESSAGE(sm3::tbl_update(t, id5, r5.d, r5.null) == 0, sm1::errmsg());
+  // 4. The delete, and again.
+  std::string_view old;
+  REQUIRE_MESSAGE(sm3::tbl_delete(t, id6, ref, old) == 0, sm1::errmsg());
+  CHECK(decode(t, old) == std::pair<int32_t, std::string>(6, "n6"));
+  CHECK(sm3::tbl_delete(t, id6) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_NOTFOUND);
+  CHECK(sm3::tbl_read(t, id6, tuple) == 1);
+  sm3::unpin(ref);
+  sm3::tbl_close(t);
+  db.commit();
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 14999);
+  CHECK(rows[5] == "five");
+  CHECK(rows.count(6) == 0);
+  CHECK(where(db, c, 5).first == 0);
+  // 5. A row RG compaction moved.
+  auto [rg8, id8] = where(db, c, 8);
+  REQUIRE(compact(db.ss, c, {rg8}));
+  CHECK(where(db, c, 8).first != rg8);
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE(sm3::tbl_read(t, id8, tuple) == 0);
+  CHECK(decode(t, tuple).first == 8);
+  REQUIRE_MESSAGE(sm3::tbl_delete(t, id8) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  db.commit();
+  CHECK(scan_rows(db, c).count(8) == 0);
 }

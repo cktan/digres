@@ -279,6 +279,8 @@ static thread_local /*LOCAL*/ Oid kept_oid = InvalidOid;
  */
 static thread_local /*LOCAL*/ Oid load_oid = InvalidOid;
 static thread_local /*LOCAL*/ std::string kept_key;
+/* A column store table's row deleted from a row group, kept_tuple's copy. */
+static thread_local /*LOCAL*/ std::string kept_copy;
 static thread_local /*LOCAL*/ const char *kept_tuple = NULL;
 static thread_local /*LOCAL*/ Size kept_len = 0;
 static thread_local /*LOCAL*/ sm_pin_ref_t kept_ref = {};
@@ -2639,19 +2641,6 @@ static bool is_column_store(Oid relid) {
   sm_tbl_t *tbl = open_table(relid, SM_LOCKMODE_IS);
 
   return NULL != tbl && sm_tbl_def(tbl)->column_store;
-}
-
-/*
- * Refuse what of a column store table needs a row's name, its row group's
- * with its _id (../../../../../sm/COLSTORE.md §8), which digres does not
- * carry yet: without it, a row of a row group would not be found.
- */
-static void refuse_column_store(Relation rel, const char *what) {
-  if (is_column_store(RelationGetRelid(rel)))
-    ereport(ERROR,
-            (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-             errmsg("%s of column store table \"%s\" is not supported yet",
-                    what, RelationGetRelationName(rel))));
 }
 
 /*
@@ -9740,7 +9729,6 @@ static bool scan_tuple(smstore_scan_t *scan, const void **tuple, size_t *len) {
  */
 bool smstore_fetch_row(Relation rel, const RowKey *key, int natts,
                        TupleTableSlot *slot) {
-  refuse_column_store(rel, "UPDATE, or a read of a row by its _id,");
   sm_tbl_t *tbl = open_table(RelationGetRelid(rel), SM_LOCKMODE_IS);
   sm_datum_t vals[INDEX_MAX_KEYS];
 
@@ -9815,12 +9803,33 @@ static TM_Result write_result(Relation rel, const std::string &key, int rc,
 }
 
 /*
+ * The row group of tbl's row at key, encoded, if tbl is a column store
+ * table and the scan in *scan is on that row, read from a row group: a write
+ * names the row by it, and sm looks for none (../../../../../sm/COLSTORE.md
+ * §8).  0 otherwise, and sm finds the row by its _id.  0 too after a write
+ * found the row changed, as its newest version is elsewhere.
+ */
+static uint64 scan_rg(sm_tbl_t *tbl, Relation rel, const std::string &key,
+                      smstore_scan_t **scan) {
+  Oid oid = RelationGetRelid(rel);
+
+  *scan = NULL;
+  if (!sm_tbl_def(tbl)->column_store || (kept_oid == oid && kept_key == key))
+    return 0;
+  *scan = scan_at(oid, key);
+  /* A row read ahead is not the cursor's last: its row group is not said. */
+  return NULL != *scan && NULL != (*scan)->cursor && !(*scan)->ra_rows &&
+                 !(*scan)->ra_point
+             ? sm_row_scan_rg((*scan)->cursor)
+             : 0;
+}
+
+/*
  * Replace the row of rel key names with the slot's: sm writes every index
  * of the table with it.
  */
 TM_Result smstore_update(Relation rel, const RowKey *key, TupleTableSlot *slot,
                          TM_FailureData *tmfd) {
-  refuse_column_store(rel, "UPDATE");
   sm_tbl_t *tbl = table_to_write(rel);
   sm_datum_t vals[INDEX_MAX_KEYS];
   sm_row_key_t sk = key_to_sm(rel, key, vals);
@@ -9864,8 +9873,13 @@ TM_Result smstore_update(Relation rel, const RowKey *key, TupleTableSlot *slot,
   const sm_datum_t *row =
       row_to_sm(tbl, slot->tts_tupleDescriptor, slot->tts_values,
                 slot->tts_isnull, slot->tts_nvalid, have_old ? &old : NULL);
+  smstore_scan_t *scan;
+  uint64 rg = scan_rg(tbl, rel, bytes, &scan);
   int rc = waiting([&] {
-    return sm_tbl_update(tbl, sk, row, slot->tts_isnull, slot->tts_nvalid);
+    return 0 != rg ? sm_tbl_update_at(tbl, rg, key_rowno(rel, key), row,
+                                      slot->tts_isnull, slot->tts_nvalid)
+                   : sm_tbl_update(tbl, sk, row, slot->tts_isnull,
+                                   slot->tts_nvalid);
   });
 
   sm_unpin(&ref);
@@ -9878,14 +9892,32 @@ TM_Result smstore_update(Relation rel, const RowKey *key, TupleTableSlot *slot,
  */
 TM_Result smstore_delete(Relation rel, const RowKey *key,
                          TM_FailureData *tmfd) {
-  refuse_column_store(rel, "DELETE");
   sm_tbl_t *tbl = table_to_write(rel);
   sm_datum_t vals[INDEX_MAX_KEYS];
   sm_row_key_t sk = key_to_sm(rel, key, vals);
   std::string bytes = key_bytes(tbl, sk);
   const void *old;
   size_t len;
+  smstore_scan_t *scan;
+  uint64 rg = scan_rg(tbl, rel, bytes, &scan);
 
+  /*
+   * A row group's row, the scan on it: deleted by its name, and kept as the
+   * scan read it, copied, as the scan's pin lasts until its cursor moves.
+   */
+  if (0 != rg && scan_tuple(scan, &old, &len)) {
+    std::string was((const char *)old, len);
+    int rc =
+        waiting([&] { return sm_tbl_delete_at(tbl, rg, key_rowno(rel, key)); });
+
+    if (0 == rc) {
+      sm_unpin(&kept_ref);
+      kept_copy = std::move(was);
+      keep_row(RelationGetRelid(rel), bytes, kept_copy.data(),
+               kept_copy.size());
+    }
+    return write_result(rel, bytes, rc, NULL, tmfd, "delete a row");
+  }
   /* The row deleted, pinned in kept_ref, which lets go of the last. */
   int rc =
       waiting([&] { return sm_tbl_delete(tbl, sk, &kept_ref, &old, &len); });
@@ -9920,7 +9952,6 @@ TM_Result smstore_delete(Relation rel, const RowKey *key,
 TM_Result smstore_lock_row(Relation rel, const RowKey *key,
                            TupleTableSlot *slot, LockTupleMode mode,
                            LockWaitPolicy wait_policy, TM_FailureData *tmfd) {
-  refuse_column_store(rel, "a row lock");
   Oid oid = RelationGetRelid(rel);
   bool share = mode == LockTupleShare || mode == LockTupleKeyShare;
   sm_tbl_t *tbl =

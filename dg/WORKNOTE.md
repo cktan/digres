@@ -13556,3 +13556,30 @@ A check hook took the new value as a `char **`, to change it with
 - **Left on purpose**: the row name in the `RowKey`, a scan's
   columns and bounds, and `ANALYZE` of a column store table.
   `\d+` shows no `storage` option, as it shows no other.
+
+## Step 448: a column store table's rows are updated and deleted
+
+- **What it was**: step 447 refused UPDATE, DELETE, row locks
+  and reads by `_id` of a column store table. A row of a row
+  group is named by its row group with its `_id`, and the
+  `RowKey` carries the `_id` alone.
+- **What it is**: the `RowKey` still carries the `_id` alone
+  ([`../QUESTION.md`](../QUESTION.md) 3, option C).
+  `scan_rg()` in `access/sm/smstore.c` takes the row group from
+  the scan that read the row, when that scan is still on it, and
+  the write names the row `(rg_id, _id)` with
+  `sm_tbl_update_at` or `sm_tbl_delete_at`. A plain UPDATE ...
+  WHERE or DELETE ... WHERE is so, and costs no lookup. Else, as
+  after a join, a sort or a TID scan, the write names the row by
+  its `_id`, and sm finds its row group
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §8). Reads by `_id`
+  (`smstore_fetch_row()`, `smstore_lock_row()`) are sm's too.
+- **What went with it**: `refuse_column_store()`. A DELETE of a
+  row group's row keeps the row as the scan read it, copied into
+  `kept_copy`, for RETURNING.
+- **Left on purpose**: no system column for the row group, and
+  no change outside `access/sm`. After a write found the row
+  changed (TM_Updated), the retry names it by its `_id`: its
+  newest version is in the delta store. A row read ahead
+  (`ra_rows`, `ra_point`) gives no row group, as the cursor is on
+  past it; a column store table has no index, so none is.

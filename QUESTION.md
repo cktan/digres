@@ -1,5 +1,32 @@
 # Questions
 
+## 3. How digres names a row of a row group (2026-11-19)
+
+**Branch:** `wip-colstore-10`, from `wip-colstore-9` at
+`2f2e6f27`, the point to return to.
+
+**Question.** A row of a row group is named by `(rg_id, _id)`.
+digres's `RowKey` carries the `_id` alone, so an `UPDATE` or a
+`DELETE` by it finds no row, and changes nothing, without an
+error. Until this is decided, digres refuses `UPDATE`, `DELETE`
+and row locks of a column store table. How does the row group
+reach sm?
+
+| Option | What changes | Cost |
+| --- | --- | --- |
+| A. The plan: a second system column, `_rg`, in the `RowKey` | slots (`tts_rg`), the planner's junk columns (`preptlist.c`, `appendinfo.c`), TID scans, `WHERE CURRENT OF`, the retry after `SM_ERR_UPDATED`; `_rg` becomes a reserved name in every table | the most code in shared PostgreSQL paths; no cost a row |
+| B. sm finds it: a write by `_id` alone looks in the delta store, then in the row groups whose `_id` zonemap holds it | sm3's `tbl_update`/`tbl_delete`; dg drops its refusals | a lookup a row: the RG keys, and the `_id` CG of each RG that may hold it |
+| C. The scan tells: when the scan that read the row is still on it, its row group is taken from the scan (`scan_at()` in `smstore.c`, `sm_row_scan_rg`); else B's lookup | `smstore_update`/`smstore_delete`, `tbl_scan_key`; B's lookup in sm3 | no cost for a scan feeding the write directly; a lookup for a plan that reorders rows (a join, a sort) |
+
+**Recommendation, taken (the user said yes on C):** C. A plain `UPDATE ... WHERE` or `DELETE
+... WHERE` is a scan under the write, which C serves at no cost.
+It changes no PostgreSQL code outside `access/sm`, and reserves
+no column name. B's lookup is its fallback, and is correct for
+every plan.
+
+It changes the plan's step 13: the row name is not carried in
+the `RowKey`.
+
 ## 2. The seal's job: the builder queue, or a worker of its own (2026-11-19)
 
 **Branch:** `wip-colstore-8`, from `wip-colstore-7` at

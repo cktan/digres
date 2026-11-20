@@ -68,6 +68,7 @@ struct sm3::table_t {
    */
   std::vector<sm3::index_state_t> states;
   uint64_t states_epoch = 0; /* cat_epoch when states was read */
+  std::string col_row; /* a row group's row read last, by a read with no pin */
 };
 
 namespace sm3 {
@@ -1027,6 +1028,15 @@ look:
 }
 
 /*
+ * A column store table's write of a row its delta store does not hold;
+ * defined below, with the reads.
+ */
+static int col_write(sm3::table_t *table, uint64_t id, int rc,
+                     const std::span<const sm2::datum_t> *values,
+                     std::span<const bool> isnull, sm3::pin_ref_t *ref,
+                     std::string_view *old);
+
+/*
  * tbl_update, with ref and old both given or both null: with them,
  * the old row is pinned into ref, and old views it.
  */
@@ -1144,7 +1154,10 @@ int tbl_update(table_t *table, uint64_t id,
   std::string key;
   return 0 != id_key(table, id, key)
              ? -1
-             : update_row(table, id, key, values, isnull, nullptr, nullptr);
+             : col_write(
+                   table, id,
+                   update_row(table, id, key, values, isnull, nullptr, nullptr),
+                   &values, isnull, nullptr, nullptr);
 }
 
 /* As above, pinning the row replaced into ref; see sm3.h. */
@@ -1155,7 +1168,9 @@ int tbl_update(table_t *table, uint64_t id,
   std::string key;
   return 0 != id_key(table, id, key)
              ? -1
-             : update_row(table, id, key, values, isnull, &ref, &old);
+             : col_write(table, id,
+                         update_row(table, id, key, values, isnull, &ref, &old),
+                         &values, isnull, &ref, &old);
 }
 
 /*
@@ -1229,15 +1244,20 @@ static int delete_row(table_t *table, std::string_view key, pin_ref_t *ref,
 /* Delete the row, then its entry in every index; see sm3.h. */
 int tbl_delete(table_t *table, uint64_t id) {
   std::string key;
-  return 0 != id_key(table, id, key) ? -1
-                                     : delete_row(table, key, nullptr, nullptr);
+  return 0 != id_key(table, id, key)
+             ? -1
+             : col_write(table, id, delete_row(table, key, nullptr, nullptr),
+                         nullptr, {}, nullptr, nullptr);
 }
 
 /* As above, pinning the row deleted into ref; see sm3.h. */
 int tbl_delete(table_t *table, uint64_t id, pin_ref_t &ref,
                std::string_view &old) {
   std::string key;
-  return 0 != id_key(table, id, key) ? -1 : delete_row(table, key, &ref, &old);
+  return 0 != id_key(table, id, key)
+             ? -1
+             : col_write(table, id, delete_row(table, key, &ref, &old), nullptr,
+                         {}, &ref, &old);
 }
 
 /* Begin a bulk load into the table; see sm3.h. */
@@ -1473,12 +1493,59 @@ int tbl_fetch_cols(table_t *table, const std::vector<int32_t> &atts,
   return 0;
 }
 
+/*
+ * Read a column store table's row with _id id from the row group that
+ * holds it live (../COLSTORE.md §8), as the transaction sees it, or
+ * newest committed with latest, into out: 1 if none does.
+ */
+static int col_read(table_t *table, uint64_t id, bool latest,
+                    std::string &out) {
+  sm1::session_t *s = table->session->sm1;
+  bool was = false;
+  if (latest && sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  col_scan_t *c = nullptr;
+  int rc = col_scan_open(table, {}, {}, id, id, c);
+  if (rc == 0) {
+    uint64_t got;
+    std::string_view tuple;
+    rc = col_scan_next(c, got, tuple);
+    if (rc == 0) {
+      out.assign(tuple);
+    }
+    col_scan_close(c);
+  }
+  if (latest) {
+    sm1::view_latest(s, was);
+  }
+  return rc;
+}
+
+/*
+ * A read of row id whose read of the delta store gave rc: in a column
+ * store table, a row the delta store has no version of is read from
+ * its row group, held in the table until the next such read. rc for
+ * any other table.
+ */
+static int col_reread(table_t *table, uint64_t id, bool latest, int rc,
+                      std::string_view &tuple) {
+  if (rc != 1 || !table->def->column_store) {
+    return rc;
+  }
+  rc = col_read(table, id, latest, table->col_row);
+  tuple = rc == 0 ? std::string_view(table->col_row) : std::string_view();
+  return rc;
+}
+
 /* Read the row with _id id; see sm3.h. */
 int tbl_read(table_t *table, uint64_t id, std::string_view &tuple) {
   std::string key;
   tuple = {};
-  return 0 != id_key(table, id, key) ? -1
-                                     : sm2::rel_read(table->rel, key, tuple);
+  return 0 != id_key(table, id, key)
+             ? -1
+             : col_reread(table, id, false,
+                          sm2::rel_read(table->rel, key, tuple), tuple);
 }
 
 /* Read the newest committed version of the row with _id id. */
@@ -1487,7 +1554,8 @@ int tbl_read_latest(table_t *table, uint64_t id, std::string_view &tuple) {
   tuple = {};
   return 0 != id_key(table, id, key)
              ? -1
-             : sm2::rel_read_latest(table->rel, key, tuple);
+             : col_reread(table, id, true,
+                          sm2::rel_read_latest(table->rel, key, tuple), tuple);
 }
 
 /*
@@ -1515,15 +1583,94 @@ static int read_into(table_t *table, pin_ref_t &ref, std::string_view &tuple,
   return 0;
 }
 
+/* As col_reread, into a pin, pointing ref at it; the pin holds the row. */
+static int col_reread(table_t *table, uint64_t id, bool latest, int rc,
+                      pin_ref_t &ref, std::string_view &tuple) {
+  if (rc != 1 || !table->def->column_store) {
+    return rc;
+  }
+  pin_t *p = pin_reread(ref);
+  if (!p) {
+    p = pin_take(table->session);
+  }
+  rc = col_read(table, id, latest, p->own);
+  if (rc != 0) {
+    pin_put(p);
+    tuple = {};
+    return rc;
+  }
+  tuple = p->own;
+  pin_hold(p, table->def, tuple, ref);
+  return 0;
+}
+
+/*
+ * A write of row id whose write in the delta store gave rc: in a column
+ * store table, a row the delta store has no version of
+ * (SM_ERR_NOTFOUND), or a seal's tombstone of (SM_ERR_SEALED), is
+ * written in its row group (../COLSTORE.md §8). rc for any other table
+ * or error. values is null for a delete.
+ * 1. Find the row group of the row's newest committed copy.
+ * 2. With ref, read the row as it is, before it is written.
+ * 3. Delete it there by its marker; an update puts values into the
+ *    delta store as its new version.
+ * 4. With ref, pin the row read into ref, for old to view.
+ */
+static int col_write(table_t *table, uint64_t id, int rc,
+                     const std::span<const sm2::datum_t> *values,
+                     std::span<const bool> isnull, pin_ref_t *ref,
+                     std::string_view *old) {
+  if (rc == 0 || !table->def->column_store ||
+      (sm1::errnum() != sm1::SM_ERR_NOTFOUND &&
+       sm1::errnum() != sm1::SM_ERR_SEALED)) {
+    return rc;
+  }
+  // 1. Its row group.
+  uint64_t rg_id = 0;
+  int f = col_find_latest(table, id, rg_id);
+  if (f != 0) {
+    return f < 0 ? -1
+                 : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                               "column store: no row " + std::to_string(id));
+  }
+  // 2. The row as it is.
+  std::string was;
+  if (ref) {
+    f = col_read(table, id, true, was);
+    if (f != 0) {
+      return f < 0 ? -1
+                   : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                                 "column store: no row " + std::to_string(id));
+    }
+  }
+  // 3. The write.
+  if ((values ? tbl_update_at(table, rg_id, id, *values, isnull)
+              : tbl_delete_at(table, rg_id, id)) != 0) {
+    return -1;
+  }
+  // 4. The row as it was, pinned.
+  if (ref) {
+    pin_t *p = pin_reread(*ref);
+    if (!p) {
+      p = pin_take(table->session);
+    }
+    p->own = std::move(was);
+    *old = p->own;
+    pin_hold(p, table->def, *old, *ref);
+  }
+  return 0;
+}
+
 /* Read the row with _id id into a pin; see sm3.h. */
 int tbl_read(table_t *table, uint64_t id, pin_ref_t &ref,
              std::string_view &tuple) {
-  return read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
+  int rc = read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
     std::string key;
     return 0 != id_key(table, id, key)
                ? -1
                : sm2::rel_read(table->rel, key, raw, tuple);
   });
+  return col_reread(table, id, false, rc, ref, tuple);
 }
 
 /* Read the row at key into a pin; see sm3.h. */
@@ -1578,12 +1725,13 @@ int tbl_read_keys(table_t *table, const std::string_view *keys, size_t n,
 /* Read the newest committed version of the row into a pin. */
 int tbl_read_latest(table_t *table, uint64_t id, pin_ref_t &ref,
                     std::string_view &tuple) {
-  return read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
+  int rc = read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
     std::string key;
     return 0 != id_key(table, id, key)
                ? -1
                : sm2::rel_read_latest(table->rel, key, raw, tuple);
   });
+  return col_reread(table, id, true, rc, ref, tuple);
 }
 
 /* Whether mode is a shared row mode, S or KS, writing nothing. */
@@ -1666,42 +1814,17 @@ static int mark_deleted(table_t *table, uint64_t rg_id, uint64_t id) {
 
 /* Delete a column store table's row (rg_id, id); see sm3.h. */
 int tbl_delete_at(table_t *table, uint64_t rg_id, uint64_t id) {
-  if (rg_id == 0) {
-    if (tbl_delete(table, id) == 0) {
-      return 0;
-    }
-    // The seal moved the row: follow it to its row group.
-    if (!table->def->column_store || sm1::errnum() != sm1::SM_ERR_SEALED) {
-      return -1;
-    }
-    int f = col_find_latest(table, id, rg_id);
-    if (f != 0) {
-      return f < 0 ? -1
-                   : sm1::seterr(sm1::SM_ERR_NOTFOUND,
-                                 "column store: the row was deleted");
-    }
-  }
-  return mark_deleted(table, rg_id, id);
+  // The delta store's row, or the row group's that holds it.
+  return rg_id == 0 ? tbl_delete(table, id) : mark_deleted(table, rg_id, id);
 }
 
 /* Update a column store table's row (rg_id, id); see sm3.h. */
 int tbl_update_at(table_t *table, uint64_t rg_id, uint64_t id,
                   std::span<const sm2::datum_t> values,
                   std::span<const bool> isnull) {
+  // The delta store's row, or the row group's that holds it.
   if (rg_id == 0) {
-    if (tbl_update(table, id, values, isnull) == 0) {
-      return 0;
-    }
-    // The seal moved the row: follow it to its row group.
-    if (!table->def->column_store || sm1::errnum() != sm1::SM_ERR_SEALED) {
-      return -1;
-    }
-    int f = col_find_latest(table, id, rg_id);
-    if (f != 0) {
-      return f < 0 ? -1
-                   : sm1::seterr(sm1::SM_ERR_NOTFOUND,
-                                 "column store: the row was deleted");
-    }
+    return tbl_update(table, id, values, isnull);
   }
   if (need_not_null(table, isnull) != 0 ||
       mark_deleted(table, rg_id, id) != 0) {
@@ -1862,7 +1985,10 @@ int tbl_update(table_t *table, const row_key_t &key,
   uint64_t id;
   return 0 != named(table, key, k, id)
              ? -1
-             : update_row(table, id, k, values, isnull, nullptr, nullptr);
+             : col_write(
+                   table, id,
+                   update_row(table, id, k, values, isnull, nullptr, nullptr),
+                   &values, isnull, nullptr, nullptr);
 }
 
 /* As above, pinning the row replaced into ref; see sm3.h. */
@@ -1875,15 +2001,19 @@ int tbl_update(table_t *table, const row_key_t &key,
   uint64_t id;
   return 0 != named(table, key, k, id)
              ? -1
-             : update_row(table, id, k, values, isnull, &ref, &old);
+             : col_write(table, id,
+                         update_row(table, id, k, values, isnull, &ref, &old),
+                         &values, isnull, &ref, &old);
 }
 
 /* Delete the row key names; see sm3.h. */
 int tbl_delete(table_t *table, const row_key_t &key) {
   std::string k;
   uint64_t id;
-  return 0 != named(table, key, k, id) ? -1
-                                       : delete_row(table, k, nullptr, nullptr);
+  return 0 != named(table, key, k, id)
+             ? -1
+             : col_write(table, id, delete_row(table, k, nullptr, nullptr),
+                         nullptr, {}, nullptr, nullptr);
 }
 
 /* As above, pinning the row deleted into ref; see sm3.h. */
@@ -1892,7 +2022,10 @@ int tbl_delete(table_t *table, const row_key_t &key, pin_ref_t &ref,
   old = {};
   std::string k;
   uint64_t id;
-  return 0 != named(table, key, k, id) ? -1 : delete_row(table, k, &ref, &old);
+  return 0 != named(table, key, k, id)
+             ? -1
+             : col_write(table, id, delete_row(table, k, &ref, &old), nullptr,
+                         {}, &ref, &old);
 }
 
 /* Read the row key names; see sm3.h. */
@@ -1900,20 +2033,23 @@ int tbl_read(table_t *table, const row_key_t &key, std::string_view &tuple) {
   std::string k;
   uint64_t id;
   tuple = {};
-  return 0 != named(table, key, k, id) ? -1
-                                       : sm2::rel_read(table->rel, k, tuple);
+  return 0 != named(table, key, k, id)
+             ? -1
+             : col_reread(table, id, false, sm2::rel_read(table->rel, k, tuple),
+                          tuple);
 }
 
 /* Read the row key names into a pin; see sm3.h. */
 int tbl_read(table_t *table, const row_key_t &key, pin_ref_t &ref,
              std::string_view &tuple) {
-  return read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
+  uint64_t id = 0;
+  int rc = read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
     std::string k;
-    uint64_t id;
     return 0 != named(table, key, k, id)
                ? -1
                : sm2::rel_read(table->rel, k, raw, tuple);
   });
+  return col_reread(table, id, false, rc, ref, tuple);
 }
 
 /* Read the newest committed version of the row key names. */
@@ -1924,19 +2060,21 @@ int tbl_read_latest(table_t *table, const row_key_t &key,
   tuple = {};
   return 0 != named(table, key, k, id)
              ? -1
-             : sm2::rel_read_latest(table->rel, k, tuple);
+             : col_reread(table, id, true,
+                          sm2::rel_read_latest(table->rel, k, tuple), tuple);
 }
 
 /* As above, into a pin; see sm3.h. */
 int tbl_read_latest(table_t *table, const row_key_t &key, pin_ref_t &ref,
                     std::string_view &tuple) {
-  return read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
+  uint64_t id = 0;
+  int rc = read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
     std::string k;
-    uint64_t id;
     return 0 != named(table, key, k, id)
                ? -1
                : sm2::rel_read_latest(table->rel, k, raw, tuple);
   });
+  return col_reread(table, id, true, rc, ref, tuple);
 }
 
 /*
@@ -2592,6 +2730,14 @@ int tbl_scannxt(scan_t *scan, uint64_t &id, pin_ref_t &ref,
       scan->delta_rows++;
     }
   }
+  // A row group's row: its key, as the delta store would name it.
+  if (scan->col_oid != 0) {
+    if (rc == 0 && scan->col) {
+      scan->col_key = sm2::id_key(id);
+    } else {
+      scan->col_key.clear();
+    }
+  }
   // Every ref to the row before goes stale, whatever comes next.
   pin_scan_move(scan->pin, rc == 0 ? tuple : std::string_view());
   // An entry handed out with its row unread names no row.
@@ -2686,6 +2832,9 @@ std::string_view tbl_scan_key(const scan_t *scan) {
   if (scan->entries) {
     // Before the first row a tree's cursor has no key.
     return 0 == scan->at ? std::string_view() : batch_row(scan, scan->at - 1);
+  }
+  if (!scan->col_key.empty()) {
+    return scan->col_key;
   }
   return sm2::rel_scan_key(scan->rel);
 }

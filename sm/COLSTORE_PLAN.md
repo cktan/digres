@@ -6,8 +6,8 @@ table's kind, its rows by name and its seal, with rel's
 `:column-store`, `seal`, `rg-of` and `delete-at`, not a scan's
 columns and bounds; of step 13 the option `storage`, read in
 `access/sm/smstore.c` as dg's tables keep no reloptions, the
-keys ignored, the loads and the tests, with `UPDATE`, `DELETE`
-and row locks refused until the row name is carried.
+keys ignored, the loads, the writes and the tests, not the
+projection and bounds.
 [`COLSTORE.md`](COLSTORE.md) is the design.
 This file says in what order to build it, where each part goes,
 and how each step is checked.
@@ -263,7 +263,10 @@ RG compaction; a writer in flight makes RG compaction give up.
    warning; keep the `NOT NULL` of a primary key.
 4. Pass the projection, and the bounds from the quals of a
    sequential scan, to the scan.
-5. Carry the row name `(rg_id, _id)` in the `RowKey`.
+5. Name a row of a row group in a write: the scan's `rg_id` when
+   the scan is on the row, else sm's lookup by `_id`
+   ([`COLSTORE.md`](COLSTORE.md) §8); the `RowKey` carries the
+   `_id` alone.
 6. Make `COPY`, `CREATE TABLE AS` and `INSERT ... SELECT` bulk
    loads of a column store table, with rows or without.
 7. Write the `dg/test` tests of §15.4.

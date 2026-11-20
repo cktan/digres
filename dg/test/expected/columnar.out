@@ -1,12 +1,15 @@
 -- Verify a column store table, made WITH (storage = columnar): its keys
 -- and indexes taken with a warning and not made, its rows loaded,
--- inserted and read, and what needs a row's name refused for now.
+-- inserted, read, updated and deleted.
 -- 1. Make one, with a primary key, a unique key and a foreign key:
 --    each is a warning, and the primary key's NOT NULL holds.
 -- 2. CREATE INDEX is a warning too.
 -- 3. INSERT ... SELECT loads 25,000 rows into row groups; one INSERT
 --    puts a row into the delta store; scans read every row.
--- 4. UPDATE, DELETE and SELECT ... FOR UPDATE are refused.
+-- 4. UPDATE, DELETE ... RETURNING and SELECT ... FOR UPDATE of rows of
+--    a row group, by the scan's name of the row; a DELETE by _id, a
+--    TID scan's, which sm finds the row group of; an UPDATE in a
+--    REPEATABLE READ transaction.
 -- 5. CREATE TABLE AS and COPY load one too.
 -- 6. A SERIALIZABLE transaction cannot read it.
 -- 7. storage = 'row' is a row store table ('row' quoted, as ROW is a
@@ -19,14 +22,14 @@ create temp table columnar_t (
   ref int references columnar_ref (id),
   amount int)
   with (storage = columnar);
-psql:test/columnar.sql:21: WARNING:  column store table "columnar_t" has no primary key: it is not made
-psql:test/columnar.sql:21: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
-psql:test/columnar.sql:21: WARNING:  column store table "columnar_t" has no foreign key: it is not made
+psql:test/columnar.sql:24: WARNING:  column store table "columnar_t" has no primary key: it is not made
+psql:test/columnar.sql:24: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
+psql:test/columnar.sql:24: WARNING:  column store table "columnar_t" has no foreign key: it is not made
 insert into columnar_t values (null, 'x', null, 1);
-psql:test/columnar.sql:22: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
+psql:test/columnar.sql:25: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
 DETAIL:  Failing row contains (null, x, null, 1).
 create index columnar_t_amount on columnar_t (amount);
-psql:test/columnar.sql:23: WARNING:  column store table "columnar_t" has no index: it is not made
+psql:test/columnar.sql:26: WARNING:  column store table "columnar_t" has no index: it is not made
 insert into columnar_t
   select g, 'c' || g, null, g % 10 from generate_series(1, 25000) g;
 insert into columnar_t values (0, 'zero', 7, 0);
@@ -65,12 +68,53 @@ select code from columnar_t where id between 12000 and 12002 order by id;
  c12002
 (3 rows)
 
-update columnar_t set amount = 1 where id = 1;
-psql:test/columnar.sql:31: ERROR:  UPDATE, or a read of a row by its _id, of column store table "columnar_t" is not supported yet
-delete from columnar_t where id = 1;
-psql:test/columnar.sql:32: ERROR:  DELETE of column store table "columnar_t" is not supported yet
-select * from columnar_t where id = 1 for update;
-psql:test/columnar.sql:33: ERROR:  a row lock of column store table "columnar_t" is not supported yet
+update columnar_t set amount = 100 where id = 1;
+update columnar_t set amount = 200 where id = 0;
+select id, amount from columnar_t where id in (0, 1) order by id;
+ id | amount 
+----+--------
+  0 |    200
+  1 |    100
+(2 rows)
+
+delete from columnar_t where id between 2 and 4 returning id, code;
+ id | code 
+----+------
+  2 | c2
+  3 | c3
+  4 | c4
+(3 rows)
+
+select id, code from columnar_t where id = 5 for update;
+ id | code 
+----+------
+  5 | c5
+(1 row)
+
+select _id as columnar_victim from columnar_t where id = 6 \gset
+delete from columnar_t where _id = :columnar_victim returning id;
+ id 
+----
+  6
+(1 row)
+
+begin isolation level repeatable read;
+update columnar_t set amount = amount + 1 where id = 7;
+commit;
+select count(*), sum(amount) from columnar_t;
+ count |  sum   
+-------+--------
+ 24997 | 112785
+(1 row)
+
+select id, amount from columnar_t where id between 1 and 7 order by id;
+ id | amount 
+----+--------
+  1 |    100
+  5 |      5
+  7 |      8
+(3 rows)
+
 create temp table columnar_ctas with (storage = columnar) as
   select g as id, g % 3 as k from generate_series(1, 12000) g;
 copy columnar_ctas from stdin;
@@ -90,7 +134,7 @@ select * from columnar_ctas where k = 5 order by id;
 drop table columnar_ctas;
 begin isolation level serializable;
 select count(*) from columnar_t;
-psql:test/columnar.sql:44: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
+psql:test/columnar.sql:56: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
 LINE 1: select count(*) from columnar_t;
                              ^
 rollback;
@@ -103,7 +147,7 @@ select * from columnar_row;
 (1 row)
 
 create temp table columnar_bad (a int) with (storage = banana);
-psql:test/columnar.sql:49: ERROR:  invalid value for option "storage": banana
+psql:test/columnar.sql:61: ERROR:  invalid value for option "storage": banana
 HINT:  Valid values are "row" and "columnar".
 drop table columnar_row;
 drop table columnar_t;

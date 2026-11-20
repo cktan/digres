@@ -11,6 +11,10 @@
 # 4. 12,000 rows inserted one at a time: the commit queues the
 #    table, and the seal's job seals a row group of them; a seal by
 #    hand finds too few rows left; a scan gives every row.
+# 5. Rows of a row group updated and deleted by _id alone, as
+#    digres names a row it has not just scanned: sm finds the row
+#    group, the update's new version is in the delta store, and the
+#    delete hands back the row as it was.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -103,6 +107,20 @@
     (assert-eq (scan-count tr) 12000 "every row once, sealed or not")
     (assert-eq (> (rg-of tr 1) 0) true "the first row is in a row group")
     (assert-eq (rg-of tr last) 0 "the last row is in the delta store")
+(commit)
+
+# 5. By _id alone.
+(def id9 (get ids 9))
+(def id10 (get ids 10))
+(begin :rc)
+    (update ev id9 [9 "nine"])
+    (def old (delete ev id10))
+    (assert-eq (get old 0) 10 "the delete hands back the row deleted")
+(commit)
+(begin :rr)
+    (assert-eq (scan-count ev) 24998 "the deleted row is gone")
+    (assert-eq (rg-of ev id9) 0 "the updated row is in the delta store")
+    (assert-nil (rg-of ev id10) "no row has the deleted _id")
 (commit)
 
 (db-close)

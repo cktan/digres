@@ -2602,6 +2602,12 @@ the delta store queues the table for the seal's job, which seals
 it by itself; `sm_seal_wait` waits until that job is idle, for
 tests (§10.4).
 
+A column store table's row named by its `_id` alone is found too:
+`sm_tbl_read`, `sm_tbl_read_latest`, `sm_tbl_update` and
+`sm_tbl_delete` look in the delta store first, and, where it has
+no version of the row, in the row group that holds it (§8). That
+costs a lookup a row; a name from a scan costs none.
+
 Errors: as `sm_tbl_update`; `SM_ERR_UPDATED` at READ COMMITTED
 for a row updated since, read again by `(0, id)`.
 

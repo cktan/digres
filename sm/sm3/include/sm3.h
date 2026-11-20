@@ -1640,6 +1640,11 @@ int tbl_update(table_t* table, uint64_t id,
  * Delete the row with _id id, and its entry in every index. The form
  * with ref hands back the image deleted, pinned into ref, as
  * tbl_update's does.
+ *
+ * In a column store table, a write or a read by _id, of the calls
+ * above and below, of a row the delta store has no version of is
+ * of the row group that holds the row (../COLSTORE.md §8): found by
+ * a lookup, at the newest committed state for a write.
  */
 int tbl_delete(table_t* table, uint64_t id);
 int tbl_delete(table_t* table, uint64_t id, pin_ref_t& ref,
