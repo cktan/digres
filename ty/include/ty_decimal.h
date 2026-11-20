@@ -165,6 +165,39 @@ int ty_decimal128_div(const ty_decimal128_t* a, const ty_decimal128_t* b,
 int ty_decimal64_div(const ty_decimal64_t* a, const ty_decimal64_t* b,
                      int rscale, ty_decimal64_t* result);
 
+/*
+ * The functions of the exponent of a decimal128, at rscale places, which
+ * the caller picks (0 to 36): sqrt is made a digit at a time, rounded half
+ * up; the others are computed in long double and rounded. Each takes no
+ * more than 128 bits, and a result of more than 36 digits before the point
+ * is TY_ERR_RANGE. A result that has more than 36 digits at rscale places
+ * has fewer places, rounded. *result is not set on an error.
+ *
+ *   - sqrt fails with TY_ERR_INVALID if a is negative.
+ *   - ln and log fail with TY_ERR_INVALID if an argument is not above
+ *     zero; log fails with TY_ERR_DIVZERO if the base is 1.
+ *   - pow_int takes an integer power exactly while it fits 128 bits, then
+ *     in long double; base is not zero. pow_real is for a real exponent:
+ *     the base is above zero, or below it and the exponent a whole number.
+ *   - to_ld and from_ld convert through the text, so that a value is
+ *     rounded once.
+ */
+long double ty_decimal128_to_ld(const ty_decimal128_t* a);
+int ty_decimal128_from_ld(long double x, int rscale, ty_decimal128_t* result);
+int ty_decimal128_sqrt(const ty_decimal128_t* a, int rscale,
+                       ty_decimal128_t* result);
+int ty_decimal128_exp(const ty_decimal128_t* a, int rscale,
+                      ty_decimal128_t* result);
+int ty_decimal128_ln(const ty_decimal128_t* a, int rscale,
+                     ty_decimal128_t* result);
+int ty_decimal128_log(const ty_decimal128_t* base, const ty_decimal128_t* a,
+                      int rscale, ty_decimal128_t* result);
+int ty_decimal128_pow_int(const ty_decimal128_t* base, int64_t n, int rscale,
+                          ty_decimal128_t* result);
+int ty_decimal128_pow_real(const ty_decimal128_t* base,
+                           const ty_decimal128_t* exp, int rscale,
+                           ty_decimal128_t* result);
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DECIMAL64_MAX_DIGITS 17
 #define TY_DECIMAL64_MAX_SCALE  17

@@ -763,3 +763,94 @@ TEST_CASE("decimal64 div is rounded to fit 17 digits") {
   CHECK(-1 == div64_of(1, 0, 0, 0, 2, &r));
   CHECK(TY_ERR_DIVZERO == ty_errnum());
 }
+
+// Verify the square root: a digit at a time, rounded half up.
+// 1. Take sqrt(2) at 20 places, and of a square, and of zero.
+// 2. Take it of a value at a scale, and round: sqrt(3) at 1 place.
+// 3. Take it of a negative: TY_ERR_INVALID.
+TEST_CASE("decimal128 sqrt is made a digit at a time") {
+  ty_decimal128_t r;
+
+  // 1. Take sqrt(2) at 20 places, and of a square, and of zero.
+  ty_decimal128_t a = {2, 0};
+  CHECK(0 == ty_decimal128_sqrt(&a, 20, &r));
+  CHECK((ty_int128_t)141421356237309 * ten_to(6) + 504880 == r.value);
+  CHECK(20 == r.scale);
+  a = {1600, 2};
+  CHECK(0 == ty_decimal128_sqrt(&a, 2, &r));
+  CHECK(400 == r.value);
+  a = {0, 3};
+  CHECK(0 == ty_decimal128_sqrt(&a, 3, &r));
+  CHECK(0 == r.value);
+
+  // 2. Take it of a value at a scale, and round: sqrt(3) at 1 place.
+  a = {1, 4};
+  CHECK(0 == ty_decimal128_sqrt(&a, 4, &r));
+  CHECK(100 == r.value);
+  a = {3, 0};
+  CHECK(0 == ty_decimal128_sqrt(&a, 1, &r));
+  CHECK(17 == r.value);
+  a = {2, 0};
+  CHECK(0 == ty_decimal128_sqrt(&a, 1, &r));
+  CHECK(14 == r.value);
+
+  // 3. Take it of a negative: TY_ERR_INVALID.
+  a = {-4, 0};
+  CHECK(-1 == ty_decimal128_sqrt(&a, 2, &r));
+  CHECK(TY_ERR_INVALID == ty_errnum());
+}
+
+// Verify exp, ln, log and the powers, in long double.
+// 1. Take exp(1) and ln(10) at 20 places; log(2, 8) at 10 places.
+// 2. Take a zero base's log, and a base of 1: TY_ERR_INVALID, DIVZERO.
+// 3. Take integer powers: 2^100 exactly, 2^-3, and a power too large for
+//    128 bits, which is rounded from long double.
+// 4. Take a real power: 2^0.5; and (-2)^3 by its sign.
+TEST_CASE("decimal128 exp, ln, log and powers") {
+  ty_decimal128_t r;
+
+  // 1. Take exp(1) and ln(10) at 20 places; log(2, 8) at 10 places.
+  ty_decimal128_t a = {1, 0};
+  CHECK(0 == ty_decimal128_exp(&a, 20, &r));
+  ty_int128_t e20 = (ty_int128_t)2718281828459045 * ten_to(5) + 23536;
+  CHECK(e20 == r.value);
+  a = {10, 0};
+  CHECK(0 == ty_decimal128_ln(&a, 20, &r));
+  CHECK((ty_int128_t)2302585092994045 * ten_to(5) + 68402 == r.value);
+  ty_decimal128_t base = {2, 0};
+  ty_decimal128_t eight = {8, 0};
+  CHECK(0 == ty_decimal128_log(&base, &eight, 10, &r));
+  CHECK(30000000000 == r.value);
+
+  // 2. Take a zero base's log, and a base of 1: TY_ERR_INVALID, DIVZERO.
+  ty_decimal128_t zero = {0, 0};
+  CHECK(-1 == ty_decimal128_ln(&zero, 5, &r));
+  CHECK(TY_ERR_INVALID == ty_errnum());
+  ty_decimal128_t one = {1, 0};
+  CHECK(-1 == ty_decimal128_log(&one, &eight, 5, &r));
+  CHECK(TY_ERR_DIVZERO == ty_errnum());
+
+  // 3. Take integer powers: 2^100 exactly, 2^-3, and a power too large for
+  //    128 bits, which is rounded from long double.
+  ty_int128_t p2 = 1;
+  for (int i = 0; i < 100; i++) {
+    p2 *= 2;
+  }
+  CHECK(0 == ty_decimal128_pow_int(&base, 100, 0, &r));
+  CHECK(p2 == r.value);
+  CHECK(0 == ty_decimal128_pow_int(&base, -3, 4, &r));
+  CHECK(1250 == r.value);
+  CHECK(4 == r.scale);
+  ty_decimal128_t b = {3789, 3};
+  CHECK(0 == ty_decimal128_pow_int(&b, 21, 5, &r));
+  CHECK(1409343026052 == r.value / ten_to(5));
+
+  // 4. Take a real power: 2^0.5; and (-2)^3 by its sign.
+  ty_decimal128_t half = {5, 1};
+  CHECK(0 == ty_decimal128_pow_real(&base, &half, 10, &r));
+  CHECK(14142135624 == r.value);
+  ty_decimal128_t neg2 = {-2, 0};
+  ty_decimal128_t three = {3, 0};
+  CHECK(0 == ty_decimal128_pow_real(&neg2, &three, 3, &r));
+  CHECK(-8000 == r.value);
+}

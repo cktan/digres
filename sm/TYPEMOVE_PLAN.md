@@ -316,10 +316,13 @@ copied from PostgreSQL keeps its copyright notice
    and `div()`, and `decimal64` `/`, are in ty, made a place or
    a chunk of places at a time in 128 bits. `where a / (b + 1) >
    1` fell 80.0% on `numeric(30,4)` and 81.7% on `numeric(10,2)`.
-   Left, all still on `mag_t` and `wide_t`: the exponent group,
-   the aggregates' sums, `generate_series`, `width_bucket`, the
-   text and binary forms, `inc` and the factorial; then the
-   hash.
+   The exponent group is in ty too, in 128 bits: `sqrt` a digit
+   at a time, `exp`, `ln`, `log` and the powers in `long double`.
+   `where sqrt(a) > 5` fell 96.7%, `where ln(a + 1) > 1` 44.0%
+   and `where power(a, 2) > 100` 50.7%, on `numeric(30,4)`.
+   Left, still on `mag_t` and `wide_t`: the aggregates' sums,
+   `generate_series`, `width_bucket`, the text and binary forms,
+   `inc` and the factorial; then the hash.
    `/` waits for the 512-bit magnitude. The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from

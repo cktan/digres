@@ -1742,39 +1742,27 @@ Datum numeric_fac(PG_FUNCTION_ARGS) {
  * ----------------------------------------------------------------------
  */
 
-/* w as a long double. */
-static long double wide_ld(const wide_t &w) {
-  return strtold(wide_text(w), NULL);
+/* num's value and scale, as ty takes them. */
+static ty_decimal128_t dec_ty(const decimal_t *num) {
+  return {dec_value(num), dec_scale(num)};
 }
 
-/*
- * x, a finite long double, as a value at scale rscale; past 36 digits
- * before the point is an error.
- */
-static Numeric dec_of_ld(long double x, int rscale) {
-  char buf[512];
-  wide_t w;
-  const char *end;
-  bool neg = x < 0;
+/* 10^n as a value, for n up to 38. */
+static i128 dec_pow10(int n) {
+  i128 r = 1;
 
-  if (!std::isfinite(x) || fabsl(x) >= 1e40L)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("value overflows numeric format")));
-  snprintf(buf, sizeof(buf), "%.*Lf", rscale, fabsl(x));
-  parse_decimal(buf, buf, &w, &end, NULL);
-  w.neg = neg && !wide_is_zero(w);
-  return dec_from_wide(w);
+  while (n-- > 0)
+    r *= 10;
+  return r;
 }
 
 /* The square root of num, at PostgreSQL's scale for it, rounded. */
 Datum numeric_sqrt(PG_FUNCTION_ARGS) {
-  wide_t arg = dec_wide(PG_GETARG_NUMERIC(0));
-  nbase_t nb = dec_nbase(arg);
-  int sweight, rscale, e;
-  mag_t m;
-  wide_t r;
+  ty_decimal128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
+  nbase_t nb = dec_nbase128(arg.value, arg.scale);
+  int sweight, rscale;
 
-  if (arg.neg)
+  if (arg.value < 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
                     errmsg("cannot take square root of a negative number")));
   /* At least 16 significant digits, not below the argument's scale. */
@@ -1783,36 +1771,32 @@ Datum numeric_sqrt(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, arg.scale);
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  /* floor(sqrt(x) * 10^(rscale + 1)), from x * 10^(2 * (rscale + 1)). */
-  e = 2 * (rscale + 1) - arg.scale;
-  m = e >= 0 ? mag_mul(arg.mag, mag_pow10(e))
-             : mag_divmod(arg.mag, mag_pow10(-e), NULL);
-  r.mag = mag_isqrt(m);
-  r.neg = false;
-  r.scale = rscale + 1;
-  PG_RETURN_NUMERIC(dec_from_wide(wide_round(r, rscale, false)));
+  /* The root is ty's, made a digit at a time in 128 bits. */
+  if (ty_decimal128_sqrt(&arg, rscale, &r) != 0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /*
  * The decimal weight of ln(w), as PostgreSQL estimates it to choose a
  * result scale; w is positive.
  */
-static int estimate_ln_dweight(const wide_t &w) {
-  wide_t lo = wide_of_int(9), hi = wide_of_int(11);
+static int estimate_ln_dweight(const ty_decimal128_t &w) {
+  ty_decimal128_t lo = {9, 1}, hi = {11, 1};
 
-  lo.scale = 1;
-  hi.scale = 1;
-  if (w.neg || wide_is_zero(w))
+  if (w.value <= 0)
     return 0;
-  if (wide_cmp(w, lo) >= 0 && wide_cmp(w, hi) <= 0) {
+  if (ty_decimal128_cmp(w, lo) >= 0 && ty_decimal128_cmp(w, hi) <= 0) {
     /* 0.9 <= w <= 1.1: ln(w) is about w - 1. */
-    wide_t x = wide_add(w, wide_of_int(1), true);
+    ty_decimal128_t one = {1, 0}, x;
 
-    if (wide_is_zero(x))
+    ty_decimal128_sub(&w, &one, &x);
+    if (x.value == 0)
       return 0;
-    return mag_digits(x.mag) - 1 - x.scale;
+    return u128_digits(x.value < 0 ? -(u128)x.value : (u128)x.value) - 1 -
+           x.scale;
   } else {
-    nbase_t nb = dec_nbase(w);
+    nbase_t nb = dec_nbase128(w.value, w.scale);
     int digits = nb.first;
     int dweight = nb.weight * 4;
     double ln_var;
@@ -1827,19 +1811,19 @@ static int estimate_ln_dweight(const wide_t &w) {
 }
 
 /* The error of a logarithm of zero or a negative number, if w is one. */
-static void check_log_argument(const wide_t &w) {
-  if (wide_is_zero(w))
+static void check_log_argument(const ty_decimal128_t &w) {
+  if (w.value == 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_LOG),
                     errmsg("cannot take logarithm of zero")));
-  if (w.neg)
+  if (w.value < 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_LOG),
                     errmsg("cannot take logarithm of a negative number")));
 }
 
 /* e raised to num, at PostgreSQL's scale for it. */
 Datum numeric_exp(PG_FUNCTION_ARGS) {
-  wide_t arg = dec_wide(PG_GETARG_NUMERIC(0));
-  long double x = wide_ld(arg);
+  ty_decimal128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
+  long double x = ty_decimal128_to_ld(&arg);
   double val = (double)x * 0.434294481903252; /* the result's dweight */
   int rscale;
 
@@ -1849,12 +1833,14 @@ Datum numeric_exp(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, arg.scale);
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  PG_RETURN_NUMERIC(dec_of_ld(expl(x), rscale));
+  if (ty_decimal128_exp(&arg, rscale, &r) != 0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* The natural logarithm of num, at PostgreSQL's scale for it. */
 Datum numeric_ln(PG_FUNCTION_ARGS) {
-  wide_t arg = dec_wide(PG_GETARG_NUMERIC(0));
+  ty_decimal128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
   int rscale;
 
   check_log_argument(arg);
@@ -1862,14 +1848,15 @@ Datum numeric_ln(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, arg.scale);
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  PG_RETURN_NUMERIC(dec_of_ld(logl(wide_ld(arg)), rscale));
+  if (ty_decimal128_ln(&arg, rscale, &r) != 0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* log(base, num): the logarithm of num to base, at PostgreSQL's scale. */
 Datum numeric_log(PG_FUNCTION_ARGS) {
-  wide_t base = dec_wide(PG_GETARG_NUMERIC(0));
-  wide_t num = dec_wide(PG_GETARG_NUMERIC(1));
-  long double ln_base;
+  ty_decimal128_t base = dec_ty(PG_GETARG_NUMERIC(0));
+  ty_decimal128_t num = dec_ty(PG_GETARG_NUMERIC(1)), r;
   int result_dweight, rscale;
 
   check_log_argument(base);
@@ -1880,26 +1867,28 @@ Datum numeric_log(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, num.scale);
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  ln_base = logl(wide_ld(base));
-  if (ln_base == 0)
-    division_by_zero(NULL);
-  PG_RETURN_NUMERIC(dec_of_ld(logl(wide_ld(num)) / ln_base, rscale));
+  if (ty_decimal128_log(&base, &num, rscale, &r) != 0) {
+    if (ty_errnum() == TY_ERR_DIVZERO)
+      division_by_zero(NULL);
+    dec_range_error(NULL);
+  }
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /*
- * base ^ exp for an integer exp, exact where its digits fit 512 bits, and
- * rounded to PostgreSQL's scale for it.
+ * base ^ exp for an integer exp, exact where its value fits 128 bits, and
+ * rounded to PostgreSQL's scale for it; past that, ty takes it in long
+ * double.
  */
-static Numeric power_int(const wide_t &base, int64 exp, int exp_scale) {
-  nbase_t nb = dec_nbase(base);
+static Numeric power_int(const ty_decimal128_t &base, int64 exp,
+                         int exp_scale) {
+  nbase_t nb = dec_nbase128(base.value, base.scale);
   double f;
   int rscale;
-  mag_t m = mag_of(1);
-  wide_t r;
-  uint64 n = exp < 0 ? (uint64)0 - (uint64)exp : (uint64)exp;
+  ty_decimal128_t r;
 
   /* The approximate decimal weight of the result, PostgreSQL's way. */
-  if (!wide_is_zero(base)) {
+  if (base.value != 0) {
     double d = nb.first;
     int p = nb.weight * 4;
 
@@ -1918,63 +1907,51 @@ static Numeric power_int(const wide_t &base, int64 exp, int exp_scale) {
   rscale = Max(rscale, exp_scale);
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  if (wide_is_zero(base)) {
+  if (base.value == 0) {
     if (exp < 0)
       ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
                       errmsg("zero raised to a negative power is undefined")));
-    r = wide_of_int(exp == 0 ? 1 : 0);
-    return dec_from_wide(wide_scale_up(r, rscale));
+    if (exp == 0 && rscale >= DEC_MAX_DIGITS)
+      return dec_range_error(NULL);
+    return dec_make(exp == 0 ? dec_pow10(rscale) : 0, rscale);
   }
-  /* Exact if base's magnitude to n has at most 150 digits. */
-  if ((double)n * mag_digits(base.mag) > 150.0) {
-    long double x = powl(wide_ld(base), (long double)exp);
-
-    return dec_of_ld(x, rscale);
-  }
-  for (uint64 i = 0; i < n; i++)
-    m = mag_mul(m, base.mag);
-  r.mag = m;
-  r.neg = base.neg && (n & 1);
-  r.scale = (int)(base.scale * n);
-  if (exp < 0)
-    return dec_from_wide(wide_div(wide_of_int(1), r, rscale, false));
-  return dec_from_wide(wide_round(r, rscale, false));
+  if (ty_decimal128_pow_int(&base, exp, rscale, &r) != 0)
+    return dec_range_error(NULL);
+  return dec_make(r.value, r.scale);
 }
 
 /* num1 ^ num2, at PostgreSQL's scale for it. */
 Datum numeric_power(PG_FUNCTION_ARGS) {
-  wide_t base = dec_wide(PG_GETARG_NUMERIC(0));
-  wide_t exp = dec_wide(PG_GETARG_NUMERIC(1));
-  wide_t exp_int = wide_round(exp, 0, true);
-  bool exp_is_int = wide_cmp(exp_int, exp) == 0;
+  ty_decimal128_t base = dec_ty(PG_GETARG_NUMERIC(0));
+  ty_decimal128_t exp = dec_ty(PG_GETARG_NUMERIC(1)), exp_int, r;
+  bool exp_is_int;
   long double ln_num, val;
   int rscale;
 
-  if (wide_is_zero(base) && exp.neg)
+  ty_decimal128_trunc(&exp, 0, &exp_int);
+  exp_is_int = ty_decimal128_cmp(exp_int, exp) == 0;
+  if (base.value == 0 && exp.value < 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
                     errmsg("zero raised to a negative power is undefined")));
-  if (base.neg && !exp_is_int)
+  if (base.value < 0 && !exp_is_int)
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
              errmsg("a negative number raised to a non-integer power yields "
                     "a complex result")));
-  if (exp_is_int && mag_digits(exp_int.mag) <= 9)
-    PG_RETURN_NUMERIC(power_int(
-        base, (exp.neg ? -1 : 1) * (int64)exp_int.mag.limb[0], exp.scale));
-  if (wide_is_zero(base))
-    PG_RETURN_NUMERIC(
-        dec_from_wide(wide_scale_up(wide_of_int(0), NUMERIC_MIN_SIG_DIGITS)));
+  if (exp_is_int && u128_digits(exp_int.value < 0 ? -(u128)exp_int.value
+                                                  : (u128)exp_int.value) <= 9)
+    PG_RETURN_NUMERIC(power_int(base, (int64)exp_int.value, exp.scale));
+  if (base.value == 0)
+    PG_RETURN_NUMERIC(dec_make(0, NUMERIC_MIN_SIG_DIGITS));
   {
-    wide_t abs_base = base;
+    ty_decimal128_t abs_base = ty_decimal128_abs(base);
 
-    abs_base.neg = false;
-    ln_num = logl(wide_ld(abs_base)) * wide_ld(exp);
+    ln_num = logl(ty_decimal128_to_ld(&abs_base)) * ty_decimal128_to_ld(&exp);
     if (fabsl(ln_num) > NUMERIC_MAX_RESULT_SCALE * 3.01L) {
       if (ln_num > 0)
         ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                         errmsg("value overflows numeric format")));
-      PG_RETURN_NUMERIC(dec_from_wide(
-          wide_scale_up(wide_of_int(0), NUMERIC_MAX_DISPLAY_SCALE)));
+      PG_RETURN_NUMERIC(dec_make(0, NUMERIC_MAX_DISPLAY_SCALE));
     }
     val = ln_num * 0.434294481903252L; /* the result's dweight */
     rscale = NUMERIC_MIN_SIG_DIGITS - (int)val;
@@ -1982,14 +1959,10 @@ Datum numeric_power(PG_FUNCTION_ARGS) {
     rscale = Max(rscale, exp.scale);
     rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
     rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-    {
-      long double x = expl(ln_num);
-
-      /* A negative base has an integer exponent: odd keeps the sign. */
-      if (base.neg && (exp_int.mag.limb[0] & 1))
-        x = -x;
-      PG_RETURN_NUMERIC(dec_of_ld(x, rscale));
-    }
+    /* A negative base has an integer exponent: ty keeps its sign. */
+    if (ty_decimal128_pow_real(&base, &exp, rscale, &r) != 0)
+      dec_range_error(NULL);
+    PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
   }
 }
 

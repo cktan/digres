@@ -276,12 +276,19 @@ Results are exact or an error, never silently wrong.
 - **`sqrt`, `ln`, `log`, `exp`, `power`**: computed in
   `long double`, 128-bit IEEE on this aarch64 (some 33
   digits), and rounded to PostgreSQL's choice of scale. Not
-  PostgreSQL's arbitrary precision; enough (§4.3). They, the
-  sums of the aggregates, `generate_series`, `width_bucket`,
-  and the text and binary forms still use the 512-bit
-  magnitude (`mag_t`, `wide_t` in `decimal.c`): the rule above
-  removes it, one piece a commit, and then those too give an
-  error past 36 digits.
+  PostgreSQL's arbitrary precision; enough (§4.3). They are in
+  ty, in 128 bits (`ty_decimal128_sqrt`, `_exp`, `_ln`, `_log`,
+  `_pow_int`, `_pow_real`): `sqrt` a digit at a time, rounded
+  half up; the rest in `long double`. PostgreSQL's choice of
+  scale and its errors stay in `decimal.c`. A power with an
+  integer exponent is exact while its value fits 128 bits, and
+  past that it is in `long double`; it was exact to about 150
+  digits.
+  The sums of the aggregates, `generate_series`,
+  `width_bucket`, `inc`, the factorial and the text and binary
+  forms still use the 512-bit magnitude (`mag_t`, `wide_t` in
+  `decimal.c`): the rule above removes it, one piece a commit,
+  and then those too give an error past 36 digits.
 - **Overflow is an error**: "numeric field overflow", as
   PostgreSQL says it past a typmod.
 - **No NaN, no infinity**: `'NaN'::numeric` and division by
