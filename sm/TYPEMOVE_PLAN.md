@@ -320,9 +320,12 @@ copied from PostgreSQL keeps its copyright notice
    at a time, `exp`, `ln`, `log` and the powers in `long double`.
    `where sqrt(a) > 5` fell 96.7%, `where ln(a + 1) > 1` 44.0%
    and `where power(a, 2) > 100` 50.7%, on `numeric(30,4)`.
-   Left, still on `mag_t` and `wide_t`: the aggregates' sums,
-   `generate_series`, `width_bucket`, the text and binary forms,
-   `inc` and the factorial; then the hash.
+   `generate_series`, `width_bucket`, `inc`, the factorial and
+   the window `in_range` are in ty too: `where width_bucket(a,
+   0, 1500, 10) = 5` fell 66.5% and `generate_series(1, 2000)`
+   36.0%.
+   Left, still on `mag_t` and `wide_t`: the aggregates' sums and
+   the text and binary forms; then the hash.
    `/` waits for the 512-bit magnitude. The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from

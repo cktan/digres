@@ -284,11 +284,13 @@ Results are exact or an error, never silently wrong.
   integer exponent is exact while its value fits 128 bits, and
   past that it is in `long double`; it was exact to about 150
   digits.
-  The sums of the aggregates, `generate_series`,
-  `width_bucket`, `inc`, the factorial and the text and binary
-  forms still use the 512-bit magnitude (`mag_t`, `wide_t` in
-  `decimal.c`): the rule above removes it, one piece a commit,
-  and then those too give an error past 36 digits.
+  `generate_series` (it ends when its next value would pass 36
+  digits), `width_bucket` (`ty_decimal128_width_bucket`, one bit
+  of the count at a time), `inc`, the factorial and the window
+  `in_range` are in ty too. The sums of the aggregates and the
+  text and binary forms still use the 512-bit magnitude (`mag_t`,
+  `wide_t` in `decimal.c`): the rule above removes it, one piece
+  a commit, and then those too give an error past 36 digits.
 - **Overflow is an error**: "numeric field overflow", as
   PostgreSQL says it past a typmod.
 - **No NaN, no infinity**: `'NaN'::numeric` and division by

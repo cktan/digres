@@ -198,6 +198,24 @@ int ty_decimal128_pow_real(const ty_decimal128_t* base,
                            const ty_decimal128_t* exp, int rscale,
                            ty_decimal128_t* result);
 
+/*
+ * n! as a decimal128, scale 0: TY_ERR_RANGE past 36 digits (n above 32),
+ * TY_ERR_INVALID if n is negative.
+ */
+int ty_decimal128_factorial(int64_t n, ty_decimal128_t* result);
+
+/*
+ * The bucket of operand among count equal buckets between b1 and b2, in
+ * either order: 0 before them, count + 1 after, else
+ * floor((operand - low) * count / (high - low)) + 1, in 128 bits.
+ * TY_ERR_INVALID if count is not above 0 or the bounds are equal;
+ * TY_ERR_RANGE if the differences do not fit 36 digits.
+ */
+int ty_decimal128_width_bucket(const ty_decimal128_t* operand,
+                               const ty_decimal128_t* b1,
+                               const ty_decimal128_t* b2, int32_t count,
+                               int64_t* result);
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DECIMAL64_MAX_DIGITS 17
 #define TY_DECIMAL64_MAX_SCALE  17

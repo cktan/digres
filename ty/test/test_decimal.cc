@@ -854,3 +854,52 @@ TEST_CASE("decimal128 exp, ln, log and powers") {
   CHECK(0 == ty_decimal128_pow_real(&neg2, &three, 3, &r));
   CHECK(-8000 == r.value);
 }
+
+// Verify factorial and width_bucket.
+// 1. Take 0!, 5! and 32!; 33! and a negative fail.
+// 2. Take width_bucket: 5.35 in 0.024 to 10.06 in 5 is 3; before is 0;
+//    at the top is count + 1; a reversed range counts down.
+// 3. Take bad bounds and a bad count: TY_ERR_INVALID.
+TEST_CASE("decimal128 factorial and width_bucket") {
+  ty_decimal128_t r;
+  int64_t bucket = -1;
+
+  // 1. Take 0!, 5! and 32!; 33! and a negative fail.
+  CHECK(0 == ty_decimal128_factorial(0, &r));
+  CHECK(1 == r.value);
+  CHECK(0 == ty_decimal128_factorial(5, &r));
+  CHECK(120 == r.value);
+  CHECK(0 == ty_decimal128_factorial(32, &r));
+  CHECK(-1 == ty_decimal128_factorial(33, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(-1 == ty_decimal128_factorial(-1, &r));
+  CHECK(TY_ERR_INVALID == ty_errnum());
+
+  // 2. Take width_bucket: 5.35 in 0.024 to 10.06 in 5 is 3; before is 0;
+  //    at the top is count + 1; a reversed range counts down.
+  ty_decimal128_t op = {535, 2};
+  ty_decimal128_t lo = {24, 3};
+  ty_decimal128_t hi = {1006, 2};
+  CHECK(0 == ty_decimal128_width_bucket(&op, &lo, &hi, 5, &bucket));
+  CHECK(3 == bucket);
+  op = {0, 0};
+  CHECK(0 == ty_decimal128_width_bucket(&op, &lo, &hi, 5, &bucket));
+  CHECK(0 == bucket);
+  op = {1006, 2};
+  CHECK(0 == ty_decimal128_width_bucket(&op, &lo, &hi, 5, &bucket));
+  CHECK(6 == bucket);
+  op = {535, 2};
+  CHECK(0 == ty_decimal128_width_bucket(&op, &hi, &lo, 5, &bucket));
+  CHECK(3 == bucket);
+  ty_decimal128_t one = {1, 0};
+  ty_decimal128_t ten = {10, 0};
+  op = {55, 1};
+  CHECK(0 == ty_decimal128_width_bucket(&op, &one, &ten, 9, &bucket));
+  CHECK(5 == bucket);
+
+  // 3. Take bad bounds and a bad count: TY_ERR_INVALID.
+  CHECK(-1 == ty_decimal128_width_bucket(&op, &one, &one, 5, &bucket));
+  CHECK(TY_ERR_INVALID == ty_errnum());
+  CHECK(-1 == ty_decimal128_width_bucket(&op, &one, &ten, 0, &bucket));
+  CHECK(TY_ERR_INVALID == ty_errnum());
+}

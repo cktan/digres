@@ -791,3 +791,91 @@ int ty_decimal64_div(const ty_decimal64_t *a, const ty_decimal64_t *b,
   result->scale = s;
   return 0;
 }
+
+/*
+ * n! as a decimal128.
+ * 1. If n is negative, fail.
+ * 2. Multiply 2 to n in 128 bits; if that does not fit, or has more than
+ *    36 digits, fail.
+ */
+int ty_decimal128_factorial(int64_t n, ty_decimal128_t *result) {
+  u128 r = 1;
+
+  if (n < 0) {
+    return ty_internal::set_error(TY_ERR_INVALID,
+                                  "factorial of a negative number");
+  }
+  for (int64_t i = 2; i <= n; i++) {
+    if (__builtin_mul_overflow(r, (u128)i, &r) || r > (u128)d128_max) {
+      return range_error128();
+    }
+  }
+  result->value = (ty_int128_t)r;
+  result->scale = 0;
+  return 0;
+}
+
+/*
+ * The bucket of operand: width_bucket.
+ * 1. Check count and the bounds.
+ * 2. Before the low bound is 0, and at or after the high bound count + 1.
+ * 3. Else num = |operand - low| and den = |high - low|, put to one scale.
+ * 4. floor(num * count / den) is made by the bits of count: a quotient
+ *    and a remainder, doubled each bit, with num added for a one bit.
+ *    num is below den, so no step passes 128 bits.
+ */
+int ty_decimal128_width_bucket(const ty_decimal128_t *operand,
+                               const ty_decimal128_t *b1,
+                               const ty_decimal128_t *b2, int32_t count,
+                               int64_t *result) {
+  int c = ty_decimal128_cmp(*b1, *b2);
+
+  if (count <= 0 || c == 0) {
+    return ty_internal::set_error(TY_ERR_INVALID, "bad width bucket bounds");
+  }
+  if (c < 0 ? ty_decimal128_cmp(*operand, *b1) < 0
+            : ty_decimal128_cmp(*operand, *b1) > 0) {
+    *result = 0;
+    return 0;
+  }
+  if (c < 0 ? ty_decimal128_cmp(*operand, *b2) >= 0
+            : ty_decimal128_cmp(*operand, *b2) <= 0) {
+    *result = (int64_t)count + 1;
+    return 0;
+  }
+  ty_decimal128_t num, den;
+  if ((c < 0 ? ty_decimal128_sub(operand, b1, &num)
+             : ty_decimal128_sub(b1, operand, &num)) != 0 ||
+      (c < 0 ? ty_decimal128_sub(b2, b1, &den)
+             : ty_decimal128_sub(b1, b2, &den)) != 0) {
+    return -1;
+  }
+  u128 x = magnitude(num.value);
+  u128 y = magnitude(den.value);
+  for (int sn = num.scale, sd = den.scale; sn != sd;) {
+    u128 *t = sn < sd ? &x : &y;
+    if (__builtin_mul_overflow(*t, (u128)10, t)) {
+      return range_error128();
+    }
+    (sn < sd ? sn : sd)++;
+  }
+  u128 q = 0;
+  u128 rem = 0;
+  for (int bit = 30; bit >= 0; bit--) {
+    q *= 2;
+    rem *= 2;
+    if (rem >= y) {
+      rem -= y;
+      q++;
+    }
+    if ((count >> bit) & 1) {
+      rem += x;
+      if (rem >= y) {
+        rem -= y;
+        q++;
+      }
+    }
+  }
+  *result = (int64_t)q + 1;
+  return 0;
+}

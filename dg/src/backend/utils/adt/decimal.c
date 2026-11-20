@@ -435,6 +435,11 @@ static Numeric dec_range_error(bool *have_error) {
   return NULL;
 }
 
+/* num's value and scale, as ty takes them. */
+static ty_decimal128_t dec_ty(const decimal_t *num) {
+  return {dec_value(num), dec_scale(num)};
+}
+
 /* The wide value of num. */
 static wide_t dec_wide(const decimal_t *num) {
   wide_t w = wide_of_int(dec_value(num));
@@ -1208,9 +1213,10 @@ Datum numeric_trim_scale(PG_FUNCTION_ARGS) {
 
 /* Where a numeric generate_series stands. */
 typedef struct series_fctx_t {
-  wide_t current;
-  wide_t stop;
-  wide_t step;
+  ty_decimal128_t current;
+  ty_decimal128_t stop;
+  ty_decimal128_t step;
+  bool done; /* the next value passed 36 digits, so it is past stop */
 } series_fctx_t;
 
 /* generate_series(start, stop): by 1. */
@@ -1225,30 +1231,39 @@ Datum generate_series_step_numeric(PG_FUNCTION_ARGS) {
 
   if (SRF_IS_FIRSTCALL()) {
     MemoryContext oldcontext;
-    wide_t step = wide_of_int(1);
+    ty_decimal128_t step = {1, 0};
 
     if (PG_NARGS() == 3) {
-      step = dec_wide(PG_GETARG_NUMERIC(2));
-      if (wide_is_zero(step))
+      step = dec_ty(PG_GETARG_NUMERIC(2));
+      if (step.value == 0)
         ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                         errmsg("step size cannot equal zero")));
     }
     funcctx = SRF_FIRSTCALL_INIT();
     oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
     fctx = (series_fctx_t *)palloc(sizeof(series_fctx_t));
-    fctx->current = dec_wide(PG_GETARG_NUMERIC(0));
-    fctx->stop = dec_wide(PG_GETARG_NUMERIC(1));
+    fctx->current = dec_ty(PG_GETARG_NUMERIC(0));
+    fctx->stop = dec_ty(PG_GETARG_NUMERIC(1));
     fctx->step = step;
+    fctx->done = false;
     funcctx->user_fctx = fctx;
     MemoryContextSwitchTo(oldcontext);
   }
   funcctx = SRF_PERCALL_SETUP();
   fctx = (series_fctx_t *)funcctx->user_fctx;
-  if ((!fctx->step.neg && wide_cmp(fctx->current, fctx->stop) <= 0) ||
-      (fctx->step.neg && wide_cmp(fctx->current, fctx->stop) >= 0)) {
-    Numeric result = dec_from_wide(fctx->current);
+  if (!fctx->done &&
+      ((fctx->step.value > 0 &&
+        ty_decimal128_cmp(fctx->current, fctx->stop) <= 0) ||
+       (fctx->step.value < 0 &&
+        ty_decimal128_cmp(fctx->current, fctx->stop) >= 0))) {
+    Numeric result = dec_make(fctx->current.value, fctx->current.scale);
+    ty_decimal128_t next;
 
-    fctx->current = wide_add(fctx->current, fctx->step, false);
+    /* A next value of more than 36 digits is past stop: the last. */
+    if (ty_decimal128_add(&fctx->current, &fctx->step, &next) == 0)
+      fctx->current = next;
+    else
+      fctx->done = true;
     SRF_RETURN_NEXT(funcctx, NumericGetDatum(result));
   }
   SRF_RETURN_DONE(funcctx);
@@ -1279,21 +1294,24 @@ Datum generate_series_numeric_support(PG_FUNCTION_ARGS) {
         ret = (Node *)req;
       } else if (IsA(arg1, Const) && IsA(arg2, Const) &&
                  (arg3 == NULL || IsA(arg3, Const))) {
-        wide_t start = dec_wide(DatumGetNumeric(((Const *)arg1)->constvalue));
-        wide_t stop = dec_wide(DatumGetNumeric(((Const *)arg2)->constvalue));
-        wide_t step =
-            arg3 ? dec_wide(DatumGetNumeric(((Const *)arg3)->constvalue))
-                 : wide_of_int(1);
+        ty_decimal128_t start =
+            dec_ty(DatumGetNumeric(((Const *)arg1)->constvalue));
+        ty_decimal128_t stop =
+            dec_ty(DatumGetNumeric(((Const *)arg2)->constvalue));
+        ty_decimal128_t step =
+            arg3 ? dec_ty(DatumGetNumeric(((Const *)arg3)->constvalue))
+                 : ty_decimal128_t{1, 0};
+        ty_decimal128_t res, q;
 
-        if (!wide_is_zero(step)) {
-          wide_t res = wide_add(stop, start, true);
-
-          if (!wide_is_zero(res) && step.neg != res.neg)
+        /* An estimate: if a difference passes 36 digits, there is none. */
+        if (step.value != 0 && ty_decimal128_sub(&stop, &start, &res) == 0) {
+          if (res.value != 0 && (step.value < 0) != (res.value < 0)) {
             req->rows = 0;
-          else
-            req->rows =
-                strtod(wide_text(wide_div(res, step, 0, true)), NULL) + 1;
-          ret = (Node *)req;
+            ret = (Node *)req;
+          } else if (ty_decimal128_div(&res, &step, 0, true, &q) == 0) {
+            req->rows = (double)q.value + 1;
+            ret = (Node *)req;
+          }
         }
       }
     }
@@ -1307,37 +1325,26 @@ Datum generate_series_numeric_support(PG_FUNCTION_ARGS) {
  * after.
  */
 Datum width_bucket_numeric(PG_FUNCTION_ARGS) {
-  wide_t operand = dec_wide(PG_GETARG_NUMERIC(0));
-  wide_t bound1 = dec_wide(PG_GETARG_NUMERIC(1));
-  wide_t bound2 = dec_wide(PG_GETARG_NUMERIC(2));
+  ty_decimal128_t operand = dec_ty(PG_GETARG_NUMERIC(0));
+  ty_decimal128_t bound1 = dec_ty(PG_GETARG_NUMERIC(1));
+  ty_decimal128_t bound2 = dec_ty(PG_GETARG_NUMERIC(2));
   int32 count = PG_GETARG_INT32(3);
-  int32 result;
-  int c = wide_cmp(bound1, bound2);
+  int64 result;
 
   if (count <= 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),
                     errmsg("count must be greater than zero")));
-  if (c == 0)
+  if (ty_decimal128_cmp(bound1, bound2) == 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),
                     errmsg("lower bound cannot equal upper bound")));
-  if (c < 0 ? wide_cmp(operand, bound1) < 0 : wide_cmp(operand, bound1) > 0)
-    result = 0;
-  else if (c < 0 ? wide_cmp(operand, bound2) >= 0
-                 : wide_cmp(operand, bound2) <= 0) {
-    if (pg_add_s32_overflow(count, 1, &result))
-      ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                      errmsg("integer out of range")));
-  } else {
-    /* floor((operand - low) * count / (high - low)) + 1, all positive */
-    wide_t num = c < 0 ? wide_add(operand, bound1, true)
-                       : wide_add(bound1, operand, true);
-    wide_t den =
-        c < 0 ? wide_add(bound2, bound1, true) : wide_add(bound1, bound2, true);
-    wide_t q = wide_div(wide_mul(num, wide_of_int(count)), den, 0, true);
-
-    result = (int32)q.mag.limb[0] + 1;
-  }
-  PG_RETURN_INT32(result);
+  /* The bucket is ty's, made in 128 bits. */
+  if (ty_decimal128_width_bucket(&operand, &bound1, &bound2, count, &result) !=
+      0)
+    dec_range_error(NULL);
+  if (result > PG_INT32_MAX)
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("integer out of range")));
+  PG_RETURN_INT32((int32)result);
 }
 
 /* ----------------------------------------------------------------------
@@ -1407,19 +1414,29 @@ Datum numeric_le(PG_FUNCTION_ARGS) {
  * offset before (sub) or after base, as less says.
  */
 Datum in_range_numeric_numeric(PG_FUNCTION_ARGS) {
-  wide_t val = dec_wide(PG_GETARG_NUMERIC(0));
-  wide_t base = dec_wide(PG_GETARG_NUMERIC(1));
-  wide_t offset = dec_wide(PG_GETARG_NUMERIC(2));
+  ty_decimal128_t val = dec_ty(PG_GETARG_NUMERIC(0));
+  ty_decimal128_t base = dec_ty(PG_GETARG_NUMERIC(1));
+  ty_decimal128_t offset = dec_ty(PG_GETARG_NUMERIC(2));
   bool sub = PG_GETARG_BOOL(3);
   bool less = PG_GETARG_BOOL(4);
-  wide_t sum;
+  ty_decimal128_t sum;
+  int c;
 
-  if (offset.neg)
+  if (offset.value < 0)
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
              errmsg("invalid preceding or following size in window function")));
-  sum = wide_add(base, offset, sub);
-  PG_RETURN_BOOL(less ? wide_cmp(val, sum) <= 0 : wide_cmp(val, sum) >= 0);
+  if ((sub ? ty_decimal128_sub(&base, &offset, &sum)
+           : ty_decimal128_add(&base, &offset, &sum)) == 0) {
+    c = ty_decimal128_cmp(val, sum);
+  } else {
+    /* The sum passes 36 digits, so val is on one side of it, by its sign. */
+    long double lb = ty_decimal128_to_ld(&base);
+    long double lo = ty_decimal128_to_ld(&offset);
+
+    c = (sub ? lb - lo : lb + lo) > 0 ? -1 : 1;
+  }
+  PG_RETURN_BOOL(less ? c <= 0 : c >= 0);
 }
 
 /*
@@ -1671,8 +1688,11 @@ Datum numeric_mod(PG_FUNCTION_ARGS) {
 
 /* num + 1, at its scale. */
 Datum numeric_inc(PG_FUNCTION_ARGS) {
-  PG_RETURN_NUMERIC(dec_from_wide(
-      wide_add(dec_wide(PG_GETARG_NUMERIC(0)), wide_of_int(1), false)));
+  ty_decimal128_t a = dec_ty(PG_GETARG_NUMERIC(0)), one = {1, 0}, r;
+
+  if (ty_decimal128_add(&a, &one, &r) != 0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* The smaller of two values: a copy of it. */
@@ -1724,7 +1744,7 @@ Datum numeric_lcm(PG_FUNCTION_ARGS) {
 /* factorial(n), for n of at most 33, the last whose factorial fits. */
 Datum numeric_fac(PG_FUNCTION_ARGS) {
   int64 num = PG_GETARG_INT64(0);
-  mag_t r = mag_of(1);
+  ty_decimal128_t r;
 
   if (num < 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -1732,20 +1752,15 @@ Datum numeric_fac(PG_FUNCTION_ARGS) {
   if (num > 100)
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("value overflows numeric format")));
-  for (int64 i = 2; i <= num; i++)
-    r = mag_mul_small(r, (uint64)i);
-  PG_RETURN_NUMERIC(dec_from_wide(wide_t{r, false, 0}));
+  if (ty_decimal128_factorial(num, &r) != 0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* ----------------------------------------------------------------------
  * Square root, logarithms and powers
  * ----------------------------------------------------------------------
  */
-
-/* num's value and scale, as ty takes them. */
-static ty_decimal128_t dec_ty(const decimal_t *num) {
-  return {dec_value(num), dec_scale(num)};
-}
 
 /* 10^n as a value, for n up to 38. */
 static i128 dec_pow10(int n) {
