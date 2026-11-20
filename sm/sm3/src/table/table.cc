@@ -544,6 +544,20 @@ void close_rels(table_t *table) {
 }
 
 /*
+ * Refuse a column store table to a SERIALIZABLE transaction
+ * (../COLSTORE.md §9.1): it takes no SIREAD lock, so it cannot be
+ * part of one. Returns 0 or -1.
+ */
+int refuse_serializable(const session_t *session, const table_def_t &def) {
+  if (def.column_store && session->level == sm1::xctlevel_t::serializable) {
+    return sm1::seterr(sm1::SM_ERR_INVALID,
+                       "a column store table cannot be used in a "
+                       "SERIALIZABLE transaction");
+  }
+  return 0;
+}
+
+/*
  * Lock the table, waiting for it or not, then open its heap: 0, or 1
  * with nothing taken if the lock would have waited, or -1.
  */
@@ -556,6 +570,9 @@ int open_table(session_t *session, uint64_t oid, sm1::lockmode_t mode,
                 : cat_trylock_table(session, oid, mode, t->def, &fresh);
   if (rc != 0) {
     return rc;
+  }
+  if (refuse_serializable(session, *t->def) != 0) {
+    return -1;
   }
   t->session = session;
   t->writable = covers_write(mode);
@@ -635,6 +652,10 @@ int tbl_reopen(table_t *table, sm1::lockmode_t mode, bool wait) {
                 : cat_trylock_table(session, oid, mode, def, &fresh);
   if (rc != 0) {
     return rc;
+  }
+  // A parked handle comes back in a transaction of any level.
+  if (refuse_serializable(session, *def) != 0) {
+    return -1;
   }
   table->writable = covers_write(mode);
   table->exclusive = mode == sm1::SM_LOCKMODE_EX;

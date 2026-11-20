@@ -267,6 +267,12 @@ struct table_rec_t {
   std::vector<fkey_rec_t> fkeys;
   std::vector<check_rec_t> checks;
   std::vector<fkey_ref_t> referenced_by;
+  /*
+   * A column store table (../COLSTORE.md): its rows in row groups of
+   * column files, and a delta store; no index, no key. Its row groups'
+   * ids come from the sequence sm3.rg.<oid>.
+   */
+  bool column_store = false;
 };
 
 /* A column of a loaded table. */
@@ -343,6 +349,7 @@ struct table_def_t {
      */
     std::vector<int32_t>          key_columns;
     table_rec_t                   rec;     /* the record it was built from */
+    bool                          column_store = false; /* rec's */
 };
 
 /*
@@ -807,7 +814,8 @@ int cat_list_sequences(session_t* s, uint64_t nspoid,
  * commits.
  */
 int create_table(session_t* session, uint64_t nspoid, std::string_view name,
-                 std::span<const column_spec_t> columns, uint64_t& oid);
+                 std::span<const column_spec_t> columns, uint64_t& oid,
+                 bool column_store = false);
 
 /*
  * Create a temporary table named name (TEMPTABLE.md §4), as
@@ -821,7 +829,8 @@ int create_table(session_t* session, uint64_t nspoid, std::string_view name,
  * temporary.
  */
 int create_temp_table(session_t* session, std::string_view name,
-                      std::span<const column_spec_t> columns, uint64_t& oid);
+                      std::span<const column_spec_t> columns, uint64_t& oid,
+                      bool column_store = false);
 
 /*
  * The rest of the DDL, each in session's transaction and, as

@@ -459,6 +459,11 @@ inline std::string toast_seq_name(uint64_t oid) {
   return "sm3.toast." + std::to_string(oid);
 }
 
+/* The sm1 sequence a column store table draws its row groups' ids from. */
+inline std::string rg_seq_name(uint64_t oid) {
+  return "sm3.rg." + std::to_string(oid);
+}
+
 void overlay_name(session_t *s, uint64_t nspoid, std::string_view name,
                   std::optional<uint64_t> oid);
 void overlay_collation(session_t *s, uint64_t oid, uint64_t nspoid,

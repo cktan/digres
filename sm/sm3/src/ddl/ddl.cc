@@ -272,7 +272,8 @@ static int name_not_null(session_t *session, table_rec_t &rec, size_t at,
  */
 static int make_table(session_t *session, uint64_t nspoid,
                       std::string_view name,
-                      std::span<const column_spec_t> columns, uint64_t &oid) {
+                      std::span<const column_spec_t> columns, uint64_t &oid,
+                      bool column_store) {
   if (name.empty()) {
     return sm1::seterr(sm1::SM_ERR_INVALID, "create table: no name");
   }
@@ -314,7 +315,8 @@ static int make_table(session_t *session, uint64_t nspoid,
                   {},
                   {},
                   {},
-                  {}};
+                  {},
+                  column_store};
   for (const column_spec_t &c : columns) {
     rec.columns.push_back({c.name,
                            c.type_code,
@@ -354,8 +356,12 @@ static int make_table(session_t *session, uint64_t nspoid,
   }
   // And the sequence its TOAST ids come from, used once the host
   // reads TOAST pointers (cat_set_toast).
+  // A column store table's row groups draw their ids from one more
+  // (../COLSTORE.md §4.1).
   if (sm1::mkseq(session->sm1, rec.id_seq, 1, 1, temp) == 0 &&
       sm1::mkseq(session->sm1, toast_seq_name(t), 1, 1, temp) == 0 &&
+      (!column_store ||
+       sm1::mkseq(session->sm1, rg_seq_name(t), 1, 1, temp) == 0) &&
       cat_put_table(session, t, rec) == 0) {
     // The identity columns own their sequences, as own_sequence
     // would make them.
@@ -377,6 +383,9 @@ static int make_table(session_t *session, uint64_t nspoid,
   if (sm1::retryable() != 1) {
     sm1::errnum_t error = sm1::errnum();
     std::string reason = sm1::errmsg();
+    if (column_store) {
+      sm1::rmseq(session->sm1, rg_seq_name(t));
+    }
     sm1::rmseq(session->sm1, toast_seq_name(t));
     sm1::rmseq(session->sm1, rec.id_seq);
     sm1::rmstore(session->sm1, rec.storeid);
@@ -387,18 +396,20 @@ static int make_table(session_t *session, uint64_t nspoid,
 
 /* Create a table; see sm3.h. */
 int create_table(session_t *session, uint64_t nspoid, std::string_view name,
-                 std::span<const column_spec_t> columns, uint64_t &oid) {
+                 std::span<const column_spec_t> columns, uint64_t &oid,
+                 bool column_store) {
   // No namespace is the temporary tables' alone (create_temp_table).
   if (nspoid == nsp_temp) {
     return sm1::seterr(sm1::SM_ERR_NOTFOUND, "namespace 0 does not exist");
   }
-  return make_table(session, nspoid, name, columns, oid);
+  return make_table(session, nspoid, name, columns, oid, column_store);
 }
 
 /* Create a temporary table; see sm3.h. */
 int create_temp_table(session_t *session, std::string_view name,
-                      std::span<const column_spec_t> columns, uint64_t &oid) {
-  return make_table(session, nsp_temp, name, columns, oid);
+                      std::span<const column_spec_t> columns, uint64_t &oid,
+                      bool column_store) {
+  return make_table(session, nsp_temp, name, columns, oid, column_store);
 }
 
 /*
@@ -561,7 +572,8 @@ int drop_table(session_t *session, uint64_t oid) {
   // Its store takes its rows and index entries with it (../DESIGN.md §5).
   if (sm1::rmstore(session->sm1, rec.storeid) != 0 ||
       sm1::rmseq(session->sm1, rec.id_seq) != 0 ||
-      sm1::rmseq(session->sm1, toast_seq_name(oid)) != 0) {
+      sm1::rmseq(session->sm1, toast_seq_name(oid)) != 0 ||
+      (rec.column_store && sm1::rmseq(session->sm1, rg_seq_name(oid)) != 0)) {
     return -1;
   }
   // Its commit sweeps the namespace for sequences it missed.
@@ -1223,6 +1235,10 @@ int create_index(session_t *session, uint64_t table, std::string_view name,
   table_rec_t rec;
   if (cat_get_table_rec(session, table, rec) != 0) {
     return -1;
+  }
+  // A column store table has no index (../COLSTORE.md §14.1).
+  if (rec.column_store) {
+    return invalid("create index: a column store table has no index");
   }
   index_rec_t x;
   x.oid = 0;
