@@ -65,9 +65,9 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | RG key | the versioned key that holds an RG's metadata and the statistics of its CGs |
 | filter key | the versioned key that holds one CG's bloom filter or exact set |
 | zonemap | a CG's statistics in the RG key: min, max, null count and flags |
-| key bytes | a datum in sm2's order-preserving key encoding, `encode()`, of a varlena's payload past its header; memcmp order is SQL order |
+| key bytes | a datum in its type's order-preserving key encoding (`type_t::key_encode`), of a varlena's payload past its header; memcmp order is SQL order |
 | RG compaction | the rewrite of an RG with many delete markers into a new RG |
-| long value | a value of a varlena type longer than 1024 bytes; a CG holds a pointer to it |
+| long value | a varlena of more than 1024 bytes, its header included; a CG holds a pointer to it |
 | long-value file | the file that holds the long values of one CG |
 
 ---
@@ -112,7 +112,7 @@ hundred rows. The 20% and 50% are of the RG size set.
 | --- | --- | --- |
 | the sealed tombstone, and the moved marker's rule in first-committer-wins | sm1 | rules of the write path; sm1 knows no table |
 | file sets: the file I/O of CGs, their key class, their GC and the sweep at open; later S3 and the local file cache | sm1, beside the Buffer Manager | sm1 owns the I/O of every byte, the order of fsync and RG key, and GC (§4.5) |
-| the CG file format, the encodings, the dictionary, the zonemap and the filter, and the pruning test on key bytes | sm2 | they need types and `encode()`; the pruning test compares key bytes and knows no type |
+| the CG file format, the encodings, the dictionary, the zonemap and the filter, and the pruning test on key bytes | sm2 | they need types and their key encodings; the pruning test compares key bytes and knows no type |
 | the RG keys, the seal, RG compaction, the scan, the lookup by `_id`, and the locks of §9.1 | sm3 | they need the table, its columns and predicates, as the `tbl_*` calls of a row store table do |
 
 ---
@@ -141,7 +141,8 @@ hundred rows. The 20% and 50% are of the RG size set.
   for 30 columns. A table of 1B rows has about 3M files.
   `DROP TABLE` removes the store's directory tree.
 - **A file is durable before anything refers to it.** The writer
-  fsyncs the file and its directory, then puts the RG key that
+  syncs the file (`fdatasync`) and its directories, then puts
+  the RG key that
   names it.
 - **A file holds no transaction state.** It has no xid and no
   version. Its RG key decides which snapshots see it.
@@ -234,7 +235,8 @@ sm1 does the whole life of a file:
 5. Delete the files in GC, when no version of the key is
    committed and visible to a snapshot, or prepared (§13).
 6. At open, scan class `0x05` of each store, and delete the
-   files that no version names (§13).
+   files of each `rg_id` whose newest committed or prepared
+   version is not a put (§13).
 
 - **sm3 never uses a file path.** It reads a CG through sm1, by
   `rg_id` and the file's name (`id`, `3`, `3.long`).
@@ -255,9 +257,9 @@ sm1 does the whole life of a file:
 | dictionary | a CG with no long value, where it is smaller than plain (§5.2) |
 | delta, bit-packed | `int2`, `int4` and `int8` in ascending order, with no null: the `_id` CG of a sealed or loaded RG |
 
-**A CG holds no TOAST pointer.** A value of 1024 bytes or less
-is in the CG. A long value is in the CG's long-value file
-(§5.4), and the CG holds a pointer to it.
+**A CG holds no TOAST pointer.** A varlena of 1024 bytes or
+less, its header included, is in the CG. A long value is in the
+CG's long-value file (§5.4), and the CG holds a pointer to it.
 
 After the encoding, the CG is compressed with zstd. The tail
 tags the encoding, so a new encoding does not change the format
@@ -286,7 +288,8 @@ order, and gets plain encoding.
 A CG file holds, in this order (`sm2/src/col/cg.cc`):
 
 1. The body, compressed with zstd: the encoding, the row count,
-   a null bitmap and a long bitmap where a row needs them, then
+   a flags byte that says which bitmaps follow, a null bitmap
+   and a long bitmap where a row needs them, then
    the values as the encoding lays them out, the dictionary
    first in a CG with one (§5.1, §5.2).
 2. The zonemap (§6.1).
@@ -302,7 +305,9 @@ A CG file holds, in this order (`sm2/src/col/cg.cc`):
 - **The RG key also holds each file's CRC32C** (§4.4). RocksDB
   is the authority, so the key says what the file must be.
 - **Each read of a CG checks it**, from disk now, from S3
-  later. sm1's `fileset_read` checks nothing; its callers do:
+  later. sm1's `fileset_read` checks no CRC32C; it fails with
+  `SM_ERR_CORRUPT` for a missing file, or one shorter than the
+  range read. Its callers check the bytes:
   - sm3 compares the file's size and CRC32C with the RG key's.
   - sm2's `cg_open` checks the tail's CRC32C.
   - sm2's `cg_long_check` checks a long value's CRC32C.
@@ -318,7 +323,8 @@ A CG file holds, in this order (`sm2/src/col/cg.cc`):
 ### 5.4 Long values
 
 A long value is a value of a varlena type (`text`, `bytea`,
-`jsonb` and the others) longer than 1024 bytes. Nobody filters
+`jsonb` and the others) of more than 1024 bytes, its header
+included. Nobody filters
 on it by equality. So it is kept out of line, as a URL is kept
 in place of a document.
 
@@ -362,11 +368,11 @@ in place of a document.
 | Statistic | Encoding | Prunes |
 | --- | --- | --- |
 | min, max | key bytes; finite values only for the types of `has_nan` and `has_*_inf` | `=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN` |
-| inexact bit | min and max cut to 32 bytes; a cut min is still a lower bound; a cut max compares as its prefix's successor | keeps a long `text` from making the RG key large |
+| `min_cut`, `max_cut` | bits: min, or max, cut to 32 bytes; a cut min is still a lower bound; a cut max compares as its prefix's successor | keeps a long `text` from making the RG key large |
 | null count | `uint32`; has-null is `> 0`, all-null is `= row count` | `IS NULL`, `IS NOT NULL`, every strict predicate on an all-null CG |
 | distinct count | `uint32`, exact when the CG is written | nothing reads it yet |
-| `has_nan` | bit; `float4`, `float8`, `numeric` | `x = 'NaN'`, `x <> 'NaN'`, and ranges with finite min and max |
-| `has_pos_inf`, `has_neg_inf` | bits; the types of `has_nan`, and `date`, `timestamp`, `timestamptz` | `x = 'infinity'`, and ranges with finite min and max |
+| `has_nan` | bit; `float4`, `float8` | `x = 'NaN'`, `x <> 'NaN'`, and ranges with finite min and max |
+| `has_pos_inf`, `has_neg_inf` | bits; the types of `has_nan`, and `date`, `timestamp`, `timestamptz`, `interval` | `x = 'infinity'`, and ranges with finite min and max |
 | `has_long` | bit: the CG holds a long value (§5.4) | tells the filter's rule of §6.3 |
 | `sorted` | bit: the CG is in ascending key order | nothing reads it yet |
 | collation version | for each collated column | turns off pruning by value for a CG whose version is not the column's |
@@ -392,7 +398,9 @@ These follow and need no field:
 
 ### 6.3 The filter of a CG
 
-Each CG has one filter key: an exact set or a bloom filter.
+Each CG has one filter key: an exact set, a bloom filter, or
+none, for a CG with no value that is short and not null. A CG of
+nulls alone has none, and no equality matches it.
 
 - **A long value is in no filter.** It is in min and max, cut
   to 32 bytes as every value is. Out of max, a long value
@@ -445,7 +453,8 @@ the RGs that it rewrites (§11).
   and a page of PostgreSQL holds about 100. Counted as pages,
   RGs would make a scan look 100 times cheaper than it is, and
   a nested loop over the table look almost free. So `relpages`
-  is the bytes of all the CGs and of the delta store, divided
+  is the bytes of all the CGs, their long-value files included,
+  and of the delta store, divided
   by 8 KB. `reltuples` is the row counts of the RG keys plus the
   delta store's. Neither needs a file read.
 - **The cost of a scan does not see the projection.** A scan of
@@ -463,7 +472,10 @@ the RGs that it rewrites (§11).
   `_id` 900" is one question with one answer, wherever the row
   is.
 - **Each RG stores its rows' `_id`s as a hidden CG.** It is
-  sorted and delta-encoded, except in a merged RG (§5.1).
+  sorted and delta-encoded in an RG of the seal or a bulk load.
+  In an RG that RG compaction merged (§11.1), or that
+  `rewrite_table` wrote (§9.2), it may not be sorted, and is
+  plain.
 - **The `_id` CG is like any other CG.** It has a zonemap and a
   filter key (§6), and nothing more. There is no map from `_id`
   to `rg_id`.
@@ -476,8 +488,9 @@ A lookup of `_id` is a scan with the predicate `_id = n`:
 1. Read the RG keys at the snapshot.
 2. Skip each RG whose `_id` min and max do not hold `n`.
 3. Read the delete markers of each RG that is left, into a set.
-4. Read the RG's CGs, and walk its `_id` CG row by row to `n`.
-   A copy whose `_id` is in the set of step 3 is dead.
+4. Read the RG's `_id` CG, and walk it row by row to `n`. A
+   copy whose `_id` is in the set of step 3 is dead. A read of
+   the row (`col_read`) reads every CG of the RG that holds it.
 5. Read the delta key `n`.
 
 - **Steps 1 and 2 read RocksDB alone.** The `_id` filter is not
@@ -551,7 +564,8 @@ location misses a write after a move. So every lock names the
 be64(_id)`. That key space is `_id` space.
 
 **Row locks.** `FOR UPDATE` and `FOR SHARE` lock delta key
-`_id` with `sm1::lock_row`, wherever the row is. A move never
+`_id` with `sm2::rel_lock`, which is `sm1::chain_lock_row` on the
+table's chained store, wherever the row is. A move never
 takes a lock's row away.
 
 **No SERIALIZABLE transaction uses a column store table.** A
@@ -698,7 +712,9 @@ no rw-edge.
   an RG among them: each transaction counts its own, and
   hands them to the sealer at its commit, so a seal never starts
   before the rows it is to take are committed. At 10k rows the
-  table is queued (§7).
+  table is queued (§7). A prepared transaction's counts are
+  lost: `sm3::prepare` hands none over, and `COMMIT PREPARED`
+  has none to hand. A scan catches its rows (below).
 - **A scan that reads more than 10k rows of a delta store also
   queues a seal job.** The counts start at 0 when the database
   opens, so this catches a delta store that grew before a
@@ -763,10 +779,11 @@ committed state:
 ### 11.1 When RG compaction runs
 
 - **At 20% dead rows.** A commit counts the delete markers it
-  committed on each RG, in memory. When they reach 20% of a full
-  RG's rows, 2,000, it queues an RG compaction job on the
-  sealer's queue (§10.4). Below 20%, the dead rows cost a scan
-  less than a rewrite of the RG costs.
+  committed on each RG, in memory; a prepared transaction's, as
+  its rows' (§10.4), are lost, and a scan catches them. When
+  they reach 20% of a full RG's rows, 2,000, it queues an RG
+  compaction job on the sealer's queue (§10.4). Below 20%, the
+  dead rows cost a scan less than a rewrite of the RG costs.
 - **A scan counts too.** A scan reads each RG's markers into a
   set, so it counts them at no cost, and queues a job when they
   are 20% of that RG's rows. The counts in memory start at 0
@@ -835,10 +852,11 @@ All access is by scan. A scan takes three things from digres:
 A scan at a snapshot:
 
 1. Reads the RG keys at the snapshot.
-2. Skips each RG that the zonemaps prove has no match (§6.2).
-3. For an RG that is left, reads the filter key of each column
-   in an equality or `IN` predicate, and skips the RG if one
-   proves there is no match.
+2. For each bounded column (`may_hold`): reads its filter key
+   if its bound is an equality or `IN`, then skips the RG if its
+   zonemap or its filter proves there is no match (§6.2).
+3. A filter key is read before its zonemap is tested, so an RG
+   that a zonemap skips can cost a read of a filter key.
 4. Reads the CGs that the query needs, from the local cache or
    from S3.
 5. Reads the RG's delete markers under `0x0002 ‖ be64(rg_id)`
@@ -902,10 +920,10 @@ A listing of a directory or of S3 never decides it.
   cases reach this rule:
   - the erase of the RG key, by RG compaction, is at or below
     the watermark ([`GC.md`](GC.md));
-  - the put of the RG key is dead. The compaction filter or the
-    GC worker deletes the files when it drops the dead version.
-    This covers a `ROLLBACK PREPARED` after a restart, when the
-    transaction's list is gone.
+  - the put of the RG key is dead. The compaction filter, as it
+    drops the dead version, queues the `rg_id`, and the GC worker
+    deletes the files. This covers every `ROLLBACK PREPARED`: a
+    prepare ends the transaction's list of files.
 - **An unlink that fails leaves the file** until the sweep of
   the next open. There is no other sweep while the database
   runs.
@@ -1028,7 +1046,8 @@ random CGs and random bounds, against a test of every value.
    and not a scan of the others; a changed byte in a CG file
    fails a scan of its column.
 10. A reader's `FOR SHARE` lock and a prepared writer hold off
-    RG compaction and the seal until they end.
+    RG compaction until they end; a prepared writer holds off the
+    seal.
 11. A bulk load rolled back to a savepoint leaves no row, no RG
     and no file.
 12. **A column store table agrees with a row store table.** One
@@ -1042,6 +1061,8 @@ random CGs and random bounds, against a test of every value.
 14. With TOAST on, the seal reads each value out of line whole,
     erases its chunks, and a snapshot older than the seal still
     reads them.
+15. A scan's bounds on a text column, a range and an equality,
+    skip only the RGs that cannot match.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.
@@ -1053,19 +1074,23 @@ across a restart; SERIALIZABLE and an index refused; a delete by
 name and an abort; the seal's job; an update and a delete by
 `_id` alone; a scan of some columns, with bounds; an update
 counted toward the seal; two loads prepared across a restart,
-one committed and one aborted. `rel/test/test_toast.rel`, with
-TOAST on: 10k rows of long values inserted one at a time, sealed
-by the seal's job, read back whole.
+one committed and one aborted; bounds on a text column.
+`rel/test/test_toast.rel`, with TOAST on: 10k rows of long
+values inserted one at a time, sealed by the seal's job, read
+back whole.
 
 `dg/test/columnar.sql`: `CREATE TABLE ... WITH (storage =
-columnar)`; the warnings of §14.1, and the `NOT NULL` kept from
-an ignored `PRIMARY KEY`; `INSERT ... SELECT` into RGs;
-`UPDATE`, `DELETE ... RETURNING` and `SELECT ... FOR UPDATE`;
+columnar)`; the warnings of §14.1 but `EXCLUDE`'s, and the `NOT
+NULL` kept from an ignored `PRIMARY KEY`; `INSERT ... SELECT`
+into RGs; `UPDATE`, `DELETE ... RETURNING` and `SELECT ... FOR
+UPDATE`; a `DELETE` by `_id`, which sm finds in its RG; an
+`UPDATE` at REPEATABLE READ; `EXPLAIN VERBOSE` of a scan of some
+columns, and an `UPDATE` whose scan reads every column;
 queries with bounds, whose results equal a row store table's;
 `ALTER TABLE` and `TRUNCATE`; `CREATE TABLE AS` and `COPY`; a
 SERIALIZABLE transaction refused with `0A000`; `storage =
-'row'`; a foreign key that references a column store table,
-which fails.
+'row'`, and another value refused; a foreign key that
+references a column store table, which fails.
 
 ### 15.5 Layers with no test
 

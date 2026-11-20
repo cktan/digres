@@ -436,10 +436,16 @@ Owed, and blocking nothing above:
   - **A scan hands out sm2 tuples**, so a row of more than
     64 KB fails in a scan. Datums handed out with no tuple
     remove the limit (§12).
-  - **A lookup by `_id` reads every RG it may be in whole**:
-    every column, every marker, the `_id` CG row by row. It is
-    to read the `_id` filter, find `n` by a binary search, and
-    read one marker (§8).
+  - **A lookup by `_id` reads each RG it may be in**: every
+    marker into a set, and the `_id` CG row by row; a read of the
+    row reads every CG of its RG. It is to read the `_id`
+    filter, find `n` by a binary search, and read one marker
+    (§8).
+  - **A prepared transaction's rows and delete markers are not
+    counted** toward a seal or an RG compaction: `sm3::prepare`
+    hands no count over, and `COMMIT PREPARED` has none. A scan
+    catches them; counts kept with the prepared transaction would
+    not need one (§10.4, §11.1).
   - **A scan reads each long value of a column it reads**, for
     each row. An external pointer, fetched on use, as TOAST is,
     saves the reads a qual rules out (§5.4).
