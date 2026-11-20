@@ -38,8 +38,8 @@ design problem. The arithmetic itself is not.
   sm0_arena.h`). It cuts pieces from blocks it takes with
   `new`, it has no mutex, and it frees all at once. An earlier
   line of [`NEXT.md`](NEXT.md) said digres backs an arena with
-  `palloc()`. That needs a change to `arena_t`, so §3 treats it
-  as a cost, not as given.
+  `palloc()`. §3 does not need it: an arena serves only sm's
+  own threads.
 - **digres's `decimal.c` is new code, not PostgreSQL's**: 3,575
   lines, 159 functions with `PG_FUNCTION_ARGS`, 15 `palloc`
   calls and 51 `ereport` or `elog` calls (grep). Most `palloc`
@@ -57,27 +57,137 @@ design problem. The arithmetic itself is not.
 
 ## 3. Decision 1: where a result gets its memory
 
-Three kinds of result, three answers:
+Settled on 2026-11-19. Three kinds of result, three answers:
 
 | Result | Example | Memory |
 | --- | --- | --- |
 | By value | `decimal64 + decimal64`, `int4 * int4` | none: it is the return value |
 | Fixed width by reference | `decimal128`, `uuid`, `interval` | the caller's storage: an out-parameter |
-| Variable width | `text || text`, `replace()`, `repeat()` | to decide |
+| Variable width | `text || text`, `replace()`, `repeat()` | the host's allocator hook, below |
 
-The first two need no design. Only the third does. Options:
+The first two need no design. A variable-width result gets
+its memory from an allocator hook that the host installs for
+the process. sm has hosts other than digres, so the hook is
+general: nothing in it is specific to PostgreSQL.
+
+### 3.1 The hook
+
+```
+typedef void* (*sm_alloc_fn)(void* arg, size_t size) noexcept;
+typedef void  (*sm_free_fn)(void* arg, void* p) noexcept;
+
+int  sm_set_alloc(sm_alloc_fn alloc, sm_free_fn free, void* arg);
+void sm_free(void* p);
+```
+
+- `sm_set_alloc` installs the hook for the process, as
+  `sm_set_log` installs the log hook.
+- The host calls it once, before `sm_attach` and before any
+  call that returns a variable-width result. A second call
+  fails with `SM_ERR_INVALID`: sm frees its own memory through
+  the hook, and a changed hook would free memory that another
+  allocator gave.
+- A host that does not call it gets `malloc()` and `free()`.
+- `sm_free` frees a result through the installed hook, so a
+  host can free a result without knowing which allocator gave
+  it.
+
+### 3.2 What the hook must do
+
+1. Return memory aligned to at least 8 bytes, or NULL when it
+   cannot allocate.
+2. Never throw an exception, and never `longjmp`. The types
+   are `noexcept`, as `sm_log_fn` is. A host whose allocator
+   throws wraps it: the wrapper catches and returns NULL.
+3. Be safe to call on every host thread that calls sm.
+4. In `free`, accept any pointer that `alloc` returned. sm
+   never passes NULL.
+
+Why NULL and not an exception: no exception crosses `sm.h`'s
+boundary. An exception from the hook would pass through
+functions of sm2 and sm3 that are `noexcept`, and the
+catch-all of sm's entry points would hide what it was.
+
+### 3.3 What uses the hook
+
+Only a variable-width datum that sm makes and returns to the
+caller:
+
+- the result of a moved type function, such as `text || text`;
+- later, a value read through a TOAST pointer. Today
+  `sm_toast_fetch` fills a `std::string`, and digres copies it
+  into its own memory. With the hook, the copy goes.
+
+Nothing else changes:
+
+- A row or an index entry from a cursor or a pin points into
+  engine memory, as `sm.h` says.
+- A list, a `std::string` that a call fills, and a handle stay
+  as they are.
+- sm2's storage functions (`in`, `out`, `key_encode`,
+  `tup_encode`) keep `std::string`: their bytes go to storage,
+  not to the host.
+
+### 3.4 Who frees what
+
+- **A result that sm returns is the caller's.** The caller
+  frees it with its own allocator, or with `sm_free`.
+- **sm frees only what it allocated and did not return.** For
+  example, to make X bigger, sm frees X and allocates a bigger
+  X. There is no `realloc` hook.
+- **On an error, sm frees what it allocated** and returns no
+  result.
+
+### 3.5 When the hook returns NULL
+
+1. The call frees what it allocated.
+2. The call sets `SM_ERR_NOMEM` and returns -1.
+3. The host maps the code to its own error.
+
+This is not the policy of [`DESIGN.md`](DESIGN.md), that every
+`std::bad_alloc` is fatal. That policy is for sm's own
+allocations, which can leave sm's state half changed. A
+result's allocation changes no state, so its failure is safe
+to report.
+
+### 3.6 sm's own threads
+
+sm's own threads, such as the index-build workers, the
+garbage collector and a bulk load's, never call the hook. They
+allocate with `malloc()` and `free()`, or with an `arena_t`. A
+datum made on one of them never goes to the host.
+
+So inside sm, code that makes a datum takes its allocator as
+an argument, `sm_mem_t`: an alloc function, a free function
+and an arg. An entry point on a host thread passes the
+installed hook. sm's own threads pass `malloc()` and `free()`.
+The argument is explicit, so a worker cannot use the hook by
+mistake. `sm_mem_t` is a small new type in sm0.
+
+### 3.7 digres's hook
+
+digres's `alloc` calls
+`MemoryContextAllocExtended(CurrentMemoryContext, size,
+MCXT_ALLOC_NO_OOM | MCXT_ALLOC_HUGE)`, and its `free` calls
+`pfree()`. A result goes into the memory context that is
+current at the call. `MCXT_ALLOC_NO_OOM` makes it return
+NULL, not raise an error. `MCXT_ALLOC_HUGE` permits a datum
+up to the 1 GB limit of a varlena. This is one host's hook,
+not the design.
+
+### 3.8 The options
 
 | Option | For | Against |
 | --- | --- | --- |
 | **A. A buffer and a length.** The call returns the length it needs. | Allocates nothing. | The caller may call twice. The work may run twice, or the call must keep the result. |
-| **B. An `arena_t`.** | Exists. Frees at once. | Cannot be backed by `palloc()` as built. A host makes the result and then copies it into its own memory: a second copy of each variable result. |
-| **C. An allocator passed to the call**, as `sm_mem_t`: a function and a context. | One indirect call a variable result, and none for the others. digres passes a wrapper of `palloc()`. No copy. Ownership is plain: the caller supplied it. | A new small type in sm0. A caller must pass it on every variable call. |
-| **D. A global allocator hook per session.** | The call has no extra argument. | Hides ownership, and a session's setting is state, which the move is to remove. |
+| **B. An `arena_t`.** | Exists. Frees at once. | Cannot be backed by a host's allocator as built. A host copies each result into its own memory. |
+| **C. An allocator passed to each call.** | Ownership is plain. Works on any thread. | An extra argument on each variable call, and the type calls take no handle (§5). |
+| **D. An allocator hook per session.** | No extra argument. | A session's setting is state, which the move is to remove. |
+| **E. An allocator hook per process**, with C inside sm. | No extra argument at the API. Explicit inside sm, so sm's own threads cannot use the hook. | A process-wide setting; it cannot change once set. |
 
-**Recommendation: C.** Fixed results use out-parameters. Only a
-variable result takes the allocator. sm's own callers pass a
-wrapper of `malloc()` or an arena. D is rejected. A is kept for
-`text` functions whose size is known before the work.
+**Chosen: E.** A is kept for `text` functions whose size is
+known before the work. B is kept for sm's own threads. D is
+rejected.
 
 ## 4. Decision 2: how an error is reported
 
@@ -145,7 +255,15 @@ copied from PostgreSQL keeps its copyright notice
 3. **The rest of decimal's core**, in groups: arithmetic, then
    rounding, then functions of the exponent. → verify: the
    same, after each group.
-4. **Tests at every layer** the change reaches: sm2 unit tests
+4. **The allocator hook** (§3): `sm_set_alloc`, `sm_free` and
+   sm0's `sm_mem_t`, before the first variable-width type
+   moves. Decimal does not need it. → verify: unit tests with
+   a counting hook find every allocation freed once, by the
+   caller for a result and by sm for the rest; a hook that
+   returns NULL gives `SM_ERR_NOMEM` and leaks nothing; a
+   second `sm_set_alloc` fails with `SM_ERR_INVALID`; an index
+   build on sm's own thread never calls the hook.
+5. **Tests at every layer** the change reaches: sm2 unit tests
    for each moved function (new), `rel` if an expression index
    uses one, and pgregress for digres. The mvcc scenarios do
    not apply: nothing here touches concurrency.
@@ -154,8 +272,9 @@ copied from PostgreSQL keeps its copyright notice
 
 1. How large a rise in a statement's instructions is the limit?
    This note proposes 1%.
-2. Decision 1: option C, or A for the first types?
+2. Decision 1: settled, option E (§3).
 3. Decision 2: option A or B?
 4. The header name and place for the operations.
-5. May `arena_t` take an allocator, so that option B works too?
-   If not, B is dropped.
+5. Does `sm_toast_fetch` change to return a datum from the
+   hook, or does a new call do it, so that `std::string`
+   callers stay as they are?

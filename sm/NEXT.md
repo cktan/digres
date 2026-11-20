@@ -236,14 +236,13 @@ are the catalog tables psql reads
 
     To settle:
     - where a result of variable size gets its memory (text,
-      bytea, concatenation, `replace`). Two forms: the caller
-      supplies a buffer, which allocates nothing and suits
-      fixed-width results; or the caller passes an allocator
-      with the call. sm0's `arena_t` cannot be backed by
-      `palloc()` as built (`sm0/include/sm0_arena.h`). A global
-      allocator hook is not preferred: it hides who owns the
-      memory. The options are in
-      [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md);
+      bytea, concatenation, `replace`): settled. The host
+      installs an allocator hook for the process, `malloc()`
+      if it installs none. The hook returns NULL on failure
+      and never throws. The caller frees what sm returns; sm
+      frees only what it keeps. sm's own threads never call
+      the hook. The design is in
+      [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §3;
     - the hooks for what a session sets: `DateStyle`,
       `TimeZone`, `extra_float_digits`, collation and locale;
     - the errors: sm's error state, and how a host maps it to
