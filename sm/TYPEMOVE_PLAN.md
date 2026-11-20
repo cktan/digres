@@ -286,8 +286,14 @@ copied from PostgreSQL keeps its copyright notice
    and `%` and `gcd`, with `TY_ERR_DIVZERO` as the second error
    kind; and `lcm`, a `decimal64` that is an error past 17
    digits, as `*` is; and the compare, `ty_decimal64_cmp`. Next:
-   the hash, which waits for `decimal128`, as both hash alike;
-   then rounding. `/` waits for the 512-bit magnitude.
+   the hash, which waits for `decimal128`, as both hash alike.
+   `/` waits for the 512-bit magnitude. The rounding group is
+   done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
+   `where round(a, 1) > 500` over the 2,000 rows fell from
+   14,631,134 to 4,375,507 instructions a statement (-70%), as
+   the old path was the 512-bit one; `where floor(a) > 500` rose
+   from 4,202,753 to 4,230,396 (+0.66%, in the limit): `floor`
+   is a call into ty, not in line.
 
    The compare is a lesson in cost, measured by callgrind on
    the baseline's table (2,000 rows, 20 and 60 statements). A

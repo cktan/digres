@@ -304,9 +304,9 @@ column, which holds no value of more than 17 digits anyway.
 | --- | --- | --- |
 | `=`, `<>`, `<`, `<=`, `>`, `>=`, btree and hash opclasses, sort support | `bool`, `int4` | the words at one scale, else rescaled in 128 bits |
 | `min`, `max`, unary `-`, `abs`, `sign` | `decimal64` | in 64 bits |
-| `ceil`, `ceiling`, `floor` | `decimal64` | in 64 bits; a value with places has at most 16 digits before the point, so never past 17 |
-| `%`, `mod`, `gcd` | `decimal64` | in 128 bits at the larger scale; no more digits than the smaller operand's before the point, nor places than the larger scale |
-| `round(x)`, `round(x, n)`, `trunc(x)`, `trunc(x, n)` | `decimal64` | as numeric's; past 17 digits or places, as a carry or `n` past 17 makes, an error, not a `decimal128` |
+| `ceil`, `ceiling`, `floor` | `decimal64` | `ty_decimal64_ceil` and `_floor`, in 64 bits; a value with places has at most 16 digits before the point, so never past 17 |
+| `%`, `mod`, `gcd` | `decimal64` | `ty_decimal64_mod` and `_gcd`, in 128 bits at the larger scale; no more digits than the smaller operand's before the point, nor places than the larger scale |
+| `round(x)`, `round(x, n)`, `trunc(x)`, `trunc(x, n)` | `decimal64` | `ty_decimal64_round` and `_trunc`, in 64 bits, half away from zero; past 17 digits or places, as a carry or `n` past 17 makes, an error, not a `decimal128` |
 | `+`, `-`, `*` | `decimal64` | `ty_decimal64_add`, `_sub` and `_mul`, in 64 bits (the product in 128); past 17 digits, an error, not a `decimal128` |
 | `/` | `decimal64` | the wide path, without casting either side; places past 17 digits rounded away |
 | `lcm` | `decimal64` | `ty_decimal64_lcm`, in 128 bits; past 17 digits, an error |

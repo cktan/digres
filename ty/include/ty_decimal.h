@@ -114,6 +114,26 @@ int ty_decimal64_lcm(const ty_decimal64_t* a, const ty_decimal64_t* b,
                      ty_decimal64_t* result);
 
 /*
+ * *result = a rounded to n places, half away from zero: n is the result's
+ * scale, as round(numeric, int) says. A larger n adds zeros. A negative n
+ * rounds to tens, hundreds and so on, and gives scale 0. Fails with
+ * TY_ERR_RANGE if the result needs more than 17 digits or n is above 17:
+ * *result is then not set. The scale of a is at most 17.
+ */
+int ty_decimal64_round(const ty_decimal64_t* a, int n, ty_decimal64_t* result);
+
+/* *result = a truncated to n places, as ty_decimal64_round() rounds. */
+int ty_decimal64_trunc(const ty_decimal64_t* a, int n, ty_decimal64_t* result);
+
+/*
+ * The nearest whole number at or above a, and at or below a, at scale 0.
+ * They cannot fail: a whole number has no more digits than a. The scale
+ * of a is at most 17.
+ */
+ty_decimal64_t ty_decimal64_ceil(ty_decimal64_t a);
+ty_decimal64_t ty_decimal64_floor(ty_decimal64_t a);
+
+/*
  * *result = a * b, at the sum of their scales. Fails with TY_ERR_RANGE
  * if the product needs more than 17 digits, or more than 17 places:
  * *result is then not set. It is exact or an error, as add and sub are.

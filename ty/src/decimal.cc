@@ -95,6 +95,88 @@ int common_scale(const ty_decimal64_t *a, const ty_decimal64_t *b,
   return sa;
 }
 
+/* v / 10^drop, for drop up to 18: rounded half away from zero, or cut. */
+int64_t drop_places64(int64_t v, int drop, bool cut) {
+  int64_t d = 1;
+  for (int i = 0; i < drop; i++) {
+    d *= 10;
+  }
+  int64_t q = v / d;
+  int64_t rem = v % d;
+
+  if (rem < 0) {
+    rem = -rem;
+  }
+  if (!cut && 2 * rem >= d) {
+    q += v < 0 ? -1 : 1;
+  }
+  return q;
+}
+
+/*
+ * *result = a rounded, or cut if cut, to n places.
+ * 1. If n is not below the scale, add zeros: the scale becomes n, and
+ *    fails if n is above 17 or the value has more than 17 digits.
+ * 2. If n is at least 0, drop the places past n: the scale becomes n.
+ * 3. Else drop the scale and the places left of the point, and put the
+ *    zeros back: the scale is 0. A value below 10^17 drops to 0 once 18
+ *    places are dropped, so that is where the value is cut off.
+ */
+int round_or_cut(const ty_decimal64_t *a, int n, bool cut,
+                 ty_decimal64_t *result) {
+  int64_t v = a->value;
+  int s = a->scale;
+
+  if (n >= s) {
+    if (n > TY_DECIMAL64_MAX_SCALE) {
+      return range_error();
+    }
+    ty_int128_t w = v;
+    for (int i = s; i < n; i++) {
+      w *= 10;
+    }
+    if (w > d64_max || w < -d64_max) {
+      return range_error();
+    }
+    result->value = (int64_t)w;
+    result->scale = n;
+    return 0;
+  }
+  if (n >= 0) {
+    result->value = drop_places64(v, s - n, cut);
+    result->scale = n;
+    return 0;
+  }
+  int drop = s - n;
+  int64_t q = drop > 18 ? 0 : drop_places64(v, drop, cut);
+  ty_int128_t w = q;
+  for (int i = 0; i < -n && w != 0; i++) {
+    w *= 10;
+    if (w > d64_max || w < -d64_max) {
+      return range_error();
+    }
+  }
+  result->value = (int64_t)w;
+  result->scale = 0;
+  return 0;
+}
+
+/* The nearest whole number at or above a, or at or below if floor. */
+ty_decimal64_t ceil_or_floor(ty_decimal64_t a, bool floor) {
+  if (a.scale == 0) {
+    return a;
+  }
+  int64_t p = 1;
+  for (int i = 0; i < a.scale; i++) {
+    p *= 10;
+  }
+  int64_t q = a.value / p;
+  if (a.value % p != 0 && (a.value < 0) == floor) {
+    q += floor ? -1 : 1;
+  }
+  return {q, 0};
+}
+
 } // namespace
 
 /* *result = a + b; fails past 17 digits. */
@@ -205,4 +287,24 @@ int ty_decimal64_cmp_scaled(ty_decimal64_t a, ty_decimal64_t b) {
 
   common_scale(&a, &b, &x, &y);
   return (x > y) - (x < y);
+}
+
+/* *result = a rounded to n places, half away from zero. */
+int ty_decimal64_round(const ty_decimal64_t *a, int n, ty_decimal64_t *result) {
+  return round_or_cut(a, n, false, result);
+}
+
+/* *result = a truncated to n places. */
+int ty_decimal64_trunc(const ty_decimal64_t *a, int n, ty_decimal64_t *result) {
+  return round_or_cut(a, n, true, result);
+}
+
+/* The nearest whole number at or above a. */
+ty_decimal64_t ty_decimal64_ceil(ty_decimal64_t a) {
+  return ceil_or_floor(a, false);
+}
+
+/* The nearest whole number at or below a. */
+ty_decimal64_t ty_decimal64_floor(ty_decimal64_t a) {
+  return ceil_or_floor(a, true);
 }

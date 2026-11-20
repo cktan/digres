@@ -3450,41 +3450,48 @@ Datum decimal64_accum_inv(PG_FUNCTION_ARGS) {
   PG_RETURN_POINTER(state);
 }
 
+/* Raise PostgreSQL's ERROR for a rounded value that has too many digits. */
+static void d64_format_overflow(void) {
+  ereport(ERROR,
+          (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+           errmsg("value overflows numeric format"),
+           errdetail("A numeric of precision %d or less has at most %d "
+                     "digits.",
+                     D64_MAX_DIGITS, D64_MAX_DIGITS)));
+}
+
 /*
- * w as a decimal64, exactly: a result of more than 17 digits or places is
- * an error, not rounded to fit (DECIMAL.md section 2.8).
+ * d rounded, or truncated if trunc, to n places: ty's, exact or an error
+ * past 17 digits or places, as PostgreSQL's message says it.
  */
-static Datum d64_exact(const wide_t &w) {
-  if (w.scale > D64_MAX_DIGITS || mag_digits(w.mag) > D64_MAX_DIGITS)
-    ereport(ERROR,
-            (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-             errmsg("value overflows numeric format"),
-             errdetail("A numeric of precision %d or less has at most %d "
-                       "digits.",
-                       D64_MAX_DIGITS, D64_MAX_DIGITS)));
-  return d64_from_wide(w);
+static Datum d64_round_or_trunc(Datum d, int n, bool trunc) {
+  ty_decimal64_t a = {d64_value(d), d64_scale(d)};
+  ty_decimal64_t r;
+
+  if ((trunc ? ty_decimal64_trunc(&a, n, &r) : ty_decimal64_round(&a, n, &r)) !=
+      0)
+    d64_format_overflow();
+  return d64_make(r.value, r.scale);
 }
 
 /* round(decimal64, int), a decimal64, as numeric's; past 17 digits an error. */
 Datum decimal64_round(PG_FUNCTION_ARGS) {
-  return d64_exact(wide_round_at(d64_wide(PG_GETARG_DATUM(0)),
-                                 PG_GETARG_INT32(1), false));
+  return d64_round_or_trunc(PG_GETARG_DATUM(0), PG_GETARG_INT32(1), false);
 }
 
 /* round(decimal64): round(x, 0). */
 Datum decimal64_round0(PG_FUNCTION_ARGS) {
-  return d64_exact(wide_round_at(d64_wide(PG_GETARG_DATUM(0)), 0, false));
+  return d64_round_or_trunc(PG_GETARG_DATUM(0), 0, false);
 }
 
 /* trunc(decimal64, int), a decimal64, as numeric's; past 17 places an error. */
 Datum decimal64_trunc(PG_FUNCTION_ARGS) {
-  return d64_exact(wide_round_at(d64_wide(PG_GETARG_DATUM(0)),
-                                 PG_GETARG_INT32(1), true));
+  return d64_round_or_trunc(PG_GETARG_DATUM(0), PG_GETARG_INT32(1), true);
 }
 
 /* trunc(decimal64): trunc(x, 0). */
 Datum decimal64_trunc0(PG_FUNCTION_ARGS) {
-  return d64_exact(wide_round_at(d64_wide(PG_GETARG_DATUM(0)), 0, true));
+  return d64_round_or_trunc(PG_GETARG_DATUM(0), 0, true);
 }
 
 /* to_char(decimal64, text), as numeric's: its value as a decimal128 on the stack. */
@@ -3497,34 +3504,20 @@ Datum decimal64_to_char(PG_FUNCTION_ARGS) {
                                  PointerGetDatum(&num), PG_GETARG_DATUM(1));
 }
 
-/*
- * The decimal64 d at scale 0, toward zero, then one up for ceil of a
- * positive value with places, or one down for floor of a negative one: in
- * 64 bits, and never past 17 digits, as a value with places has at most
- * 16 before the point.
- */
-static Datum d64_ceil_floor(Datum d, bool floor) {
-  int64 v = d64_value(d), p = 1, q;
-  int s = d64_scale(d);
-
-  if (s == 0)
-    return d;
-  while (s-- > 0)
-    p *= 10;
-  q = v / p;
-  if (v % p != 0 && (v < 0) == floor)
-    q += floor ? -1 : 1;
-  return d64_make(q, 0);
-}
-
 /* ceil(decimal64) and ceiling(decimal64): the nearest integer >= it. */
 Datum decimal64_ceil(PG_FUNCTION_ARGS) {
-  return d64_ceil_floor(PG_GETARG_DATUM(0), false);
+  Datum d = PG_GETARG_DATUM(0);
+  ty_decimal64_t r = ty_decimal64_ceil({d64_value(d), d64_scale(d)});
+
+  return d64_make(r.value, r.scale);
 }
 
 /* floor(decimal64): the nearest integer <= it. */
 Datum decimal64_floor(PG_FUNCTION_ARGS) {
-  return d64_ceil_floor(PG_GETARG_DATUM(0), true);
+  Datum d = PG_GETARG_DATUM(0);
+  ty_decimal64_t r = ty_decimal64_floor({d64_value(d), d64_scale(d)});
+
+  return d64_make(r.value, r.scale);
 }
 
 /*

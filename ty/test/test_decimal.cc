@@ -331,3 +331,91 @@ TEST_CASE("decimal64 cmp is exact at any scales") {
   CHECK(1 == ty_decimal64_cmp({99999999999999999, 0}, {99999999999999999, 17}));
   CHECK(-1 == ty_decimal64_cmp({-99999999999999999, 0}, {0, 17}));
 }
+
+namespace {
+
+/* ty_decimal64_round of the decimal64 {v, s} to n places. */
+int round_of(int64_t v, int s, int n, ty_decimal64_t *r) {
+  ty_decimal64_t a = {v, s};
+  return ty_decimal64_round(&a, n, r);
+}
+
+/* ty_decimal64_trunc of the decimal64 {v, s} to n places. */
+int trunc_of(int64_t v, int s, int n, ty_decimal64_t *r) {
+  ty_decimal64_t a = {v, s};
+  return ty_decimal64_trunc(&a, n, r);
+}
+
+} // namespace
+
+// Verify decimal64 round and trunc: places, zeros, and tens.
+// 1. Round to fewer places, half away from zero, both signs.
+// 2. Truncate to fewer places, both signs.
+// 3. Round to more places: zeros are added, and past 17 it fails.
+// 4. Round to tens and hundreds: the scale is 0; a carry that makes 18
+//    digits fails with TY_ERR_RANGE.
+// 5. Round to tens past the value: zero.
+TEST_CASE("decimal64 round and trunc") {
+  ty_decimal64_t r;
+
+  // 1. Round to fewer places, half away from zero, both signs.
+  CHECK(0 == round_of(1235, 3, 2, &r));
+  CHECK(124 == r.value);
+  CHECK(2 == r.scale);
+  CHECK(0 == round_of(-1235, 3, 2, &r));
+  CHECK(-124 == r.value);
+  CHECK(0 == round_of(1234, 3, 0, &r));
+  CHECK(1 == r.value);
+  CHECK(0 == r.scale);
+
+  // 2. Truncate to fewer places, both signs.
+  CHECK(0 == trunc_of(1239, 3, 2, &r));
+  CHECK(123 == r.value);
+  CHECK(0 == trunc_of(-1239, 3, 2, &r));
+  CHECK(-123 == r.value);
+
+  // 3. Round to more places: zeros are added, and past 17 it fails.
+  CHECK(0 == round_of(15, 1, 3, &r));
+  CHECK(1500 == r.value);
+  CHECK(3 == r.scale);
+  CHECK(-1 == round_of(15, 1, 18, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(-1 == round_of(99999999999999999, 0, 1, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+
+  // 4. Round to tens and hundreds: the scale is 0; a carry that makes 18
+  //    digits fails with TY_ERR_RANGE.
+  CHECK(0 == round_of(14949, 2, -2, &r));
+  CHECK(100 == r.value);
+  CHECK(0 == r.scale);
+  CHECK(0 == round_of(15049, 2, -2, &r));
+  CHECK(200 == r.value);
+  CHECK(0 == round_of(-149, 0, -2, &r));
+  CHECK(-100 == r.value);
+  CHECK(0 == trunc_of(-19999, 2, -2, &r));
+  CHECK(-100 == r.value);
+  CHECK(-1 == round_of(99999999999999999, 0, -1, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+
+  // 5. Round to tens past the value: zero.
+  CHECK(0 == round_of(12345, 0, -40, &r));
+  CHECK(0 == r.value);
+  CHECK(0 == r.scale);
+}
+
+// Verify decimal64 ceil and floor.
+// 1. Take them of a value with places, positive and negative.
+// 2. Take them of a whole number: it is itself.
+TEST_CASE("decimal64 ceil and floor give a whole number") {
+  // 1. Take them of a value with places, positive and negative.
+  CHECK(2 == ty_decimal64_ceil({15, 1}).value);
+  CHECK(1 == ty_decimal64_floor({15, 1}).value);
+  CHECK(-1 == ty_decimal64_ceil({-15, 1}).value);
+  CHECK(-2 == ty_decimal64_floor({-15, 1}).value);
+  CHECK(0 == ty_decimal64_ceil({15, 1}).scale);
+
+  // 2. Take them of a whole number: it is itself.
+  CHECK(7 == ty_decimal64_ceil({700, 2}).value);
+  CHECK(7 == ty_decimal64_floor({700, 2}).value);
+  CHECK(7 == ty_decimal64_ceil({7, 0}).value);
+}
