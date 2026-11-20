@@ -2178,6 +2178,13 @@ int tbl_scan_columns(table_t *table, std::vector<bool> cols,
   return 0;
 }
 
+/* Open a cursor over a column store table's delta store; see colstore.h. */
+int tbl_scan_delta(table_t *table, scan_t *&out) {
+  return open_scan(table, out, [&](sm2::rel_scan_t *&rel) {
+    return sm2::rel_scan(table->rel, 0, UINT64_MAX, rel);
+  });
+}
+
 /* Open a cursor over every row in its key's order; see sm3.h. */
 int tbl_scan_rows(table_t *table, scan_t *&out) {
   const index_def_t *pk = primary_of(*table->def);
@@ -2880,8 +2887,20 @@ int tbl_idx_scan(table_t *table, uint64_t index, const sm2::bound_t *lo,
 
 /* The rows' bytes, in files and in memtables; see sm3.h. */
 int tbl_size(table_t *table, uint64_t &disk, uint64_t &mem, bool old) {
-  return sm2::relid_size(table->session->sm1, table->def->storeid, heap_relid,
-                         disk, mem, old);
+  if (sm2::relid_size(table->session->sm1, table->def->storeid, heap_relid,
+                      disk, mem, old) != 0) {
+    return -1;
+  }
+  // A column store table's row groups are in files, outside RocksDB:
+  // their CGs' bytes count as the heap's (../COLSTORE.md §7).
+  if (table->def->column_store) {
+    uint64_t cgs = 0;
+    if (col_bytes(table, cgs) != 0) {
+      return -1;
+    }
+    disk += cgs;
+  }
+  return 0;
 }
 
 /* One index's bytes, in files and in memtables. */

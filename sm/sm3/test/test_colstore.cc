@@ -8,12 +8,15 @@
  * kind in the catalog, what they refuse, and their data.
  */
 
+#include "analyze.h"
 #include "db.h"
 #include "doctest.h"
 #include "sm3.h"
 
 #include <cstring>
 #include <map>
+#include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -869,4 +872,74 @@ TEST_CASE("a read and a write by _id alone find a row of a row group") {
   sm3::tbl_close(t);
   db.commit();
   CHECK(scan_rows(db, c).count(8) == 0);
+}
+
+// Verify ANALYZE's sample of a column store table: an exact row
+// count, rows from the row groups and the delta store by their
+// shares, no deleted row, and the CGs' bytes in the table's size.
+// 1. Load 25,000 rows: two row groups, 5,000 in the delta store.
+// 2. Delete 10 rows of the first row group by name; insert 7 rows
+//    into the delta store.
+// 3. Sample at target 1, 300 rows: 24,997 live, exactly; 60 rows
+//    from the delta store (300 x 5,007 / 24,997), 241 from the row
+//    groups (120 and 121, by their live rows); none deleted.
+// 4. The table's size counts the CGs' bytes on disk.
+TEST_CASE("ANALYZE samples a column store table's row groups and delta") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The load.
+  load_rows(db, c, 25000);
+  REQUIRE(row_groups(db, c) == 2);
+  // 2. The deletes and the inserts.
+  std::set<uint64_t> gone;
+  for (int32_t a = 0; a < 10; a++) {
+    auto [rg, id] = where(db, c, a);
+    REQUIRE(rg != 0);
+    db.begin();
+    sm3::table_t *t = nullptr;
+    REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+    REQUIRE_MESSAGE(sm3::tbl_delete_at(t, rg, id) == 0, sm1::errmsg());
+    sm3::tbl_close(t);
+    db.commit();
+    gone.insert(id);
+  }
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  for (int32_t a = 30000; a < 30007; a++) {
+    row_t r(a, "new");
+    uint64_t id = 0;
+    REQUIRE_MESSAGE(sm3::tbl_insert(t, r.d, r.null, id) == 0, sm1::errmsg());
+  }
+  sm3::tbl_close(t);
+  db.commit();
+  // 3. The sample.
+  db.begin(sm1::xctlevel_t::repeatable_read);
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  std::mt19937_64 rng(42);
+  sm3::sample_t s;
+  REQUIRE_MESSAGE(sm3::sample_table(t, 1, rng, s) == 0, sm1::errmsg());
+  CHECK(s.live_rows == 24997);
+  CHECK(s.rows_read == 24997);
+  CHECK(s.runs == 2);
+  CHECK(s.rows.size() == 301);
+  size_t from_delta = 0;
+  for (size_t i = 0; i < s.rows.size(); i++) {
+    CHECK(gone.count(s.rows[i].id) == 0);
+    if (s.rows[i].id > 20000) {
+      from_delta++;
+    }
+    if (i > 0) {
+      CHECK(s.rows[i - 1].id < s.rows[i].id);
+    }
+  }
+  CHECK(from_delta == 60);
+  // 4. The size.
+  uint64_t disk = 0, mem = 0;
+  REQUIRE(sm3::tbl_size(t, disk, mem) == 0);
+  CHECK(disk > 0);
+  sm3::tbl_close(t);
+  db.commit();
 }

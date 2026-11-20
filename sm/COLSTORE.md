@@ -14,8 +14,9 @@ compaction and its trigger, and their C API; in digres, `WITH
 (storage = columnar)`, keys taken with a warning, loads, inserts,
 scans, updates, deletes and row locks. Not built: the merge of
 small RGs by itself (`tbl_compact_rgs` merges the RGs it is
-given), `ANALYZE`, the DDL of §14, and a scan's columns and
-bounds in the C API.
+given), the DDL of §14, a scan's columns and bounds in the C
+API, and an `ANALYZE` test in digres, whose `run.sh` tests are
+of temporary tables, which sm does not analyze.
 Where the code differs from this design today:
 
 - A scan hands out sm2 tuples, not datums, so a row of more than
@@ -789,12 +790,16 @@ A scan at a snapshot:
 | Statistic | How |
 | --- | --- |
 | row count | exact: the row counts of the RG keys, less their visible delete markers, plus the delta store's count; no file is read |
-| null fraction | exact: the null counts of the zonemaps; no file is read |
-| the sample, for most common values, histograms and distinct counts | up to 100 RGs at random from the RG keys; from each, the analyzed columns, and about `300 × target / 100` live rows at random places; the delta store sampled as a keyless table ([`STATISTICS.md`](STATISTICS.md) §3.3), in proportion to its share of the rows |
+| null fraction | from the sample, as for a row store table |
+| the sample, for most common values, histograms and distinct counts | up to 100 RGs at random from the RG keys; from each, a share of the rows wanted in proportion to its live rows, at random places; the delta store read whole, and its share of the rows wanted kept at random, in proportion to its share of the live rows |
+| the size, for `relpages` | the bytes of the delta store and of every CG, their long-value files included, from the RG keys; no file is read |
 | the estimators | those of sm3, on the sample, as for a row store table |
 
 - **The cost of a sample is in RGs, not in rows.** A read of one
   row of a CG reads and decompresses the whole CG.
+- **The delta store is read whole.** The seal keeps it at about
+  one RG's rows, so a whole read costs what a sample would, and
+  its row count is exact.
 - **Many RGs, few rows from each.** The rows of an RG were
   inserted together, and are alike. At the default target of
   100, three whole RGs give the 30,000 rows wanted, from three

@@ -353,21 +353,46 @@ int rg_read_open(table_t *table, uint64_t rg_id, rg_meta_t meta,
     return corrupt("row group " + std::to_string(rg_id) + " has no _id CG");
   }
   // 2. Its delete markers, at the transaction's view.
+  return col_markers(table, rg_id, r.deleted);
+}
+
+/* A row group's delete markers; see colstore.h. */
+int col_markers(table_t *table, uint64_t rg_id, std::set<uint64_t> &ids) {
   std::string lo = marker_bound(rg_id, 0x00), hi = marker_bound(rg_id, 0xFF);
   sm1::scan_t *c = nullptr;
-  if (sm1::scan(s, def.storeid, lo.data(), lo.size(), 1, hi.data(), hi.size(),
-                1, c) != 0) {
+  if (sm1::scan(tbl_session(table)->sm1, tbl_def(table).storeid, lo.data(),
+                lo.size(), 1, hi.data(), hi.size(), 1, c) != 0) {
     return -1;
   }
   std::string_view k, d;
   int rc;
   while ((rc = sm1::scannxt(c, k, d)) == 0) {
     if (k.size() == 18) {
-      r.deleted.insert(sm0::get_be64(k.data() + 10));
+      ids.insert(sm0::get_be64(k.data() + 10));
     }
   }
   sm1::scanend(c);
   return rc < 0 ? -1 : 0;
+}
+
+/* The bytes of the row groups' CGs; see colstore.h. */
+int col_bytes(table_t *table, uint64_t &bytes) {
+  bytes = 0;
+  std::vector<std::pair<uint64_t, std::string>> rgs;
+  if (sm1::fileset_list(tbl_session(table)->sm1, tbl_def(table).storeid, rgs) !=
+      0) {
+    return -1;
+  }
+  for (const auto &[rg_id, value] : rgs) {
+    rg_meta_t meta;
+    if (rg_meta_decode(value, meta) != 0) {
+      return -1;
+    }
+    for (const rg_col_t &c : meta.cols) {
+      bytes += c.size + c.long_size;
+    }
+  }
+  return 0;
 }
 
 /* The next live row of a row group; see colstore.h. */

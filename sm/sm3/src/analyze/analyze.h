@@ -70,6 +70,10 @@ struct sample_t {
  * read per byte the slots read span, by sm1's estimate, times the
  * bytes of all of them: a slot spans whole data blocks, as the
  * estimate resolves its ends, not a page's share exactly.
+ *
+ * A column store table's sample is of its row groups and its delta
+ * store instead (../COLSTORE.md §12.1): live_rows is exact, runs is
+ * the row groups read, and ids_covered is 0.
  */
 int sample_table(table_t *table, int32_t target, std::mt19937_64 &rng,
                  sample_t &out);

@@ -170,6 +170,24 @@ void col_scan_close(col_scan_t *c);
 /* The rg_id of the row group c's last row came from. */
 inline uint64_t col_scan_rg(const col_scan_t *c) { return c->rg.rg_id; }
 
+/*
+ * The _ids of row group rg_id's delete markers that the transaction
+ * sees, into ids: its rows deleted (§4.3).
+ */
+int col_markers(table_t *table, uint64_t rg_id, std::set<uint64_t> &ids);
+
+/*
+ * The bytes of the CGs of the row groups the transaction sees, their
+ * long-value files included, into bytes (§7).
+ */
+int col_bytes(table_t *table, uint64_t &bytes);
+
+/*
+ * Open a cursor over the delta store of a column store table alone,
+ * in _id order, without its row groups. Close it with tbl_scanend.
+ */
+int tbl_scan_delta(table_t *table, scan_t *&out);
+
 /* The key of row id's delete marker in row group rg_id (§4.3). */
 std::string marker_key(uint64_t rg_id, uint64_t id);
 
