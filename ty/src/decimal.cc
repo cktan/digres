@@ -169,3 +169,28 @@ int ty_decimal64_gcd(const ty_decimal64_t *a, const ty_decimal64_t *b,
   result->scale = s;
   return 0;
 }
+
+/*
+ * *result = lcm(a, b), at the larger of the scales.
+ * 1. Put both values at the larger scale, in 128 bits.
+ * 2. If either is zero, the lcm is zero.
+ * 3. Take |x| / gcd(x, y) * |y|; if that does not fit 128 bits, or has
+ *    more than 17 digits, fail.
+ */
+int ty_decimal64_lcm(const ty_decimal64_t *a, const ty_decimal64_t *b,
+                     ty_decimal64_t *result) {
+  ty_int128_t x, y;
+  int s = common_scale(a, b, &x, &y);
+  u128 l = 0;
+
+  if (x != 0 && y != 0) {
+    u128 g = u128_gcd(x, y);
+    if (__builtin_mul_overflow(magnitude(x) / g, magnitude(y), &l) ||
+        l > (u128)d64_max) {
+      return range_error();
+    }
+  }
+  result->value = (int64_t)l;
+  result->scale = s;
+  return 0;
+}

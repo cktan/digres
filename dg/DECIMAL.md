@@ -218,6 +218,11 @@ Results are exact or an error, never silently wrong.
     sum of two 17-digit values may need 18, so it is an error
     where PostgreSQL's is not; this is the cost of a result
     with no `palloc`.
+  - `%`, `gcd` and `lcm` are `ty_decimal64_mod`, `_gcd` and
+    `_lcm`. `%` by zero is "division by zero". `lcm` is exact
+    or an error past 17 digits, as `*` is; `gcd` can pass 17
+    digits only for `gcd(0, x)` at a scale that puts `x` past
+    them, and is then an error.
   - `/` is not exact in any decimal, so its places past 17
     digits are rounded away, half away from zero, as a cast to
     `decimal64` rounds them. It is an error only if the integer
@@ -304,7 +309,7 @@ column, which holds no value of more than 17 digits anyway.
 | `round(x)`, `round(x, n)`, `trunc(x)`, `trunc(x, n)` | `decimal64` | as numeric's; past 17 digits or places, as a carry or `n` past 17 makes, an error, not a `decimal128` |
 | `+`, `-`, `*` | `decimal64` | `ty_decimal64_add`, `_sub` and `_mul`, in 64 bits (the product in 128); past 17 digits, an error, not a `decimal128` |
 | `/` | `decimal64` | the wide path, without casting either side; places past 17 digits rounded away |
-| `lcm` | `decimal128` | in 128 bits, the wide path only past them |
+| `lcm` | `decimal64` | `ty_decimal64_lcm`, in 128 bits; past 17 digits, an error |
 | `sum`, `avg` | `decimal128` | a 128-bit sum in the state, no palloc a row |
 | `to_char(x, fmt)` | `text` | numeric's, on a `decimal128` built on the stack |
 | casts to and from the integers, `float4`, `float8`, `money`, `jsonb` | | §2.4 |

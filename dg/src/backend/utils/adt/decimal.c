@@ -3350,22 +3350,6 @@ Datum decimal64_cash(PG_FUNCTION_ARGS) {
                              NumericGetDatum(d64_numeric(PG_GETARG_DATUM(0))));
 }
 
-/*
- * a and b's values at the larger of their scales, which 128 bits hold:
- * what %, gcd and lcm compute in.
- */
-static int d64_common_scale(Datum a, Datum b, i128 *x, i128 *y) {
-  int sa = d64_scale(a), sb = d64_scale(b);
-
-  *x = d64_value(a);
-  *y = d64_value(b);
-  for (; sa < sb; sa++)
-    *x *= 10;
-  for (; sb < sa; sb++)
-    *y *= 10;
-  return sa;
-}
-
 /* The ERROR for the error that the last call of ty set, in ty_errnum(). */
 static void ty_error_raise(void) {
   if (ty_errnum() == TY_ERR_DIVZERO)
@@ -3571,19 +3555,6 @@ Datum decimal64_sign(PG_FUNCTION_ARGS) {
   return d64_make(ty_decimal64_sign({d64_value(da), d64_scale(da)}), 0);
 }
 
-/* The greatest common divisor of the magnitudes of x and y, by Euclid. */
-static u128 u128_gcd(i128 x, i128 y) {
-  u128 a = x < 0 ? -(u128)x : (u128)x, b = y < 0 ? -(u128)y : (u128)y;
-
-  while (b != 0) {
-    u128 r = a % b;
-
-    a = b;
-    b = r;
-  }
-  return a;
-}
-
 /*
  * gcd(decimal64, decimal64) at the larger scale, as numeric's: ty takes it
  * in 128 bits. It is a decimal64, as it is no larger than either operand,
@@ -3602,22 +3573,16 @@ Datum decimal64_gcd(PG_FUNCTION_ARGS) {
 }
 
 /*
- * lcm(decimal64, decimal64) at the larger scale, a decimal128, as a product
- * is: in 128 bits, and by the wide path, as numeric's, only past them.
+ * lcm(decimal64, decimal64) at the larger scale, a decimal64: ty takes it in
+ * 128 bits, and past 17 digits is an error, as a * b's is.
  */
 Datum decimal64_lcm(PG_FUNCTION_ARGS) {
-  Datum a = PG_GETARG_DATUM(0), b = PG_GETARG_DATUM(1);
-  i128 x, y, l;
-  int s = d64_common_scale(a, b, &x, &y);
-  u128 g;
+  Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
+  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
+  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
+  ty_decimal64_t r;
 
-  if (x == 0 || y == 0)
-    PG_RETURN_NUMERIC(dec_make(0, s));
-  g = u128_gcd(x, y);
-  x = x < 0 ? -x : x;
-  y = y < 0 ? -y : y;
-  if (!__builtin_mul_overflow(x / (i128)g, y, &l) && dec_fits(l))
-    PG_RETURN_NUMERIC(dec_make(l, s));
-  return DirectFunctionCall2(numeric_lcm, NumericGetDatum(d64_numeric(a)),
-                             NumericGetDatum(d64_numeric(b)));
+  if (ty_decimal64_lcm(&a, &b, &r) != 0)
+    ty_error_raise();
+  return d64_make(r.value, r.scale);
 }

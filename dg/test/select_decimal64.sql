@@ -12,8 +12,8 @@
 -- 5. decimal64's binary form is numeric's.
 -- 6. decimal64's own operators and functions are in the catalog, each with
 --    the type it gives, and are the ones chosen: what gives a decimal64 is
---    decimal64's, not decimal128's by a cast; an lcm past 128 bits is
---    decimal128's, places dropped to fit 36 digits.
+--    decimal64's, not decimal128's by a cast; an lcm past 17 digits is an
+--    error, and a decimal128's lcm is the way to more digits.
 -- (Errors are server.sh's: a run stops at its first.)
 SELECT pg_typeof(1.5)::oid, pg_typeof(0.00000000000000001)::oid, pg_typeof(123456789012345678.5)::oid, pg_typeof(1e3)::oid, 1.23456::numeric, pg_typeof(1.5::numeric(18,2))::oid;
 SELECT 'numeric'::regtype::oid, 'decimal(5)'::regtype::oid, 'numeric(17,2)'::regtype::oid, 'numeric(18,2)'::regtype::oid, format_type(1700, ((10 << 16) | 2) + 4), format_type(8383, ((30 << 16) | 5) + 4), format_type(1700, -1);
@@ -33,4 +33,4 @@ SELECT oprname, oprcode, oprresult FROM pg_operator WHERE oprleft IN (0, 1700) A
 SELECT proname, prosrc, prorettype, pronargs FROM pg_proc WHERE proargtypes[0] = 1700 AND prokind = 'f' AND proname NOT LIKE 'decimal64%' AND proname NOT LIKE 'hash%' ORDER BY 1, 4, 3;
 SELECT pg_typeof(-x)::oid, pg_typeof(abs(x))::oid, pg_typeof(sign(x))::oid, pg_typeof(x % x)::oid, pg_typeof(mod(x, x))::oid, pg_typeof(gcd(x, x))::oid, pg_typeof(round(x))::oid, pg_typeof(round(x, 1))::oid, pg_typeof(trunc(x))::oid, pg_typeof(trunc(x, 1))::oid, pg_typeof(ceil(x))::oid, pg_typeof(ceiling(x))::oid, pg_typeof(floor(x))::oid, pg_typeof(x + x)::oid, pg_typeof(x * x)::oid, pg_typeof(lcm(x, x))::oid FROM (VALUES (1.5)) v(x);
 SELECT pg_typeof(min(x))::oid, pg_typeof(max(x))::oid, pg_typeof(sum(x))::oid, pg_typeof(avg(x))::oid FROM (VALUES (1.5)) v(x);
-SELECT lcm(99999999999999999::numeric(17,0), 0.99999999999999997), lcm(99999999999999999::numeric(17,0), 0.99999999999999997)::text = lcm(99999999999999999::decimal128, 0.99999999999999997::decimal128)::text;
+SELECT lcm(4::numeric, 6::numeric), lcm(1.5, 0.25), lcm(0, 5), lcm(99999999999999999::decimal128, 0.99999999999999997::decimal128), pg_typeof(lcm(4::numeric, 6::numeric))::oid;

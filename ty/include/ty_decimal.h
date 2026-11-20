@@ -91,6 +91,15 @@ int ty_decimal64_gcd(const ty_decimal64_t* a, const ty_decimal64_t* b,
                      ty_decimal64_t* result);
 
 /*
+ * *result = lcm(a, b): the smallest value that is a whole multiple of
+ * both, at the larger of their scales; 0 if either is zero. Fails with
+ * TY_ERR_RANGE if it needs more than 17 digits. The scales of both are
+ * at most 17.
+ */
+int ty_decimal64_lcm(const ty_decimal64_t* a, const ty_decimal64_t* b,
+                     ty_decimal64_t* result);
+
+/*
  * *result = a * b, at the sum of their scales. Fails with TY_ERR_RANGE
  * if the product needs more than 17 digits, or more than 17 places:
  * *result is then not set. It is exact or an error, as add and sub are.

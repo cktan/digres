@@ -266,3 +266,44 @@ TEST_CASE("decimal64 gcd is at the larger scale") {
   CHECK(-1 == ty_decimal64_gcd(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 }
+
+// Verify decimal64 lcm: at the larger scale, and an error past 17 digits.
+// 1. Take lcm(4, 6), and with a negative.
+// 2. Take lcm(1.5, 0.25), at two scales.
+// 3. Take lcm(0, 5): zero.
+// 4. Take lcm of two large coprime values: it fails with TY_ERR_RANGE,
+//    and sets no result.
+TEST_CASE("decimal64 lcm is at the larger scale, and fails past 17 digits") {
+  ty_decimal64_t r = {7, 7};
+
+  // 1. Take lcm(4, 6), and with a negative.
+  ty_decimal64_t a = {4, 0};
+  ty_decimal64_t b = {6, 0};
+  CHECK(0 == ty_decimal64_lcm(&a, &b, &r));
+  CHECK(12 == r.value);
+  a = {-4, 0};
+  CHECK(0 == ty_decimal64_lcm(&a, &b, &r));
+  CHECK(12 == r.value);
+
+  // 2. Take lcm(1.5, 0.25), at two scales.
+  a = {15, 1};
+  b = {25, 2};
+  CHECK(0 == ty_decimal64_lcm(&a, &b, &r));
+  CHECK(150 == r.value);
+  CHECK(2 == r.scale);
+
+  // 3. Take lcm(0, 5): zero.
+  a = {0, 0};
+  b = {5, 0};
+  CHECK(0 == ty_decimal64_lcm(&a, &b, &r));
+  CHECK(0 == r.value);
+
+  // 4. Take lcm of two large coprime values: it fails with TY_ERR_RANGE,
+  //    and sets no result.
+  r = {7, 7};
+  a = {99999999999999999, 0};
+  b = {99999999999999998, 0};
+  CHECK(-1 == ty_decimal64_lcm(&a, &b, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(7 == r.value);
+}
