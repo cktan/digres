@@ -330,15 +330,11 @@ bool filter_may_hold(const sm2::cg_column_t &col, const sm2::cg_stats_t &st,
   if (filter.empty()) {
     return true;
   }
-  // A long value is in no filter. A key this short is of no long
-  // value, unless a non-deterministic collation calls strings of
-  // other lengths equal.
+  // A long value is in no filter, and its key's size says nothing
+  // of its own: a bpchar's key leaves out its trailing spaces, and a
+  // non-deterministic collation calls strings of other lengths equal.
   if (st.has_long) {
-    bool deterministic =
-        !col.collation || !col.collation->icu || col.collation->deterministic;
-    if (!deterministic || k.size() > sm2::cg_long_min) {
-      return true;
-    }
+    return true;
   }
   std::string_view in = filter;
   uint8_t kind = static_cast<uint8_t>(in[0]);

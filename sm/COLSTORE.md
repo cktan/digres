@@ -389,11 +389,14 @@ Each CG has one filter key: an exact set or a bloom filter.
 - **A long value is in no filter.** It is in min and max, cut
   to 32 bytes as every value is. Out of max, a long value
   `'zzz…'` would let `x > 'y'` skip a CG that holds a match.
-- **A filter of a CG with `has_long` prunes only for a constant
-  of 1024 bytes or less, under a deterministic collation.** A
-  long value cannot equal such a constant. Under a
-  non-deterministic collation, strings of different lengths can
-  be equal, so the filter does not prune.
+- **The filter of a CG with `has_long` does not prune.** The
+  size of a long value's key says nothing of the value:
+  - A `char(n)` key leaves out the trailing spaces. The long
+    value `'a'` padded to 2,000 bytes has the key `'a'`.
+  - Under a non-deterministic collation, strings of different
+    lengths can be equal.
+
+  Min and max still prune such a CG.
 - **An exact set** when the key bytes of the CG's distinct
   values total 4 KB or less. For a CG with a dictionary, the
   set is the dictionary. It answers `=` and `IN` with no false

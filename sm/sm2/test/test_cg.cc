@@ -234,6 +234,33 @@ TEST_CASE("pruning skips only CGs that cannot match") {
   CHECK(sm2::cg_may_match(fcol, fb.stats, fb.filter, big));
 }
 
+// Verify that a CG with a long value whose key is short is not skipped
+// by its filter: a bpchar's key leaves out its trailing spaces.
+// 1. Build a bpchar CG of "b" and of "a" padded to 2,000 bytes, a long
+//    value, kept out of the filter.
+// 2. An equality on "a" may match, as the long value is "a".
+// 3. An equality on "c", outside min and max, may not.
+TEST_CASE("a long value with a short key is not skipped by the filter") {
+  // 1. The CG.
+  sm2::cg_column_t col = column(sm2::type_bpchar);
+  std::vector<std::string> d = {
+      datum(sm2::type_bpchar, "b"),
+      datum(sm2::type_bpchar, "a" + std::string(1999, ' '))};
+  sm2::cg_built_t b;
+  REQUIRE(sm2::cg_build(col, values(d), b) == 0);
+  REQUIRE(b.stats.has_long);
+  auto eq = [&](std::string_view s) {
+    sm2::cg_bound_t x;
+    x.not_null = x.has_in = true;
+    x.in = {key(sm2::type_bpchar, s)};
+    return x;
+  };
+  // 2. "a" may match.
+  CHECK(sm2::cg_may_match(col, b.stats, b.filter, eq("a")));
+  // 3. "c" may not.
+  CHECK_FALSE(sm2::cg_may_match(col, b.stats, b.filter, eq("c")));
+}
+
 // Verify that pruning never skips a CG holding a match.
 // 1. Build random int4 CGs, some with nulls.
 // 2. For random ranges, equalities and IN lists, compare the
