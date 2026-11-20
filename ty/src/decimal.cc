@@ -57,6 +57,44 @@ int add_or_sub(const ty_decimal64_t *a, const ty_decimal64_t *b, bool subtract,
   return 0;
 }
 
+/* A value as unsigned: |v|. */
+typedef unsigned __int128 u128;
+u128 magnitude(ty_int128_t v) { return v < 0 ? -(u128)v : (u128)v; }
+
+/* gcd of |x| and |y| by Euclid's algorithm; gcd(0, y) is |y|. */
+u128 u128_gcd(ty_int128_t x, ty_int128_t y) {
+  u128 a = magnitude(x);
+  u128 b = magnitude(y);
+
+  while (b != 0) {
+    u128 t = a % b;
+    a = b;
+    b = t;
+  }
+  return a;
+}
+
+/*
+ * a and b's values at the larger of their scales, in 128 bits: each
+ * value is below 10^17 and a scale is at most 17, so they fit. Returns
+ * the scale.
+ */
+int common_scale(const ty_decimal64_t *a, const ty_decimal64_t *b,
+                 ty_int128_t *x, ty_int128_t *y) {
+  int sa = a->scale;
+  int sb = b->scale;
+
+  *x = a->value;
+  *y = b->value;
+  for (; sa < sb; sa++) {
+    *x *= 10;
+  }
+  for (; sb < sa; sb++) {
+    *y *= 10;
+  }
+  return sa;
+}
+
 } // namespace
 
 /* *result = a + b; fails past 17 digits. */
@@ -87,6 +125,47 @@ int ty_decimal64_mul(const ty_decimal64_t *a, const ty_decimal64_t *b,
     return range_error();
   }
   result->value = (int64_t)p;
+  result->scale = s;
+  return 0;
+}
+
+/*
+ * *result = a % b, at the larger of the scales.
+ * 1. Put both values at the larger scale, in 128 bits.
+ * 2. If b is zero, fail.
+ * 3. The remainder has the sign of a, and is below |b| and not above
+ *    |a| at that scale, so it fits 64 bits.
+ */
+int ty_decimal64_mod(const ty_decimal64_t *a, const ty_decimal64_t *b,
+                     ty_decimal64_t *result) {
+  ty_int128_t x, y;
+  int s = common_scale(a, b, &x, &y);
+
+  if (y == 0) {
+    return ty_internal::set_error(TY_ERR_DIVZERO, "division by zero");
+  }
+  result->value = (int64_t)(x % y);
+  result->scale = s;
+  return 0;
+}
+
+/*
+ * *result = gcd(a, b), at the larger of the scales.
+ * 1. Put both values at the larger scale, in 128 bits.
+ * 2. Take their gcd.
+ * 3. If it has more than 17 digits, fail: one is zero and the other
+ *    is large at that scale.
+ */
+int ty_decimal64_gcd(const ty_decimal64_t *a, const ty_decimal64_t *b,
+                     ty_decimal64_t *result) {
+  ty_int128_t x, y;
+  int s = common_scale(a, b, &x, &y);
+  u128 g = u128_gcd(x, y);
+
+  if (g > (u128)d64_max) {
+    return range_error();
+  }
+  result->value = (int64_t)g;
   result->scale = s;
   return 0;
 }

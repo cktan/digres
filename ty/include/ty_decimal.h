@@ -74,6 +74,23 @@ int ty_decimal64_sub(const ty_decimal64_t* a, const ty_decimal64_t* b,
                      ty_decimal64_t* result);
 
 /*
+ * *result = a % b, the remainder of the division of a by b, with the
+ * sign of a, at the larger of their scales. Fails with TY_ERR_DIVZERO
+ * if b is zero. The scales of both are at most 17.
+ */
+int ty_decimal64_mod(const ty_decimal64_t* a, const ty_decimal64_t* b,
+                     ty_decimal64_t* result);
+
+/*
+ * *result = gcd(a, b): the largest value that both are whole multiples
+ * of, at the larger of their scales. It is below 10^17 unless one operand
+ * is zero and the other's value, put to the larger scale, is not: it then
+ * fails with TY_ERR_RANGE. The scales of both are at most 17.
+ */
+int ty_decimal64_gcd(const ty_decimal64_t* a, const ty_decimal64_t* b,
+                     ty_decimal64_t* result);
+
+/*
  * *result = a * b, at the sum of their scales. Fails with TY_ERR_RANGE
  * if the product needs more than 17 digits, or more than 17 places:
  * *result is then not set. It is exact or an error, as add and sub are.

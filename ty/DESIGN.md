@@ -124,7 +124,8 @@ Why per thread, and not per process:
 ## 4. Errors
 
 - ty has its own codes, in `include/ty_error.h`:
-  `TY_ERR_INVALID`, `TY_ERR_NOMEM` and `TY_ERR_EXCEPTION` today.
+  `TY_ERR_INVALID`, `TY_ERR_NOMEM`, `TY_ERR_EXCEPTION`,
+  `TY_ERR_RANGE` and `TY_ERR_DIVZERO` today.
 - A type adds its own kinds when it moves: out of range,
   division by zero, bad text. Each is appended, and no value is
   reused.

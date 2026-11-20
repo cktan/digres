@@ -190,3 +190,79 @@ TEST_CASE("decimal64 neg, abs and sign keep the scale") {
   CHECK(-1 == ty_decimal64_sign(neg));
   CHECK(0 == ty_decimal64_sign(zero));
 }
+
+// Verify decimal64 remainder: the sign of a, at the larger scale.
+// 1. Take 7 % 3, and -7 % 3, and 7 % -3.
+// 2. Take 7.5 % 2.25, at two scales.
+// 3. Take a % 0: it fails with TY_ERR_DIVZERO, and sets no result.
+TEST_CASE("decimal64 mod has the sign of a, and fails on zero") {
+  ty_decimal64_t r = {7, 7};
+
+  // 1. Take 7 % 3, and -7 % 3, and 7 % -3.
+  ty_decimal64_t a = {7, 0};
+  ty_decimal64_t b = {3, 0};
+  CHECK(0 == ty_decimal64_mod(&a, &b, &r));
+  CHECK(1 == r.value);
+  a = {-7, 0};
+  CHECK(0 == ty_decimal64_mod(&a, &b, &r));
+  CHECK(-1 == r.value);
+  a = {7, 0};
+  b = {-3, 0};
+  CHECK(0 == ty_decimal64_mod(&a, &b, &r));
+  CHECK(1 == r.value);
+
+  // 2. Take 7.5 % 2.25, at two scales.
+  a = {75, 1};
+  b = {225, 2};
+  CHECK(0 == ty_decimal64_mod(&a, &b, &r));
+  CHECK(75 == r.value);
+  CHECK(2 == r.scale);
+
+  // 3. Take a % 0: it fails with TY_ERR_DIVZERO, and sets no result.
+  r = {7, 7};
+  b = {0, 3};
+  CHECK(-1 == ty_decimal64_mod(&a, &b, &r));
+  CHECK(TY_ERR_DIVZERO == ty_errnum());
+  CHECK(7 == r.value);
+}
+
+// Verify decimal64 gcd: at the larger scale, and with zero.
+// 1. Take gcd(12, 18), and with a negative.
+// 2. Take gcd(1.5, 0.25), at two scales.
+// 3. Take gcd(0, 5) and gcd(0, 0).
+// 4. Take gcd(0, a large value) at a scale that makes it 34 digits: it
+//    fails with TY_ERR_RANGE.
+TEST_CASE("decimal64 gcd is at the larger scale") {
+  ty_decimal64_t r;
+
+  // 1. Take gcd(12, 18), and with a negative.
+  ty_decimal64_t a = {12, 0};
+  ty_decimal64_t b = {18, 0};
+  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(6 == r.value);
+  a = {-12, 0};
+  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(6 == r.value);
+
+  // 2. Take gcd(1.5, 0.25), at two scales.
+  a = {15, 1};
+  b = {25, 2};
+  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(25 == r.value);
+  CHECK(2 == r.scale);
+
+  // 3. Take gcd(0, 5) and gcd(0, 0).
+  a = {0, 0};
+  b = {5, 0};
+  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(5 == r.value);
+  b = {0, 0};
+  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(0 == r.value);
+
+  // 4. Take gcd(0, a large value) at a scale that makes it 34 digits.
+  a = {0, 17};
+  b = {99999999999999999, 0};
+  CHECK(-1 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+}

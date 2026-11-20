@@ -7,7 +7,7 @@
  * ty_error.h -- ty's error codes, in C.
  *
  * A code says what kind of thing went wrong, and there are few.
- * A type adds its own kinds (division by zero, bad text) when
+ * A type adds its own kinds (bad text, and so on) when
  * its operations move into ty; each is appended below.
  *
  * Values are explicit and stable: new codes are appended, and
@@ -28,9 +28,10 @@ typedef enum ty_errnum_t {
     TY_ERR_EXCEPTION = 3,
 
     TY_ERR_RANGE     = 4,   /* a result does not fit its type */
+    TY_ERR_DIVZERO   = 5,   /* a division by zero */
 
     /* The highest code; move it when one is appended. */
-    TY_ERR_LAST      = TY_ERR_RANGE
+    TY_ERR_LAST      = TY_ERR_DIVZERO
 } ty_errnum_t;
 
 #endif /* TY_ERROR_H */

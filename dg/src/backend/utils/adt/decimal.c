@@ -3366,6 +3366,14 @@ static int d64_common_scale(Datum a, Datum b, i128 *x, i128 *y) {
   return sa;
 }
 
+/* The ERROR for the error that the last call of ty set, in ty_errnum(). */
+static void ty_error_raise(void) {
+  if (ty_errnum() == TY_ERR_DIVZERO)
+    division_by_zero(NULL);
+  ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                  errmsg("numeric field overflow")));
+}
+
 /*
  * a + b, a decimal64, by value: past 17 digits it is an error, and a
  * caller who wants more adds a decimal128 to a decimal64.
@@ -3378,8 +3386,7 @@ Datum decimal64_add(PG_FUNCTION_ARGS) {
 
   /* The addition is ty's: it takes the two parts of each decimal64. */
   if (ty_decimal64_add(&a, &b, &r) != 0)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("numeric field overflow")));
+    ty_error_raise();
   return d64_make(r.value, r.scale);
 }
 
@@ -3392,8 +3399,7 @@ Datum decimal64_sub(PG_FUNCTION_ARGS) {
 
   /* The subtraction is ty's: it takes the two parts of each decimal64. */
   if (ty_decimal64_sub(&a, &b, &r) != 0)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("numeric field overflow")));
+    ty_error_raise();
   return d64_make(r.value, r.scale);
 }
 
@@ -3409,8 +3415,7 @@ Datum decimal64_mul(PG_FUNCTION_ARGS) {
 
   /* The multiplication is ty's: it takes the two parts of each decimal64. */
   if (ty_decimal64_mul(&a, &b, &r) != 0)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("numeric field overflow")));
+    ty_error_raise();
   return d64_make(r.value, r.scale);
 }
 
@@ -3548,12 +3553,15 @@ Datum decimal64_floor(PG_FUNCTION_ARGS) {
  * point than the smaller of a and b, nor more places than the larger.
  */
 Datum decimal64_mod(PG_FUNCTION_ARGS) {
-  i128 x, y;
-  int s = d64_common_scale(PG_GETARG_DATUM(0), PG_GETARG_DATUM(1), &x, &y);
+  Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
+  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
+  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
+  ty_decimal64_t r;
 
-  if (y == 0)
-    division_by_zero(NULL);
-  return d64_make((int64)(x % y), s);
+  /* The remainder is ty's; a zero b is its TY_ERR_DIVZERO. */
+  if (ty_decimal64_mod(&a, &b, &r) != 0)
+    ty_error_raise();
+  return d64_make(r.value, r.scale);
 }
 
 /* sign(decimal64): -1, 0 or 1, at scale 0, as numeric's. */
@@ -3577,14 +3585,20 @@ static u128 u128_gcd(i128 x, i128 y) {
 }
 
 /*
- * gcd(decimal64, decimal64) at the larger scale, as numeric's: in 128 bits,
- * and a decimal64, as it is no larger than either.
+ * gcd(decimal64, decimal64) at the larger scale, as numeric's: ty takes it
+ * in 128 bits. It is a decimal64, as it is no larger than either operand,
+ * except for gcd(0, x) at a scale that makes x past 17 digits: an error.
  */
 Datum decimal64_gcd(PG_FUNCTION_ARGS) {
-  i128 x, y;
-  int s = d64_common_scale(PG_GETARG_DATUM(0), PG_GETARG_DATUM(1), &x, &y);
+  Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
+  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
+  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
+  ty_decimal64_t r;
 
-  return d64_make((int64)u128_gcd(x, y), s);
+  /* The gcd is ty's; past 17 digits is its TY_ERR_RANGE. */
+  if (ty_decimal64_gcd(&a, &b, &r) != 0)
+    ty_error_raise();
+  return d64_make(r.value, r.scale);
 }
 
 /*

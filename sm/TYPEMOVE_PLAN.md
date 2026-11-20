@@ -281,10 +281,12 @@ copied from PostgreSQL keeps its copyright notice
 3. **The rest of decimal's core**, in groups: arithmetic, then
    rounding, then functions of the exponent. → verify: the
    same, after each group. Done so far: `+`, `-` and `*` (step
-   2), and `neg`, `abs` and `sign`, which are inline in
-   `ty_decimal.h`: a call that cannot fail has no out-parameter.
-   Next: `%` and `mod`, `gcd` and `lcm`, the compares and the
-   hash; then rounding. `/` waits for the 512-bit magnitude.
+   2), `neg`, `abs` and `sign`, which are inline in
+   `ty_decimal.h`: a call that cannot fail has no out-parameter;
+   and `%` and `gcd`, with `TY_ERR_DIVZERO` as the second error
+   kind. Next: `lcm`, which can return a `decimal128`, so its
+   result type is open; the compares and the hash; then
+   rounding. `/` waits for the 512-bit magnitude.
 4. **The allocator on each thread** (§3.2): digres sets its
    functions in each backend thread, and sm sets an arena's on
    each of its own threads. Decimal does not need it. This is
