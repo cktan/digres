@@ -2585,6 +2585,7 @@ int sm_tbl_delete_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id);
 int sm_tbl_update_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id,
                      const sm_datum_t* values, const bool* isnull, size_t n);
 int sm_tbl_seal(sm_tbl_t* tbl, bool* sealed);
+int sm_seal_wait(sm_session_t* session);
 ```
 
 A column store table's row by its name, `(rg_id, id)`:
@@ -2595,7 +2596,10 @@ is deleted by its delete marker, under its lock on its `_id`; an
 update reinserts it into the delta store. A row the seal moved is
 followed to its row group. `sm_tbl_seal` seals one row group of
 the delta store's first rows, at READ COMMITTED; `*sealed` says
-whether it did (§10).
+whether it did (§10). A commit that puts a row group's rows into
+the delta store queues the table for the seal's job, which seals
+it by itself; `sm_seal_wait` waits until that job is idle, for
+tests (§10.4).
 
 Errors: as `sm_tbl_update`; `SM_ERR_UPDATED` at READ COMMITTED
 for a row updated since, read again by `(0, id)`.

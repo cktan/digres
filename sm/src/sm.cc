@@ -469,11 +469,18 @@ static int start_builder(sm_env_t *env, std::string_view dbname,
     });
     return -1;
   }
-  return 0;
+  // The seal's job, with sessions of its own as the builder's
+  // (../COLSTORE.md §10.4).
+  return sm3::sealer_attach(cat, [e, name]() -> sm1::session_t * {
+    sm1::session_t *s = nullptr;
+    return sm1::opendb(e, name, s) == 0 ? s : nullptr;
+  });
 }
 
 /* Stop a catalog's builder and btree reaper, which hold sessions on it. */
 static void stop_workers(sm3::catalog_t *cat) {
+  // The sealer first: its jobs open tables, as the builder's do.
+  sm3::sealer_detach(cat);
   sm3::btree_reaper_detach(cat);
   sm3::builder_detach(cat);
 }
@@ -2152,6 +2159,17 @@ int sm_tbl_update_at(sm_tbl_t *tbl, uint64_t rg_id, uint64_t id,
       return -1;
     }
     return sm3::tbl_update_at(tbl->table, rg_id, id, {values, n}, {isnull, n});
+  });
+}
+
+/* Wait for the seal's job to be idle; see sm.h. */
+int sm_seal_wait(sm_session_t *session) {
+  return guard(session, [&] {
+    if (!session) {
+      return null_arg("sm_seal_wait", "session");
+    }
+    sm3::sealer_wait_idle(sm3::session_cat(session->sm3));
+    return 0;
   });
 }
 

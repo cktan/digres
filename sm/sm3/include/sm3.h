@@ -1965,6 +1965,20 @@ int btree_reaper_attach(catalog_t* cat, std::function<sm1::session_t*()> open,
 void btree_reaper_detach(catalog_t* cat);
 
 /*
+ * The seal's job (../COLSTORE.md §10.4): a worker thread of cat's,
+ * which opens sm1 sessions with open, and seals the column store
+ * tables queued to it, a row group at a time. A table is queued when
+ * the inserts into its delta store reach a row group's rows, and
+ * when a scan reads that many of its delta store's rows.
+ * sealer_detach stops and joins the worker; sealer_wait_idle waits
+ * until it has nothing to do, for tests. Attached once: a second
+ * attach is a no-op.
+ */
+int sealer_attach(catalog_t* cat, std::function<sm1::session_t*()> open);
+void sealer_detach(catalog_t* cat);
+void sealer_wait_idle(const catalog_t* cat);
+
+/*
  * One pass of the reapers, on the calling thread: the btree reaper's,
  * of at most budget pages, then the row reaper's. 0, or -1. For tests.
  */

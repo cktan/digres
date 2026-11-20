@@ -99,6 +99,10 @@ struct sm3::scan_t {
    * any other table.
    */
   col_scan_t *col = nullptr;
+  /* A column store table's delta rows read, for its seal's queue. */
+  uint64_t delta_rows = 0;
+  /* That table's oid, for its seal's queue; 0 for any other table. */
+  uint64_t col_oid = 0;
   /*
    * raws[0] is the cursor's pin's own; the batch's others go back to
    * the session's pool, emptied, so their iterators and blocks go now.

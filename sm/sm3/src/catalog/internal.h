@@ -242,6 +242,12 @@ struct sm3::session_t {
    * sweep of orphan sequences after its commit (../SEQUENCE.md §3.5).
    */
   std::vector<uint64_t> drop_nsps;
+  /*
+   * The rows the transaction put into each column store table's delta
+   * store, by table oid, for the seal's counts at its commit
+   * (../COLSTORE.md §10.4).
+   */
+  std::unordered_map<uint64_t, uint64_t> col_inserts;
   bool in_txn = false;      /* between begin and commit or abort */
   uint64_t snap_seq = 0;    /* cat->seq, noted before the snapshot */
   bool stmt_pinned = false; /* stmt_begin was called: statement snapshots */

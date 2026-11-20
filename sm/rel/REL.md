@@ -877,6 +877,11 @@ Seals a row group of a column store table's delta store
 (`sm_tbl_seal`): `true` if it did, `false` if the delta store had
 too few rows.
 
+### `(seal-wait)`
+Waits until the seal's job of the session's database has nothing
+to do (`sm_seal_wait`): a commit that put a row group's rows into
+a column store table's delta store has had them sealed.
+
 ### `(rg-of table id)`
 The row group a scan of the column store table finds the row with
 `_id` `id` in, 0 for its delta store; `nil` if no row has it.

@@ -1,7 +1,6 @@
 # COLSTORE_PLAN — building the Column Store
 
-Status: steps 1 to 8 are built; of step 9 the seal as a call,
-`tbl_seal`, not its job and counts; of step 12 the C API of a
+Status: steps 1 to 9 are built; of step 12 the C API of a
 table's kind, its rows by name and its seal, with rel's
 `:column-store`, `seal`, `rg-of` and `delete-at`, not a scan's
 columns and bounds.
@@ -46,7 +45,7 @@ The user took these on 2026-11-19.
 | the order of steps 5 to 13 | as below: every part of sm3, then the C API, then digres | a thin slice first: a table, a bulk load, a scan with no pruning, end to end through digres; then the rest in sm3. It shows the whole path early, but each later step touches every level again |
 | one flag for both moves | `version_sealed`, `0x40`, on a sealed tombstone (a chained key) and on a moved marker (a versioned key); one rule in the write path | two flags; they would have the same rule |
 | zstd | link `libzstd`, which RocksDB links already | none: the design needs it |
-| the builder queue | give a job a kind: an index build, a seal, or RG compaction | a second queue and its own threads |
+| the builder queue | give a job a kind: an index build, a seal, or RG compaction; built instead as a worker of its own, the sealer, pending [`../QUESTION.md`](../QUESTION.md) question 2 | a second queue and its own threads |
 | the bloom filter | sm's own, in sm2, over a 64-bit hash of key bytes | RocksDB's filter code, which is not a public interface |
 
 ---
@@ -198,8 +197,9 @@ updates and deletes.
 
 [`COLSTORE.md`](COLSTORE.md) §10.
 
-1. Give the builder's jobs a kind (`sm3/src/builder/builder.cc`),
-   and add the seal job.
+1. Add the seal's job: the sealer, a worker thread for each
+   catalog (`sm3/src/colstore/sealer.cc`), as the btree reaper
+   has, pending [`../QUESTION.md`](../QUESTION.md) question 2.
 2. Seal by the steps of §10.1: sealed tombstones, the skip of a
    writer in flight or prepared, TOAST chunks erased, the RG
    written, one transaction for each RG.

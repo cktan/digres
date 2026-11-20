@@ -600,3 +600,33 @@ TEST_CASE("the seal passes over a locked row; a writer follows a sealed row") {
   sm3::session_close(ss2);
   sm3::session_close(ss3);
 }
+
+// Verify the seal's job seals a delta store once a transaction's
+// commit makes it a row group's worth, and not before.
+// 1. Attach a sealer to the catalog.
+// 2. Commit 9,999 inserts: nothing is queued; no row group.
+// 3. Commit one more: the table is queued and sealed.
+// 4. A scan gives every row once.
+TEST_CASE("the seal's job seals a delta store at a row group's worth") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The sealer.
+  sm1::env_t *env = db.env();
+  REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+            sm1::session_t *s = nullptr;
+            return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+          }) == 0);
+  // 2. Not yet.
+  insert_rows(db, c, 0, 9999);
+  sm3::sealer_wait_idle(db.cat);
+  CHECK(row_groups(db, c) == 0);
+  // 3. Now.
+  insert_rows(db, c, 9999, 10000);
+  sm3::sealer_wait_idle(db.cat);
+  CHECK(row_groups(db, c) == 1);
+  // 4. Every row once.
+  CHECK(scan_rows(db, c).size() == 10000);
+  sm3::sealer_detach(db.cat);
+}

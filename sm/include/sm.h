@@ -1570,6 +1570,13 @@ int sm_tbl_update_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id,
 int sm_tbl_seal(sm_tbl_t* tbl, bool* sealed);
 
 /*
+ * Wait until the seal's job of the session's database has nothing
+ * to do: the tables a commit queued are sealed (../COLSTORE.md
+ * §10.4). For tests.
+ */
+int sm_seal_wait(sm_session_t* session);
+
+/*
  * Read the row with _id id: 0 with its tuple, 1 if none, or -1. The
  * tuple is valid only until the next call on this session.
  */

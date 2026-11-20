@@ -11,6 +11,7 @@
  * sm1 has committed.
  */
 
+#include "../colstore/colstore.h"
 #include "../table/pin.h"
 #include "internal.h"
 #include "sm0_log.h"
@@ -429,6 +430,7 @@ int begin(session_t *s, sm1::xctlevel_t level, bool read_only) {
     drop_doomed(s);
   }
   s->drop_nsps.clear();
+  s->col_inserts.clear();
   s->level = level;
   s->depth = 0;
   s->snap_seq = seq;
@@ -652,8 +654,14 @@ int commit(session_t *s) {
   // Taken first: a failed commit, and the sweep's own, clear it.
   std::vector<uint64_t> nsps = std::move(s->drop_nsps);
   s->drop_nsps.clear();
+  std::unordered_map<uint64_t, uint64_t> inserts = std::move(s->col_inserts);
+  s->col_inserts.clear();
   if (commit_txn(s) != 0) {
     return -1;
+  }
+  // The rows are committed: they count toward each table's seal.
+  for (const auto &[oid, n] : inserts) {
+    sealer_count(s->cat, oid, n);
   }
   // The drop is durable; a sequence it missed is dropped now.
   if (!nsps.empty()) {
@@ -684,6 +692,7 @@ int prepare(session_t *s, std::string_view gid) {
 /* Abort, dropping the overlay. */
 int abort(session_t *s) {
   s->drop_nsps.clear();
+  s->col_inserts.clear();
   close_tree_scans(s);
   release_all_pins(s);
   drop_from(s, 0);

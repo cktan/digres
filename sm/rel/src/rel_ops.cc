@@ -2732,6 +2732,17 @@ static sm_row_scan_t *open_row_cursor(session_ctx_t *s, int32_t argc,
                                       Janet *argv, const char *op,
                                       table_def_t *&p_tdef);
 
+/* (seal-wait): wait until the seal's job is idle. */
+static Janet cfun_seal_wait(int32_t argc, Janet *argv) {
+  (void)argv;
+  janet_fixarity(argc, 0);
+  session_ctx_t *s = require_session();
+  if (sm_seal_wait(s->session) != 0) {
+    panic_sm_error("seal-wait sm_seal_wait");
+  }
+  return janet_wrap_nil();
+}
+
 /* (seal table): seal a row group of a column store table. */
 static Janet cfun_seal(int32_t argc, Janet *argv) {
   janet_fixarity(argc, 1);
@@ -3565,6 +3576,8 @@ static const JanetReg s_rel_cfuns[] = {
     {"_update", cfun_update, "internal"},
     {"_delete", cfun_delete, "internal"},
     {"_seal", cfun_seal, "internal"},
+    {"seal-wait", cfun_seal_wait,
+     "(seal-wait) -- wait until the seal's job is idle"},
     {"_rg-of", cfun_rg_of, "internal"},
     {"_delete-at", cfun_delete_at, "internal"},
     {"_scan", cfun_scan, "internal"},

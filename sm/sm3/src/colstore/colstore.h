@@ -181,6 +181,15 @@ std::string marker_key(uint64_t rg_id, uint64_t id);
  */
 int col_find_latest(table_t *table, uint64_t id, uint64_t &rg_id);
 
+/*
+ * Count rows put into table oid's delta store; at rg_max_rows the
+ * table is queued for its seal (sealer.cc). A no-op with no sealer.
+ */
+void sealer_count(const catalog_t *cat, uint64_t oid, uint64_t rows);
+
+/* Queue table oid for its seal; a no-op with no sealer. */
+void sealer_enqueue(const catalog_t *cat, uint64_t oid);
+
 } // namespace sm3
 
 #endif /* SM3_COLSTORE_H */

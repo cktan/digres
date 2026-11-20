@@ -8,8 +8,9 @@
 #    index; the other levels read it.
 # 3. A row of a row group is deleted by its name (rg_id, _id); an
 #    aborted delete leaves it.
-# 4. 12,000 rows inserted one at a time are sealed into a row group;
-#    a second seal finds too few rows; a scan gives every row.
+# 4. 12,000 rows inserted one at a time: the commit queues the
+#    table, and the seal's job seals a row group of them; a seal by
+#    hand finds too few rows left; a scan gives every row.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -94,10 +95,7 @@
     (for i 0 12000
       (set last (insert tr [i "x"])))
 (commit)
-(begin :rc)
-    (assert-eq (rg-of tr last) 0 "an inserted row is in the delta store")
-    (assert-eq (seal tr) true "10,000 rows are sealed")
-(commit)
+(seal-wait)
 (begin :rc)
     (assert-eq (seal tr) false "2,000 rows are too few to seal")
 (commit)

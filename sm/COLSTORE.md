@@ -9,11 +9,10 @@ match, from statistics kept in RocksDB.
 **Status.** Built in part, in sm1, sm2 and sm3
 ([`COLSTORE_PLAN.md`](COLSTORE_PLAN.md) has the steps): the
 sealed tombstone, file sets, the CG file, the catalog's kind,
-bulk loads, scans, deletes and updates, the seal as a call, and
-their C API. Not built: the seal's job and its counts, RG
-compaction, `ANALYZE`, the DDL of §14, a scan's columns and
-bounds in the C API, and digres. Where the code differs from this
-design today:
+bulk loads, scans, deletes and updates, the seal and its job,
+and their C API. Not built: RG compaction, `ANALYZE`, the DDL
+of §14, a scan's columns and bounds in the C API, and digres.
+Where the code differs from this design today:
 
 - A scan hands out sm2 tuples, not datums, so a row of more than
   64 KB, long values included, fails in a scan.
@@ -638,12 +637,15 @@ no rw-edge.
 
 ### 10.4 When the seal runs
 
-- **A seal job runs on the builder queue of sm3**, the queue
-  and the worker threads that build indexes. A table has at
-  most one seal job waiting.
+- **A seal job runs on the sealer of sm3**
+  (`sm3/src/colstore/sealer.cc`): one worker thread for each
+  catalog, with a queue of tables, as the btree reaper has its
+  own. A table is queued once until its job starts.
 - **The insert path counts, for each table, in memory,** the
-  rows of its delta store. It queues a seal job when the count
-  reaches 10k rows (§7).
+  rows of its delta store: each transaction counts its own, and
+  hands them to the sealer at its commit, so a seal never starts
+  before the rows it is to take are committed. At 10k rows the
+  table is queued (§7).
 - **A scan that reads more than 10k rows of a delta store also
   queues a seal job.** The counts start at 0 when the database
   opens, so this catches a delta store that grew before a

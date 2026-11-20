@@ -776,10 +776,16 @@ int id_key(table_t *t, uint64_t id, std::string &key) {
 /* Insert the row, then its entry in every index; see sm3.h. */
 int tbl_insert(table_t *table, std::span<const sm2::datum_t> values,
                std::span<const bool> isnull, uint64_t &id) {
-  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0) {
+  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0 ||
+      insert_row(table, values, isnull, 0, id) != 0) {
     return -1;
   }
-  return insert_row(table, values, isnull, 0, id);
+  // A column store table's delta grows toward its seal (§10.4),
+  // counted at the commit.
+  if (table->def->column_store) {
+    table->session->col_inserts[table->def->oid]++;
+  }
+  return 0;
 }
 
 /*
@@ -1431,6 +1437,7 @@ int tbl_load_close(loader_t *l) {
   // The rows past the last row group go into the delta store, under
   // their _ids, for a later seal (../COLSTORE.md §9.2).
   if (l->rg) {
+    l->table->session->col_inserts[l->table->def->oid] += l->rg->ids.size();
     return rg_build_to_delta(*l->rg,
                              [&](uint64_t id, std::span<const sm2::datum_t> v,
                                  std::span<const bool> n) {
@@ -1999,6 +2006,10 @@ int tbl_scan_columns(table_t *table, std::vector<bool> cols,
     out = nullptr;
     return -1;
   }
+  if (table->def->column_store) {
+    out->col_oid = table->def->oid;
+    out->session = table->session;
+  }
   return 0;
 }
 
@@ -2550,6 +2561,9 @@ int tbl_scannxt(scan_t *scan, uint64_t &id, pin_ref_t &ref,
   if (!scan->col && rc == 1) {
     rc = scan->entries ? tree_next(scan, id, tuple)
                        : sm2::rel_scannxt(scan->rel, id, tuple);
+    if (rc == 0 && scan->col_oid != 0) {
+      scan->delta_rows++;
+    }
   }
   // Every ref to the row before goes stale, whatever comes next.
   pin_scan_move(scan->pin, rc == 0 ? tuple : std::string_view());
@@ -2655,6 +2669,11 @@ void tbl_scanend(scan_t *scan) {
     return;
   }
   col_scan_close(scan->col);
+  // A delta store a scan found that long is queued for its seal: a
+  // restart loses the inserts' counts (../COLSTORE.md §10.4).
+  if (scan->col_oid != 0 && scan->delta_rows >= rg_max_rows && scan->session) {
+    sealer_enqueue(scan->session->cat, scan->col_oid);
+  }
   sm2::rel_scanend(scan->rel);
   sm2::idx_scanend(scan->entries);
   pin_release(scan->pin);
