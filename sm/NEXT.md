@@ -528,6 +528,25 @@ Owed, and blocking nothing above:
   [`../dg/CODE.md`](../dg/CODE.md#2-c-compiled-as-c) §2 goes.
   To decide: whether the macros stay for PostgreSQL code ported
   later from `REL_18_STABLE`, or go.
+- **Decide what `char(n)`, `bpchar`, is in digres.** It is
+  PostgreSQL's: padded with spaces to `n`, and compared without
+  its trailing spaces. sm's key of a `bpchar` leaves those
+  spaces out, so a key can be much shorter than its value: a
+  `char(2000)` value `'a'` is a long value
+  ([`COLSTORE.md`](COLSTORE.md#54-long-values) §5.4) with a key
+  of 3 bytes. That broke the CG filter's test of a long value
+  by its key's size, which is now not made. The choices:
+  - **Keep it as PostgreSQL's**, as it is now.
+  - **Store it unpadded**: strip the trailing spaces on a write,
+    and pad again on output. Comparisons give what they give
+    now; `length()`, a cast to `text`, and other places that
+    see the padding must give PostgreSQL's results too.
+  - **Make it `varchar(n)`**, as Snowflake and DuckDB do: the
+    simplest, and visibly not PostgreSQL's (`'a '::char(3)`,
+    padded output, pgregress).
+
+  Lean: keep it, unless it costs again; then store it unpadded,
+  which keeps PostgreSQL's results.
 
 ---
 
