@@ -377,6 +377,10 @@ written and read as PostgreSQL's canonical text for it --
 `"2026-09-26"`, `"12.30"` under `decimal(10, 2)`,
 `"P1Y2M3DT4H5M6S"` -- which is the only text accepted.
 
+After the clauses, `:column-store` makes a column store table
+([`../COLSTORE.md`](../COLSTORE.md)): no index, and no
+SERIALIZABLE transaction.
+
 Column qualifiers:
 - `:not-null` -- requires non-null value on insert/update.
 - `:on-update "text"` -- the column's update default, the
@@ -867,6 +871,19 @@ Returns the previous tuple values `[old1 old2 ...]`.
 ```janet
 (def old (delete users r1))
 ```
+
+### `(seal table)`
+Seals a row group of a column store table's delta store
+(`sm_tbl_seal`): `true` if it did, `false` if the delta store had
+too few rows.
+
+### `(rg-of table id)`
+The row group a scan of the column store table finds the row with
+`_id` `id` in, 0 for its delta store; `nil` if no row has it.
+
+### `(delete-at table rg id)`
+Deletes a column store table's row by its name, its row group and
+its `_id` (`sm_tbl_delete_at`).
 
 ### `(scan table [:from first] [:to last])`
 Scans the table, keyless, in `_id` order over the `_id`s

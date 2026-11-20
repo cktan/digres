@@ -1,7 +1,10 @@
 # COLSTORE_PLAN — building the Column Store
 
-Status: steps 1 to 8 are built, and of step 9 the seal as a
-call, `tbl_seal`; its job and its counts are not.
+Status: steps 1 to 8 are built; of step 9 the seal as a call,
+`tbl_seal`, not its job and counts; of step 12 the C API of a
+table's kind, its rows by name and its seal, with rel's
+`:column-store`, `seal`, `rg-of` and `delete-at`, not a scan's
+columns and bounds.
 [`COLSTORE.md`](COLSTORE.md) is the design.
 This file says in what order to build it, where each part goes,
 and how each step is checked.
@@ -248,7 +251,7 @@ RG compaction; a writer in flight makes RG compaction give up.
 ### Step 13: digres
 
 1. Add the reloption `storage`, with the values `row` and
-   `column`, in `access/common/reloptions.c`.
+   `columnar`, in `access/common/reloptions.c`.
 2. Choose the routine by the table's kind in
    `access/sm/smtable.c`.
 3. Ignore a primary key, a unique key, an exclusion, a foreign

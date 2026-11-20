@@ -1369,6 +1369,15 @@ Moves to the next row. Returns 0 with it, 1 at the end, or -1.
 
 Errors: `SM_ERR_SCANCLOSED`.
 
+### `sm_row_scan_rg`
+
+```cpp
+uint64_t sm_row_scan_rg(const sm_row_scan_t* scan);
+```
+
+The row group of the column store table's row the cursor handed
+out last, 0 for a row of its delta store and of any other table.
+
 ### `sm_row_scan_seek`
 
 ```cpp
@@ -2569,6 +2578,28 @@ Deletes the row with `_id` `id`, or the row `key` names. `ref`,
 
 Errors: as `sm_tbl_update`.
 
+### `sm_tbl_delete_at`, `sm_tbl_update_at`, `sm_tbl_seal`
+
+```cpp
+int sm_tbl_delete_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id);
+int sm_tbl_update_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id,
+                     const sm_datum_t* values, const bool* isnull, size_t n);
+int sm_tbl_seal(sm_tbl_t* tbl, bool* sealed);
+```
+
+A column store table's row by its name, `(rg_id, id)`:
+`rg_id` is the row group a scan read it from
+(`sm_row_scan_rg`), 0 for the delta store
+([`COLSTORE.md`](COLSTORE.md#9-writes) §9). A row of a row group
+is deleted by its delete marker, under its lock on its `_id`; an
+update reinserts it into the delta store. A row the seal moved is
+followed to its row group. `sm_tbl_seal` seals one row group of
+the delta store's first rows, at READ COMMITTED; `*sealed` says
+whether it did (§10).
+
+Errors: as `sm_tbl_update`; `SM_ERR_UPDATED` at READ COMMITTED
+for a row updated since, read again by `(0, id)`.
+
 ### `sm_tbl_read`
 
 ```cpp
@@ -3040,11 +3071,14 @@ struct sm_column_spec_t {
 int sm_cat_create_table(sm_session_t* session, uint64_t nspoid,
                         const char* name,
                         const std::vector<sm_column_spec_t>& columns,
-                        uint64_t* oid);
+                        uint64_t* oid, bool column_store = false);
 ```
 
 Creates the table `name` in `nspoid` with these columns: its
-store, its `_id` sequence and its definition. The session's
+store, its `_id` sequence and its definition. With
+`column_store`, a column store table
+([`COLSTORE.md`](COLSTORE.md)): no index, no SERIALIZABLE
+transaction, and a sequence of its row groups' ids. The session's
 transaction sees it at once, and others at commit. An identity
 column owns its sequence from then on.
 

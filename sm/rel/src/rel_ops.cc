@@ -724,6 +724,14 @@ static Janet table_create(int32_t argc, Janet *argv, bool temp) {
     }
   }
 
+  // :column-store: a column store table (../../COLSTORE.md).
+  bool column_store = false;
+  for (const Janet &c : clauses) {
+    if (janet_checktype(c, JANET_KEYWORD) &&
+        identifier_of(c) == "column-store") {
+      column_store = true;
+    }
+  }
   // :namespace name: the table is made there, not in public.
   uint64_t nspoid = SM_NSP_PUBLIC;
   for (size_t i = 0; i < clauses.size(); i++) {
@@ -853,7 +861,7 @@ static Janet table_create(int32_t argc, Janet *argv, bool temp) {
   int rc =
       temp ? sm_cat_create_temp_table(s->session, tbl_name.c_str(), specs, &oid)
            : sm_cat_create_table(s->session, nspoid, tbl_name.c_str(), specs,
-                                 &oid);
+                                 &oid, column_store);
   if (rc != 0) {
     panic_sm_error(op);
   }
@@ -2720,6 +2728,69 @@ static Janet cfun_update(int32_t argc, Janet *argv) {
   return janet_wrap_tuple(janet_tuple_end(old_vals));
 }
 
+static sm_row_scan_t *open_row_cursor(session_ctx_t *s, int32_t argc,
+                                      Janet *argv, const char *op,
+                                      table_def_t *&p_tdef);
+
+/* (seal table): seal a row group of a column store table. */
+static Janet cfun_seal(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 1);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef =
+      need_table(s, identifier_of(argv[0]), SM_LOCKMODE_IX, "seal");
+  bool sealed = false;
+  if (sm_tbl_seal(p_tdef->tbl, &sealed) != 0) {
+    abort_failed_write(s);
+    panic_sm_error("seal sm_tbl_seal");
+  }
+  return janet_wrap_boolean(sealed);
+}
+
+/*
+ * (rg-of table id): the row group a scan finds the row with _id id
+ * in, 0 for the delta store; nil if no row has it.
+ */
+static Janet cfun_rg_of(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 2);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef = nullptr;
+  Janet tbl = argv[0];
+  sm_row_scan_t *rscan = open_row_cursor(s, 1, &tbl, "rg-of", p_tdef);
+  uint64_t want = static_cast<uint64_t>(janet_getinteger64(argv, 1));
+  uint64_t rowno = 0;
+  sm_pin_ref_t ref;
+  int rc;
+  Janet out = janet_wrap_nil();
+  while ((rc = sm_row_scannxt(rscan, &rowno, &ref)) == 0) {
+    if (rowno == want) {
+      out = janet_wrap_number(static_cast<double>(sm_row_scan_rg(rscan)));
+    }
+  }
+  if (rc < 0) {
+    if (!engine_aborted()) {
+      sm_row_scanclose(rscan);
+    }
+    panic_sm_error("rg-of sm_row_scannxt");
+  }
+  sm_row_scanclose(rscan);
+  return out;
+}
+
+/* (delete-at table rg id): delete a column store table's row by name. */
+static Janet cfun_delete_at(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 3);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef =
+      need_table(s, identifier_of(argv[0]), SM_LOCKMODE_IX, "delete-at");
+  uint64_t rg = static_cast<uint64_t>(janet_getinteger64(argv, 1));
+  uint64_t id = static_cast<uint64_t>(janet_getinteger64(argv, 2));
+  if (sm_tbl_delete_at(p_tdef->tbl, rg, id) != 0) {
+    abort_failed_write(s);
+    panic_sm_error("delete-at sm_tbl_delete_at");
+  }
+  return janet_wrap_nil();
+}
+
 /* (delete table id), or by key as (read) */
 static Janet cfun_delete(int32_t argc, Janet *argv) {
   janet_fixarity(argc, 2);
@@ -3493,6 +3564,9 @@ static const JanetReg s_rel_cfuns[] = {
     {"_stats", cfun_stats, "internal"},
     {"_update", cfun_update, "internal"},
     {"_delete", cfun_delete, "internal"},
+    {"_seal", cfun_seal, "internal"},
+    {"_rg-of", cfun_rg_of, "internal"},
+    {"_delete-at", cfun_delete_at, "internal"},
     {"_scan", cfun_scan, "internal"},
     {"_scan-count", cfun_scan_count, "internal"},
     {"_idx-scan", cfun_idx_scan, "internal"},
@@ -3658,6 +3732,15 @@ static const char *s_prelude = R"janet(
   ~(_scan (string ',tbl) ,;rest))
 (defmacro scan-count [tbl & rest]
   ~(_scan-count (string ',tbl) ,;rest))
+
+(defmacro seal [tbl]
+  ~(_seal (string ',tbl)))
+
+(defmacro rg-of [tbl id]
+  ~(_rg-of (string ',tbl) ,id))
+
+(defmacro delete-at [tbl rg id]
+  ~(_delete-at (string ',tbl) ,rg ,id))
 
 (defmacro idx-scan [idx & rest]
   ~(_idx-scan (string ',idx) ,;rest))

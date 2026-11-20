@@ -1259,6 +1259,12 @@ int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, const void **tuple,
 }
 
 /* The next row, in the cursor's pin, which *ref then names. */
+/* The row group of a scan's last row; see sm.h. */
+uint64_t sm_row_scan_rg(const sm_row_scan_t *scan) {
+  return scan ? sm3::tbl_scan_rg(rel_scan_of(const_cast<sm_row_scan_t *>(scan)))
+              : 0;
+}
+
 int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, sm_pin_ref_t *ref) {
   return guard(nullptr, [&] {
     sm3::pin_ref_t r;
@@ -2128,6 +2134,37 @@ int sm_tbl_update(sm_tbl_t *tbl, uint64_t id, const sm_datum_t *values,
 }
 
 /* Delete a row and its index entries. */
+/* Delete a column store table's row by its name; see sm.h. */
+int sm_tbl_delete_at(sm_tbl_t *tbl, uint64_t rg_id, uint64_t id) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl) {
+      return null_arg("sm_tbl_delete_at", "tbl");
+    }
+    return sm3::tbl_delete_at(tbl->table, rg_id, id);
+  });
+}
+
+/* Update a column store table's row by its name; see sm.h. */
+int sm_tbl_update_at(sm_tbl_t *tbl, uint64_t rg_id, uint64_t id,
+                     const sm_datum_t *values, const bool *isnull, size_t n) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (check_row("sm_tbl_update_at", tbl, values, isnull, n) != 0) {
+      return -1;
+    }
+    return sm3::tbl_update_at(tbl->table, rg_id, id, {values, n}, {isnull, n});
+  });
+}
+
+/* Seal a row group of a column store table; see sm.h. */
+int sm_tbl_seal(sm_tbl_t *tbl, bool *sealed) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl || !sealed) {
+      return null_arg("sm_tbl_seal", "tbl or sealed");
+    }
+    return sm3::tbl_seal(tbl->table, *sealed);
+  });
+}
+
 int sm_tbl_delete(sm_tbl_t *tbl, uint64_t id, sm_pin_ref_t *ref,
                   const void **old, size_t *len) {
   return guard(tbl ? tbl->session : nullptr, [&] {
@@ -2752,7 +2789,7 @@ int sm_tbl_stats(sm_session_t *session, uint64_t oid,
 int sm_cat_create_table(sm_session_t *session, uint64_t nspoid,
                         const char *name,
                         const std::vector<sm_column_spec_t> &columns,
-                        uint64_t *oid) {
+                        uint64_t *oid, bool column_store) {
   return guard(session, [&] {
     if (!oid) {
       return null_arg("sm_cat_create_table", "oid");
@@ -2769,7 +2806,8 @@ int sm_cat_create_table(sm_session_t *session, uint64_t nspoid,
            c.not_null_name ? c.not_null_name : "", c.generated,
            c.generated_reads});
     }
-    return sm3::create_table(session->sm3, nspoid, name_of(name), cols, *oid);
+    return sm3::create_table(session->sm3, nspoid, name_of(name), cols, *oid,
+                             column_store);
   });
 }
 

@@ -9,10 +9,11 @@ match, from statistics kept in RocksDB.
 **Status.** Built in part, in sm1, sm2 and sm3
 ([`COLSTORE_PLAN.md`](COLSTORE_PLAN.md) has the steps): the
 sealed tombstone, file sets, the CG file, the catalog's kind,
-bulk loads, scans, deletes and updates, and the seal as a call.
-Not built: the seal's job and its counts, RG compaction, `ANALYZE`,
-the DDL of §14, the C API and digres. Where the code differs from
-this design today:
+bulk loads, scans, deletes and updates, the seal as a call, and
+their C API. Not built: the seal's job and its counts, RG
+compaction, `ANALYZE`, the DDL of §14, a scan's columns and
+bounds in the C API, and digres. Where the code differs from this
+design today:
 
 - A scan hands out sm2 tuples, not datums, so a row of more than
   64 KB, long values included, fails in a scan.
@@ -96,7 +97,7 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | the TID that digres carries | `(rg_id, _id)`; `rg_id` 0 for a row in the delta store | §8 |
 | locks | row locks on delta key `_id` | §9.1 |
 | isolation | READ COMMITTED and REPEATABLE READ; a SERIALIZABLE transaction that reads or writes a column store table fails | §9.1 |
-| how digres makes one | `CREATE TABLE ev (...) WITH (storage = column)`; sm3's catalog records the kind | §3 |
+| how digres makes one | `CREATE TABLE ev (...) WITH (storage = columnar)`; sm3's catalog records the kind | §3 |
 | the executor | PostgreSQL's, a row at a time, until the Column Store is stable; then an executor for columnar operations | §3 |
 | `relpages` | the bytes of all CGs and of the delta store, divided by 8 KB | §7 |
 | an update or delete of a row in an RG | a delete marker, plus a reinsert into the delta store for an update | §9 |
@@ -964,7 +965,7 @@ after which the sweep runs; 2PC across a restart.
 `dg/test`:
 
 - `.sql` files for `run.sh`: `CREATE TABLE ... WITH (storage =
-  column)`; the warnings of §14.1, and the `NOT NULL` kept from
+  columnar)`; the warnings of §14.1, and the `NOT NULL` kept from
   an ignored `PRIMARY KEY`; a foreign key that references a
   column store table, which fails; queries with bounds, whose
   results equal a row store table's; `COPY`; `TRUNCATE`;
@@ -975,8 +976,9 @@ after which the sweep runs; 2PC across a restart.
 ### 15.5 Layers with no test
 
 - **aa** has no change.
-- **sq** has no change: `WITH (storage = column)` is a
-  reloption, which its grammar parses already.
+- **sq** has no change: `WITH (storage = columnar)` is a
+  reloption, which its grammar parses already: `columnar` is an
+  identifier, as any value of a reloption may be.
 - **pgregress** has no test of a column store table, as
   PostgreSQL has no such table.
 

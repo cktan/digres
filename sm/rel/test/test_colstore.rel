@@ -1,0 +1,113 @@
+# test_colstore.rel -- a column store table through sm.h
+# (../../COLSTORE.md): its row groups, made by a load and by the
+# seal, read by a scan, its rows deleted by name, across a restart.
+#
+# 1. A load of 25,000 rows into a column store table: a scan gives
+#    every row, after a restart too.
+# 2. A SERIALIZABLE transaction cannot read it, and it takes no
+#    index; the other levels read it.
+# 3. A row of a row group is deleted by its name (rg_id, _id); an
+#    aborted delete leaves it.
+# 4. 12,000 rows inserted one at a time are sealed into a row group;
+#    a second seal finds too few rows; a scan gives every row.
+
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
+(rm-rf test-dir)
+(env-init test-dir)
+(env-attach test-dir)
+
+(db-create "csdb")
+(db-open "csdb")
+
+# The message of the error expr raises, or "no error".
+(defmacro err-of [expr]
+  ~(try (do ,expr "no error") ([e] (string e))))
+
+# Whether the error expr raises says what.
+(defn says [msg what]
+  (truthy? (string/find what msg)))
+
+(begin :rc)
+    (table-create ev
+      (columns
+        (a :int4 :not-null)
+        (b :text))
+      :column-store)
+(commit)
+
+# 1. A load, and a scan, after a restart too.
+(def rows (map (fn [i] [i (string "n" (% i 7))]) (range 25000)))
+(begin :rc)
+    (def ids (load ev rows))
+(commit)
+(begin :rr)
+    (assert-eq (scan-count ev) 25000 "every row loaded")
+(commit)
+
+(db-close)
+(env-detach :force true)
+(env-attach test-dir)
+(db-open "csdb")
+
+(begin :rr)
+    (assert-eq (scan-count ev) 25000 "every row after a restart")
+(commit)
+
+# 2. SERIALIZABLE is refused; so is an index.
+(begin :ser)
+    (assert-eq (says (err-of (scan-count ev)) "ERR_INVALID") true
+               "SERIALIZABLE cannot read a column store table")
+(abort)
+(begin :rc)
+    (assert-eq (says (err-of (index-create ev_a (table ev) (key (a :asc))))
+                     "ERR_INVALID")
+               true "a column store table takes no index")
+(abort)
+
+# 3. A row of a row group, deleted by name; an aborted delete.
+(def id7 (get ids 7))
+(def id8 (get ids 8))
+(begin :rc)
+    (def rg7 (rg-of ev id7))
+    (assert-eq (> rg7 0) true "a loaded row is in a row group")
+    (delete-at ev rg7 id7)
+(commit)
+(begin :rr)
+    (assert-eq (scan-count ev) 24999 "the deleted row is gone")
+    (assert-nil (rg-of ev id7) "no row has its _id")
+(commit)
+(begin :rc)
+    (delete-at ev (rg-of ev id8) id8)
+(abort)
+(begin :rr)
+    (assert-eq (scan-count ev) 24999 "an aborted delete leaves the row")
+(commit)
+
+# 4. The seal.
+(begin :rc)
+    (table-create tr
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (var last 0)
+    (for i 0 12000
+      (set last (insert tr [i "x"])))
+(commit)
+(begin :rc)
+    (assert-eq (rg-of tr last) 0 "an inserted row is in the delta store")
+    (assert-eq (seal tr) true "10,000 rows are sealed")
+(commit)
+(begin :rc)
+    (assert-eq (seal tr) false "2,000 rows are too few to seal")
+(commit)
+(begin :rr)
+    (assert-eq (scan-count tr) 12000 "every row once, sealed or not")
+    (assert-eq (> (rg-of tr 1) 0) true "the first row is in a row group")
+    (assert-eq (rg-of tr last) 0 "the last row is in the delta store")
+(commit)
+
+(db-close)
+(env-detach :force true)
+(rm-rf test-dir)
+(print "test_colstore.rel: PASSED")
