@@ -1,9 +1,10 @@
 # Copyright (c) 2026 CK Tan
 # SPDX-License-Identifier: MIT
 
-# digres -- four parts, each with a Makefile of its own (README.md): sm/,
-# the storage stack; sq/, the SQL parser; aa/, roles and privileges; and
-# dg/, digres, which links the other three. This file builds and tests
+# digres -- five parts, each with a Makefile of its own (README.md): ty/,
+# the operations of the SQL types; sm/, the storage stack; sq/, the SQL
+# parser; aa/, roles and privileges; and dg/, digres, which links the
+# other four. This file builds and tests
 # them together, after ext/: PostgreSQL 18.6 and RocksDB, downloaded and
 # built there the first time (ext/Makefile).
 #
@@ -12,11 +13,11 @@
 #   make -j4            the release build, dg/build/digres-release: what
 #                       the benchmark runs
 #   make -j4 test       every part's tests, on the debug build, in order:
-#                       sm, sq, aa, then digres; make test-sm, test-sq,
-#                       test-aa or test-dg, one part's
+#                       ty, sm, sq, aa, then digres; make test-ty,
+#                       test-sm, test-sq, test-aa or test-dg, one part's
 #   make -j4 tsan       digres under the thread sanitizer, and its tests
 #   make -j4 bench      the release build, then bench/run.sh
-#   make format         clang-format sm, sq and aa
+#   make format         clang-format ty, sm, sq and aa
 #   make clean          remove every part's build directory
 #
 # dg is not formatted here: its tree is formatted by the lines a change
@@ -24,7 +25,7 @@
 
 .NOTPARALLEL:
 
-DIRS := sm sq aa dg
+DIRS := ty sm sq aa dg
 
 TESTDIRS := $(DIRS:%=test-%)
 CLEANDIRS := $(DIRS:%=clean-%)

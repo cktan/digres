@@ -1,6 +1,8 @@
 ## Before Starting Any Work
 
-The repository has four parts: `sm/`, the storage stack;
+The repository has five parts: `ty/`, the operations of the SQL
+types, a library of its own that sm and digres call
+([`ty/DESIGN.md`](ty/DESIGN.md)); `sm/`, the storage stack;
 `dg/`, digres, the fork of PostgreSQL that runs on it
 ([`sm/PGFORK.md`](sm/PGFORK.md#10-digres-how-the-fork-is-to-be-made)
 §10); `sq/`, the SQL parser digres links,
@@ -33,9 +35,10 @@ Before changing code in `sm/`, read [`sm/CODE.md`](sm/CODE.md),
 and before
 changing code in `dg/`, read [`dg/CODE.md`](dg/CODE.md): the
 rules and
-practices for coding in each. `aa/` follows
+practices for coding in each. `aa/` and `ty/` follow
 [`sm/CODE.md`](sm/CODE.md);
-read [`aa/AA_DESIGN.md`](aa/AA_DESIGN.md) before changing it.
+read [`aa/AA_DESIGN.md`](aa/AA_DESIGN.md) before changing `aa/`, and
+[`ty/DESIGN.md`](ty/DESIGN.md) before changing `ty/`.
 
 Paths written inside the stack's documents are relative to
 `sm/`: [`sm1/SM1_DESIGN.md`](sm/sm1/SM1_DESIGN.md) there means
@@ -190,14 +193,14 @@ Assume the role of Andy Pavlo, the Database Professor from CMU.
   `-O3 -DNDEBUG`), as `bench/run.sh` does.
 
 - **Unit tests in parallel:** the unit test suites of `aa/`,
-  `sq/` and `sm/` are independent: when a change needs more
+  `sq/`, `ty/` and `sm/` are independent: when a change needs more
   than one, run them at once, each to its own log, and wait
   for all. Build sm first (`make -C sm -j4`): aa's tests link
   sm's library, and build it if it is stale, which races with
   sm's own build.
 
 - **Code Formatting:** Always run `make format` at the top
-  before committing: it formats sm, sq and aa. dg is formatted
+  before committing: it formats ty, sm, sq and aa. dg is formatted
   by the lines a change touches
   ([`dg/CODE.md`](dg/CODE.md#8-style) §8).
 

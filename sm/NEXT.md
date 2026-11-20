@@ -236,17 +236,19 @@ are the catalog tables psql reads
 
     To settle:
     - where a result of variable size gets its memory (text,
-      bytea, concatenation, `replace`): settled. The host
-      installs an allocator hook for the process, `malloc()`
-      if it installs none. The hook returns NULL on failure
-      and never throws. The caller frees what sm returns; sm
-      frees only what it keeps. sm's own threads never call
-      the hook. The design is in
-      [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §3;
+      bytea, concatenation, `replace`): settled. Each thread
+      sets its own alloc and free functions in ty
+      (`ty_set_alloc`), `malloc()` and `free()` if it sets
+      none. The host sets them on its threads, and sm sets an
+      arena's on its own. `alloc` returns NULL on failure and
+      never throws. The caller frees what ty returns; ty
+      frees only what it keeps. The design is in
+      [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §3 and
+      [`../ty/DESIGN.md`](../ty/DESIGN.md) §3;
     - the hooks for what a session sets: `DateStyle`,
       `TimeZone`, `extra_float_digits`, collation and locale;
-    - the errors: sm's error state, and how a host maps it to
-      its own codes and text;
+    - the errors: settled. ty keeps its own error state and
+      codes; a host maps them to its own codes and text;
     - the interface of an operation in `sm.h`. digres calls it
       as a plain C call, with no handle or session lookup, so
       the instruction counts of a statement do not move;

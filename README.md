@@ -121,12 +121,13 @@ The repository holds digres and the libraries it links:
 | [`dg/`](dg/) | digres: a fork of PostgreSQL 18.6 that runs on the stack. It compiles as C++, is one process with one thread per session, and serves PostgreSQL's own `psql`; sm stores its tables |
 | [`sq/`](sq/) | the SQL parser: PostgreSQL 18's SQL in, a tree of nodes out, as a library with one API, `sq/include/sq.h`. It is built from nothing outside `sq/` |
 | [`aa/`](aa/) | roles, authentication and authorization, a library on sm that digres links |
+| [`ty/`](ty/) | the operations of the SQL types, a library of its own that sm and digres call. It is built from nothing outside `ty/` |
 | [`bench/`](bench/) | digres against PostgreSQL 18, query by query |
 
 ## Design documents
 
 Start with [`sm/README.md`](sm/README.md). Before changing code,
-read [`sm/CODE.md`](sm/CODE.md) for `sm/` and `aa/`, or
+read [`sm/CODE.md`](sm/CODE.md) for `sm/`, `aa/` and `ty/`, or
 [`dg/CODE.md`](dg/CODE.md) for `dg/`.
 
 | Document | What it holds |
@@ -138,6 +139,7 @@ read [`sm/CODE.md`](sm/CODE.md) for `sm/` and `aa/`, or
 | [`dg/README.md`](dg/README.md), [`dg/DESIGN.md`](dg/DESIGN.md) | what digres runs, and its decisions of record |
 | [`sm/PGFORK.md`](sm/PGFORK.md#10-digres-how-the-fork-is-to-be-made) | how the fork of PostgreSQL is made |
 | [`aa/AA_DESIGN.md`](aa/AA_DESIGN.md), [`aa/USAGE.md`](aa/USAGE.md) | roles, authentication and authorization |
+| [`ty/DESIGN.md`](ty/DESIGN.md) | the operations of the SQL types, and how they get memory |
 | [`dg/WORKNOTE.md`](dg/WORKNOTE.md) | every step taken in digres, and why |
 
 ## License

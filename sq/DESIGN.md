@@ -210,8 +210,10 @@ arena. The two have the signatures of `malloc` and `free`.
   `longjmp` (§5).
 - free takes a pointer that alloc returned before. sq never
   passes NULL.
-- alloc and free must be safe to call from any thread that
-  parses. Threads may parse at once with the same allocator.
+- sq calls alloc and free only on the thread that called
+  `sq_parse`. They need no thread safety of their own.
+- These are the rules of every allocator in the repository, ty's
+  as well ([`../ty/DESIGN.md`](../ty/DESIGN.md) §3.1).
 
 **WARNING: do not put digres's nodes in an arena.** digres needs
 the allocator, because PostgreSQL does not treat the tree as

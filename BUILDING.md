@@ -80,7 +80,7 @@ one there (`Makefile`):
 export DEBUG=1; make -j4    # debug: dg/build/digres
 unset DEBUG; make -j4       # release: dg/build/digres-release
 make -j4 tsan               # dg/build/digres-tsan, and its tests
-make format                 # clang-format sm, sq and aa
+make format                 # clang-format ty, sm, sq and aa
 make clean
 ```
 

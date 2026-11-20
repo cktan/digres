@@ -5,7 +5,7 @@ make -j4 test
 ```
 
 It runs every part's tests on the debug build, whatever
-`DEBUG` is, in order: sm, sq, aa, then digres, which runs on
+`DEBUG` is, in order: ty, sm, sq, aa, then digres, which runs on
 the other three, stopping at the first that fails. Every
 commit that touches source passes it. digres's part ends with
 these lines:
@@ -19,9 +19,9 @@ slt: PASSED (49 files on digres, 10711 records, 11 skipped)
 all 231 ok
 ```
 
-One part's alone is `make -j4 test-sm`, `test-sq`, `test-aa` or
-`test-dg`, on the debug build too. The output is long: save it
-to a file and read that.
+One part's alone is `make -j4 test-ty`, `test-sm`, `test-sq`,
+`test-aa` or `test-dg`, on the debug build too. The output is
+long: save it to a file and read that.
 
 **Which test is running**: while a doctest binary runs, a file
 beside it, `BINARY.active` (`sm/sm2/build/test_sm2.active`, for

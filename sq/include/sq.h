@@ -166,8 +166,10 @@ typedef void (*sq_notice_fn)(void* arg, const sq_notice_t* notice);
  *     that a bigger one replaced. It takes a pointer that alloc
  *     returned before, and sq never passes NULL. It must not throw
  *     or longjmp.
- *   - alloc and free are safe to call from any thread that parses: a
- *     number of threads may parse at once with the same allocator.
+ *   - sq calls alloc and free only on the thread that called sq_parse,
+ *     so they need no thread safety of their own.
+ *
+ * These are the rules of ty's allocator too (../ty/DESIGN.md, 3.1).
  *   - sq frees nothing else. The tree's nodes, lists and text, and
  *     the tree's store, stay allocated when the tree is destroyed,
  *     and when a parse fails. The caller frees them: it keeps track
