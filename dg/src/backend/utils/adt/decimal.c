@@ -440,6 +440,70 @@ static ty_decimal128_t dec_ty(const decimal_t *num) {
   return {dec_value(num), dec_scale(num)};
 }
 
+/* 10^n as a value, for n up to 38. */
+static i128 dec_pow10(int n) {
+  i128 r = 1;
+
+  while (n-- > 0)
+    r *= 10;
+  return r;
+}
+
+/* The digits of u, at least one, into out; returns how many. */
+static int dec_digits_text(u128 u, char *out) {
+  char tmp[48];
+  int n = 0;
+
+  do {
+    tmp[n++] = (char)('0' + (int)(u % 10));
+    u /= 10;
+  } while (u != 0);
+  for (int i = 0; i < n; i++)
+    out[i] = tmp[n - 1 - i];
+  return n;
+}
+
+/* v at scale as PostgreSQL prints a numeric: every place, no exponent. */
+static char *dec_text(i128 v, int scale) {
+  char dig[48], out[96];
+  int n = dec_digits_text(v < 0 ? -(u128)v : (u128)v, dig), pos = 0;
+
+  if (v < 0)
+    out[pos++] = '-';
+  if (n <= scale) {
+    out[pos++] = '0';
+    if (scale > 0)
+      out[pos++] = '.';
+    for (int i = n; i < scale; i++)
+      out[pos++] = '0';
+    for (int i = 0; i < n; i++)
+      out[pos++] = dig[i];
+  } else {
+    int ip = n - scale;
+
+    for (int i = 0; i < ip; i++)
+      out[pos++] = dig[i];
+    if (scale > 0) {
+      out[pos++] = '.';
+      for (int i = ip; i < n; i++)
+        out[pos++] = dig[i];
+    }
+  }
+  out[pos] = '\0';
+  return pstrdup(out);
+}
+
+/*
+ * *v, at scale from, put to scale to (not below it): false if it then has
+ * more than 36 digits.
+ */
+static bool dec_scale_up(i128 *v, int from, int to) {
+  for (; from < to; from++)
+    if (__builtin_mul_overflow(*v, (i128)10, v))
+      return false;
+  return (*v >= 0 ? *v : -*v) < dec_pow10(DEC_MAX_DIGITS);
+}
+
 /* The wide value of num. */
 static wide_t dec_wide(const decimal_t *num) {
   wide_t w = wide_of_int(dec_value(num));
@@ -873,7 +937,9 @@ Datum numeric_in(PG_FUNCTION_ARGS) {
 
 /* Output function for numeric: every place of its scale, no exponent. */
 Datum numeric_out(PG_FUNCTION_ARGS) {
-  PG_RETURN_CSTRING(wide_text(dec_wide(PG_GETARG_NUMERIC(0))));
+  Numeric n = PG_GETARG_NUMERIC(0);
+
+  PG_RETURN_CSTRING(dec_text(dec_value(n), dec_scale(n)));
 }
 
 /*
@@ -881,32 +947,51 @@ Datum numeric_out(PG_FUNCTION_ARGS) {
  * 1234 at scale 1 is 1.2e+03.  Zero's exponent is 0.
  */
 char *numeric_out_sci(Numeric num, int scale) {
-  wide_t w = dec_wide(num);
-  int exponent = wide_is_zero(w) ? 0 : mag_digits(w.mag) - 1 - w.scale;
-  wide_t sig = w;
-  char *s;
+  i128 v = dec_value(num);
+  int s = dec_scale(num);
+  char dig[48];
+  int exponent =
+      v == 0 ? 0 : dec_digits_text(v < 0 ? -(u128)v : (u128)v, dig) - 1 - s;
+  ty_decimal128_t sig = {v, s + exponent}, r;
+  char *txt;
   char *str;
   size_t len;
 
   if (scale < 0)
     scale = 0;
-  /* The significand is w / 10^exponent: move the point. */
-  sig.scale = w.scale + exponent;
-  if (sig.scale < 0) {
-    sig.mag = mag_mul(sig.mag, mag_pow10(-sig.scale));
-    sig.scale = 0;
+  /* The significand is v / 10^exponent: the point moves, the digits do not. */
+  if (scale < sig.scale) {
+    ty_decimal128_round(&sig, scale, &r);
+    txt = dec_text(r.value, r.scale);
+  } else {
+    char *t = dec_text(sig.value, sig.scale);
+    size_t tl = strlen(t);
+
+    txt = (char *)palloc(tl + 2 + (scale - sig.scale));
+    memcpy(txt, t, tl);
+    if (sig.scale == 0 && scale > 0)
+      txt[tl++] = '.';
+    memset(txt + tl, '0', scale - sig.scale);
+    txt[tl + (scale - sig.scale)] = '\0';
+    pfree(t);
   }
-  s = wide_text(wide_round(sig, scale, false));
-  len = strlen(s) + 13;
+  len = strlen(txt) + 13;
   str = (char *)palloc(len);
-  snprintf(str, len, "%se%+03d", s, exponent);
-  pfree(s);
+  snprintf(str, len, "%se%+03d", txt, exponent);
+  pfree(txt);
   return str;
 }
 
 /* num's text with no zeros after the point, nor the point if bare. */
 char *numeric_normalize(Numeric num) {
-  return wide_text(wide_strip_zeros(dec_wide(num), 0));
+  i128 v = dec_value(num);
+  int s = dec_scale(num);
+
+  while (s > 0 && v % 10 == 0) {
+    v /= 10;
+    s--;
+  }
+  return dec_text(v, s);
 }
 
 /* The largest number of digits a base-10,000 value of 36 digits has. */
@@ -1197,13 +1282,28 @@ Datum numeric_scale(PG_FUNCTION_ARGS) {
 
 /* The fewest places num needs: its scale with no zeros at the end. */
 Datum numeric_min_scale(PG_FUNCTION_ARGS) {
-  PG_RETURN_INT32(wide_strip_zeros(dec_wide(PG_GETARG_NUMERIC(0)), 0).scale);
+  Numeric n = PG_GETARG_NUMERIC(0);
+  i128 v = dec_value(n);
+  int s = dec_scale(n);
+
+  while (s > 0 && v % 10 == 0) {
+    v /= 10;
+    s--;
+  }
+  PG_RETURN_INT32(s);
 }
 
 /* num at the fewest places it needs. */
 Datum numeric_trim_scale(PG_FUNCTION_ARGS) {
-  PG_RETURN_NUMERIC(
-      dec_from_wide(wide_strip_zeros(dec_wide(PG_GETARG_NUMERIC(0)), 0)));
+  Numeric n = PG_GETARG_NUMERIC(0);
+  i128 v = dec_value(n);
+  int s = dec_scale(n);
+
+  while (s > 0 && v % 10 == 0) {
+    v /= 10;
+    s--;
+  }
+  PG_RETURN_NUMERIC(dec_make(v, s));
 }
 
 /* ----------------------------------------------------------------------
@@ -1762,15 +1862,6 @@ Datum numeric_fac(PG_FUNCTION_ARGS) {
  * ----------------------------------------------------------------------
  */
 
-/* 10^n as a value, for n up to 38. */
-static i128 dec_pow10(int n) {
-  i128 r = 1;
-
-  while (n-- > 0)
-    r *= 10;
-  return r;
-}
-
 /* The square root of num, at PostgreSQL's scale for it, rounded. */
 Datum numeric_sqrt(PG_FUNCTION_ARGS) {
   ty_decimal128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
@@ -1995,10 +2086,11 @@ Numeric int64_to_numeric(int64 val) { return dec_make(val, 0); }
  */
 Numeric int64_div_fast_to_numeric(int64 val1, int log10val2) {
   if (log10val2 < 0) {
-    wide_t w = wide_of_int(val1);
+    i128 v = val1;
 
-    w.mag = mag_mul(w.mag, mag_pow10(-log10val2));
-    return dec_from_wide(w);
+    if (!dec_scale_up(&v, 0, -log10val2))
+      return dec_range_error(NULL);
+    return dec_make(v, 0);
   }
   return dec_make(val1, log10val2);
 }
@@ -2023,17 +2115,12 @@ Datum int2_numeric(PG_FUNCTION_ARGS) {
  * hi; else false.
  */
 static bool dec_to_int(const decimal_t *num, i128 lo, i128 hi, i128 *out) {
-  wide_t w = wide_round(dec_wide(num), 0, false);
-  u128 mag;
-  i128 v;
+  ty_decimal128_t a = dec_ty(num), r;
 
-  if (mag_digits(w.mag) > 38)
+  ty_decimal128_round(&a, 0, &r);
+  if (r.value < lo || r.value > hi)
     return false;
-  mag = ((u128)w.mag.limb[1] << 64) | w.mag.limb[0];
-  v = w.neg ? -(i128)mag : (i128)mag;
-  if (v < lo || v > hi)
-    return false;
-  *out = v;
+  *out = r.value;
   return true;
 }
 
@@ -2125,7 +2212,9 @@ Datum float4_numeric(PG_FUNCTION_ARGS) {
 
 /* numeric to float8, by its text. */
 Datum numeric_float8(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(strtod(wide_text(dec_wide(PG_GETARG_NUMERIC(0))), NULL));
+  Numeric n = PG_GETARG_NUMERIC(0);
+
+  PG_RETURN_FLOAT8(strtod(dec_text(dec_value(n), dec_scale(n)), NULL));
 }
 
 /* numeric to float8, for the planner: never an error. */
@@ -2135,17 +2224,20 @@ Datum numeric_float8_no_overflow(PG_FUNCTION_ARGS) {
 
 /* numeric to float4, by its text. */
 Datum numeric_float4(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT4(strtof(wide_text(dec_wide(PG_GETARG_NUMERIC(0))), NULL));
+  Numeric n = PG_GETARG_NUMERIC(0);
+
+  PG_RETURN_FLOAT4(strtof(dec_text(dec_value(n), dec_scale(n)), NULL));
 }
 
 /* numeric to pg_lsn: rounded to an integer, from 0 to 2^64 - 1. */
 Datum numeric_pg_lsn(PG_FUNCTION_ARGS) {
-  wide_t w = wide_round(dec_wide(PG_GETARG_NUMERIC(0)), 0, false);
+  ty_decimal128_t a = dec_ty(PG_GETARG_NUMERIC(0)), r;
 
-  if (w.neg || mag_bits(w.mag) > 64)
+  ty_decimal128_round(&a, 0, &r);
+  if (r.value < 0 || r.value > (i128)UINT64_MAX)
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("pg_lsn out of range")));
-  PG_RETURN_LSN((XLogRecPtr)w.mag.limb[0]);
+  PG_RETURN_LSN((XLogRecPtr)(uint64)r.value);
 }
 
 /* ----------------------------------------------------------------------
@@ -2158,29 +2250,30 @@ Datum numeric_pg_lsn(PG_FUNCTION_ARGS) {
  * larger of their scales.
  */
 Numeric random_numeric(pg_prng_state *state, Numeric rmin, Numeric rmax) {
-  wide_t lo = dec_wide(rmin), hi = dec_wide(rmax);
-  int s = Max(lo.scale, hi.scale);
-  wide_t range;
-  mag_t r;
-  int bits;
+  i128 lo = dec_value(rmin), hi = dec_value(rmax);
+  int s = Max(dec_scale(rmin), dec_scale(rmax));
+  u128 range, r;
+  int bits = 0;
 
-  lo = wide_scale_up(lo, s);
-  hi = wide_scale_up(hi, s);
-  if (wide_cmp(lo, hi) > 0)
+  if (!dec_scale_up(&lo, dec_scale(rmin), s) ||
+      !dec_scale_up(&hi, dec_scale(rmax), s))
+    return dec_range_error(NULL);
+  if (lo > hi)
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
              errmsg("lower bound must be less than or equal to upper bound")));
-  range = wide_add(hi, lo, true);
-  bits = mag_bits(range.mag);
+  range = (u128)hi - (u128)lo;
+  for (u128 t = range; t != 0; t >>= 1)
+    bits++;
   /* Draw bits as wide as the range, again while the draw is past it. */
   do {
-    r = mag_of(0);
+    r = 0;
     for (int i = 0; i * 64 < bits; i++)
-      r.limb[i] = pg_prng_uint64(state);
-    if (bits % 64 != 0)
-      r.limb[(bits - 1) / 64] &= ((uint64)1 << (bits % 64)) - 1;
-  } while (mag_cmp(r, range.mag) > 0);
-  return dec_from_wide(wide_add(lo, wide_t{r, false, s}, false));
+      r |= (u128)pg_prng_uint64(state) << (64 * i);
+    if (bits < 128)
+      r &= (((u128)1) << bits) - 1;
+  } while (r > range);
+  return dec_make(lo + (i128)r, s);
 }
 
 /* ----------------------------------------------------------------------
@@ -3116,7 +3209,9 @@ Datum decimal64_in(PG_FUNCTION_ARGS) {
 
 /* Output: every place of its scale, as numeric's. */
 Datum decimal64_out(PG_FUNCTION_ARGS) {
-  PG_RETURN_CSTRING(wide_text(d64_wide(PG_GETARG_DATUM(0))));
+  Datum d = PG_GETARG_DATUM(0);
+
+  PG_RETURN_CSTRING(dec_text(d64_value(d), d64_scale(d)));
 }
 
 /* Binary input: numeric's format, as a decimal64. */
@@ -3211,12 +3306,16 @@ Datum decimal64_int8(PG_FUNCTION_ARGS) {
 
 /* decimal64 to float4, by its text. */
 Datum decimal64_float4(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT4(strtof(wide_text(d64_wide(PG_GETARG_DATUM(0))), NULL));
+  Datum d = PG_GETARG_DATUM(0);
+
+  PG_RETURN_FLOAT4(strtof(dec_text(d64_value(d), d64_scale(d)), NULL));
 }
 
 /* decimal64 to float8, by its text. */
 Datum decimal64_float8(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(strtod(wide_text(d64_wide(PG_GETARG_DATUM(0))), NULL));
+  Datum d = PG_GETARG_DATUM(0);
+
+  PG_RETURN_FLOAT8(strtod(dec_text(d64_value(d), d64_scale(d)), NULL));
 }
 
 /*

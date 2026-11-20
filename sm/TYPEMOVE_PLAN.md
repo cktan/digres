@@ -324,8 +324,13 @@ copied from PostgreSQL keeps its copyright notice
    the window `in_range` are in ty too: `where width_bucket(a,
    0, 1500, 10) = 5` fell 66.5% and `generate_series(1, 2000)`
    36.0%.
-   Left, still on `mag_t` and `wide_t`: the aggregates' sums and
-   the text and binary forms; then the hash.
+   The text out of a value, the conversions to a float, an
+   integer and `pg_lsn`, `random(min, max)`, `min_scale` and
+   `trim_scale` are on 128-bit values too: `sum(length(a::text))`
+   fell 36.0% and `where a::float8 > 500` 32.8%.
+   Left, still on `mag_t` and `wide_t`: text input with its
+   typmod, the binary forms, the `decimal64` conversion helpers
+   and the aggregates' sums; then the hash.
    `/` waits for the 512-bit magnitude. The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from
