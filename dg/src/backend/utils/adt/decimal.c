@@ -1509,71 +1509,54 @@ static bool division_by_zero(bool *have_error) {
 }
 
 /*
- * Whether v, a value's integer, has at most 36 digits: a result that does
- * is made as it is, without the wide path (DECIMAL.md section 2.5).
+ * The error of a decimal128 result past 36 digits: raised, or, if the
+ * caller asks for it, recorded in *have_error.
  */
-static bool dec_fits(i128 v) {
-  constexpr i128 limit = [] {
-    i128 r = 1;
-
-    for (int i = 0; i < DEC_MAX_DIGITS; i++)
-      r *= 10;
-    return r;
-  }();
-
-  return v < limit && v > -limit;
-}
-
-/* num1 + num2, or NULL with *have_error set past 36 digits. */
-Numeric numeric_add_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  Numeric res;
-
-  if (dec_scale(num1) == dec_scale(num2)) {
-    i128 r;
-
-    if (!__builtin_add_overflow(dec_value(num1), dec_value(num2), &r) &&
-        dec_fits(r))
-      return dec_make(r, dec_scale(num1));
-  }
-  return dec_pack(wide_add(dec_wide(num1), dec_wide(num2), false), &res,
-                  have_error)
-             ? res
-             : NULL;
-}
-
-/* num1 - num2, or NULL with *have_error set past 36 digits. */
-Numeric numeric_sub_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  Numeric res;
-
-  if (dec_scale(num1) == dec_scale(num2)) {
-    i128 r;
-
-    if (!__builtin_sub_overflow(dec_value(num1), dec_value(num2), &r) &&
-        dec_fits(r))
-      return dec_make(r, dec_scale(num1));
-  }
-  return dec_pack(wide_add(dec_wide(num1), dec_wide(num2), true), &res,
-                  have_error)
-             ? res
-             : NULL;
+static Numeric dec_range_error(bool *have_error) {
+  if (have_error == NULL)
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("value overflows numeric format")));
+  *have_error = true;
+  return NULL;
 }
 
 /*
- * num1 * num2 at the sum of their scales, places past 36 digits rounded
- * away; NULL with *have_error set if the integer part is past 36 digits.
+ * num1 + num2, a decimal128 as an int64 + an int64 is an int64: ty adds
+ * them exactly, or NULL with *have_error set past 36 digits.
+ */
+Numeric numeric_add_opt_error(Numeric num1, Numeric num2, bool *have_error) {
+  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_decimal128_t r;
+
+  if (ty_decimal128_add(&a, &b, &r) != 0)
+    return dec_range_error(have_error);
+  return dec_make(r.value, r.scale);
+}
+
+/* num1 - num2, as num1 + num2: exact, or NULL with *have_error set. */
+Numeric numeric_sub_opt_error(Numeric num1, Numeric num2, bool *have_error) {
+  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_decimal128_t r;
+
+  if (ty_decimal128_sub(&a, &b, &r) != 0)
+    return dec_range_error(have_error);
+  return dec_make(r.value, r.scale);
+}
+
+/*
+ * num1 * num2 at the sum of their scales: exact, or NULL with *have_error
+ * set if it has more than 36 digits or 36 places.
  */
 Numeric numeric_mul_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  Numeric res;
-  int s = dec_scale(num1) + dec_scale(num2);
-  i128 r;
+  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_decimal128_t r;
 
-  if (s <= NUMERIC_MAX_SCALE &&
-      !__builtin_mul_overflow(dec_value(num1), dec_value(num2), &r) &&
-      dec_fits(r))
-    return dec_make(r, s);
-  return dec_pack(wide_mul(dec_wide(num1), dec_wide(num2)), &res, have_error)
-             ? res
-             : NULL;
+  if (ty_decimal128_mul(&a, &b, &r) != 0)
+    return dec_range_error(have_error);
+  return dec_make(r.value, r.scale);
 }
 
 /* num1 / num2 at PostgreSQL's scale; NULL with *have_error on an error. */

@@ -1996,8 +1996,9 @@ select (-1.0) ^ 1000000000000000;
 select (-1.0) ^ 1000000000000001;
 
 -- integer powers of 10
-select n, 10.0 ^ n as "10^n", (10.0 ^ n) * (10.0 ^ (-n)) = 1 as ok
-from generate_series(-20, 20) n;
+--dg-skip: value overflows numeric format
+--dg select n, 10.0 ^ n as "10^n", (10.0 ^ n) * (10.0 ^ (-n)) = 1 as ok
+--dg from generate_series(-20, 20) n;
 
 --
 -- Tests for raising to non-integer powers

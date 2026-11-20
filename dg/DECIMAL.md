@@ -202,8 +202,8 @@ typedef struct decimal_t {  /* decimal128's, in two halves */
 Results are exact or an error, never silently wrong.
 
 - **`+`, `-`**: scale `max(s1, s2)`.
-- **`*`**: scale `s1 + s2`; past 36 digits, rounded to fewer
-  places where the integer part still fits, else an error.
+- **`*`**: scale `s1 + s2`; past 36 digits, an error (it was
+  rounded to fewer places, before the rule below).
 - **`/`**: PostgreSQL's choice of scale (`select_div_scale()`,
   at least 16 significant digits, at most 36 in all), rounded.
 - **`decimal64` `+`, `-`, `*` and `/` give a `decimal64`**, by
@@ -237,11 +237,17 @@ Results are exact or an error, never silently wrong.
     error comes only past 38 digits. Its `/` gives a `DOUBLE`.
     A digres operand does not carry width and scale (§2.1), so
     its operator has one result type and cannot widen.
-- **A result of `decimal128` that may pass 17 digits** is
-  computed in 128 bits for `decimal128`'s own `+`, `-` and `*`
-  while the result fits 36 digits. Only past that, and for the
-  rest, is the 512-bit wide path taken. What `decimal64` does
-  itself is listed in §2.8.
+- **`decimal128` follows the same rule** (decided 2026-11-20):
+  `decimal64` and `decimal128` work as `int32` and `int64` do.
+  A `+`, `-` or `*` of two `decimal128` is a `decimal128`,
+  exact or an error past 36 digits (`*` also past 36 places).
+  Nothing is widened, and nothing is rounded: a user who wants
+  more digits casts an operand to a wider type, as with
+  `int32` and `int64`. A `decimal64` with a `decimal128` is a
+  `decimal128`, by the implicit cast. They are `ty_decimal128_add`,
+  `_sub` and `_mul`, in 128 bits, with no 512-bit path. `/`, `%`,
+  and the functions of the exponent still run in the wide path.
+  What `decimal64` does itself is listed in §2.8.
 - **`%`, `div`, `abs`, `sign`, `ceil`, `floor`, `round(x, n)`,
   `trunc(x, n)`, `gcd`, `lcm`, `factorial`, `min`, `max`**:
   exact, as PostgreSQL's.

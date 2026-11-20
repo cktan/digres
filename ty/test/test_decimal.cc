@@ -419,3 +419,81 @@ TEST_CASE("decimal64 ceil and floor give a whole number") {
   CHECK(7 == ty_decimal64_floor({700, 2}).value);
   CHECK(7 == ty_decimal64_ceil({7, 0}).value);
 }
+
+namespace {
+
+/* 10^n as a 128-bit integer. */
+ty_int128_t ten_to(int n) {
+  ty_int128_t r = 1;
+  for (; n > 0; n--) {
+    r *= 10;
+  }
+  return r;
+}
+
+} // namespace
+
+// Verify decimal128 + - *: exact, or an error past 36 digits.
+// 1. Add and subtract at one scale and at two.
+// 2. Add up to the largest value, 36 digits, which fits; one more fails.
+// 3. Add where aligning the scales passes 128 bits: it fails.
+// 4. Multiply, with a negative; to the largest value, which fits.
+// 5. Multiply past 36 digits, and past 128 bits, and to 37 places: each
+//    fails with TY_ERR_RANGE and sets no result.
+TEST_CASE("decimal128 add, sub and mul are exact, or fail past 36 digits") {
+  ty_decimal128_t r = {7, 7};
+  ty_int128_t big = ten_to(36) - 1;
+
+  // 1. Add and subtract at one scale and at two.
+  ty_decimal128_t a = {125, 2};
+  ty_decimal128_t b = {250, 2};
+  CHECK(0 == ty_decimal128_add(&a, &b, &r));
+  CHECK(375 == r.value);
+  a = {15, 1};
+  b = {25, 3};
+  CHECK(0 == ty_decimal128_sub(&a, &b, &r));
+  CHECK(1475 == r.value);
+  CHECK(3 == r.scale);
+
+  // 2. Add up to the largest value, 36 digits, which fits; one more fails.
+  a = {big - 1, 0};
+  b = {1, 0};
+  CHECK(0 == ty_decimal128_add(&a, &b, &r));
+  CHECK(big == r.value);
+  r = {7, 7};
+  a = {big, 0};
+  CHECK(-1 == ty_decimal128_add(&a, &b, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+
+  // 3. Add where aligning the scales passes 128 bits: it fails.
+  a = {big, 0};
+  b = {1, 36};
+  CHECK(-1 == ty_decimal128_add(&a, &b, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+
+  // 4. Multiply, with a negative; to the largest value, which fits.
+  a = {-15, 1};
+  b = {225, 2};
+  CHECK(0 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(-3375 == r.value);
+  CHECK(3 == r.scale);
+  a = {big, 0};
+  b = {1, 0};
+  CHECK(0 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(big == r.value);
+
+  // 5. Multiply past 36 digits, and past 128 bits, and to 37 places.
+  r = {7, 7};
+  b = {10, 0};
+  CHECK(-1 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  a = {big, 0};
+  b = {big, 0};
+  CHECK(-1 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  a = {1, 20};
+  b = {1, 17};
+  CHECK(-1 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(7 == r.value);
+}

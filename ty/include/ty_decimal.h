@@ -70,6 +70,24 @@ static inline int ty_decimal64_cmp(ty_decimal64_t a, ty_decimal64_t b) {
     return ty_decimal64_cmp_scaled(a, b);
 }
 
+/* The most digits, and the most places, a decimal128 holds. */
+#define TY_DECIMAL128_MAX_DIGITS 36
+#define TY_DECIMAL128_MAX_SCALE  36
+
+/*
+ * A decimal128 works as an int64 does beside an int32: a + b, a - b and
+ * a * b of two decimal128 are a decimal128, exact, or TY_ERR_RANGE if the
+ * result needs more than 36 digits, or a product more than 36 places. The
+ * caller who wants more casts an operand to a wider type. *result is then
+ * not set. The scales of both operands are at most 36.
+ */
+int ty_decimal128_add(const ty_decimal128_t* a, const ty_decimal128_t* b,
+                      ty_decimal128_t* result);
+int ty_decimal128_sub(const ty_decimal128_t* a, const ty_decimal128_t* b,
+                      ty_decimal128_t* result);
+int ty_decimal128_mul(const ty_decimal128_t* a, const ty_decimal128_t* b,
+                      ty_decimal128_t* result);
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DECIMAL64_MAX_DIGITS 17
 #define TY_DECIMAL64_MAX_SCALE  17

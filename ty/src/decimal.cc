@@ -57,6 +57,57 @@ int add_or_sub(const ty_decimal64_t *a, const ty_decimal64_t *b, bool subtract,
   return 0;
 }
 
+/* 10^36 - 1: the largest value of a decimal128. */
+constexpr ty_int128_t d128_max = [] {
+  ty_int128_t r = 1;
+  for (int i = 0; i < TY_DECIMAL128_MAX_DIGITS; i++) {
+    r *= 10;
+  }
+  return r - 1;
+}();
+
+/* Record that a result does not fit a decimal128; returns -1. */
+int range_error128() {
+  return ty_internal::set_error(TY_ERR_RANGE, "decimal128 result out of range");
+}
+
+/*
+ * *result = a + b, or a - b if subtract, at the larger of the scales.
+ * 1. Multiply the value of the smaller scale by 10 until the scales are
+ *    equal; if that does not fit 128 bits, fail: the result would have
+ *    more than 36 digits, as the other value cannot cancel it.
+ * 2. Add or subtract them; if that does not fit 128 bits, fail.
+ * 3. If the result has more than 36 digits, fail.
+ * 4. Set the result.
+ */
+int add_or_sub128(const ty_decimal128_t *a, const ty_decimal128_t *b,
+                  bool subtract, ty_decimal128_t *result) {
+  ty_int128_t x = a->value;
+  ty_int128_t y = b->value;
+  int sa = a->scale;
+  int sb = b->scale;
+
+  for (; sa < sb; sa++) {
+    if (__builtin_mul_overflow(x, (ty_int128_t)10, &x)) {
+      return range_error128();
+    }
+  }
+  for (; sb < sa; sb++) {
+    if (__builtin_mul_overflow(y, (ty_int128_t)10, &y)) {
+      return range_error128();
+    }
+  }
+  ty_int128_t r;
+  bool overflow = subtract ? __builtin_sub_overflow(x, y, &r)
+                           : __builtin_add_overflow(x, y, &r);
+  if (overflow || r > d128_max || r < -d128_max) {
+    return range_error128();
+  }
+  result->value = r;
+  result->scale = sa;
+  return 0;
+}
+
 /* A value as unsigned: |v|. */
 typedef unsigned __int128 u128;
 u128 magnitude(ty_int128_t v) { return v < 0 ? -(u128)v : (u128)v; }
@@ -307,4 +358,38 @@ ty_decimal64_t ty_decimal64_ceil(ty_decimal64_t a) {
 /* The nearest whole number at or below a. */
 ty_decimal64_t ty_decimal64_floor(ty_decimal64_t a) {
   return ceil_or_floor(a, true);
+}
+
+/* *result = a + b; fails past 36 digits. */
+int ty_decimal128_add(const ty_decimal128_t *a, const ty_decimal128_t *b,
+                      ty_decimal128_t *result) {
+  return add_or_sub128(a, b, false, result);
+}
+
+/* *result = a - b; fails past 36 digits. */
+int ty_decimal128_sub(const ty_decimal128_t *a, const ty_decimal128_t *b,
+                      ty_decimal128_t *result) {
+  return add_or_sub128(a, b, true, result);
+}
+
+/*
+ * *result = a * b, at the sum of the scales.
+ * 1. Multiply in 128 bits; if that does not fit, the product has more
+ *    than 36 digits: fail.
+ * 2. If the product has more than 36 digits, or the scale is above 36,
+ *    fail.
+ * 3. Set the result.
+ */
+int ty_decimal128_mul(const ty_decimal128_t *a, const ty_decimal128_t *b,
+                      ty_decimal128_t *result) {
+  ty_int128_t p;
+  int s = a->scale + b->scale;
+
+  if (__builtin_mul_overflow(a->value, b->value, &p) ||
+      s > TY_DECIMAL128_MAX_SCALE || p > d128_max || p < -d128_max) {
+    return range_error128();
+  }
+  result->value = p;
+  result->scale = s;
+  return 0;
 }

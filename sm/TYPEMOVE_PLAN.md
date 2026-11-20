@@ -256,13 +256,17 @@ copied from PostgreSQL keeps its copyright notice
 
    | EXPR | old | new | change |
    | --- | --- | --- | --- |
-   | `a + b > 1000` | 4,726,761 | 3,707,388 | -21.6% |
+   | `a + b > 1000` | 5,369,321 | 4,417,015 | -17.7% |
    | `a * b > 100000` | 5,394,971 | 4,488,746 | -16.8% |
    | `(a + b) - (a - b) * 2 > 0` | 5,907,925 | 4,995,572 | -15.4% |
 
-   About 450 to 510 instructions fewer for each row: the
+   About 450 to 480 instructions fewer for each row: the
    `palloc` of a `decimal128` result, and the compare of a
-   `decimal128` with a literal.
+   `decimal128` with a literal. The first run of the first
+   table, `a + b`, read 4,726,761 and 3,707,388 (-21.6%): the
+   first start of a server on a loaded data directory costs more
+   than the next. Each point is now taken after a run to warm it
+   up, and `a + b` was taken again; the other two did not move.
 2. **One function end to end.** Move `decimal64` add into ty
    (`ty_decimal64_add`, in `ty/include/ty_decimal.h`). Its
    result is a `decimal64`, by value, and it fails with
@@ -287,6 +291,13 @@ copied from PostgreSQL keeps its copyright notice
    kind; and `lcm`, a `decimal64` that is an error past 17
    digits, as `*` is; and the compare, `ty_decimal64_cmp`. Next:
    the hash, which waits for `decimal128`, as both hash alike.
+   `decimal128` `+`, `-` and `*` moved too, under the rule that
+   `decimal64` and `decimal128` work as `int32` and `int64` do:
+   exact, or an error past 36 digits, never rounded and never
+   widened. They cost `where a + b > 1000` over 2,000 rows of
+   `numeric(30,4)` +0.84% and `a * b > 100000` +0.51%: in the
+   limit, as the equal-scale path was in line, and is a call
+   now.
    `/` waits for the 512-bit magnitude. The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from
