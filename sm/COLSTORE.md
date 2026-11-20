@@ -1026,6 +1026,10 @@ random CGs and random bounds, against a test of every value.
 9. A changed byte in a long value fails a scan of its column,
    and not a scan of the others; a changed byte in a CG file
    fails a scan of its column.
+10. A reader's `FOR SHARE` lock and a prepared writer hold off
+    RG compaction and the seal until they end.
+11. A bulk load rolled back to a savepoint leaves no row, no RG
+    and no file.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.

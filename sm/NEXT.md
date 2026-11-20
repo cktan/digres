@@ -456,12 +456,9 @@ Owed, and blocking nothing above:
     catches a small RG (§11.1).
   - **Tests not written yet:**
     - mvcc: a seal that meets a writer in flight or prepared;
-    - sm3: TOAST chunks erased by the seal; a prepared writer
-      skipped by the seal and given up on by RG compaction; a
-      row lock across RG compaction; a bulk load's rollback to
-      a savepoint; `ANALYZE`'s null fraction; one random
-      workload on a column store table and a row store table,
-      compared at each level;
+    - sm3: TOAST chunks erased by the seal; `ANALYZE`'s null
+      fraction; one random workload on a column store table and
+      a row store table, compared at each level;
     - rel: the sweep after a new attach; 2PC across a restart;
     - digres: a foreign key that references a column store
       table; an RR update while a seal runs (`server.sh`); an

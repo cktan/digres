@@ -1340,3 +1340,128 @@ TEST_CASE("a changed byte in a CG file or a long value fails the scan") {
   flip_byte(db, rg + ".0", 10);
   CHECK(scan_error(db, c, {true, false}) == sm1::SM_ERR_CORRUPT);
 }
+
+namespace {
+
+/* The regular files under the colstore directories of db's home. */
+size_t colstore_files(col_db_t &db) {
+  size_t n = 0;
+  for (const auto &e :
+       std::filesystem::recursive_directory_iterator(db.path())) {
+    n += e.is_regular_file() &&
+         e.path().string().find("/colstore/") != std::string::npos;
+  }
+  return n;
+}
+
+} // namespace
+
+// Verify that a reader's FOR SHARE lock and a prepared writer keep a
+// row from RG compaction and from the seal, until they end, with row
+// groups of 100 rows.
+// 1. Load 100 rows: one row group. S2 locks a = 5 FOR SHARE: RG
+//    compaction gives up. S2 commits: nothing yet changes.
+// 2. S2 deletes a = 6 and prepares: RG compaction gives up. COMMIT
+//    PREPARED: RG compaction rewrites the row group, 99 rows.
+// 3. Insert 100 rows into the delta store. S2 updates a = 1050 and
+//    prepares: the seal finds 99 rows it can take, and seals none.
+//    ROLLBACK PREPARED: the seal takes all 100.
+TEST_CASE("a FOR SHARE lock and a prepared writer hold off RG compaction "
+          "and the seal") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  load_rows(db, c, 100);
+  uint64_t rg = where(db, c, 5).first;
+  REQUIRE(rg != 0);
+  sm1::session_t *s2 = db.open();
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
+  sm1::session_t *s3 = db.open();
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
+  sm3::table_t *t2 = nullptr;
+  // 1. FOR SHARE.
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IS, t2) == 0);
+  REQUIRE(sm3::tbl_lock(t2, where(db, c, 5).second, sm1::SM_LOCKMODE_SH) == 0);
+  CHECK_FALSE(compact(ss3, c, {rg}));
+  sm3::tbl_close(t2);
+  REQUIRE(sm3::commit(ss2) == 0);
+  CHECK(where(db, c, 5).first == rg);
+  // 2. A prepared delete.
+  auto [rg6, id6] = where(db, c, 6);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  REQUIRE(sm3::tbl_delete_at(t2, rg6, id6) == 0);
+  sm3::tbl_close(t2);
+  REQUIRE_MESSAGE(sm3::prepare(ss2, "g1") == 0, sm1::errmsg());
+  CHECK_FALSE(compact(ss3, c, {rg}));
+  REQUIRE_MESSAGE(sm1::commit_prepared(db.s, "g1") == 0, sm1::errmsg());
+  CHECK(compact(ss3, c, {rg}));
+  CHECK(where(db, c, 5).first != rg);
+  CHECK(scan_rows(db, c).size() == 99);
+  // 3. A prepared update of a delta row.
+  insert_rows(db, c, 1000, 1100);
+  auto [rg0, id1050] = where(db, c, 1050);
+  REQUIRE(rg0 == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  row_t r(1050, "p");
+  REQUIRE(sm3::tbl_update_at(t2, 0, id1050, r.d, r.null) == 0);
+  sm3::tbl_close(t2);
+  REQUIRE_MESSAGE(sm3::prepare(ss2, "g2") == 0, sm1::errmsg());
+  CHECK_FALSE(seal(ss3, c));
+  CHECK(where(db, c, 1000).first == 0);
+  REQUIRE_MESSAGE(sm1::abort_prepared(db.s, "g2") == 0, sm1::errmsg());
+  CHECK(seal(ss3, c));
+  CHECK(where(db, c, 1000).first != 0);
+  CHECK(where(db, c, 1050).first != 0);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify that a bulk load rolled back to a savepoint leaves no row,
+// no row group and no file, and the transaction goes on, with row
+// groups of 100 rows.
+// 1. Begin, set a savepoint, and load 250 rows: two row groups and
+//    50 rows in the delta store, with their files.
+// 2. Roll back to the savepoint, insert one row, and commit.
+// 3. One row, no row group, and no file.
+TEST_CASE("a bulk load rolled back to a savepoint leaves nothing") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The load.
+  db.begin();
+  int depth = sm3::savepoint(db.ss);
+  REQUIRE(depth >= 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  sm3::loader_t *l = nullptr;
+  REQUIRE(sm3::tbl_load_open(t, l) == 0);
+  for (int i = 0; i < 250; i++) {
+    row_t r(i, "l");
+    uint64_t id = 0;
+    REQUIRE(sm3::tbl_load_add(l, r.d, r.null, id) == 0);
+  }
+  REQUIRE(sm3::tbl_load_close(l) == 0);
+  sm3::tbl_close(t);
+  CHECK(colstore_files(db) > 0);
+  // 2. Back to the savepoint.
+  REQUIRE_MESSAGE(sm3::rollback(db.ss, depth) == 0, sm1::errmsg());
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r(7, "kept");
+  uint64_t id = 0;
+  REQUIRE(sm3::tbl_insert(t, r.d, r.null, id) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  // 3. What is left.
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 1);
+  CHECK(rows[7] == "kept");
+  CHECK(row_groups(db, c) == 0);
+  CHECK(colstore_files(db) == 0);
+}
