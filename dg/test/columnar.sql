@@ -23,6 +23,10 @@
 --    keyword); another value is refused.
 -- 10. A row store table's foreign key that references a column store
 --     table fails, as the referenced column has no unique key.
+-- 11. Bounds on a numeric(10,2) column, of constants at a finer scale
+--     or past its precision, give what a row store copy gives: two
+--     row groups, d 0.00 to 99.99 and 100.00 to 199.99, and the
+--     delta store.
 \set ON_ERROR_STOP off
 create temp table columnar_ref (id int primary key);
 create temp table columnar_t (
@@ -124,6 +128,23 @@ insert into columnar_row values (1);
 select * from columnar_row;
 create temp table columnar_bad (a int) with (storage = banana);
 create temp table columnar_child (r int references columnar_t (id));
+create temp table columnar_n (d numeric(10,2)) with (storage = columnar);
+insert into columnar_n select g / 100.0 from generate_series(0, 24999) g;
+create temp table columnar_nr as select * from columnar_n;
+select 'columnar' as t, count(*), min(d), max(d) from columnar_n
+  where d < 100.004
+union all select 'row', count(*), min(d), max(d) from columnar_nr
+  where d < 100.004;
+select 'columnar' as t, count(*), min(d), max(d) from columnar_n
+  where d > 99.985
+union all select 'row', count(*), min(d), max(d) from columnar_nr
+  where d > 99.985;
+select 'columnar' as t, count(*) from columnar_n where d = 100.000
+union all select 'row', count(*) from columnar_nr where d = 100.000;
+select 'columnar' as t, count(*) from columnar_n where d < 1e20
+union all select 'row', count(*) from columnar_nr where d < 1e20;
+drop table columnar_nr;
+drop table columnar_n;
 drop table columnar_row;
 drop table columnar_t;
 drop table columnar_ref;

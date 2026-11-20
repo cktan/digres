@@ -13648,3 +13648,18 @@ A check hook took the new value as a `char **`, to change it with
   varlena's payload ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §6).
 - **Test**: step 5 of `test/columnar.sql`, text bounds against a row
   store copy.
+
+## Step 453: a decimal bound of a column store scan takes in every row
+
+- **What it is**: a fix. `bound_datum()` in
+  `access/sm/smstore.c` made a decimal bound the column's integer
+  as an assignment rounds it, half up, and failed past the
+  column's precision. So `d < 100.004` on a `numeric(10,2)`
+  column became `d < 100.00`, and skipped the row group whose
+  min is 100.00; `d < 1e20` failed with an overflow.
+- **How**: as an index scan's bound does (`numeric_bound()`): a
+  lower bound or an equality is the column's integer at or below
+  the constant, an upper bound the one at or above it, clamped to
+  the column's precision.
+- **Test**: step 11 of `test/columnar.sql`, against a row store
+  copy.

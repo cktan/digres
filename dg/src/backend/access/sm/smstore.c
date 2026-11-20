@@ -3645,12 +3645,15 @@ static bool may_read_some(Index scanrelid, EState *estate) {
 }
 
 /*
- * A datum of rel's column att as sm takes it, for a bound: a decimal its
- * integer at the column's scale, a varlena read whole.
+ * A datum of rel's column att as sm takes it, for a bound: a decimal the
+ * column's integer at or below it, or with upper at or above it, within
+ * the column's precision (numeric_bound()), so the bound takes in every
+ * row the qual would; a varlena read whole.
  */
-static sm_datum_t bound_datum(Form_pg_attribute att, Datum d) {
+static sm_datum_t bound_datum(Form_pg_attribute att, Datum d, bool upper) {
   if (is_decimal(att->atttypid))
-    return numeric_to_sm(d, att->atttypid, att->atttypmod);
+    return numeric_bound(d, att->atttypid, att->atttypid, att->atttypmod, upper,
+                         (uint8 *)palloc(16));
   if (-1 == att->attlen)
     return (sm_datum_t)PG_DETOAST_DATUM_PACKED(d);
   return (sm_datum_t)d;
@@ -3751,7 +3754,9 @@ static std::vector<sm_col_bound_t> qual_bounds(Relation rel, List *qual,
             : BTGreaterStrategyNumber == s      ? BTLessStrategyNumber
             : BTGreaterEqualStrategyNumber == s ? BTLessEqualStrategyNumber
                                                 : s;
-      v = bound_datum(form, ((Const *)right)->constvalue);
+      v = bound_datum(form, ((Const *)right)->constvalue,
+                      BTLessStrategyNumber == s ||
+                          BTLessEqualStrategyNumber == s);
       b.attnum = att - 1;
       b.not_null = true;
       if (BTEqualStrategyNumber == s) {
@@ -3805,7 +3810,7 @@ static std::vector<sm_col_bound_t> qual_bounds(Relation rel, List *qual,
       /* A null element matches no row. */
       for (int i = 0; i < n; i++)
         if (!nulls[i])
-          in[k++] = bound_datum(form, elems[i]);
+          in[k++] = bound_datum(form, elems[i], false);
       b.attnum = att - 1;
       b.not_null = true;
       b.has_in = true;
