@@ -423,6 +423,18 @@ static Numeric dec_make(i128 v, int scale) {
   return res;
 }
 
+/*
+ * The error of a decimal128 result past 36 digits: raised, or, if the
+ * caller asks for it, recorded in *have_error.
+ */
+static Numeric dec_range_error(bool *have_error) {
+  if (have_error == NULL)
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("value overflows numeric format")));
+  *have_error = true;
+  return NULL;
+}
+
 /* The wide value of num. */
 static wide_t dec_wide(const decimal_t *num) {
   wide_t w = wide_of_int(dec_value(num));
@@ -476,13 +488,6 @@ static Numeric dec_from_wide(const wide_t &w) {
 
   dec_pack(w, &res, NULL);
   return res;
-}
-
-/* The sign of num: -1, 0 or 1. */
-static int dec_sign(const decimal_t *num) {
-  i128 v = dec_value(num);
-
-  return v < 0 ? -1 : (v > 0 ? 1 : 0);
 }
 
 /*
@@ -1109,18 +1114,18 @@ bool numeric_is_inf(Numeric num) { return false; }
 
 /* |num|, at its scale. */
 Datum numeric_abs(PG_FUNCTION_ARGS) {
-  wide_t w = dec_wide(PG_GETARG_NUMERIC(0));
+  Numeric n = PG_GETARG_NUMERIC(0);
+  ty_decimal128_t r = ty_decimal128_abs({dec_value(n), dec_scale(n)});
 
-  w.neg = false;
-  PG_RETURN_NUMERIC(dec_from_wide(w));
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* -num, at its scale. */
 Datum numeric_uminus(PG_FUNCTION_ARGS) {
-  wide_t w = dec_wide(PG_GETARG_NUMERIC(0));
+  Numeric n = PG_GETARG_NUMERIC(0);
+  ty_decimal128_t r = ty_decimal128_neg({dec_value(n), dec_scale(n)});
 
-  w.neg = !w.neg && !wide_is_zero(w);
-  PG_RETURN_NUMERIC(dec_from_wide(w));
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* +num: a copy. */
@@ -1130,33 +1135,25 @@ Datum numeric_uplus(PG_FUNCTION_ARGS) {
 
 /* -1, 0 or 1 as num is negative, zero or positive. */
 Datum numeric_sign(PG_FUNCTION_ARGS) {
-  PG_RETURN_NUMERIC(dec_make(dec_sign(PG_GETARG_NUMERIC(0)), 0));
+  Numeric n = PG_GETARG_NUMERIC(0);
+
+  PG_RETURN_NUMERIC(
+      dec_make(ty_decimal128_sign({dec_value(n), dec_scale(n)}), 0));
 }
 
 
 /*
- * w rounded to scale places, half away from zero, as round(numeric, int)
- * rounds, or with trunc truncated, as trunc(numeric, int): a negative
- * scale rounds left of the point, to scale 0.
+ * num rounded, or truncated if trunc, to n places: ty's, exact, or the
+ * error of a result past 36 digits.
  */
-static wide_t wide_round_at(const wide_t &w, int32 scale, bool trunc) {
-  wide_t r;
+static Datum dec_round_or_trunc(Numeric num, int n, bool trunc) {
+  ty_decimal128_t a = {dec_value(num), dec_scale(num)};
+  ty_decimal128_t r;
 
-  scale = Max(scale, -154);
-  scale = Min(scale, NUMERIC_MAX_SCALE);
-  if (scale >= 0)
-    return wide_round(w, scale, trunc);
-  /*
-   * Round once at 10^-scale: w read as its integer over 10^-scale more,
-   * rounded to an integer, then scaled back up.  Rounding to an integer
-   * first would round twice: -149.5 to -150, then to -200, not -100.
-   */
-  r = w;
-  r.scale = w.scale - scale;
-  r = wide_round(r, 0, trunc);
-  r = wide_scale_up(r, -scale);
-  r.scale = 0;
-  return r;
+  if ((trunc ? ty_decimal128_trunc(&a, n, &r) : ty_decimal128_round(&a, n, &r)) !=
+      0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /*
@@ -1164,36 +1161,28 @@ static wide_t wide_round_at(const wide_t &w, int32 scale, bool trunc) {
  * rounds to tens, hundreds and so on, and gives scale 0.
  */
 Datum numeric_round(PG_FUNCTION_ARGS) {
-  PG_RETURN_NUMERIC(dec_from_wide(wide_round_at(
-      dec_wide(PG_GETARG_NUMERIC(0)), PG_GETARG_INT32(1), false)));
+  return dec_round_or_trunc(PG_GETARG_NUMERIC(0), PG_GETARG_INT32(1), false);
 }
 
 /* num truncated to scale places, as numeric_round(). */
 Datum numeric_trunc(PG_FUNCTION_ARGS) {
-  PG_RETURN_NUMERIC(dec_from_wide(wide_round_at(
-      dec_wide(PG_GETARG_NUMERIC(0)), PG_GETARG_INT32(1), true)));
-}
-
-/* The smallest integer not below w, or with floor the largest not above. */
-static wide_t wide_ceil_floor(const wide_t &w, bool floor) {
-  wide_t t = wide_round(w, 0, true);
-
-  /* Truncation moved toward zero; past the value for one sign. */
-  if (wide_cmp(t, w) != 0 && w.neg == floor)
-    t = wide_add(t, wide_of_int(floor ? -1 : 1), false);
-  return t;
+  return dec_round_or_trunc(PG_GETARG_NUMERIC(0), PG_GETARG_INT32(1), true);
 }
 
 /* The smallest integer not below num, at scale 0. */
 Datum numeric_ceil(PG_FUNCTION_ARGS) {
-  PG_RETURN_NUMERIC(
-      dec_from_wide(wide_ceil_floor(dec_wide(PG_GETARG_NUMERIC(0)), false)));
+  Numeric n = PG_GETARG_NUMERIC(0);
+  ty_decimal128_t r = ty_decimal128_ceil({dec_value(n), dec_scale(n)});
+
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* The largest integer not above num, at scale 0. */
 Datum numeric_floor(PG_FUNCTION_ARGS) {
-  PG_RETURN_NUMERIC(
-      dec_from_wide(wide_ceil_floor(dec_wide(PG_GETARG_NUMERIC(0)), true)));
+  Numeric n = PG_GETARG_NUMERIC(0);
+  ty_decimal128_t r = ty_decimal128_floor({dec_value(n), dec_scale(n)});
+
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* num's scale. */
@@ -1362,7 +1351,7 @@ static int dec_cmp(const decimal_t *a, const decimal_t *b) {
 
   if (dec_scale(a) == dec_scale(b))
     return va < vb ? -1 : (va > vb ? 1 : 0);
-  return wide_cmp(dec_wide(a), dec_wide(b));
+  return ty_decimal128_cmp_scaled({va, dec_scale(a)}, {vb, dec_scale(b)});
 }
 
 /* The comparator of a sort of numerics. */
@@ -1506,18 +1495,6 @@ static bool division_by_zero(bool *have_error) {
             (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
   *have_error = true;
   return false;
-}
-
-/*
- * The error of a decimal128 result past 36 digits: raised, or, if the
- * caller asks for it, recorded in *have_error.
- */
-static Numeric dec_range_error(bool *have_error) {
-  if (have_error == NULL)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("value overflows numeric format")));
-  *have_error = true;
-  return NULL;
 }
 
 /*

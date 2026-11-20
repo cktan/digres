@@ -108,6 +108,93 @@ int add_or_sub128(const ty_decimal128_t *a, const ty_decimal128_t *b,
   return 0;
 }
 
+/* 10^n for n up to 38, as a 128-bit integer. */
+ty_int128_t pow10_128(int n) {
+  ty_int128_t r = 1;
+  for (; n > 0; n--) {
+    r *= 10;
+  }
+  return r;
+}
+
+/* v / 10^drop, for drop up to 36: rounded half away from zero, or cut. */
+ty_int128_t drop_places128(ty_int128_t v, int drop, bool cut) {
+  ty_int128_t d = pow10_128(drop);
+  ty_int128_t q = v / d;
+  ty_int128_t rem = v % d;
+
+  if (rem < 0) {
+    rem = -rem;
+  }
+  if (!cut && rem >= d - rem) {
+    q += v < 0 ? -1 : 1;
+  }
+  return q;
+}
+
+/*
+ * *result = a rounded, or cut if cut, to n places, of a decimal128.
+ * 1. An n above 36 is 36.
+ * 2. If n is not below the scale, add zeros: fail if the value passes
+ *    36 digits.
+ * 3. If n is at least 0, drop the places past n.
+ * 4. Else drop the scale and the places left of the point, and put the
+ *    zeros back: the scale is 0. A value below 10^36 is 0 once 37 places
+ *    are dropped.
+ */
+int round_or_cut128(const ty_decimal128_t *a, int n, bool cut,
+                    ty_decimal128_t *result) {
+  ty_int128_t v = a->value;
+  int s = a->scale;
+
+  if (n > TY_DECIMAL128_MAX_SCALE) {
+    n = TY_DECIMAL128_MAX_SCALE;
+  }
+  if (n >= s) {
+    for (int i = s; i < n; i++) {
+      if (__builtin_mul_overflow(v, (ty_int128_t)10, &v)) {
+        return range_error128();
+      }
+    }
+    if (v > d128_max || v < -d128_max) {
+      return range_error128();
+    }
+    result->value = v;
+    result->scale = n;
+    return 0;
+  }
+  if (n >= 0) {
+    result->value = drop_places128(v, s - n, cut);
+    result->scale = n;
+    return 0;
+  }
+  int drop = s - n;
+  ty_int128_t q =
+      drop > TY_DECIMAL128_MAX_DIGITS ? 0 : drop_places128(v, drop, cut);
+  for (int i = 0; i < -n && q != 0; i++) {
+    if (__builtin_mul_overflow(q, (ty_int128_t)10, &q) || q > d128_max ||
+        q < -d128_max) {
+      return range_error128();
+    }
+  }
+  result->value = q;
+  result->scale = 0;
+  return 0;
+}
+
+/* The nearest whole number at or above a, or at or below if floor. */
+ty_decimal128_t ceil_or_floor128(ty_decimal128_t a, bool floor) {
+  if (a.scale == 0) {
+    return a;
+  }
+  ty_int128_t p = pow10_128(a.scale);
+  ty_int128_t q = a.value / p;
+  if (a.value % p != 0 && (a.value < 0) == floor) {
+    q += floor ? -1 : 1;
+  }
+  return {q, 0};
+}
+
 /* A value as unsigned: |v|. */
 typedef unsigned __int128 u128;
 u128 magnitude(ty_int128_t v) { return v < 0 ? -(u128)v : (u128)v; }
@@ -392,4 +479,52 @@ int ty_decimal128_mul(const ty_decimal128_t *a, const ty_decimal128_t *b,
   result->value = p;
   result->scale = s;
   return 0;
+}
+
+/* *result = a rounded to n places, half away from zero. */
+int ty_decimal128_round(const ty_decimal128_t *a, int n,
+                        ty_decimal128_t *result) {
+  return round_or_cut128(a, n, false, result);
+}
+
+/* *result = a truncated to n places. */
+int ty_decimal128_trunc(const ty_decimal128_t *a, int n,
+                        ty_decimal128_t *result) {
+  return round_or_cut128(a, n, true, result);
+}
+
+/* The nearest whole number at or above a. */
+ty_decimal128_t ty_decimal128_ceil(ty_decimal128_t a) {
+  return ceil_or_floor128(a, false);
+}
+
+/* The nearest whole number at or below a. */
+ty_decimal128_t ty_decimal128_floor(ty_decimal128_t a) {
+  return ceil_or_floor128(a, true);
+}
+
+/*
+ * a <=> b of a decimal128, of two scales.
+ * 1. Multiply the value of the smaller scale by 10 until the scales are
+ *    equal. If that does not fit 128 bits, its magnitude is above that of
+ *    any value of 36 digits: its sign decides.
+ * 2. Compare them.
+ */
+int ty_decimal128_cmp_scaled(ty_decimal128_t a, ty_decimal128_t b) {
+  ty_int128_t x = a.value;
+  ty_int128_t y = b.value;
+  int sa = a.scale;
+  int sb = b.scale;
+
+  for (; sa < sb; sa++) {
+    if (__builtin_mul_overflow(x, (ty_int128_t)10, &x)) {
+      return a.value > 0 ? 1 : -1;
+    }
+  }
+  for (; sb < sa; sb++) {
+    if (__builtin_mul_overflow(y, (ty_int128_t)10, &y)) {
+      return b.value > 0 ? -1 : 1;
+    }
+  }
+  return (x > y) - (x < y);
 }

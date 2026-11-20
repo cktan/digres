@@ -88,6 +88,48 @@ int ty_decimal128_sub(const ty_decimal128_t* a, const ty_decimal128_t* b,
 int ty_decimal128_mul(const ty_decimal128_t* a, const ty_decimal128_t* b,
                       ty_decimal128_t* result);
 
+/* -a, |a| and the sign of a, of a decimal128. */
+static inline ty_decimal128_t ty_decimal128_neg(ty_decimal128_t a) {
+    return {-a.value, a.scale};
+}
+
+static inline ty_decimal128_t ty_decimal128_abs(ty_decimal128_t a) {
+    return {a.value < 0 ? -a.value : a.value, a.scale};
+}
+
+static inline int ty_decimal128_sign(ty_decimal128_t a) {
+    return (a.value > 0) - (a.value < 0);
+}
+
+/*
+ * a <=> b of a decimal128, at any scales: -1, 0 or 1. Two values of one
+ * scale compare in line; others out of line, where a value that does not
+ * fit 128 bits at the larger scale is the larger in magnitude.
+ */
+int ty_decimal128_cmp_scaled(ty_decimal128_t a, ty_decimal128_t b);
+
+static inline int ty_decimal128_cmp(ty_decimal128_t a, ty_decimal128_t b) {
+    if (a.scale == b.scale) {
+        return (a.value > b.value) - (a.value < b.value);
+    }
+    return ty_decimal128_cmp_scaled(a, b);
+}
+
+/*
+ * *result = a rounded, or truncated, to n places, as for a decimal64: n is
+ * the scale, a negative n gives scale 0, and an n above 36 is 36. Fails
+ * with TY_ERR_RANGE if the result needs more than 36 digits; *result is
+ * then not set.
+ */
+int ty_decimal128_round(const ty_decimal128_t* a, int n,
+                        ty_decimal128_t* result);
+int ty_decimal128_trunc(const ty_decimal128_t* a, int n,
+                        ty_decimal128_t* result);
+
+/* The nearest whole number at or above, and at or below, a. */
+ty_decimal128_t ty_decimal128_ceil(ty_decimal128_t a);
+ty_decimal128_t ty_decimal128_floor(ty_decimal128_t a);
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DECIMAL64_MAX_DIGITS 17
 #define TY_DECIMAL64_MAX_SCALE  17

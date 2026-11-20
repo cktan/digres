@@ -297,7 +297,13 @@ copied from PostgreSQL keeps its copyright notice
    widened. They cost `where a + b > 1000` over 2,000 rows of
    `numeric(30,4)` +0.84% and `a * b > 100000` +0.51%: in the
    limit, as the equal-scale path was in line, and is a call
-   now.
+   now. `decimal128`'s `neg`, `abs`, `sign`, `round`, `trunc`,
+   `ceil`, `floor` and the compare of two scales moved too, all
+   in 128 bits and out of the wide path: `where round(a, 2) >
+   500` fell 70.9%, `where abs(a - b) > 100` 28.5%, and
+   `ORDER BY a` 6.4% (that compare is the equal-scale one, which
+   digres still does itself). Left for `decimal128`: `/`, `%`,
+   `gcd`, `lcm`, `div`, the exponent group, and the hash.
    `/` waits for the 512-bit magnitude. The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from

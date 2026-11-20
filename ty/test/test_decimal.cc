@@ -497,3 +497,91 @@ TEST_CASE("decimal128 add, sub and mul are exact, or fail past 36 digits") {
   CHECK(TY_ERR_RANGE == ty_errnum());
   CHECK(7 == r.value);
 }
+
+namespace {
+
+/* ty_decimal128_round of {v, s} to n places. */
+int round128_of(ty_int128_t v, int s, int n, ty_decimal128_t *r) {
+  ty_decimal128_t a = {v, s};
+  return ty_decimal128_round(&a, n, r);
+}
+
+/* ty_decimal128_trunc of {v, s} to n places. */
+int trunc128_of(ty_int128_t v, int s, int n, ty_decimal128_t *r) {
+  ty_decimal128_t a = {v, s};
+  return ty_decimal128_trunc(&a, n, r);
+}
+
+} // namespace
+
+// Verify decimal128 neg, abs, sign, ceil, floor and compare.
+// 1. Negate, take the absolute value and the sign of both signs and zero.
+// 2. Take ceil and floor of values with places, and of a whole number.
+// 3. Compare at one scale, at two, and where aligning passes 128 bits.
+TEST_CASE("decimal128 neg, abs, sign, ceil, floor and cmp") {
+  ty_int128_t big = ten_to(36) - 1;
+
+  // 1. Negate, take the absolute value and the sign of both signs and zero.
+  CHECK(-125 == ty_decimal128_neg({125, 2}).value);
+  CHECK(125 == ty_decimal128_abs({-125, 2}).value);
+  CHECK(2 == ty_decimal128_abs({-125, 2}).scale);
+  CHECK(1 == ty_decimal128_sign({125, 2}));
+  CHECK(-1 == ty_decimal128_sign({-125, 2}));
+  CHECK(0 == ty_decimal128_sign({0, 9}));
+
+  // 2. Take ceil and floor of values with places, and of a whole number.
+  CHECK(2 == ty_decimal128_ceil({15, 1}).value);
+  CHECK(1 == ty_decimal128_floor({15, 1}).value);
+  CHECK(-1 == ty_decimal128_ceil({-15, 1}).value);
+  CHECK(-2 == ty_decimal128_floor({-15, 1}).value);
+  CHECK(7 == ty_decimal128_ceil({7, 0}).value);
+  CHECK(big == ty_decimal128_floor({big * 10 + 5 > 0 ? big : 0, 0}).value);
+
+  // 3. Compare at one scale, at two, and where aligning passes 128 bits.
+  CHECK(-1 == ty_decimal128_cmp({1, 2}, {2, 2}));
+  CHECK(0 == ty_decimal128_cmp({15, 1}, {150, 2}));
+  CHECK(1 == ty_decimal128_cmp({151, 2}, {15, 1}));
+  CHECK(1 == ty_decimal128_cmp({big, 0}, {big, 36}));
+  CHECK(-1 == ty_decimal128_cmp({-big, 0}, {big, 36}));
+  CHECK(-1 == ty_decimal128_cmp({big, 36}, {big, 0}));
+}
+
+// Verify decimal128 round and trunc.
+// 1. Round to fewer places, half away from zero, both signs; and cut.
+// 2. Round to more places: zeros are added; to 40 places is 36.
+// 3. Round to tens and hundreds: the scale is 0.
+// 4. Round past 36 digits: it fails with TY_ERR_RANGE.
+TEST_CASE("decimal128 round and trunc") {
+  ty_decimal128_t r;
+  ty_int128_t big = ten_to(36) - 1;
+
+  // 1. Round to fewer places, half away from zero, both signs; and cut.
+  CHECK(0 == round128_of(1235, 3, 2, &r));
+  CHECK(124 == r.value);
+  CHECK(0 == round128_of(-1235, 3, 2, &r));
+  CHECK(-124 == r.value);
+  CHECK(0 == trunc128_of(-1239, 3, 2, &r));
+  CHECK(-123 == r.value);
+
+  // 2. Round to more places: zeros are added; to 40 places is 36.
+  CHECK(0 == round128_of(15, 1, 3, &r));
+  CHECK(1500 == r.value);
+  CHECK(3 == r.scale);
+  CHECK(0 == round128_of(5, 1, 40, &r));
+  CHECK(36 == r.scale);
+  CHECK(-1 == round128_of(15, 1, 40, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+
+  // 3. Round to tens and hundreds: the scale is 0.
+  CHECK(0 == round128_of(14949, 2, -2, &r));
+  CHECK(100 == r.value);
+  CHECK(0 == r.scale);
+  CHECK(0 == round128_of(12345, 0, -40, &r));
+  CHECK(0 == r.value);
+
+  // 4. Round past 36 digits: it fails with TY_ERR_RANGE.
+  CHECK(-1 == round128_of(big, 0, 1, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(-1 == round128_of(big, 0, -1, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+}
