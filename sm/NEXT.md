@@ -459,9 +459,8 @@ Owed, and blocking nothing above:
     - sm3: TOAST chunks erased by the seal; `ANALYZE`'s null
       fraction; one random workload on a column store table and
       a row store table, compared at each level;
-    - rel: the sweep after a new attach; 2PC across a restart;
-    - digres: a foreign key that references a column store
-      table; an RR update while a seal runs (`server.sh`); an
+    - rel: the sweep after a crash, which rel cannot make;
+    - digres: an RR update while a seal runs (`server.sh`); an
       `ANALYZE`, as `run.sh`'s tables are temporary, and sm
       does not analyze those.
 

@@ -13626,3 +13626,11 @@ A check hook took the new value as a `char **`, to change it with
   was `SM_ERR_INVALID`, which digres reported as `XX000`, an
   internal error.
 - **Test**: `test/columnar.sql` prints the SQLSTATE.
+
+## Step 451: a foreign key that references a column store table
+
+- **What it is**: a test. A row store table's foreign key that
+  references a column store table fails, as the referenced
+  column has no unique key
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §14.1).
+- **Test**: step 10 of `test/columnar.sql`.

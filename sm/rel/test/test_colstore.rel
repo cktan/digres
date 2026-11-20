@@ -21,6 +21,9 @@
 # 7. 9,999 rows inserted into tr and one row of its row group
 #    updated by _id: the update's new version counts toward the
 #    seal too, making a row group's worth, and the seal follows.
+# 8. Two loads of a row group each into tp, prepared, across a
+#    restart: no snapshot sees their rows before COMMIT PREPARED;
+#    the committed one's row group is read, the aborted one's not.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -162,6 +165,35 @@
     (assert-eq (and (> now 0) (not= now tr-rg)) true
                "the updated row is sealed into a new row group")
     (assert-eq (scan-count tr) 21999 "every row once")
+(commit)
+
+# 8. Prepared loads across a restart.
+(begin :rc)
+    (table-create tp
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (load tp (map (fn [i] [i "p1"]) (range 10000)))
+(prepare "cs_p1")
+(session-open "s2" "csdb")
+(session-use "s2")
+(begin :rc)
+    (load tp (map (fn [i] [i "p2"]) (range 10000)))
+(prepare "cs_p2")
+(session-use "default")
+(db-close)
+(env-detach :force true)
+(env-attach test-dir)
+(db-open "csdb")
+(begin :rr)
+    (assert-eq (scan-count tp) 0 "prepared loads are not seen")
+(commit)
+(commit-prepared "cs_p1")
+(abort-prepared "cs_p2")
+(begin :rr)
+    (assert-eq (scan-count tp) 10000 "the committed load's row group")
+    (assert-eq (> (rg-of tp 1) 0) true "its rows are in a row group")
 (commit)
 
 (db-close)

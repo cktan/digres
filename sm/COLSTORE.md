@@ -1040,7 +1040,8 @@ an RG compaction comes after a few hundred rows.
 across a restart; SERIALIZABLE and an index refused; a delete by
 name and an abort; the seal's job; an update and a delete by
 `_id` alone; a scan of some columns, with bounds; an update
-counted toward the seal.
+counted toward the seal; two loads prepared across a restart,
+one committed and one aborted.
 
 `dg/test/columnar.sql`: `CREATE TABLE ... WITH (storage =
 columnar)`; the warnings of §14.1, and the `NOT NULL` kept from
@@ -1049,7 +1050,8 @@ an ignored `PRIMARY KEY`; `INSERT ... SELECT` into RGs;
 queries with bounds, whose results equal a row store table's;
 `ALTER TABLE` and `TRUNCATE`; `CREATE TABLE AS` and `COPY`; a
 SERIALIZABLE transaction refused with `0A000`; `storage =
-'row'`.
+'row'`; a foreign key that references a column store table,
+which fails.
 
 ### 15.5 Layers with no test
 

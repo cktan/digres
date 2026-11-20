@@ -21,6 +21,8 @@
 --    supported, SQLSTATE 0A000.
 -- 9. storage = 'row' is a row store table ('row' quoted, as ROW is a
 --    keyword); another value is refused.
+-- 10. A row store table's foreign key that references a column store
+--     table fails, as the referenced column has no unique key.
 \set ON_ERROR_STOP off
 create temp table columnar_ref (id int primary key);
 create temp table columnar_t (
@@ -105,6 +107,7 @@ create temp table columnar_row (a int) with (storage = 'row');
 insert into columnar_row values (1);
 select * from columnar_row;
 create temp table columnar_bad (a int) with (storage = banana);
+create temp table columnar_child (r int references columnar_t (id));
 drop table columnar_row;
 drop table columnar_t;
 drop table columnar_ref;
