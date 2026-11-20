@@ -51,7 +51,9 @@ for (const sq_raw_stmt_t* raw : tree.stmts) {
 - **The tree owns every node and string in it** and frees them
   when it is destroyed. Nothing is freed by hand. Given an
   allocator, as digres gives its memory context, the tree
-  frees none of the nodes: they are the caller's.
+  frees none of the nodes: they are the caller's. So the
+  allocator keeps track of what it gives, or frees all of it at
+  once: do not give it `malloc` and `free`.
 - **The nodes are PostgreSQL's**, in `include/sq_nodes.h`, by
   sq's names: `SelectStmt` is `sq_select_stmt_t` and its
   `targetList` is `target_list`, laid out as digres's own. A

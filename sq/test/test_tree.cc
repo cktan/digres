@@ -166,49 +166,76 @@ TEST_CASE(
 
 namespace {
 
-/* An allocator that keeps what it hands out, for a test to free. */
+/*
+ * An allocator that keeps what it hands out, for a test to free. Its
+ * alloc and free have no argument, so it is a global; the tests run on
+ * one thread.
+ */
 struct kept_t {
   std::vector<void *> pieces;
-  int reallocs = 0;
+  int frees = 0;
+  int fail_at = -1; /* the alloc that returns NULL, from 0; -1 for none */
+  int allocs = 0;
 };
+kept_t *g_kept = nullptr;
 
-/* sq_allocator_t's alloc, from malloc, kept. */
-void *kept_alloc(void *arg, size_t size) {
-  void *p = malloc(size);
-  static_cast<kept_t *>(arg)->pieces.push_back(p);
-  return p;
-}
-
-/* sq_allocator_t's realloc, kept in place of what it grew. */
-void *kept_realloc(void *arg, void *ptr, size_t size) {
-  kept_t *k = static_cast<kept_t *>(arg);
-  void *p = realloc(ptr, size);
-  for (void *&piece : k->pieces) {
-    if (piece == ptr) {
-      piece = p;
-    }
+/* sq_allocator_t's alloc: malloc, kept; or NULL at fail_at. */
+void *kept_alloc(size_t size) {
+  if (g_kept->allocs++ == g_kept->fail_at) {
+    return nullptr;
   }
-  k->reallocs++;
+  void *p = malloc(size);
+  g_kept->pieces.push_back(p);
   return p;
 }
+
+/*
+ * sq_allocator_t's free: free, and no longer kept. It must not throw,
+ * so a piece alloc never gave fails the test by CHECK, not REQUIRE.
+ */
+void kept_free(void *ptr) {
+  auto &pieces = g_kept->pieces;
+  auto it = std::find(pieces.begin(), pieces.end(), ptr);
+  CHECK(it != pieces.end());
+  if (it == pieces.end()) {
+    return;
+  }
+  pieces.erase(it);
+  free(ptr);
+  g_kept->frees++;
+}
+
+/* Make kept the allocator's for a test, and free what it still keeps. */
+struct use_kept_t {
+  kept_t kept;
+  sq_allocator_t allocator{kept_alloc, kept_free};
+  use_kept_t() { g_kept = &kept; }
+  ~use_kept_t() {
+    for (void *p : kept.pieces) {
+      free(p);
+    }
+    g_kept = nullptr;
+  }
+};
 
 } // namespace
 
-TEST_CASE(
-    "a parse with an allocator makes its tree there, and frees none of it") {
+TEST_CASE("a parse with an allocator makes its tree there, and frees none of "
+          "it but outgrown arrays") {
   // Verify sq_options_t's allocator: a server's memory context holds
   // the tree, and the server frees it.
   // 1. Parse a SELECT of 40 columns with an allocator that keeps what
   //    it hands out.
   // 2. Confirm the statement and its select list came from it, and
-  //    that the list grew by its realloc; and that the tree's store
-  //    came from it too, so that the parse made none of its own.
-  // 3. Destroy the tree: everything kept is still the test's to free,
+  //    that the tree's store came from it too, so that the parse made
+  //    none of its own.
+  // 3. Confirm the list's array grew, and sq gave back each array it
+  //    outgrew: kept_free finds each one among what alloc gave.
+  // 4. Destroy the tree: everything kept is still the test's to free,
   //    which it does; the leak checker sees anything else.
-  kept_t kept;
-  sq_allocator_t allocator{kept_alloc, kept_realloc, &kept};
+  use_kept_t use;
   sq_options_t opt;
-  opt.allocator = &allocator;
+  opt.allocator = &use.allocator;
   std::string sql = "select 0";
   for (int i = 1; i < 40; i++) {
     sql += ", " + std::to_string(i);
@@ -219,20 +246,18 @@ TEST_CASE(
     REQUIRE(tree.stmts.size() == 1);
     auto *sel = static_cast<sq_select_stmt_t *>(tree.stmts[0]->stmt);
     auto kept_piece = [&](const void *p) {
-      return std::find(kept.pieces.begin(), kept.pieces.end(), p) !=
-             kept.pieces.end();
+      return std::find(use.kept.pieces.begin(), use.kept.pieces.end(), p) !=
+             use.kept.pieces.end();
     };
     CHECK(kept_piece(tree.stmts[0]));
     CHECK(kept_piece(sel));
     CHECK(kept_piece(sel->target_list));
     CHECK(kept_piece(sel->target_list->elements));
     CHECK(sq::list_length(sel->target_list) == 40);
-    CHECK(kept.reallocs > 0);
+    CHECK(use.kept.frees > 0);
     CHECK(kept_piece(&sq::tree_access_t::store(tree)));
   }
-  for (void *p : kept.pieces) {
-    free(p);
-  }
+  CHECK(!use.kept.pieces.empty());
 }
 
 TEST_CASE("a failed parse with an allocator leaves its store to the caller") {
@@ -243,17 +268,48 @@ TEST_CASE("a failed parse with an allocator leaves its store to the caller") {
   // 2. Confirm the tree is empty.
   // 3. Let the tree go, then free what was kept; the leak checker sees
   //    a store sq freed itself, or one it never freed.
-  kept_t kept;
-  sq_allocator_t allocator{kept_alloc, kept_realloc, &kept};
+  use_kept_t use;
   sq_options_t opt;
-  opt.allocator = &allocator;
+  opt.allocator = &use.allocator;
   {
     sq_tree_t tree;
     REQUIRE(sq_parse("select 1", &opt, tree) == 0);
     CHECK(sq_parse("select from where", &opt, tree) == -1);
     CHECK(tree.stmts.empty());
   }
-  for (void *p : kept.pieces) {
-    free(p);
+}
+
+TEST_CASE("an alloc that returns NULL fails the parse as out of memory") {
+  // Verify sq reports an allocator's NULL as SQ_ERR_NOMEM, wherever in a
+  // parse it comes, and leaves the tree empty.
+  // 1. Count the allocs of a parse of a SELECT of 40 columns, whose list
+  //    outgrows its array.
+  // 2. Parse it again once for each alloc, with that one returning NULL:
+  //    the store's, a node's, a string's, and a list array's.
+  // 3. Confirm each parse returns -1 with SQ_ERR_NOMEM and an empty tree;
+  //    the leak checker sees anything sq kept or freed twice.
+  std::string sql = "select 0";
+  for (int i = 1; i < 40; i++) {
+    sql += ", " + std::to_string(i);
+  }
+  int allocs;
+  {
+    use_kept_t use;
+    sq_options_t opt;
+    opt.allocator = &use.allocator;
+    sq_tree_t tree;
+    REQUIRE(sq_parse(sql, &opt, tree) == 0);
+    allocs = use.kept.allocs;
+  }
+  REQUIRE(allocs > 1);
+  for (int n = 0; n < allocs; n++) {
+    use_kept_t use;
+    use.kept.fail_at = n;
+    sq_options_t opt;
+    opt.allocator = &use.allocator;
+    sq_tree_t tree;
+    CHECK(sq_parse(sql, &opt, tree) == -1);
+    CHECK(sq_errnum() == SQ_ERR_NOMEM);
+    CHECK(tree.stmts.empty());
   }
 }

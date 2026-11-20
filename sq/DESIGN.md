@@ -168,6 +168,8 @@ node and every string made for it, and frees them all in its
 destructor. Nothing in a tree is freed by hand, and nothing
 points outside it. Text is copied in, so a tree outlives the
 text it was parsed from. A tree can be moved, but not copied.
+With an allocator (below), the caller owns the nodes, lists and
+text instead, and the tree frees none of them.
 
 **Nodes, lists and text are cut from the tree's arena**, as
 PostgreSQL's `palloc` cuts them from a memory context.
@@ -185,16 +187,27 @@ PostgreSQL's `palloc` cuts them from a memory context.
   as the current tree.
 
 **Or they go where the caller says.** The allocator in
-`sq_options_t`, an alloc and a realloc, takes the place of the
-arena.
+`sq_options_t`, an alloc and a free, takes the place of the
+arena. The two have the signatures of `malloc` and `free`.
 
 - digres's allocator is its current memory context. So digres
   keeps, grows and frees sq's nodes and lists as its own.
 - The tree's store is also cut from the allocator, and no arena
   block is made. So a parse asks `malloc` for none of its nodes.
-- The tree never frees what the allocator gives out.
+- A list grows by a copy: alloc, copy, then free of the array
+  it outgrew. sq calls free for nothing else.
+- The tree never frees its nodes, lists, text or store, when
+  it is destroyed or when a parse fails. The caller frees them.
+  It keeps track of what alloc gave, or frees all of it at
+  once, as a memory context does.
+- **WARNING: do not give `malloc` and `free`.** Nothing would
+  free what the tree holds. For `malloc`'s memory, give no
+  allocator: the arena's blocks are `malloc`'s, and the tree
+  frees them.
 - A failed alloc returns NULL. sq reports running out of memory
   as it reports any error.
+- alloc and free must return normally: they must not throw or
+  `longjmp` (§5).
 
 **WARNING: do not put digres's nodes in an arena.** digres needs
 the allocator, because PostgreSQL does not treat the tree as
@@ -224,8 +237,9 @@ and tests do.
 **Ownership makes cleanup after an error one line.** A parse that
 fails halfway has made hundreds of nodes. Some are reachable from
 bison's stack, and some from nowhere. The tree owns them all the
-same, and emptying the tree frees them. Three things make this
-work:
+same, and emptying the tree frees them. With an allocator,
+emptying the tree leaves them to the caller, who frees them as it
+frees the rest. Three things make this work:
 
 - **The grammar's actions make nodes in "the current tree"**: a
   per-thread pointer that `sq_parse` sets while it runs.
@@ -271,7 +285,10 @@ A server sends these to its client as they are.
   helpers are written for that. The exception keeps them in the
   shape they have upstream. flex's own fatal path, which would
   call `exit()`, leaves the same way. No exception crosses the
-  interface.
+  interface, in either direction. A call does not throw out of
+  sq. The notice hook and the allocator must not throw or
+  `longjmp` into sq (§4): sq would catch the exception, and
+  report it as its own error.
 - **A notice is not an error.** A notice is, for example, an
   identifier cut to 63 bytes, or a warning about escapes. It
   goes to the caller's hook as it happens, and the parse goes on.
@@ -365,8 +382,8 @@ Two checks cover sq's own consistency:
 - **A tree holds a little more memory than its nodes need.** It
   keeps a list's outgrown cells, in place or in an array that
   the arena does not give back. It also keeps the scanner's
-  strings that no node kept. Both stay until the tree goes. In
-  digres's memory context, a realloc gives an outgrown array
+  strings that no node kept. Both stay until the tree goes. With
+  an allocator, the allocator's free gives an outgrown array
   back.
 - **sq's tags are digres's.** If digres adds or drops a node
   before the value nodes in its headers, their numbers move.
@@ -413,7 +430,11 @@ of its own. Its `raw_parser()` is sq's one caller in digres
 
 - **passes the session's three settings** in `sq_options_t`. It
   also passes an allocator that is its current memory context:
-  `palloc` and `repalloc`, which return NULL when out of memory.
+  `palloc` and `pfree`. `palloc` raises an ERROR for a request
+  over `MaxAllocSize`, even when it is asked to return NULL when
+  out of memory. So the alloc catches the ERROR, removes it from
+  the error stack with `FlushErrorState()`, and returns NULL.
+  sq then reports running out of memory, and digres raises that.
 - **hands sq's statements to the analyzer as they are**, because
   they are digres's nodes. sq's generator writes `sq_nodes.c`
   when digres is built. It checks this at compile time, with a

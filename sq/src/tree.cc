@@ -43,18 +43,16 @@ void *arena_t::grow(size_t size, size_t align) {
   return alloc(size, align);
 }
 
-/* Grow ptr by the caller's realloc, or by a copy in the arena. */
+/*
+ * Grow ptr by a copy: in the caller's memory, whose free then takes
+ * ptr back, or in the arena, which keeps ptr until the tree goes.
+ */
 void *store_t::realloc(void *ptr, size_t old, size_t size) {
-  if (allocator != nullptr) {
-    void *p = allocator->realloc(allocator->arg, ptr, size);
-    if (p == nullptr) {
-      throw std::bad_alloc();
-    }
-    return p;
-  }
-  // The arena gives nothing back: the old piece stays until the tree goes.
-  void *p = arena.alloc(size, alignof(std::max_align_t));
+  void *p = alloc(size, alignof(std::max_align_t));
   memcpy(p, ptr, std::min(old, size));
+  if (allocator != nullptr) {
+    allocator->free(ptr);
+  }
   return p;
 }
 
@@ -80,7 +78,7 @@ void tree_access_t::begin(sq_tree_t &tree, const sq_allocator_t *allocator) {
     tree.m_store = new store_t;
     return;
   }
-  void *at = allocator->alloc(allocator->arg, sizeof(store_t));
+  void *at = allocator->alloc(sizeof(store_t));
   if (at == nullptr) {
     throw std::bad_alloc();
   }

@@ -30,9 +30,10 @@
  *     defaults.
  *   - Anything else handed out is the caller's own: bytes are a
  *     std::string, filled by the call.
- *   - No C++ exception crosses this boundary. Every call catches
- *     everything: std::bad_alloc becomes SQ_ERR_NOMEM, anything
- *     else SQ_ERR_EXCEPTION.
+ *   - No C++ exception crosses this boundary, in either direction.
+ *     Every call catches everything: std::bad_alloc becomes
+ *     SQ_ERR_NOMEM, anything else SQ_ERR_EXCEPTION. What sq calls,
+ *     the notice hook and the allocator, must not throw or longjmp.
  *
  * Threading: any number of threads may parse at once, each into
  * its own tree. The error state is per thread. A tree, once made,
@@ -155,15 +156,27 @@ typedef void (*sq_notice_fn)(void* arg, const sq_notice_t* notice);
 /*
  * Where a parse puts its nodes, lists and text, in place of the tree's
  * own arena: a server's memory context, so that the server may keep,
- * grow and free them as its own. alloc returns size bytes aligned for
- * any node, or NULL when out of memory; realloc resizes what alloc
- * returned, or returns NULL and leaves it be. What they hand out is
- * the caller's: the tree frees none of it.
+ * grow and free them as its own. The two have malloc's and free's
+ * signatures.
+ *
+ *   - alloc returns size bytes aligned for any node, or NULL when it
+ *     cannot. It must return normally: it must not throw or longjmp.
+ *     sq reports a NULL as SQ_ERR_NOMEM.
+ *   - free gives back a piece that sq no longer uses: a list's array
+ *     that a bigger one replaced. It must not throw or longjmp.
+ *   - sq frees nothing else. The tree's nodes, lists and text, and
+ *     the tree's store, stay allocated when the tree is destroyed,
+ *     and when a parse fails. The caller frees them: it keeps track
+ *     of what alloc handed out, or frees all of it at once, as a
+ *     memory context does.
+ *
+ * WARNING: do not give malloc and free. Nothing would free what the
+ * tree holds. For malloc's memory, give no allocator: the tree's
+ * arena is malloc's, and the tree frees it.
  */
 struct sq_allocator_t {
-    void* (*alloc)(void* arg, size_t size);
-    void* (*realloc)(void* arg, void* ptr, size_t size);
-    void* arg;
+    void* (*alloc)(size_t size);
+    void  (*free)(void* ptr);
 };
 
 struct sq_options_t {

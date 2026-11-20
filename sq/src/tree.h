@@ -70,7 +70,8 @@ private:
 
 /*
  * Where a tree's nodes, lists and text go: its arena, or the caller's
- * allocator (sq_options_t), whose memory the tree never frees.
+ * allocator (sq_options_t), whose memory the tree frees none of but
+ * a list's outgrown array.
  */
 struct store_t {
   arena_t arena;
@@ -86,7 +87,7 @@ struct store_t {
       return arena.alloc(size, align);
     }
     // The caller's memory is aligned for any node.
-    void *p = allocator->alloc(allocator->arg, size);
+    void *p = allocator->alloc(size);
     if (p == nullptr) {
       throw std::bad_alloc();
     }

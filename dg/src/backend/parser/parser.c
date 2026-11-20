@@ -81,24 +81,6 @@ static void keep_notice(void *arg, const sq_notice_t *notice) {
   }
 }
 
-/*
- * sq's allocator: the current memory context, as palloc. Out of memory,
- * it returns NULL for sq to report, and raises nothing: an ERROR thrown
- * from inside sq would leave the error stack for sq to swallow.
- */
-static void *sq_palloc(void *arg, size_t size) {
-  (void)arg;
-  return palloc_extended(size, MCXT_ALLOC_NO_OOM);
-}
-
-/* sq's allocator's realloc: repalloc, NULL when out of memory. */
-static void *sq_repalloc(void *arg, void *ptr, size_t size) {
-  (void)arg;
-  return repalloc_extended(ptr, size, MCXT_ALLOC_NO_OOM);
-}
-
-static const sq_allocator_t sq_allocator = {sq_palloc, sq_repalloc, NULL};
-
 /* PostgreSQL's error code for a SQLSTATE of five characters. */
 static int sqlstate_code(const char *state) {
   return MAKE_SQLSTATE(state[0], state[1], state[2], state[3], state[4]);
@@ -137,6 +119,26 @@ thread_local /*LOCAL*/ const char *raw_parser_index_type = SMSTORE_INDEX_LSM;
  * for each statement, or one TypeName.
  */
 List *raw_parser(const char *str, RawParseMode mode) {
+  /*
+   * sq's allocator: the current memory context, which keeps the tree's
+   * nodes after job goes. sq's alloc must not throw, so palloc's ERROR,
+   * for a request over MaxAllocSize, is caught and is NULL, which sq
+   * reports as out of memory. pfree takes back a list's outgrown array.
+   */
+  auto sq_alloc = [](size_t size) -> void * {
+    void *p = NULL;
+
+    PG_TRY();
+    { p = palloc_extended(size, MCXT_ALLOC_NO_OOM); }
+    PG_CATCH();
+    {
+      /* sq reports the error as its own: this one leaves the stack. */
+      FlushErrorState();
+    }
+    PG_END_TRY();
+    return p;
+  };
+  sq_allocator_t allocator = {sq_alloc, pfree};
   sq_options_t options;
   parse_job_t job;
   sq_type_name_t *type_name = NULL;
@@ -157,7 +159,7 @@ List *raw_parser(const char *str, RawParseMode mode) {
   options.default_index_type = raw_parser_index_type;
   options.notice = keep_notice;
   options.notice_arg = &job;
-  options.allocator = &sq_allocator;
+  options.allocator = &allocator;
 
   /* Nothing in sq raises a server error, or throws: it returns. */
   if (mode == RAW_PARSE_TYPE_NAME)
