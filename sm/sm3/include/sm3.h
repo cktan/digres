@@ -1646,6 +1646,37 @@ int tbl_delete(table_t* table, uint64_t id, pin_ref_t& ref,
                std::string_view& old);
 
 /*
+ * The row of a column store table named (rg_id, id) (../COLSTORE.md
+ * §8): rg_id is the row group it was read from, 0 for the delta
+ * store; tbl_scan_rg gives it for a scan's last row.
+ *
+ * tbl_delete_at with rg_id 0 is tbl_delete. With a row group's, it
+ * takes the row's exclusive lock, on its _id, then puts the row's
+ * delete marker. tbl_update_at deletes so, then inserts values
+ * into the delta store under the same _id. Above read committed, a
+ * marker or a new version of the row committed since the snapshot
+ * fails with SM_ERR_CONFLICT. At read committed, a row deleted since
+ * fails with SM_ERR_NOTFOUND, and a row updated since, which lives
+ * on in the delta store, with SM_ERR_UPDATED: the caller reads it
+ * with tbl_read_latest, under the lock now held, and names it
+ * (0, id).
+ */
+int tbl_delete_at(table_t* table, uint64_t rg_id, uint64_t id);
+
+/*
+ * Seal a row group of a column store table's delta store
+ * (../COLSTORE.md §10.1), in the caller's transaction, which runs at
+ * READ COMMITTED: its first rows, each locked if it is free now and
+ * passed over if not, erased with a sealed tombstone, and written as
+ * a new row group of rg_max_rows rows. With fewer rows to take, none
+ * is sealed: sealed is false, and nothing is left written.
+ */
+int tbl_seal(table_t* table, bool& sealed);
+int tbl_update_at(table_t* table, uint64_t rg_id, uint64_t id,
+                  std::span<const sm2::datum_t> values,
+                  std::span<const bool> isnull);
+
+/*
  * A BULK LOAD into an open table (BULKLOAD.md §5, §13): many rows
  * handed over one by one and written to sorted files that the
  * store takes whole, past its log and its compactions.
@@ -1867,6 +1898,27 @@ int tbl_scannxt(scan_t* scan, uint64_t& id, std::string_view& tuple);
  * in a table with a primary key.
  */
 int tbl_scan_rows(table_t* table, scan_t*& out);
+
+/* A bound of a scan on one column (../COLSTORE.md §12): attnum's. */
+struct col_bound_t {
+    int32_t         attnum;
+    sm2::cg_bound_t bound;
+};
+
+/*
+ * tbl_scan of first..last, of a column store table: of its row
+ * groups, only the columns cols reads, every one if cols is empty,
+ * and only the row groups whose zonemaps and filters may hold a row
+ * that meets every bound (../COLSTORE.md §12). A bound prunes; it
+ * does not filter: the caller tests each row. A column not read is
+ * null in the rows of the row groups. On any other table, tbl_scan.
+ */
+int tbl_scan_columns(table_t* table, std::vector<bool> cols,
+                     std::vector<col_bound_t> bounds, uint64_t first,
+                     uint64_t last, scan_t*& out);
+
+/* The rg_id of the row a scan handed out last; 0 for the delta's. */
+uint64_t tbl_scan_rg(const scan_t* scan);
 
 /*
  * Open a cursor over the rows of index, the table's primary key or

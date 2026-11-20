@@ -695,6 +695,16 @@ int rel_insert_at(rel_t* rel, uint64_t id, std::span<const datum_t> datums,
                   std::span<const bool> isnull, std::string* key = nullptr);
 
 /*
+ * rel_insert_at of a keyless row under an _id whose key may hold a
+ * version already: the Column Store's row back in its delta store,
+ * over the seal's tombstone (../COLSTORE.md §9). It reads the key's
+ * newest version, as sm1::insert does, where rel_insert_at's writes
+ * a key never written.
+ */
+int rel_reinsert_at(rel_t* rel, uint64_t id, std::span<const datum_t> datums,
+                    std::span<const bool> isnull);
+
+/*
  * Read the row at key as the transaction sees it: 0 with tuple set,
  * and id if wanted, a keyless row's _id from its key or 0 for a
  * keyed row, 1 if there is none, -1 on error, as sm1::read.
@@ -806,6 +816,17 @@ int rel_update(rel_t* rel, std::string_view key, uint64_t id,
 int rel_delete(rel_t* rel, std::string_view key);
 int rel_delete(rel_t* rel, std::string_view key, sm1::rawpin_t* pin,
                std::string_view& old, bool hold = false);
+
+/*
+ * rel_delete of a row the Column Store's seal moves into a row group
+ * (../COLSTORE.md §10.1): its tombstone sealed (sm1::erase_sealed),
+ * so a writer of the row is judged by the row's own commit. Its
+ * tuple is pinned into pin, as rel_delete's; with hold, its datums
+ * out of line are erased only by rel_release, so the seal reads them
+ * first.
+ */
+int rel_seal(rel_t* rel, std::string_view key, sm1::rawpin_t* pin,
+             std::string_view& old, bool hold = false);
 
 /*
  * Put a row into a bulk load (sm1::load_open) of the rel's store,

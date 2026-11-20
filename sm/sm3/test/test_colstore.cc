@@ -12,6 +12,8 @@
 #include "doctest.h"
 #include "sm3.h"
 
+#include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -168,4 +170,433 @@ TEST_CASE("a dropped column store table takes its sequence") {
   CHECK(sm1::nextseq(db.s, "sm3.rg." + std::to_string(c), id) == -1);
   CHECK(sm1::errnum() == sm1::SM_ERR_NOTFOUND);
   REQUIRE(sm1::abort(db.s) == 0);
+}
+
+namespace {
+
+/* Load n rows (a = i, b = "n" + i % 7) into c, in one transaction. */
+void load_rows(col_db_t &db, uint64_t c, int n, bool commit = true) {
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  sm3::loader_t *l = nullptr;
+  REQUIRE_MESSAGE(sm3::tbl_load_open(t, l) == 0, sm1::errmsg());
+  for (int i = 0; i < n; i++) {
+    std::string b = sm2::make_varlena("n" + std::to_string(i % 7));
+    sm2::datum_t d[2] = {sm2::datum_from_int32(i),
+                         reinterpret_cast<sm2::datum_t>(b.data())};
+    bool null[2] = {false, false};
+    uint64_t id = 0;
+    REQUIRE_MESSAGE(sm3::tbl_load_add(l, d, null, id) == 0, sm1::errmsg());
+  }
+  REQUIRE_MESSAGE(sm3::tbl_load_close(l) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  if (commit) {
+    db.commit();
+  } else {
+    REQUIRE(sm3::abort(db.ss) == 0);
+  }
+}
+
+/* What a scan of c gives: the a of each row, and its b, or "-". */
+std::map<int32_t, std::string> scan_rows(col_db_t &db, uint64_t c,
+                                         std::vector<bool> cols = {},
+                                         std::vector<sm3::col_bound_t> b = {}) {
+  std::map<int32_t, std::string> out;
+  db.begin(sm1::xctlevel_t::repeatable_read);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE_MESSAGE(sm3::tbl_scan_columns(t, cols, b, 0, UINT64_MAX, scan) == 0,
+                  sm1::errmsg());
+  uint64_t id;
+  std::string_view tuple;
+  const sm3::table_def_t &def = sm3::tbl_def(t);
+  int rc;
+  while ((rc = sm3::tbl_scannxt(scan, id, tuple)) == 0) {
+    sm2::datum_t d[2];
+    bool null[2];
+    REQUIRE(sm2::tup_deform(def.desc, tuple, d, null) == 0);
+    int32_t a = null[0] ? -1 : sm2::datum_to_int32(d[0]);
+    std::string v = "-";
+    if (!null[1]) {
+      std::string_view bytes;
+      REQUIRE(sm2::datum_bytes(&sm2::type_text, -1, d[1], bytes) == 0);
+      v = std::string(sm2::varlena_payload(bytes));
+    }
+    CHECK(out.count(a) == 0);
+    out[a] = v;
+  }
+  CHECK(rc == 1);
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  db.commit();
+  return out;
+}
+
+/* The row groups of c's store its transaction sees. */
+size_t row_groups(col_db_t &db, uint64_t c) {
+  db.begin();
+  std::shared_ptr<const sm3::table_def_t> def = sm3::cat_get_table(db.cat, c);
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  REQUIRE(sm1::fileset_list(db.s, def->storeid, sets) == 0);
+  db.commit();
+  return sets.size();
+}
+
+} // namespace
+
+// Verify a bulk load writes whole row groups, the rest to the delta
+// store, and a scan reads every row once, before and after a restart.
+// 1. Load 25,000 rows into c: two row groups, 5,000 rows in the delta.
+// 2. A scan gives each row once, with its values.
+// 3. After a restart, the same.
+TEST_CASE("a bulk load writes row groups, and a scan reads every row") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The load.
+  load_rows(db, c, 25000);
+  CHECK(row_groups(db, c) == 2);
+  // 2. Every row, once.
+  auto rows = scan_rows(db, c);
+  REQUIRE(rows.size() == 25000);
+  CHECK(rows[0] == "n0");
+  CHECK(rows[12345] == "n" + std::to_string(12345 % 7));
+  CHECK(rows[24999] == "n" + std::to_string(24999 % 7));
+  // 3. After a restart.
+  db.reload();
+  CHECK(scan_rows(db, c).size() == 25000);
+}
+
+// Verify a scan's bounds skip row groups, and its columns are those
+// read.
+// 1. Load 25,000 rows, a ascending: row group 1 holds a 0..9,999,
+//    row group 2 a 10,000..19,999.
+// 2. With a = 15,000, row group 1 is skipped: the scan gives row
+//    group 2's rows and the delta store's, 15,000.
+// 3. With a > 30,000, both are skipped: the delta's 5,000 alone.
+// 4. Reading a alone, b is null in the row groups' rows.
+TEST_CASE("a scan's bounds skip row groups that cannot match") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  load_rows(db, c, 25000);
+  auto key = [](int32_t v) {
+    std::string k, d(4, '\0');
+    memcpy(d.data(), &v, 4);
+    REQUIRE(sm2::type_int4.key_encode(d, -1, nullptr, k) == 0);
+    return k;
+  };
+  // 2. An equality.
+  sm3::col_bound_t eq{0, {}};
+  eq.bound.has_lo = eq.bound.has_hi = true;
+  eq.bound.lo = eq.bound.hi = key(15000);
+  CHECK(scan_rows(db, c, {}, {eq}).size() == 15000);
+  // 3. A range past every row group.
+  sm3::col_bound_t gt{0, {}};
+  gt.bound.has_lo = true;
+  gt.bound.lo_incl = false;
+  gt.bound.lo = key(30000);
+  CHECK(scan_rows(db, c, {}, {gt}).size() == 5000);
+  // 4. One column read.
+  auto rows = scan_rows(db, c, {true, false});
+  REQUIRE(rows.size() == 25000);
+  CHECK(rows[5] == "-");
+  CHECK(rows[24000] == "n" + std::to_string(24000 % 7));
+}
+
+// Verify an aborted bulk load leaves no row group and no row.
+// 1. Load 12,000 rows, and abort.
+// 2. No row group is seen, and a scan gives no row.
+TEST_CASE("an aborted bulk load leaves no row group") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The aborted load.
+  load_rows(db, c, 12000, false);
+  // 2. Nothing.
+  CHECK(row_groups(db, c) == 0);
+  CHECK(scan_rows(db, c).empty());
+}
+
+namespace {
+
+/* Where row a is: (rg_id, _id), read by a scan of c. */
+std::pair<uint64_t, uint64_t> where(col_db_t &db, uint64_t c, int32_t a) {
+  std::pair<uint64_t, uint64_t> at{UINT64_MAX, 0};
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  while (sm3::tbl_scannxt(scan, id, tuple) == 0) {
+    sm2::datum_t d[2];
+    bool null[2];
+    REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+    if (!null[0] && sm2::datum_to_int32(d[0]) == a) {
+      at = {sm3::tbl_scan_rg(scan), id};
+    }
+  }
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  db.commit();
+  return at;
+}
+
+/* The row (a, b) as datums, b's varlena in buf. */
+struct row_t {
+  row_t(int32_t a, const std::string &b) : buf(sm2::make_varlena(b)) {
+    d[0] = sm2::datum_from_int32(a);
+    d[1] = reinterpret_cast<sm2::datum_t>(buf.data());
+  }
+  std::string buf;
+  sm2::datum_t d[2];
+  bool null[2] = {false, false};
+};
+
+} // namespace
+
+// Verify a row of a row group is deleted and updated by its name.
+// 1. Load 15,000 rows: a = 7 and a = 8 in the row group, a = 12,000
+//    in the delta store.
+// 2. Delete a = 7 at (rg_id, _id): a scan no longer gives it; a
+//    second delete fails with SM_ERR_NOTFOUND.
+// 3. Update a = 8 to b = "x": a scan gives it once, from the delta
+//    store, under its _id.
+// 4. Delete a = 12,000 in the delta store, at (0, _id).
+TEST_CASE("a row of a row group is deleted and updated") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  load_rows(db, c, 15000);
+  auto [rg7, id7] = where(db, c, 7);
+  auto [rg8, id8] = where(db, c, 8);
+  auto [rg12, id12] = where(db, c, 12000);
+  CHECK(rg7 != 0);
+  CHECK(rg8 == rg7);
+  CHECK(rg12 == 0);
+  // 2. Delete a = 7.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t, rg7, id7) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  db.commit();
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 14999);
+  CHECK(rows.count(7) == 0);
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK(sm3::tbl_delete_at(t, rg7, id7) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_NOTFOUND);
+  sm3::tbl_close(t);
+  REQUIRE(sm3::abort(db.ss) == 0);
+  // 3. Update a = 8.
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r8(8, "x");
+  REQUIRE_MESSAGE(sm3::tbl_update_at(t, rg8, id8, r8.d, r8.null) == 0,
+                  sm1::errmsg());
+  sm3::tbl_close(t);
+  db.commit();
+  rows = scan_rows(db, c);
+  CHECK(rows.size() == 14999);
+  CHECK(rows[8] == "x");
+  auto [rg8b, id8b] = where(db, c, 8);
+  CHECK(rg8b == 0);
+  CHECK(id8b == id8);
+  // 4. Delete in the delta store.
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE(sm3::tbl_delete_at(t, 0, id12) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  CHECK(scan_rows(db, c).count(12000) == 0);
+}
+
+// Verify concurrent writers of a row of a row group, by level.
+// 1. R (REPEATABLE READ) begins; S deletes a = 9 and commits; R's
+//    delete of it fails with SM_ERR_CONFLICT.
+// 2. S updates a = 10 into the delta store, and commits; C (READ
+//    COMMITTED, its statement's snapshot older) deletes it at its
+//    row group's name: SM_ERR_UPDATED, then at (0, _id): done.
+// 3. An aborted delete leaves the row.
+TEST_CASE("concurrent writers of a row of a row group") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  load_rows(db, c, 12000);
+  auto [rg9, id9] = where(db, c, 9);
+  auto [rg10, id10] = where(db, c, 10);
+  auto [rg11, id11] = where(db, c, 11);
+  sm1::session_t *s2 = db.open();
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
+  sm3::table_t *t = nullptr, *t2 = nullptr;
+  // 1. R, then S's delete.
+  db.begin(sm1::xctlevel_t::repeatable_read);
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  REQUIRE(sm3::tbl_delete_at(t2, rg9, id9) == 0);
+  sm3::tbl_close(t2);
+  REQUIRE(sm3::commit(ss2) == 0);
+  CHECK(sm3::tbl_delete_at(t, rg9, id9) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_CONFLICT);
+  sm3::tbl_close(t);
+  sm3::abort(db.ss);
+  // 2. S's update, then C's delete.
+  db.begin(sm1::xctlevel_t::read_committed);
+  REQUIRE(sm1::stmt_begin(db.s) == 0);
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  std::string_view tuple;
+  // A read takes the statement's snapshot, before S commits.
+  CHECK(sm3::tbl_read(t, id11, tuple) == 1);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  row_t r10(10, "y");
+  REQUIRE(sm3::tbl_update_at(t2, rg10, id10, r10.d, r10.null) == 0);
+  sm3::tbl_close(t2);
+  REQUIRE(sm3::commit(ss2) == 0);
+  CHECK(sm3::tbl_delete_at(t, rg10, id10) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_UPDATED);
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t, 0, id10) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  db.commit();
+  CHECK(scan_rows(db, c).count(10) == 0);
+  // 3. An aborted delete.
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE(sm3::tbl_delete_at(t, rg11, id11) == 0);
+  sm3::tbl_close(t);
+  REQUIRE(sm3::abort(db.ss) == 0);
+  CHECK(scan_rows(db, c).count(11) == 1);
+  sm3::session_close(ss2);
+}
+
+namespace {
+
+/* Insert rows a = from .. to - 1 into c, one at a time, in one transaction. */
+void insert_rows(col_db_t &db, uint64_t c, int from, int to) {
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  for (int i = from; i < to; i++) {
+    row_t r(i, "n" + std::to_string(i % 7));
+    uint64_t id;
+    REQUIRE(sm3::tbl_insert(t, r.d, r.null, id) == 0);
+  }
+  sm3::tbl_close(t);
+  db.commit();
+}
+
+/* Seal c once, in a transaction of its own; whether it sealed. */
+bool seal(sm3::session_t *ss, uint64_t c) {
+  REQUIRE(sm3::begin(ss, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  bool sealed = false;
+  REQUIRE_MESSAGE(sm3::tbl_seal(t, sealed) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss) == 0);
+  return sealed;
+}
+
+} // namespace
+
+// Verify the seal moves the delta store's first rows into a row group,
+// and seals no partial one.
+// 1. Insert 12,000 rows one at a time: all in the delta store.
+// 2. Seal: one row group of 10,000; a scan gives every row once.
+// 3. Seal again: 2,000 rows are too few, nothing changes.
+// 4. After a restart, every row once still.
+TEST_CASE("the seal moves rows into a row group, never a partial one") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  insert_rows(db, c, 0, 12000);
+  CHECK(row_groups(db, c) == 0);
+  // 2. The seal.
+  CHECK(seal(db.ss, c));
+  CHECK(row_groups(db, c) == 1);
+  auto rows = scan_rows(db, c);
+  REQUIRE(rows.size() == 12000);
+  CHECK(rows[11999] == "n" + std::to_string(11999 % 7));
+  CHECK(where(db, c, 5).first != 0);
+  CHECK(where(db, c, 11000).first == 0);
+  // 3. Too few rows.
+  CHECK_FALSE(seal(db.ss, c));
+  CHECK(row_groups(db, c) == 1);
+  CHECK(scan_rows(db, c).size() == 12000);
+  // 4. After a restart.
+  db.reload();
+  CHECK(scan_rows(db, c).size() == 12000);
+}
+
+// Verify the seal passes over a locked row, and a writer whose
+// snapshot is older than the seal follows the row it moved.
+// 1. Insert 10,001 rows; S2 locks a = 3 FOR UPDATE.
+// 2. Seal: 10,000 rows sealed, a = 3 left in the delta store.
+// 3. R (REPEATABLE READ) began before a second seal of rows 10,001 to
+//    20,000; it updates a = 15,000 by its delta name (0, _id): it
+//    follows the row to its row group, and commits.
+// 4. A scan gives a = 15,000 once, with R's value.
+TEST_CASE("the seal passes over a locked row; a writer follows a sealed row") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows, and a lock on one.
+  insert_rows(db, c, 0, 10001);
+  auto [rg3, id3] = where(db, c, 3);
+  CHECK(rg3 == 0);
+  sm1::session_t *s2 = db.open();
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t2 = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  REQUIRE(sm3::tbl_lock(t2, id3, sm1::SM_LOCKMODE_EX) == 0);
+  // 2. The seal passes it over.
+  sm1::session_t *s3 = db.open();
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
+  CHECK(seal(ss3, c));
+  CHECK(where(db, c, 3).first == 0);
+  CHECK(where(db, c, 4).first != 0);
+  sm3::tbl_close(t2);
+  REQUIRE(sm3::commit(ss2) == 0);
+  // 3. R, then a second seal, then R's update.
+  insert_rows(db, c, 10001, 20001);
+  auto [rgx, idx] = where(db, c, 15000);
+  CHECK(rgx == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  std::string_view tuple;
+  REQUIRE(sm3::tbl_read(t2, idx, tuple) == 0);
+  CHECK(seal(ss3, c));
+  CHECK(where(db, c, 15000).first != 0);
+  row_t r(15000, "r");
+  REQUIRE_MESSAGE(sm3::tbl_update_at(t2, 0, idx, r.d, r.null) == 0,
+                  sm1::errmsg());
+  sm3::tbl_close(t2);
+  REQUIRE(sm3::commit(ss2) == 0);
+  // 4. Once, with R's value.
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 20001);
+  CHECK(rows[15000] == "r");
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
 }

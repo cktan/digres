@@ -6,8 +6,21 @@ query with a scan. It has no primary key and no secondary index.
 Each scan skips the parts of the table that its predicate cannot
 match, from statistics kept in RocksDB.
 
-**Status.** Design only. Nothing is built. §16 lists the
-questions that are still open.
+**Status.** Built in part, in sm1, sm2 and sm3
+([`COLSTORE_PLAN.md`](COLSTORE_PLAN.md) has the steps): the
+sealed tombstone, file sets, the CG file, the catalog's kind,
+bulk loads, scans, deletes and updates, and the seal as a call.
+Not built: the seal's job and its counts, RG compaction, `ANALYZE`,
+the DDL of §14, the C API and digres. Where the code differs from
+this design today:
+
+- A scan hands out sm2 tuples, not datums, so a row of more than
+  64 KB, long values included, fails in a scan.
+- A bulk load draws each row's `_id` from the sequence one at a
+  time, as sm1 has no draw of a batch.
+- A read by `_id` (`tbl_read`) sees the delta store alone.
+
+§16 lists the questions that are still open.
 
 ---
 
@@ -309,9 +322,9 @@ in place of a document.
   rows.** It does not hold them in memory. The file has no size
   target.
 - **Each long value has a CRC32C of its own**, in its pointer
-  in the CG. A read of one value is a ranged read, or one ranged
-  GET from S3, and checks that CRC32C. The CRC32C of the whole file (§5.3) is
-  for a read of the whole file.
+  in the CG. A read of one value is a ranged read, or one
+  ranged GET from S3, and checks that CRC32C. The CRC32C of the
+  whole file (§5.3) is for a read of the whole file.
 - **digres gets an external pointer datum** and fetches the
   value only when it uses it, as PostgreSQL does with TOAST. A
   query that neither tests nor returns the column reads no long
@@ -519,7 +532,7 @@ Store from SSI:
 `rewrite_table` write RGs directly, in the transaction of the
 statement. They do not pass through the delta store.
 
-1. Draw 10k `_id`s from the table's sequence, as one batch.
+1. Draw each row's `_id` from the table's sequence.
 2. Add 10k rows to the CGs being built. Write each long value
    into its long-value file as the row is added.
 3. Write the CG files, and put the file set key and the filter
@@ -531,8 +544,8 @@ statement. They do not pass through the delta store.
 - **A table with rows can take a bulk load.** A new RG
   conflicts with no key that is there, so the load takes no
   lock beyond what an `INSERT` takes.
-- **An RG's `_id`s are contiguous**, as they come from one
-  batch. So its `_id` range is tight.
+- **An RG's `_id`s ascend**, as they come from the sequence in
+  the load's order. So its `_id` range is tight.
 - **An abort or a rollback to a savepoint** unlinks the files,
   from the transaction's list, and the undo list removes the
   keys (§13).
