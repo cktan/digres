@@ -157,7 +157,8 @@ int merge_set(table_t *t, uint64_t rg_id, std::vector<uint64_t> &out) {
   }
   out.push_back(rg_id);
   // 3. The small row groups next to it.
-  const uint64_t half = rg_max_rows / 2;
+  const uint64_t max_rows = rg_rows(tbl_session(t)->cat);
+  const uint64_t half = max_rows / 2;
   if (live < half) {
     uint64_t total = live;
     for (ptrdiff_t dir : {ptrdiff_t(1), ptrdiff_t(-1)}) {
@@ -167,7 +168,7 @@ int merge_set(table_t *t, uint64_t rg_id, std::vector<uint64_t> &out) {
         if (live_rows(t, rgs[j].first, rgs[j].second, lj, rj) != 0) {
           return -1;
         }
-        if (lj >= half || total + lj > rg_max_rows) {
+        if (lj >= half || total + lj > max_rows) {
           break;
         }
         total += lj;
@@ -297,7 +298,7 @@ void sealer_count(const catalog_t *cat, uint64_t oid, uint64_t rows) {
   std::lock_guard<std::mutex> h(z->mu);
   uint64_t &n = z->counts[oid];
   n += rows;
-  if (n >= rg_max_rows) {
+  if (n >= rg_rows(cat)) {
     n = 0;
     enqueue_locked(z, oid);
   }
@@ -315,7 +316,7 @@ void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t rg_id,
   uint64_t &n = z->marks[{oid, rg_id}];
   n += marks;
   // A fifth of a row group's rows (../COLSTORE.md §11.1).
-  if (n >= rg_max_rows / 5) {
+  if (n >= rg_rows(cat) / 5) {
     z->marks.erase({oid, rg_id});
     enqueue_locked(z, oid, rg_id);
   }

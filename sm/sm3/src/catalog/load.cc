@@ -10,6 +10,7 @@
  * out a row itself.
  */
 
+#include "../colstore/colstore.h"
 #include "internal.h"
 #include "sm0_log.h"
 
@@ -489,6 +490,15 @@ int cat_set_toast(catalog_t *cat, bool on) {
     return sm1::seterr(sm1::SM_ERR_INVALID, "toast: no catalog");
   }
   cat->toast = on;
+  return 0;
+}
+
+/* Set the rows of a row group, for tests; see sm3.h. */
+int cat_set_rg_rows(catalog_t *cat, uint32_t rows) {
+  if (!cat || rows == 0 || rows > rg_max_rows) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "rg rows: out of range");
+  }
+  cat->rg_rows = rows;
   return 0;
 }
 

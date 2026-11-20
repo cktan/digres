@@ -1171,6 +1171,15 @@ int cat_set_evaluator(catalog_t* cat, index_eval_fn eval);
 int cat_set_toast(catalog_t* cat, bool on);
 
 /*
+ * Give the column store tables of the catalog row groups of rows
+ * rows, fewer than the 10k they have (../COLSTORE.md §7), so that a
+ * seal, an RG compaction and a merge come sooner: for tests. Once,
+ * before any session uses the catalog. 0, or -1 with SM_ERR_INVALID
+ * for rows 0 or past 10k.
+ */
+int cat_set_rg_rows(catalog_t* cat, uint32_t rows);
+
+/*
  * Drop the index oid of the table: its name, its place in the
  * table's definition, and its entries.
  */

@@ -718,7 +718,8 @@ int col_compact(table_t *table, std::span<const uint64_t> rgs, bool &done) {
         rg_read_close(r);
         return give_up(-1);
       }
-      if (b.ids.size() >= rg_max_rows && rg_build_flush(b) != 0) {
+      if (b.ids.size() >= rg_rows(tbl_session(table)->cat) &&
+          rg_build_flush(b) != 0) {
         rg_read_close(r);
         return give_up(-1);
       }

@@ -116,6 +116,9 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 The constants (10k rows, 1024 bytes, 32 bytes, 4 KB, 20%, 50%)
 may change. An RG key records the real sizes of its CGs,
 so a change of a constant does not make an existing file wrong.
+A test can give a catalog smaller RGs (`sm3::cat_set_rg_rows`),
+so that a seal, an RG compaction and a merge come after a few
+hundred rows. The 20% and 50% are of the RG size set.
 
 **Which level owns each part:**
 

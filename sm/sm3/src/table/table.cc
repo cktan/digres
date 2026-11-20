@@ -1392,7 +1392,8 @@ int tbl_load_add(loader_t *l, std::span<const sm2::datum_t> values,
         rg_build_add(*l->rg, r, values, isnull) != 0) {
       return -1;
     }
-    if (l->rg->ids.size() >= rg_max_rows && rg_build_flush(*l->rg) != 0) {
+    if (l->rg->ids.size() >= rg_rows(table->session->cat) &&
+        rg_build_flush(*l->rg) != 0) {
       return -1;
     }
     id = r;
@@ -1867,7 +1868,8 @@ int tbl_seal(table_t *table, bool &sealed) {
       return -1;
     }
   }
-  if (ids.size() < rg_max_rows) {
+  const uint32_t max_rows = rg_rows(table->session->cat);
+  if (ids.size() < max_rows) {
     return 0;
   }
   // 2. A savepoint, so a seal of too few rows leaves nothing.
@@ -1889,7 +1891,7 @@ int tbl_seal(table_t *table, bool &sealed) {
   // 3. Each row: locked if free now, else passed over; erased with a
   //    sealed tombstone; added to the row group.
   for (uint64_t id : ids) {
-    if (b.ids.size() >= rg_max_rows) {
+    if (b.ids.size() >= max_rows) {
       break;
     }
     std::string key = sm2::id_key(id);
@@ -1920,7 +1922,7 @@ int tbl_seal(table_t *table, bool &sealed) {
     }
   }
   // 4. Too few: no partial row group (../COLSTORE.md §10.4).
-  if (b.ids.size() < rg_max_rows) {
+  if (b.ids.size() < max_rows) {
     return undo();
   }
   // 5. The row group, then the rows' chunks out of line.
@@ -2854,7 +2856,8 @@ void tbl_scanend(scan_t *scan) {
   col_scan_close(scan->col);
   // A delta store a scan found that long is queued for its seal: a
   // restart loses the inserts' counts (../COLSTORE.md §10.4).
-  if (scan->col_oid != 0 && scan->delta_rows >= rg_max_rows && scan->session) {
+  if (scan->col_oid != 0 && scan->session &&
+      scan->delta_rows >= rg_rows(scan->session->cat)) {
     sealer_enqueue(scan->session->cat, scan->col_oid);
   }
   sm2::rel_scanend(scan->rel);
@@ -3318,7 +3321,8 @@ static int copy_rows(table_t *from, table_t *to, const column_conv_t *conv) {
     }
     if (rg) {
       if (rg_build_add(*rg, id, row.d, {row.null.get(), row.n}) != 0 ||
-          (rg->ids.size() >= rg_max_rows && rg_build_flush(*rg) != 0)) {
+          (rg->ids.size() >= rg_rows(to->session->cat) &&
+           rg_build_flush(*rg) != 0)) {
         return -1;
       }
       continue;

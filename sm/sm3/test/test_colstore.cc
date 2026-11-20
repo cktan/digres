@@ -23,11 +23,14 @@
 
 namespace {
 
-/* A catalog on a fresh database, loaded, with a session ss over s. */
+/*
+ * A catalog on a fresh database, loaded, with a session ss over s; its
+ * row groups of rg_rows rows, if not 0 (sm3::cat_set_rg_rows).
+ */
 class col_db_t : public db_t {
 public:
   /* Initialize the catalog of "db", load it, and open a session. */
-  col_db_t() {
+  explicit col_db_t(uint32_t rows = 0) : rg_rows(rows) {
     s = open();
     REQUIRE(sm3::cat_init(env(), "db") == 0);
     load();
@@ -58,11 +61,15 @@ public:
   sm1::session_t *s = nullptr;
   sm3::session_t *ss = nullptr;
   sm3::catalog_t *cat = nullptr;
+  const uint32_t rg_rows;
 
 private:
-  /* Load the catalog; open ss over s. */
+  /* Load the catalog, with its row group size; open ss over s. */
   void load() {
     REQUIRE_MESSAGE(sm3::cat_open(env(), "db", cat) == 0, sm1::errmsg());
+    if (rg_rows != 0) {
+      REQUIRE(sm3::cat_set_rg_rows(cat, rg_rows) == 0);
+    }
     REQUIRE(sm3::session_open(cat, s, ss) == 0);
   }
 };
@@ -752,13 +759,16 @@ TEST_CASE("a writer follows a row RG compaction moved") {
 }
 
 // Verify the sealer compacts a row group that committed delete
-// markers have made a fifth dead.
-// 1. Attach a sealer; load 10,000 rows: one row group.
-// 2. Delete 1,999 of its rows: not yet a fifth; nothing is queued.
+// markers have made a fifth dead, with row groups of 100 rows.
+// 1. Row groups of 0 rows, or of more than 10k, are refused. Attach a
+//    sealer; load 100 rows: one row group.
+// 2. Delete 19 of its rows: not yet a fifth; nothing is queued.
 // 3. Delete one more: the row group is queued and compacted into a
-//    new one of 8,000 rows.
+//    new one of 80 rows.
 TEST_CASE("the sealer compacts a row group a fifth dead") {
-  col_db_t db;
+  col_db_t db(100);
+  CHECK(sm3::cat_set_rg_rows(db.cat, 0) == -1);
+  CHECK(sm3::cat_set_rg_rows(db.cat, 10001) == -1);
   db.begin();
   uint64_t c = make(db, "c", true);
   db.commit();
@@ -768,21 +778,22 @@ TEST_CASE("the sealer compacts a row group a fifth dead") {
             sm1::session_t *s = nullptr;
             return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
           }) == 0);
-  load_rows(db, c, 10000);
-  uint64_t rg = where(db, c, 5000).first;
+  load_rows(db, c, 100);
+  uint64_t rg = where(db, c, 50).first;
   REQUIRE(rg != 0);
+  REQUIRE(row_groups(db, c) == 1);
   // 2. Not yet.
-  delete_rows(db, c, 0, 1999);
+  delete_rows(db, c, 0, 19);
   sm3::sealer_wait_idle(db.cat);
-  CHECK(where(db, c, 5000).first == rg);
+  CHECK(where(db, c, 50).first == rg);
   // 3. Now.
-  delete_rows(db, c, 1999, 2000);
+  delete_rows(db, c, 19, 20);
   sm3::sealer_wait_idle(db.cat);
-  uint64_t rg2 = where(db, c, 5000).first;
+  uint64_t rg2 = where(db, c, 50).first;
   CHECK(rg2 != 0);
   CHECK(rg2 != rg);
   CHECK(row_groups(db, c) == 1);
-  CHECK(scan_rows(db, c).size() == 8000);
+  CHECK(scan_rows(db, c).size() == 80);
   sm3::sealer_detach(db.cat);
 }
 
