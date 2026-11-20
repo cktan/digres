@@ -319,6 +319,7 @@ int rg_read_open(table_t *table, uint64_t rg_id, rg_meta_t meta,
   r.meta = std::move(meta);
   r.cgs.assign(def.columns.size(), nullptr);
   r.longs.assign(def.columns.size(), std::string());
+  std::vector<bool> in_rg(def.columns.size(), false);
   // 1. Each CG wanted: its file, checked against its RG key.
   for (const rg_col_t &c : r.meta.cols) {
     bool want =
@@ -347,12 +348,22 @@ int rg_read_open(table_t *table, uint64_t rg_id, rg_meta_t meta,
       r.ids = cg;
     } else {
       r.cgs[c.attnum] = cg;
+      in_rg[c.attnum] = true;
     }
+  }
+  // 2. Each column wanted that has no CG here, added since the row
+  //    group was written: its missing value in every row, or null
+  //    (../COLSTORE.md §14).
+  r.added.assign(def.columns.size(), false);
+  for (size_t a = 0; a < def.columns.size(); a++) {
+    const column_def_t &cd = def.columns[a];
+    r.added[a] = !in_rg[a] && !cd.dropped && cd.missing.has_value() &&
+                 (cols.empty() || (a < cols.size() && cols[a]));
   }
   if (!r.ids) {
     return corrupt("row group " + std::to_string(rg_id) + " has no _id CG");
   }
-  // 2. Its delete markers, at the transaction's view.
+  // 3. Its delete markers, at the transaction's view.
   return col_markers(table, rg_id, r.deleted);
 }
 
@@ -419,6 +430,10 @@ int rg_read_next(table_t *table, rg_read_t &r, uint64_t &id,
     }
     for (size_t c = 0; c < def.columns.size(); c++) {
       if (!r.cgs[c]) {
+        if (r.added[c]) {
+          values[c] = to_datum(def.columns[c].type, *def.columns[c].missing);
+          isnull[c] = false;
+        }
         continue;
       }
       int g = sm2::cg_get(r.cgs[c], i, d, w);

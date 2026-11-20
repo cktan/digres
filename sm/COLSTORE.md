@@ -10,13 +10,14 @@ match, from statistics kept in RocksDB.
 ([`COLSTORE_PLAN.md`](COLSTORE_PLAN.md) has the steps): the
 sealed tombstone, file sets, the CG file, the catalog's kind,
 bulk loads, scans, deletes and updates, the seal and its job, RG
-compaction and its trigger, and their C API; in digres, `WITH
-(storage = columnar)`, keys taken with a warning, loads, inserts,
-scans, updates, deletes and row locks. Not built: the merge of
-small RGs by itself (`tbl_compact_rgs` merges the RGs it is
-given), the DDL of §14, a scan's columns and bounds in the C
-API, and an `ANALYZE` test in digres, whose `run.sh` tests are
-of temporary tables, which sm does not analyze.
+compaction and its trigger, `ANALYZE`, the DDL of §14, and their
+C API; in digres, `WITH (storage = columnar)`, keys taken with a
+warning, loads, inserts, scans, updates, deletes, row locks and
+the DDL. Not built: the merge of small RGs by itself
+(`tbl_compact_rgs` merges the RGs it is given), a scan's columns
+and bounds in the C API and digres, and an `ANALYZE` test in
+digres, whose `run.sh` tests are of temporary tables, which sm
+does not analyze.
 Where the code differs from this design today:
 
 - A scan hands out sm2 tuples, not datums, so a row of more than

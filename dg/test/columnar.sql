@@ -10,9 +10,11 @@
 --    a row group, by the scan's name of the row; a DELETE by _id, a
 --    TID scan's, which sm finds the row group of; an UPDATE in a
 --    REPEATABLE READ transaction.
--- 5. CREATE TABLE AS and COPY load one too.
--- 6. A SERIALIZABLE transaction cannot read it.
--- 7. storage = 'row' is a row store table ('row' quoted, as ROW is a
+-- 5. ADD COLUMN with a default, DROP COLUMN, ALTER COLUMN TYPE, a
+--    rewrite, and TRUNCATE.
+-- 6. CREATE TABLE AS and COPY load one too.
+-- 7. A SERIALIZABLE transaction cannot read it.
+-- 8. storage = 'row' is a row store table ('row' quoted, as ROW is a
 --    keyword); another value is refused.
 \set ON_ERROR_STOP off
 create temp table columnar_ref (id int primary key);
@@ -43,6 +45,14 @@ update columnar_t set amount = amount + 1 where id = 7;
 commit;
 select count(*), sum(amount) from columnar_t;
 select id, amount from columnar_t where id between 1 and 7 order by id;
+alter table columnar_t add column z int default 42;
+select count(*), sum(z) from columnar_t;
+alter table columnar_t drop column code;
+alter table columnar_t alter column amount type bigint;
+select count(*), sum(amount), sum(z) from columnar_t;
+select * from columnar_t where id = 7;
+truncate columnar_t;
+select count(*) from columnar_t;
 create temp table columnar_ctas with (storage = columnar) as
   select g as id, g % 3 as k from generate_series(1, 12000) g;
 copy columnar_ctas from stdin;

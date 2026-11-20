@@ -8,6 +8,7 @@
  * kind in the catalog, what they refuse, and their data.
  */
 
+#include "../src/colstore/colstore.h"
 #include "analyze.h"
 #include "db.h"
 #include "doctest.h"
@@ -942,4 +943,152 @@ TEST_CASE("ANALYZE samples a column store table's row groups and delta") {
   CHECK(disk > 0);
   sm3::tbl_close(t);
   db.commit();
+}
+
+namespace {
+
+/*
+ * Each row of c by its a: column col's integer value, -1 if null; a
+ * and col int4 or int8.
+ */
+std::map<int64_t, int64_t> scan_col(col_db_t &db, uint64_t c, size_t col) {
+  std::map<int64_t, int64_t> out;
+  db.begin(sm1::xctlevel_t::repeatable_read);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  const sm3::table_def_t &def = sm3::tbl_def(t);
+  auto value = [&](std::string_view tuple, size_t i) -> int64_t {
+    sm2::datum_t d;
+    bool null;
+    REQUIRE(sm2::tup_decode(def.desc, tuple, i, d, null) == 0);
+    if (null) {
+      return -1;
+    }
+    return def.columns[i].type == &sm2::type_int8 ? sm2::datum_to_int64(d)
+                                                  : sm2::datum_to_int32(d);
+  };
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  while (sm3::tbl_scannxt(scan, id, tuple) == 0) {
+    out[value(tuple, 0)] = value(tuple, col);
+  }
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  db.commit();
+  return out;
+}
+
+/* The rg_ids of c's row groups its transaction sees. */
+std::vector<uint64_t> rg_ids(col_db_t &db, uint64_t c) {
+  std::vector<uint64_t> out;
+  db.begin();
+  std::shared_ptr<const sm3::table_def_t> def = sm3::cat_get_table(db.cat, c);
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  REQUIRE(sm1::fileset_list(db.s, def->storeid, sets) == 0);
+  for (const auto &[rg, value] : sets) {
+    out.push_back(rg);
+  }
+  db.commit();
+  return out;
+}
+
+/* The attnums of the CGs of c's row groups, the _id CG's left out. */
+std::set<int32_t> cg_attnums(col_db_t &db, uint64_t c) {
+  std::set<int32_t> out;
+  db.begin();
+  std::shared_ptr<const sm3::table_def_t> def = sm3::cat_get_table(db.cat, c);
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  REQUIRE(sm1::fileset_list(db.s, def->storeid, sets) == 0);
+  for (const auto &[rg, value] : sets) {
+    sm3::rg_meta_t meta;
+    REQUIRE(sm3::rg_meta_decode(value, meta) == 0);
+    for (const sm3::rg_col_t &col : meta.cols) {
+      if (col.attnum >= 0) {
+        out.insert(col.attnum);
+      }
+    }
+  }
+  db.commit();
+  return out;
+}
+
+} // namespace
+
+// Verify a column store table's DDL (../COLSTORE.md §14): ADD COLUMN
+// with no rewrite, DROP COLUMN, a rewrite, and TRUNCATE.
+// 1. Load 15,000 rows: a row group, and 5,000 in the delta store.
+// 2. ADD COLUMN z with a missing value of 42: every row reads 42,
+//    the row group's from no CG. A NOT NULL column with no missing
+//    value is refused, as the row group holds rows.
+// 3. DROP COLUMN b: every row reads b as null, and RG compaction
+//    leaves b's CG out of the new row group, z's in.
+// 4. ALTER COLUMN a TYPE int8, a rewrite: the new store has a row
+//    group, as a bulk load would make, and every a is converted.
+// 5. TRUNCATE: no row and no row group.
+TEST_CASE("a column store table's DDL") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  load_rows(db, c, 15000);
+  REQUIRE(row_groups(db, c) == 1);
+  // 2. ADD COLUMN.
+  int32_t v42 = 42;
+  std::string missing(reinterpret_cast<const char *>(&v42), 4);
+  db.begin();
+  REQUIRE_MESSAGE(sm3::add_column(db.ss, c,
+                                  {"z", sm2::type_int4.code, -1, false},
+                                  std::string_view(missing)) == 0,
+                  sm1::errmsg());
+  db.commit();
+  auto z = scan_col(db, c, 2);
+  REQUIRE(z.size() == 15000);
+  CHECK(z[0] == 42);
+  CHECK(z[9999] == 42);
+  CHECK(z[14999] == 42);
+  db.begin();
+  CHECK(sm3::add_column(db.ss, c, {"w", sm2::type_int4.code, -1, true},
+                        std::nullopt) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_NOTNULL);
+  REQUIRE(sm3::abort(db.ss) == 0);
+  // 3. DROP COLUMN.
+  db.begin();
+  REQUIRE_MESSAGE(sm3::drop_column(db.ss, c, "b") == 0, sm1::errmsg());
+  db.commit();
+  CHECK(cg_attnums(db, c) == std::set<int32_t>{0, 1});
+  REQUIRE(compact(db.ss, c, rg_ids(db, c)));
+  CHECK(cg_attnums(db, c) == std::set<int32_t>{0, 2});
+  z = scan_col(db, c, 2);
+  CHECK(z.size() == 15000);
+  CHECK(z[5] == 42);
+  CHECK(scan_col(db, c, 1)[5] == -1);
+  // 4. The rewrite.
+  sm3::column_conv_fn conv = [](std::span<const sm2::datum_t> v,
+                                std::span<const bool> n, std::string &out,
+                                bool &out_null) {
+    out_null = n[0];
+    int64_t a = out_null ? 0 : sm2::datum_to_int32(v[0]);
+    out.assign(reinterpret_cast<const char *>(&a), 8);
+    return 0;
+  };
+  db.begin();
+  REQUIRE_MESSAGE(sm3::alter_column_type(db.ss, c, "a",
+                                         {sm2::type_int8.code, -1}, &conv) == 0,
+                  sm1::errmsg());
+  db.commit();
+  CHECK(row_groups(db, c) == 1);
+  z = scan_col(db, c, 2);
+  REQUIRE(z.size() == 15000);
+  CHECK(z.begin()->first == 0);
+  CHECK(z.rbegin()->first == 14999);
+  CHECK(z[12345] == 42);
+  // 5. TRUNCATE.
+  db.begin();
+  REQUIRE_MESSAGE(sm3::truncate_table(db.ss, c) == 0, sm1::errmsg());
+  db.commit();
+  CHECK(row_groups(db, c) == 0);
+  CHECK(scan_col(db, c, 2).empty());
 }

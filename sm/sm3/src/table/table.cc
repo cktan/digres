@@ -3293,6 +3293,14 @@ static int copy_rows(table_t *from, table_t *to, const column_conv_t *conv) {
     return -1;
   }
   std::unique_ptr<scan_t, void (*)(scan_t *)> guard(scan, tbl_scanend);
+  // A column store table's rows go into row groups, as a bulk load's
+  // do: whole ones, and the rest into the delta store
+  // (../COLSTORE.md §14).
+  std::unique_ptr<rg_build_t> rg;
+  if (to->def->column_store) {
+    rg.reset(new rg_build_t);
+    rg_build_begin(*rg, to);
+  }
   deformed_t row(def.schema.size());
   uint64_t id;
   std::string_view tuple;
@@ -3307,6 +3315,13 @@ static int copy_rows(table_t *from, table_t *to, const column_conv_t *conv) {
     std::string converted;
     if (conv && convert_value(to, *conv, row, converted) != 0) {
       return -1;
+    }
+    if (rg) {
+      if (rg_build_add(*rg, id, row.d, {row.null.get(), row.n}) != 0 ||
+          (rg->ids.size() >= rg_max_rows && rg_build_flush(*rg) != 0)) {
+        return -1;
+      }
+      continue;
     }
     if (insert_row(to, row.d, {row.null.get(), row.n}, id, got) == 0) {
       continue;
@@ -3331,7 +3346,20 @@ static int copy_rows(table_t *from, table_t *to, const column_conv_t *conv) {
     }
     return -1;
   }
-  return rc == 1 ? 0 : -1;
+  if (rc != 1) {
+    return -1;
+  }
+  // The rows past the last row group, for a later seal.
+  if (rg) {
+    to->session->col_inserts[to->def->oid] += rg->ids.size();
+    return rg_build_to_delta(*rg,
+                             [&](uint64_t id, std::span<const sm2::datum_t> v,
+                                 std::span<const bool> n) {
+                               uint64_t got;
+                               return insert_row(to, v, n, id, got);
+                             });
+  }
+  return 0;
 }
 
 /* Rewrite the table into a new store, keyed as rec says; see internal.h. */

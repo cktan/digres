@@ -94,6 +94,8 @@ struct rg_read_t {
   uint64_t rg_id = 0;
   rg_meta_t meta;
   std::vector<sm2::cg_t *> cgs; /* by column; nullptr: not read */
+  /* By column: added since, no CG here, read as its missing value. */
+  std::vector<bool> added;
   sm2::cg_t *ids = nullptr;
   std::set<uint64_t> deleted;
   uint32_t at = 0;

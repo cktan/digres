@@ -1,14 +1,13 @@
 # COLSTORE_PLAN — building the Column Store
 
-Status: steps 1 to 9 are built; of step 11 the size and
-`ANALYZE`; of step 10 all but the merge of
-small RGs by itself; of step 12 the C API of a
-table's kind, its rows by name and its seal, with rel's
+Status: steps 1 to 9 and 11 are built; of step 10 all but the
+merge of small RGs by itself; of step 12 the C API of a table's
+kind, its rows by name and its seal, with rel's
 `:column-store`, `seal`, `rg-of` and `delete-at`, not a scan's
 columns and bounds; of step 13 the option `storage`, read in
 `access/sm/smstore.c` as dg's tables keep no reloptions, the
-keys ignored, the loads, the writes and the tests, not the
-projection and bounds.
+keys ignored, the loads, the writes, the DDL and the tests, not
+the projection and bounds.
 [`COLSTORE.md`](COLSTORE.md) is the design.
 This file says in what order to build it, where each part goes,
 and how each step is checked.
