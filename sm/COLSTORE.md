@@ -266,15 +266,17 @@ of an existing file.
 
 ### 5.3 The layout of a file
 
-A CG file holds, in this order:
+A CG file holds, in this order (`sm2/src/col/cg.cc`):
 
-1. The values, encoded (§5.1) and compressed with zstd.
-2. The dictionary, if the CG has one.
+1. The body, compressed with zstd: the encoding, the row count,
+   a null bitmap and a long bitmap where a row needs them, then
+   the values as the encoding lays them out, the dictionary
+   first in a CG with one (§5.1, §5.2).
+2. The zonemap (§6.1).
 3. The filter: the exact set or the bloom filter (§6.3).
-4. The zonemap (§6.1).
-5. A tail of fixed size: the offset of each part above, the
-   encoding tag, a format number, the row count, the CRC32C of
-   the file before the tail, and a magic number.
+4. A tail of 38 bytes: a magic number, a format number, the
+   encoding, the row count, the sizes of the parts above, the
+   CRC32C of the file before it, and the magic number again.
 
 - **A file describes itself without RocksDB.** The tail is read
   with one small read, or one ranged GET from S3.
@@ -306,9 +308,9 @@ in place of a document.
 - **The seal writes the long values into the file as it adds
   rows.** It does not hold them in memory. The file has no size
   target.
-- **Each long value is stored with its own CRC32C.** A read of
-  one value is a ranged read, or one ranged GET from S3, and
-  checks that CRC32C. The CRC32C of the whole file (§5.3) is
+- **Each long value has a CRC32C of its own**, in its pointer
+  in the CG. A read of one value is a ranged read, or one ranged
+  GET from S3, and checks that CRC32C. The CRC32C of the whole file (§5.3) is
   for a read of the whole file.
 - **digres gets an external pointer datum** and fetches the
   value only when it uses it, as PostgreSQL does with TOAST. A

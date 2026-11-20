@@ -1473,6 +1473,138 @@ void catkv_scanend(catkv_scan_t* scan);
  */
 const char* build_flags();
 
+/*
+ * The Column Store's column group, a CG (../COLSTORE.md §5, §6):
+ * the values of one column of a row group, as one immutable file,
+ * with its statistics and its filter. sm2 builds and reads the
+ * bytes; sm1 stores them (../COLSTORE.md §4.5).
+ */
+
+/* One value for a CG: a datum, in the type's form, or null. */
+struct cg_value_t {
+    std::string_view datum;
+    bool             isnull = false;
+};
+
+/* The column a CG holds. */
+struct cg_column_t {
+    const type_t*      type;
+    int32_t            typmod;
+    const collation_t* collation; /* text, varchar; nullptr: bytes */
+};
+
+/* A value longer than this is long, and kept out of line (§5.4). */
+constexpr size_t cg_long_min = 1024;
+
+/* Min and max are cut to this many bytes (§6.1). */
+constexpr size_t cg_minmax_max = 32;
+
+/*
+ * A CG's zonemap (../COLSTORE.md §6.1). min and max are key bytes
+ * (type_t::key_encode) of the finite values, cut to cg_minmax_max
+ * bytes; both empty when the CG has no finite value. NaN and the
+ * infinities are in the flags, not in min and max.
+ */
+struct cg_stats_t {
+    uint32_t    rows = 0;
+    uint32_t    nulls = 0;
+    uint32_t    distinct = 0;     /* distinct non-null keys */
+    std::string min, max;
+    bool        min_cut = false;  /* min is a prefix of the true min */
+    bool        max_cut = false;  /* max is a prefix of the true max */
+    bool        has_nan = false;
+    bool        has_pos_inf = false;
+    bool        has_neg_inf = false;
+    bool        has_long = false; /* a value is out of line */
+    bool        sorted = false;   /* non-null keys ascend, row by row */
+    std::string collation_version;
+};
+
+/* Append st's bytes to out, for the RG key (§4.4). */
+void cg_stats_encode(const cg_stats_t& st, std::string& out);
+
+/*
+ * Read a cg_stats_encode's bytes from the front of in, advancing
+ * past them. Returns 0, or -1 with SM_ERR_CORRUPT.
+ */
+int cg_stats_decode(std::string_view& in, cg_stats_t& st);
+
+/* A long value's place in its CG's long-value file (§5.4). */
+struct cg_long_t {
+    uint64_t offset = 0;
+    uint32_t length = 0;
+    uint32_t crc = 0;   /* the CRC32C of the value's bytes */
+};
+
+/* What cg_build makes of one column of a row group. */
+struct cg_built_t {
+    std::string file;      /* the CG file */
+    std::string long_file; /* its long-value file; empty for none */
+    std::string filter;    /* the filter key's value (§6.3) */
+    cg_stats_t  stats;
+};
+
+/*
+ * Build a CG of values, in row order: encode them, choose the
+ * encoding, compress, and make the statistics and the filter
+ * (../COLSTORE.md §5, §6). Returns 0, or -1 with the error set.
+ */
+int cg_build(const cg_column_t& col, std::span<const cg_value_t> values,
+             cg_built_t& out);
+
+/* A CG file, read and decoded. */
+struct cg_t;
+
+/*
+ * Check and decode a CG file. Returns 0 with the CG in out, or -1
+ * with SM_ERR_CORRUPT for a bad file, its CRC32C included.
+ */
+int cg_open(std::string_view file, cg_t*& out);
+
+/* Free a CG from cg_open; nullptr is a no-op. */
+void cg_close(cg_t* cg);
+
+/* The number of rows of a CG. */
+uint32_t cg_rows(const cg_t* cg);
+
+/*
+ * Row i of a CG: 0 with datum viewing the value, valid until
+ * cg_close; 1 if it is null; 2 if it is long, with where set.
+ */
+int cg_get(const cg_t* cg, uint32_t i, std::string_view& datum,
+           cg_long_t& where);
+
+/*
+ * Check one long value's bytes, read from its file at where: 0, or
+ * -1 with SM_ERR_CORRUPT if the length or the CRC32C differs.
+ */
+int cg_long_check(std::string_view bytes, const cg_long_t& where);
+
+/*
+ * Bounds on one column, which every matching row meets
+ * (../COLSTORE.md §12): a conjunction. Values are key bytes.
+ */
+struct cg_bound_t {
+    bool                     is_null = false;  /* IS NULL */
+    bool                     not_null = false; /* any other test */
+    bool                     has_lo = false;
+    bool                     lo_incl = true;
+    std::string              lo;
+    bool                     has_hi = false;
+    bool                     hi_incl = true;
+    std::string              hi;
+    bool                     has_in = false;   /* IN, or = */
+    std::vector<std::string> in;
+};
+
+/*
+ * Whether a CG with these statistics and this filter may hold a
+ * row that meets b (../COLSTORE.md §6.2): false means no row can,
+ * and the scan skips it.
+ */
+bool cg_may_match(const cg_column_t& col, const cg_stats_t& st,
+                  std::string_view filter, const cg_bound_t& b);
+
 } // namespace sm2
 
 #endif /* SM2_H */

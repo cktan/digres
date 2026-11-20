@@ -62,6 +62,7 @@ is never a build dependency.
 | LSM Index | [`../LSMINDEX.md`](../LSMINDEX.md) | the key encoder's rules, entries, cut keys, the index `rel` | `rel/index.cc`, `type/key.cc`, `type/collation.cc` |
 | B-tree Index | [`../BTREEINDEX.md`](../BTREEINDEX.md) | an index as a B+tree of its own pages | `tree/`, the tree paths of `rel/index.cc` |
 | TOAST | [`../TOAST.md`](../TOAST.md) | a row's long datums, out of line in the table's store | `rel/toast.cc` |
+| Column group | [`../COLSTORE.md`](../COLSTORE.md) §5, §6 | a column store's CG: its encodings, its file, its zonemap and filter, the pruning test; bytes alone, no store | `col/cg.cc` |
 | Catalog | [`../CATALOG.md`](../CATALOG.md) | `catkv`, the bytes of sm3's catalog, which sm2 stores and never reads | `rel/catkv.cc` |
 
 ## 4. Structure
@@ -82,6 +83,7 @@ src/ryu/      PostgreSQL 18's float printers, copied verbatim, built as C
 src/tuple/    the tuple codec
 src/rel/      the row and index relations, TOAST, catkv
 src/tree/     the B+tree and its page format
+src/col/      the Column Store's column groups: encode, decode, prune
 test/         doctest, as in sm1
 ```
 
@@ -125,6 +127,7 @@ its tests prove:
 | the tuple codec | `test_tuple.cc` | [`TUPLE.md`](TUPLE.md#14-tests) §14 |
 | the relations | `test_rel.cc`, `test_cluster.cc`, `test_index.cc`, `test_catkv.cc` | [`../ROWSTORE.md`](../ROWSTORE.md#13-tests) §13, [`../LSMINDEX.md`](../LSMINDEX.md#13-tests) §13 |
 | TOAST | `test_toast.cc` | [`../TOAST.md`](../TOAST.md#6-tests) §6 |
+| Column group | `test_cg.cc` | [`../COLSTORE.md`](../COLSTORE.md#15-tests) §15.2 |
 | the tree | `test_page.cc`, `test_tree.cc`, `test_tree_index.cc` | [`../BTREEINDEX.md`](../BTREEINDEX.md#15-tests) §15 |
 
 ## 5. Cross-level decisions
