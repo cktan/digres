@@ -998,8 +998,11 @@ a CG of each encoding read back; a changed byte is corruption;
 NaN and infinity in the flags; pruning skips only CGs that
 cannot match; a long value with a short key is not skipped by
 the filter; a CG of another collation version is not pruned by
-value; **pruning never skips a match**, for random CGs and
-random bounds, against a test of every value.
+value; a dictionary only where it is smaller than plain; the
+exact set to 4 KB of keys and a bloom filter above, with few
+false positives; a case-insensitive collation's filter, which
+matches another case; **pruning never skips a match**, for
+random CGs and random bounds, against a test of every value.
 
 ### 15.3 sm3: unit tests
 
@@ -1020,6 +1023,9 @@ random bounds, against a test of every value.
    20%; the merge of small RGs.
 7. `ANALYZE`: the sample of RGs and of the delta store.
 8. DDL: `TRUNCATE`, `ADD COLUMN`, `DROP COLUMN` and a rewrite.
+9. A changed byte in a long value fails a scan of its column,
+   and not a scan of the others; a changed byte in a CG file
+   fails a scan of its column.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.

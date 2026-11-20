@@ -456,11 +456,6 @@ Owed, and blocking nothing above:
     catches a small RG (§11.1).
   - **Tests not written yet:**
     - mvcc: a seal that meets a writer in flight or prepared;
-    - sm1: a changed byte in a file set's file; a long value
-      corrupt;
-    - sm2: the choice of a dictionary by size; the exact set at
-      4 KB and a bloom filter above it; the hash of a
-      non-deterministic collation's key;
     - sm3: TOAST chunks erased by the seal; a prepared writer
       skipped by the seal and given up on by RG compaction; a
       row lock across RG compaction; a bulk load's rollback to

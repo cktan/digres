@@ -15,6 +15,8 @@
 #include "sm3.h"
 
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <map>
 #include <random>
 #include <set>
@@ -1255,4 +1257,86 @@ TEST_CASE("an update of a row group's rows counts toward the seal") {
   CHECK(after.size() == 100);
   CHECK(after[99] == "u");
   sm3::sealer_detach(db.cat);
+}
+
+namespace {
+
+/* Change one byte, at offset at, of the file of c's home named name. */
+void flip_byte(col_db_t &db, const std::string &name, size_t at) {
+  for (const auto &e :
+       std::filesystem::recursive_directory_iterator(db.path())) {
+    if (e.is_regular_file() && e.path().filename() == name &&
+        e.path().string().find("/colstore/") != std::string::npos) {
+      std::fstream f(e.path(), std::ios::in | std::ios::out | std::ios::binary);
+      REQUIRE(f.good());
+      f.seekg(static_cast<std::streamoff>(at));
+      char b = 0;
+      f.read(&b, 1);
+      b = static_cast<char>(b ^ 0x5a);
+      f.seekp(static_cast<std::streamoff>(at));
+      f.write(&b, 1);
+      return;
+    }
+  }
+  FAIL("no file " << name);
+}
+
+/* A scan of c's columns cols: 0 if it reads every row, else the error. */
+int scan_error(col_db_t &db, uint64_t c, std::vector<bool> cols) {
+  db.begin(sm1::xctlevel_t::repeatable_read);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_columns(t, cols, {}, 0, UINT64_MAX, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  int rc;
+  while ((rc = sm3::tbl_scannxt(scan, id, tuple)) == 0) {
+  }
+  int err = rc < 0 ? static_cast<int>(sm1::errnum()) : 0;
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  REQUIRE(sm3::abort(db.ss) == 0);
+  return err;
+}
+
+} // namespace
+
+// Verify that a changed byte in a CG file, or in a long value, fails
+// the scan that reads it with SM_ERR_CORRUPT (../COLSTORE.md §5.3,
+// §5.4), with row groups of 100 rows.
+// 1. Load 100 rows whose b is a long value: one row group.
+// 2. Change a byte in the long value of the first row: a scan of a
+//    alone reads no long value, and succeeds; a scan of b fails.
+// 3. Change a byte in a's CG file: a scan of a fails too.
+TEST_CASE("a changed byte in a CG file or a long value fails the scan") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  sm3::loader_t *l = nullptr;
+  REQUIRE(sm3::tbl_load_open(t, l) == 0);
+  for (int i = 0; i < 100; i++) {
+    row_t r(i, std::string(2000, static_cast<char>('a' + i % 26)));
+    uint64_t id = 0;
+    REQUIRE_MESSAGE(sm3::tbl_load_add(l, r.d, r.null, id) == 0, sm1::errmsg());
+  }
+  REQUIRE(sm3::tbl_load_close(l) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  std::vector<uint64_t> rgs = rg_ids(db, c);
+  REQUIRE(rgs.size() == 1);
+  const std::string rg = std::to_string(rgs[0]);
+  REQUIRE(scan_error(db, c, {}) == 0);
+  // 2. The long value.
+  flip_byte(db, rg + ".1.long", 100);
+  CHECK(scan_error(db, c, {true, false}) == 0);
+  CHECK(scan_error(db, c, {}) == sm1::SM_ERR_CORRUPT);
+  // 3. a's CG.
+  flip_byte(db, rg + ".0", 10);
+  CHECK(scan_error(db, c, {true, false}) == sm1::SM_ERR_CORRUPT);
 }

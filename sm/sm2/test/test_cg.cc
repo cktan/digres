@@ -13,6 +13,7 @@
 
 #include "sm2.h"
 
+#include <cstdio>
 #include <random>
 #include <string>
 #include <vector>
@@ -301,6 +302,145 @@ TEST_CASE("a CG of another collation version is not pruned by value") {
   CHECK(sm2::cg_may_match(col, old, b.filter, above));
   CHECK_FALSE(sm2::cg_may_match(col, old, b.filter, null));
   sm2::collation_close(coll);
+}
+
+namespace {
+
+/* A CG file's encoding, from its tail (../COLSTORE.md §5.3). */
+int encoding_of(const std::string &file) {
+  return static_cast<unsigned char>(file[file.size() - 38 + 8]);
+}
+
+/* A filter's kind, its first byte: 1 an exact set, 2 a bloom filter. */
+int filter_kind(const std::string &filter) {
+  return static_cast<unsigned char>(filter[0]);
+}
+
+/* An equality on key k. */
+sm2::cg_bound_t equal_to(std::string k) {
+  sm2::cg_bound_t b;
+  b.not_null = b.has_in = true;
+  b.in = {std::move(k)};
+  return b;
+}
+
+} // namespace
+
+// Verify that a CG takes a dictionary only where it is smaller than
+// plain, and delta for sorted integers (../COLSTORE.md §5.1, §5.2).
+// 1. 1,000 rows of 4 distinct text values: a dictionary.
+// 2. 1,000 distinct text values: plain.
+// 3. 1,000 ascending int4 values with no null: delta.
+// 4. Each reads back.
+TEST_CASE("a CG takes a dictionary only where it is smaller") {
+  // 1. Few distinct values.
+  std::vector<std::string> few, many, ints;
+  for (int i = 0; i < 1000; i++) {
+    few.push_back(datum(sm2::type_text, "value-" + std::to_string(i % 4)));
+    many.push_back(datum(sm2::type_text, "value-" + std::to_string(i)));
+    ints.push_back(datum(sm2::type_int4, std::to_string(i * 3)));
+  }
+  sm2::cg_built_t b = round_trip(column(sm2::type_text), values(few));
+  CHECK(encoding_of(b.file) == 2);
+  // 2. Many.
+  b = round_trip(column(sm2::type_text), values(many));
+  CHECK(encoding_of(b.file) == 1);
+  // 3. Sorted integers.
+  b = round_trip(column(sm2::type_int4), values(ints));
+  CHECK(encoding_of(b.file) == 3);
+}
+
+// Verify that the filter is an exact set while its keys total 4 KB or
+// less, and a bloom filter above, with no false negative and few false
+// positives (../COLSTORE.md §6.3).
+// 1. As many int8 values as 4 KB of keys holds: an exact set, which
+//    answers each value and no other.
+// 2. One more value: a bloom filter, which answers each value.
+// 3. Of 1,000 values outside the CG's set, between its min and max,
+//    under 5% may match.
+TEST_CASE("the filter is an exact set to 4 KB of keys, a bloom filter above") {
+  const size_t ksize = key(sm2::type_int8, "1").size();
+  const size_t fit = 4096 / ksize;
+  auto build = [&](size_t n) {
+    std::vector<std::string> d;
+    for (size_t i = 0; i < n; i++) {
+      d.push_back(datum(sm2::type_int8, std::to_string(i * 2)));
+    }
+    sm2::cg_built_t b;
+    REQUIRE(sm2::cg_build(column(sm2::type_int8), values(d), b) == 0);
+    return b;
+  };
+  auto eq = [&](size_t v) {
+    return equal_to(key(sm2::type_int8, std::to_string(v)));
+  };
+  // 1. The exact set.
+  sm2::cg_built_t b = build(fit);
+  REQUIRE(filter_kind(b.filter) == 1);
+  for (size_t i = 0; i < fit; i++) {
+    REQUIRE(sm2::cg_may_match(column(sm2::type_int8), b.stats, b.filter,
+                              eq(i * 2)));
+    REQUIRE_FALSE(sm2::cg_may_match(column(sm2::type_int8), b.stats, b.filter,
+                                    eq(i * 2 + 1)));
+  }
+  // 2. The bloom filter.
+  const size_t n = fit + 1;
+  b = build(n);
+  REQUIRE(filter_kind(b.filter) == 2);
+  for (size_t i = 0; i < n; i++) {
+    REQUIRE(sm2::cg_may_match(column(sm2::type_int8), b.stats, b.filter,
+                              eq(i * 2)));
+  }
+  // 3. Few false positives.
+  int fp = 0;
+  for (size_t i = 0; i < 1000; i++) {
+    fp += sm2::cg_may_match(column(sm2::type_int8), b.stats, b.filter,
+                            eq((i % n) * 2 + 1));
+  }
+  CHECK(fp < 50);
+}
+
+// Verify that under a non-deterministic, case-insensitive collation an
+// equality matches a value of another case, in an exact set and in a
+// bloom filter (../COLSTORE.md §6.3).
+// 1. A CG of "Apple" alone: an exact set; = 'apple' may match.
+// 2. A CG of 600 values "Name0000" and on: a bloom filter; = 'name0300'
+//    and = 'NAME0599' may match.
+// 3. = 'name9999' is in neither CG's filter.
+TEST_CASE("a non-deterministic collation's filter matches another case") {
+  sm2::collation_t *ci = nullptr;
+  REQUIRE_MESSAGE(sm2::collation_open("und-u-ks-level2", false, "", ci) == 0,
+                  sm1::errmsg());
+  sm2::cg_column_t col{&sm2::type_text, -1, ci};
+  auto k = [&](std::string_view s) {
+    std::string out;
+    REQUIRE(sm2::type_text.key_encode(datum(sm2::type_text, s), -1, ci, out) ==
+            0);
+    return out;
+  };
+  // 1. The exact set.
+  sm2::cg_built_t one;
+  REQUIRE(sm2::cg_build(col, values({datum(sm2::type_text, "Apple")}), one) ==
+          0);
+  REQUIRE(filter_kind(one.filter) == 1);
+  CHECK(sm2::cg_may_match(col, one.stats, one.filter, equal_to(k("apple"))));
+  // 2. The bloom filter.
+  std::vector<std::string> d;
+  for (int i = 0; i < 600; i++) {
+    char name[16];
+    snprintf(name, sizeof(name), "Name%04d", i);
+    d.push_back(datum(sm2::type_text, name));
+  }
+  sm2::cg_built_t many;
+  REQUIRE(sm2::cg_build(col, values(d), many) == 0);
+  REQUIRE(filter_kind(many.filter) == 2);
+  CHECK(
+      sm2::cg_may_match(col, many.stats, many.filter, equal_to(k("name0300"))));
+  CHECK(
+      sm2::cg_may_match(col, many.stats, many.filter, equal_to(k("NAME0599"))));
+  // 3. Absent.
+  CHECK_FALSE(
+      sm2::cg_may_match(col, one.stats, one.filter, equal_to(k("name9999"))));
+  sm2::collation_close(ci);
 }
 
 // Verify that pruning never skips a CG holding a match.
