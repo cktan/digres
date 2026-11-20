@@ -96,6 +96,9 @@ ordered key as the only access path below sm2.
       one is dropped, so it is transactional and costs the same
       whatever the table holds (CATALOG.md §2)
 - [x] temporary tables
+- [x] column store tables (`WITH (storage = columnar)`) — no
+      index or key, READ COMMITTED and REPEATABLE READ only
+      (COLSTORE.md)
 - [ ] unlogged tables
 - [ ] materialized views — storage and refresh only; no query
       semantics needed from sm

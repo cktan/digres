@@ -6,24 +6,10 @@ query with a scan. It has no primary key and no secondary index.
 Each scan skips the parts of the table that its predicate cannot
 match, from statistics kept in RocksDB.
 
-**Status.** Built in part, in sm1, sm2 and sm3
-([`COLSTORE_PLAN.md`](COLSTORE_PLAN.md) has the steps): the
-sealed tombstone, file sets, the CG file, the catalog's kind,
-bulk loads, scans, deletes and updates, the seal and its job, RG
-compaction and its trigger, `ANALYZE`, the DDL of §14, and their
-C API; in digres, `WITH (storage = columnar)`, keys taken with a
-warning, loads, inserts, scans with their columns and bounds,
-updates, deletes, row locks and the DDL. Not built: an
-`ANALYZE` test in digres, whose `run.sh` tests are of temporary
-tables, which sm does not analyze.
-Where the code differs from this design today:
-
-- A scan hands out sm2 tuples, not datums, so a row of more than
-  64 KB, long values included, fails in a scan.
-- A bulk load draws each row's `_id` from the sequence one at a
-  time, as sm1 has no draw of a batch.
-
-§16 lists the questions that are still open.
+A scan hands out sm2 tuples, so a row of more than 64 KB, long
+values included, fails in a scan. [`NEXT.md`](NEXT.md) lists
+this and the other parts not built. §16 lists the questions that
+are still open.
 
 ---
 
@@ -95,7 +81,7 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | the write path of small writes | the delta store, a keyless row store in RocksDB | §9 |
 | the write path of a bulk load | RGs written directly in the statement's transaction; the rows past the last full RG go to the delta store | §9.2 |
 | row identity | `_id`, drawn at insert, kept for the row's life, stored as a hidden CG | §8 |
-| a lookup by `_id` | a scan with `_id = n`, pruned by the `_id` CG's zonemap and bloom filter; no map from `_id` to `rg_id` | §8 |
+| a lookup by `_id` | a scan for `_id = n`, pruned by each RG's `_id` min and max; no map from `_id` to `rg_id` | §8 |
 | the TID that digres carries | `(rg_id, _id)`; `rg_id` 0 for a row in the delta store | §8 |
 | locks | row locks on delta key `_id` | §9.1 |
 | isolation | READ COMMITTED and REPEATABLE READ; a SERIALIZABLE transaction that reads or writes a column store table fails | §9.1 |
@@ -138,14 +124,15 @@ hundred rows. The 20% and 50% are of the RG size set.
 - **One file for each CG.** A file is written once and never
   changed, renamed, appended to or overwritten.
 - **A file's path is `colstore/<storeid>/<rg_id /
-  1024>/<rg_id>.<attnum>`**, under the RocksDB directory of the
+  1024>/<rg_id>.<name>`**, under the RocksDB directory of the
   database, or of the temporary instance for a temporary table.
-  `<attnum>` is the column's attnum
-  in the Catalog of sm3, which a column keeps for good, and
-  which a dropped column does not give back
-  ([`CATALOG.md`](CATALOG.md)). `rg_id`s come from a sequence of
-  the table and are never used again. So a path is unique for
-  the life of the database. S3's keys will take the same path.
+  `<name>` is the column's attnum in the Catalog of sm3, which a
+  column keeps for good, and which a dropped column does not
+  give back ([`CATALOG.md`](CATALOG.md)). The `_id` CG's name is
+  `id`. A long-value file's name is `<attnum>.long` (§5.4).
+  `rg_id`s come from a sequence of the table and are never used
+  again. So a path is unique for the life of the database. S3's
+  keys will take the same path.
 - **A CG is never replaced under its `rg_id`.** Each rewrite,
   of rows or of one column, makes a new RG with a new `rg_id`
   (§11). So a file name needs no version, and an RG key is put
@@ -186,7 +173,7 @@ set keys of sm1 (§4.5), in a key class of their own:
 | relid `0x0001` | delta rows | `0x01 ‖ 0x0001 ‖ be64(_id)` | chained: the keyless row store as it is |
 | relid `0x0002` | delete markers | `0x00 ‖ 0x0002 ‖ be64(rg_id) ‖ be64(_id) ‖ ~wts ‖ ~seq` | versioned |
 | relid `0x0003` | unused | | |
-| relid `0x0004` | filter keys | `0x00 ‖ 0x0004 ‖ be64(rg_id) ‖ be16(col) ‖ ~wts ‖ ~seq` | versioned |
+| relid `0x0004` | filter keys | `0x00 ‖ 0x0004 ‖ be64(rg_id) ‖ be16(attnum + 1) ‖ ~wts ‖ ~seq`; the `_id` CG's is 0 | versioned |
 | relid `0xFFFF` | TOAST of delta rows | as in a row store table | versioned |
 | class `0x05` | RG keys: sm1's file set keys | `0x05 ‖ be64(rg_id) ‖ ~wts ‖ ~seq` | versioned, of sm1's file set class |
 
@@ -200,8 +187,10 @@ set keys of sm1 (§4.5), in a key class of their own:
 - **A snapshot's set of RGs is a scan of class `0x05` at the
   snapshot.** It needs no visibility rule of its own.
 - **An RG key and its filter keys are put once and erased
-  once.** The seal or RG compaction puts them. RG compaction
-  or `TRUNCATE` erases them. Nothing changes them between.
+  once.** The seal, a bulk load or RG compaction puts them. RG
+  compaction erases them. Nothing changes them between.
+  `TRUNCATE` and `DROP TABLE` erase no key: the table's old
+  store goes, with its directory of files (§14).
 - **The key of a delete marker holds the `rg_id`.** One `_id`
   can have copies in more than one RG: a dead copy in an older
   RG, and the live copy in a newer RG.
@@ -210,13 +199,18 @@ set keys of sm1 (§4.5), in a key class of their own:
 
 | Field | For each |
 | --- | --- |
+| format version | RG |
 | row count | RG |
 | `_id` min and max | RG |
+| the count of CGs | RG |
+| attnum | CG |
 | file size | CG |
 | CRC32C of the file | CG |
-| size and CRC32C of the long-value file, if any | CG |
-| encoding | CG |
+| size and CRC32C of the long-value file; 0 if none | CG |
 | zonemap (§6.1) | CG |
+
+The encoding of a CG is in the CG file's tail (§5.3), not in the
+RG key.
 
 The value is about 50 bytes for each column. A table of 30
 columns has RG keys of about 1.5 KB.
@@ -243,7 +237,7 @@ sm1 does the whole life of a file:
    files that no version names (§13).
 
 - **sm3 never uses a file path.** It reads a CG through sm1, by
-  `rg_id` and attnum.
+  `rg_id` and the file's name (`id`, `3`, `3.long`).
 - **S3 and the local file cache are sm1's too.** The levels
   above see no change when files move to S3.
 - **The key class is sm1's, so the compaction filter and the GC
@@ -258,8 +252,8 @@ sm1 does the whole life of a file:
 | Encoding | For |
 | --- | --- |
 | plain | every type; the fallback |
-| dictionary | any type with repeated values (§5.2) |
-| delta, bit-packed | sorted integers; the `_id` CG always |
+| dictionary | a CG with no long value, where it is smaller than plain (§5.2) |
+| delta, bit-packed | `int2`, `int4` and `int8` in ascending order, with no null: the `_id` CG of a sealed or loaded RG |
 
 **A CG holds no TOAST pointer.** A value of 1024 bytes or less
 is in the CG. A long value is in the CG's long-value file
@@ -269,19 +263,23 @@ After the encoding, the CG is compressed with zstd. The tail
 tags the encoding, so a new encoding does not change the format
 of an existing file.
 
+The rows of an RG that RG compaction merged (§11.1) are in the
+order of the RGs merged, so its `_id` CG is not in ascending
+order, and gets plain encoding.
+
 ### 5.2 The dictionary
 
 - **Each CG has its own dictionary**, in the file. It never
   changes, and it needs no MVCC, no lock and no GC.
-- **The dictionary is sorted in key order.** The codes keep the
-  order of the values. A range predicate becomes a range of
-  codes, found by two binary searches in the dictionary.
+- **The dictionary holds datums, sorted in key order.** The codes
+  keep the order of the values.
 - **The values are bit-packed codes.**
-- **The seal chooses for each CG.** It uses a dictionary if the
-  dictionary and its codes are smaller than plain.
-- **A predicate is evaluated once for each distinct value.**
-  That gives a bitmap of the codes that match. The scan then
-  tests codes, not values.
+- **The writer of the CG chooses.** It uses a dictionary if the
+  dictionary and its codes are smaller than plain. A CG with a
+  long value never has one.
+- **A read expands each code to its datum.** digres evaluates a
+  predicate on each row's datums. A predicate evaluated on codes
+  waits for the columnar executor.
 
 ### 5.3 The layout of a file
 
@@ -294,16 +292,23 @@ A CG file holds, in this order (`sm2/src/col/cg.cc`):
 2. The zonemap (§6.1).
 3. The filter: the exact set or the bloom filter (§6.3).
 4. A tail of 38 bytes: a magic number, a format number, the
-   encoding, the row count, the sizes of the parts above, the
-   CRC32C of the file before it, and the magic number again.
+   encoding, a flags byte (0), the row count, four sizes (the
+   compressed body, the body before compression, the zonemap and
+   the filter), the CRC32C of the file before it, and the magic
+   number again.
 
 - **A file describes itself without RocksDB.** The tail is read
   with one small read, or one ranged GET from S3.
 - **The RG key also holds each file's CRC32C** (§4.4). RocksDB
   is the authority, so the key says what the file must be.
-- **sm1 checks the CRC32C on each read from disk or S3** into
-  memory, not on a hit in memory. It costs one pass at memory
-  speed, which is far less than zstd's decompression.
+- **Each read of a CG checks it**, from disk now, from S3
+  later. sm1's `fileset_read` checks nothing; its callers do:
+  - sm3 compares the file's size and CRC32C with the RG key's.
+  - sm2's `cg_open` checks the tail's CRC32C.
+  - sm2's `cg_long_check` checks a long value's CRC32C.
+
+  It costs one pass at memory speed, which is far less than
+  zstd's decompression.
 - **A mismatch fails the scan** with a data corruption error.
   Nothing repairs the file.
 - **An upload to S3 carries the same CRC32C** in S3's checksum
@@ -317,24 +322,26 @@ A long value is a value of a varlena type (`text`, `bytea`,
 on it by equality. So it is kept out of line, as a URL is kept
 in place of a document.
 
-- **A CG holds a pointer of about 16 bytes in its place**:
-  `(offset, length)` in the CG's long-value file. Only the
+- **A CG holds a pointer of 16 bytes in its place**:
+  `(offset, length, CRC32C)` in the CG's long-value file
+  (`sm2::cg_long_t`). Only the
   pointer counts toward the size of the CG (§7), so an RG of
   long values still holds 10k rows.
 - **The long-value file is `<rg_id>.<attnum>.long`**, in the
   RG's file set (§4.5). It lives and dies with the RG, and goes
   to S3 with the other files. A CG with no long value has none.
-- **The seal writes the long values into the file as it adds
-  rows.** It does not hold them in memory. The file has no size
+- **The writer of an RG holds its rows in memory**, long values
+  whole, and builds the long-value file in memory at the RG's
+  flush (`rg_build_add`, `sm2::cg_build`). The file has no size
   target.
 - **Each long value has a CRC32C of its own**, in its pointer
   in the CG. A read of one value is a ranged read, or one
   ranged GET from S3, and checks that CRC32C. The CRC32C of the
   whole file (§5.3) is for a read of the whole file.
-- **digres gets an external pointer datum** and fetches the
-  value only when it uses it, as PostgreSQL does with TOAST. A
-  query that neither tests nor returns the column reads no long
-  value.
+- **A scan reads each long value of a column it reads**, for
+  each row, as it reads the row (`rg_read_next`). A query that
+  neither tests nor returns the column reads no long value
+  (§12).
 - **A long value has one owner, its RG.** No delta row points
   into an RG's file:
   - The delta store keeps its long values in TOAST, in
@@ -357,12 +364,12 @@ in place of a document.
 | min, max | key bytes; finite values only for the types of `has_nan` and `has_*_inf` | `=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN` |
 | inexact bit | min and max cut to 32 bytes; a cut min is still a lower bound; a cut max compares as its prefix's successor | keeps a long `text` from making the RG key large |
 | null count | `uint32`; has-null is `> 0`, all-null is `= row count` | `IS NULL`, `IS NOT NULL`, every strict predicate on an all-null CG |
-| distinct count | `uint32`, exact at the seal | sizes the filter; the planner |
+| distinct count | `uint32`, exact when the CG is written | nothing reads it yet |
 | `has_nan` | bit; `float4`, `float8`, `numeric` | `x = 'NaN'`, `x <> 'NaN'`, and ranges with finite min and max |
 | `has_pos_inf`, `has_neg_inf` | bits; the types of `has_nan`, and `date`, `timestamp`, `timestamptz` | `x = 'infinity'`, and ranges with finite min and max |
 | `has_long` | bit: the CG holds a long value (§5.4) | tells the filter's rule of §6.3 |
-| `sorted` | bit: the CG is in ascending key order | a binary search in the CG; an early stop |
-| collation version | for each collated column | turns pruning off for a CG whose version is not the column's |
+| `sorted` | bit: the CG is in ascending key order | nothing reads it yet |
+| collation version | for each collated column | recorded; nothing compares it yet ([`NEXT.md`](NEXT.md)) |
 
 These follow and need no field:
 
@@ -377,13 +384,12 @@ These follow and need no field:
   skip a CG if and only if `max <= c`, `has_nan` is clear and
   `has_pos_inf` is clear. The other comparisons follow by
   symmetry.
-- **A collation version that is not the column's turns off
-  pruning for the CG.** The min and max of `text` begin with
-  the collation's sort key, and a new ICU version can change
-  it. Without this rule, a scan would skip rows that match.
-- **`min` and `max` can answer `min()` and `max()`** of an RG
-  with no visible delete markers when the inexact bit is
-  clear.
+- **A CG records the version of its column's collation.** The
+  min and max of `text` begin with the collation's sort key, and
+  a new ICU version can change it. A check that turns off
+  pruning for a CG of another version is not built
+  ([`NEXT.md`](NEXT.md)): until then, an ICU upgrade can make a
+  scan skip rows that match.
 
 ### 6.3 The filter of a CG
 
@@ -401,26 +407,33 @@ Each CG has one filter key: an exact set or a bloom filter.
 
   Min and max still prune such a CG.
 - **An exact set** when the key bytes of the CG's distinct
-  values total 4 KB or less. For a CG with a dictionary, the
-  set is the dictionary. It answers `=` and `IN` with no false
-  positive.
+  values total 4 KB or less: a sorted list of those key bytes,
+  apart from any dictionary. It answers `=` and `IN` with no
+  false positive.
 - **A bloom filter** otherwise: 10 bits for each distinct value,
-  for 1% false positives, over a hash of the key bytes. At 10k
-  rows it is at most 12.5 KB.
-- **The hash of a non-deterministic collation's key covers only
-  the sort key part.** The key also holds the original string,
-  and `'a' = 'A'` under a case-insensitive collation must hash
-  the same.
+  for 1% false positives, with 7 probes. The hash of the key
+  bytes is FNV-1a, then the finalizer of splitmix64; it is part
+  of the file format. At 10k rows the filter is at most
+  12.5 KB.
+- **Under a non-deterministic collation, equal strings share a
+  key**: the key is the sort key alone, with no original string
+  after it. So `'a' = 'A'` under a case-insensitive collation
+  hashes the same.
 - **Every column has a filter.** There is no option and no GUC.
 
 ---
 
 ## 7. The size of an RG
 
-**An RG holds 10k rows.** The seal closes an RG when it has
-10k rows. An RG has fewer only when the seal finds fewer rows
-that it can take: rows skipped for a writer in flight (§10.1),
-or the last RG of a bulk load.
+**An RG holds 10k rows.** The seal and a bulk load make only
+RGs of 10k rows:
+
+- The seal takes 10k rows, or undoes itself (§10.1).
+- A bulk load writes full RGs, and sends the rows past the last
+  one to the delta store (§9.2).
+
+Only RG compaction makes an RG of fewer rows: the live rows of
+the RGs that it rewrites (§11).
 
 - **The size of a CG needs no limit.** A value of a CG is at
   most 1024 bytes, as a long value is out of line (§5.4). So a
@@ -450,8 +463,8 @@ or the last RG of a bulk load.
 - **An update keeps the `_id`.** So "the newest version of
   `_id` 900" is one question with one answer, wherever the row
   is.
-- **Each RG stores its rows' `_id`s as a hidden CG**, sorted,
-  delta-encoded.
+- **Each RG stores its rows' `_id`s as a hidden CG.** It is
+  sorted and delta-encoded, except in a merged RG (§5.1).
 - **The `_id` CG is like any other CG.** It has a zonemap and a
   filter key (§6), and nothing more. There is no map from `_id`
   to `rg_id`.
@@ -463,19 +476,17 @@ A lookup of `_id` is a scan with the predicate `_id = n`:
 
 1. Read the RG keys at the snapshot.
 2. Skip each RG whose `_id` min and max do not hold `n`.
-3. Skip each RG whose `_id` bloom filter does not hold `n`.
-4. Read the `_id` CG of each RG that is left, and find `n` by a
-   binary search.
-5. Read the RG's delete marker at `(rg_id, n)`, if any, to
-   decide if this copy is live.
-6. Read the delta key `n`.
+3. Read the delete markers of each RG that is left, into a set.
+4. Read the RG's CGs, and walk its `_id` CG row by row to `n`.
+   A copy whose `_id` is in the set of step 3 is dead.
+5. Read the delta key `n`.
 
-- **Steps 1 to 3 read RocksDB alone.** A bloom filter's false
-  positive costs one CG read.
+- **Steps 1 and 2 read RocksDB alone.** The `_id` filter is not
+  read: `col_find_latest` and `col_read` pass no bound.
 - **The read of the RG keys reads every RG key**, so a lookup
-  costs in proportion to the RGs of the table. Wide `_id`
-  ranges, as of an RG of reinserted rows, leave the bloom
-  filter to do the work.
+  costs in proportion to the RGs of the table. A lookup that
+  reads the `_id` filter, finds `n` by a binary search, and
+  reads one marker is in [`NEXT.md`](NEXT.md).
 
 **digres carries the `_id` alone**, as for a keyless row store
 table. A write takes the `rg_id` from the scan instead:
@@ -507,11 +518,20 @@ table. A write takes the `rg_id` from the scan instead:
 | `DELETE` | a tombstone at its delta key | a delete marker at `(r, _id)` |
 | `UPDATE` | a new version at its delta key | a delete marker at `(r, _id)`, and the new version at delta key `_id` |
 
-- **Every lock and check stays at the row.** A delete marker is
-  a versioned key, as a unique index entry is. An uncommitted
-  marker is the row's lock. A second writer waits on it, and
-  first-committer-wins and the RC exchange apply to it as to
-  any key.
+- **Every lock and check stays at the row.** A write of a row in
+  an RG (`mark_deleted`):
+  1. Takes the row's exclusive lock on its delta key `_id`, as
+     any write does. A second writer, or a `FOR UPDATE` holder,
+     is waited for.
+  2. Inserts the delete marker, a versioned key, as a unique
+     index entry is. First-committer-wins applies to it as to any
+     key.
+  3. Meets a marker there already: at READ COMMITTED, the row
+     was deleted since (`SM_ERR_NOTFOUND`), or updated since,
+     with its new version in the delta store (`SM_ERR_UPDATED`,
+     which the caller answers by a read of the newest version).
+  4. Meets a moved marker (`SM_ERR_SEALED`): finds the row's new
+     RG, and tries there, at most 8 times (§11).
 - **An update of a row in an RG writes two keys in one
   transaction.** The delta key may hold a sealed tombstone. The
   insert goes in over it, as over any tombstone.
@@ -538,14 +558,14 @@ takes a lock's row away.
 **No SERIALIZABLE transaction uses a column store table.** A
 read or a write of one in a SERIALIZABLE transaction fails with
 `SM_ERR_UNSUPPORTED`, and digres reports it as a feature not
-supported, SQLSTATE `0A000`. A column store table is for analytics, which runs at
-READ COMMITTED or REPEATABLE READ. The refusal frees the Column
-Store from SSI:
+supported, SQLSTATE `0A000`. A column store table is for
+analytics, which runs at READ COMMITTED or REPEATABLE READ. The
+refusal frees the Column Store from SSI:
 
 - A scan takes no SIREAD lock, so pruning, the merge of delete
   markers, and a later batch interface need no lock rule.
-- A delete of a row in an RG, which writes only a marker, needs
-  no report to SSI of the delta key it does not write.
+- A delete of a row in an RG, which writes a marker and no
+  delta key, needs no report to SSI of the delta key.
 - A bulk load needs no report of the `_id`s of its RGs.
 - A move of a row never meets a SIREAD lock.
 
@@ -555,11 +575,12 @@ Store from SSI:
 `rewrite_table` write RGs directly, in the transaction of the
 statement. They do not pass through the delta store.
 
-1. Draw each row's `_id` from the table's sequence.
-2. Add 10k rows to the CGs being built. Write each long value
-   into its long-value file as the row is added.
-3. Write the CG files, and put the file set key and the filter
-   keys of a new RG (§4.5).
+1. Draw each row's `_id` from the table's sequence, one at a
+   time, as sm1 has no draw of a batch. `rewrite_table`
+   (`copy_rows`) keeps each row's old `_id` instead.
+2. Add 10k rows to the RG being built, in memory.
+3. Write the CG files and the long-value files, and put the file
+   set key and the filter keys of a new RG (§4.5).
 4. Repeat until fewer than 10k rows are left.
 5. Insert the rows that are left into the delta store, as
    `INSERT` does. A later seal takes them.
@@ -568,12 +589,14 @@ statement. They do not pass through the delta store.
   conflicts with no key that is there, so the load takes no
   lock beyond what an `INSERT` takes.
 - **An RG's `_id`s ascend**, as they come from the sequence in
-  the load's order. So its `_id` range is tight.
+  the load's order. So its `_id` range is tight. An RG of
+  `rewrite_table` holds old `_id`s, in the order it reads the
+  old RGs and then the delta store.
 - **An abort or a rollback to a savepoint** unlinks the files,
   from the transaction's list, and the undo list removes the
   keys (§13).
-- **The memory is one RG**: 10k rows of at most 1024 bytes a
-  value in a CG. Long values go to their files as they come.
+- **The memory is one RG**: 10k rows, long values whole, until
+  the RG is written.
 
 ---
 
@@ -584,20 +607,27 @@ statement. They do not pass through the delta store.
 The seal moves rows from the delta store into a new RG. It is a
 transaction of its own.
 
-1. Draw a new `rg_id`.
-2. Read delta keys in `_id` order. Erase each row with a sealed
-   tombstone. The erase gives back the exact row it replaced.
-   Skip a row whose writer is in flight or prepared. The row
-   stays in the delta store, and a later seal takes it.
-3. Detoast each value of the row. Write each long value into
-   the CG's long-value file, and keep its pointer for the CG.
-   Erase the row's TOAST chunks, as a delete does. A snapshot
-   older than the seal's commit still sees the chunks.
-4. Add each row to the CGs being built. Stop at 10k rows
-   (§7).
-5. Write each CG's file, and fsync the files and the directory.
+1. Read the delta store's `_id`s in order. With fewer than 10k,
+   stop: there is nothing to seal.
+2. Set a savepoint.
+3. For each row, until 10k are taken (§7):
+   1. Try the row's exclusive lock. If another transaction holds
+      a lock on the row, a reader's `FOR SHARE` included, skip
+      the row. It stays in the delta store, and a later seal
+      takes it.
+   2. Erase the row with a sealed tombstone. The erase gives
+      back the exact row it replaced. A row changed or gone
+      since step 1 is skipped.
+   3. Add the row to the RG being built. A value out of line in
+      TOAST is read back whole.
+4. With fewer than 10k rows taken, roll back to the savepoint:
+   no partial RG.
+5. Draw a new `rg_id`. Write each CG's file and long-value file,
+   and fsync the files and the directory.
 6. Put the RG key, and a filter key for each CG.
-7. Commit.
+7. Erase the TOAST chunks of the rows taken, at once. A
+   snapshot older than the seal's commit still sees them.
+8. Commit.
 
 - **The seal is pessimistic.** Its tombstones lock the rows
   from their erase until the commit. A writer of one of those
@@ -710,17 +740,23 @@ writer in flight or prepared is neither yet:
 - If RG compaction leaves the row out and the writer aborts, the
   row is gone: a lost row.
 
-So RG compaction does these steps:
+So RG compaction (`col_compact`) does these steps, at the newest
+committed state:
 
-1. Scan the old RG's delete markers at their newest versions.
-2. If a marker's writer is in flight or prepared, stop, and try
-   the RG again later. Nothing is written yet.
-3. Otherwise, write the moved markers, the CG files, the new RG
-   key and its filter keys, erase the old RG key, and commit.
+1. Set a savepoint.
+2. For each RG to compact, read its delete markers, then its
+   live rows.
+3. For each live row, try its exclusive lock. If another
+   transaction holds a lock on the row, a reader's `FOR SHARE`
+   included, roll back to the savepoint and give up: the next
+   markers committed on the RG queue it again.
+4. Write a moved marker for the row, and add it to the new RG.
+5. Write the CG files, put the new RG key and its filter keys,
+   erase each old RG key, and commit. The row locks are held to
+   the commit.
 
-- **A writer that starts after the scan of the markers waits
-  on a moved marker**, and then follows `_id` to the new RG
-  (§10.2).
+- **A writer that comes after the lock waits on it**, then finds
+  the moved marker, and follows `_id` to the new RG (§10.2).
 - **A transaction that stays prepared for a long time keeps its
   RG from RG compaction** for that time. RG compaction is GC, so
   it can wait.
@@ -728,14 +764,15 @@ So RG compaction does these steps:
 ### 11.1 When RG compaction runs
 
 - **At 20% dead rows.** A commit counts the delete markers it
-  committed on each RG, in memory. When they reach 20% of the
-  RG's rows, it queues an RG compaction job on the sealer's
-  queue (§10.4). Below 20%, the dead rows cost a scan less than
-  a rewrite of the RG costs.
-- **A scan counts too.** A scan reads each RG's markers to
-  merge them with the `_id` CG, so it counts them at no cost,
-  and queues a job at 20%. The counts in memory start at 0 when
-  the database opens, and a scan catches what they miss.
+  committed on each RG, in memory. When they reach 20% of a full
+  RG's rows, 2,000, it queues an RG compaction job on the
+  sealer's queue (§10.4). Below 20%, the dead rows cost a scan
+  less than a rewrite of the RG costs.
+- **A scan counts too.** A scan reads each RG's markers into a
+  set, so it counts them at no cost, and queues a job when they
+  are 20% of that RG's rows. The counts in memory start at 0
+  when the database opens, and a scan catches what they miss. A
+  scan also catches a small RG, whose 20% is under 2,000.
 - **Small RGs are merged.** When the job compacts an RG with
   fewer than 50% of 10k rows live, it takes with it each small
   RG next to it in `rg_id` order, after it and then before it,
@@ -745,7 +782,7 @@ So RG compaction does these steps:
   can leave a small RG; a bulk load leaves none (§9.2). Without
   merges, small files collect.
 - **An RG with nothing to gain is left.** A job for an RG that
-  is not small and is less than 20% dead does nothing.
+  merges with no other and is less than 20% dead does nothing.
 - **A snapshot needs nothing more.** An old snapshot sees the
   old RG key, and not the new one. GC keeps the old RG's files
   until the erase of its key is at or below the watermark
@@ -778,10 +815,11 @@ All access is by scan. A scan takes three things from digres:
   executor of digres applies the whole qual to each row, the
   bounded columns too. So the rule of sm3 holds: a scan filters
   nothing ([`sm3/SM3_DESIGN.md`](sm3/SM3_DESIGN.md) §5).
-- **A scan hands out one row at a time** through `sm.h`, as the
-  datums of the projected columns, into the virtual slot of
-  digres. It builds no sm2 tuple. The row's name is `(rg_id,
-  _id)` (§8).
+- **A scan hands out one row at a time** through `sm.h`, as an
+  sm2 tuple that sm3 forms from the projected columns' datums,
+  with null for a column not read. So a row of more than 64 KB
+  fails. Datums handed out with no tuple are in
+  [`NEXT.md`](NEXT.md). The row's name is `(rg_id, _id)` (§8).
 - **PostgreSQL's table access method has no projection
   argument for a sequential scan.** digres takes the columns
   from the scan's plan: its target list and quals. Its planner
@@ -804,8 +842,8 @@ A scan at a snapshot:
    proves there is no match.
 4. Reads the CGs that the query needs, from the local cache or
    from S3.
-5. Reads the RG's delete markers under `0x0002 ‖ be64(rg_id)`,
-   in `_id` order, and merge-joins them with the `_id` CG.
+5. Reads the RG's delete markers under `0x0002 ‖ be64(rg_id)`
+   into a set, and skips each row whose `_id` is in it.
 6. Scans the delta store, as a keyless row store table.
 
 ### 12.1 ANALYZE
@@ -850,16 +888,21 @@ A listing of a directory or of S3 never decides it.
   ([`BULKLOAD.md`](BULKLOAD.md) §5.6). An abort still writes
   nothing to RocksDB.
 - **A crash is an abort, except for a prepared transaction.**
-  When the database opens, a sweep of the store's directories
-  deletes each file whose `rg_id` has no RG key version that is
-  committed or prepared. A version in flight at the crash is
-  dead. A prepared transaction's RG keys name its files, so the
-  sweep keeps them.
+  When the database opens, a sweep (`fileset_sweep`) goes
+  through each store's directory. The newest committed or
+  prepared version of an `rg_id`'s RG key decides:
+  - a prepared version, or a committed put, keeps the files;
+  - a committed erase, or no such version, deletes them. A
+    version in flight at the crash is dead.
+
+  No snapshot is older than the open, so a committed erase
+  leaves no reader. The sweep also removes the directory of a
+  store that is gone.
 - **GC deletes the files of an `rg_id` when no RG key version of
   it is committed and visible to a snapshot, or prepared.** Two
   cases reach this rule:
-  - the erase of the RG key, by RG compaction or `TRUNCATE`, is
-    at or below the watermark ([`GC.md`](GC.md));
+  - the erase of the RG key, by RG compaction, is at or below
+    the watermark ([`GC.md`](GC.md));
   - the put of the RG key is dead. The compaction filter or the
     GC worker deletes the files when it drops the dead version.
     This covers a `ROLLBACK PREPARED` after a restart, when the
@@ -917,108 +960,86 @@ warning, so a script written for a row store table runs.
 
 A test goes to each layer that can express its scenario
 ([`DESIGN.md`](DESIGN.md#4-testing-across-levels) §4). No
-existing scenario of `sm1/mvcc` changes. Each new test opens with
-the one line that says what it proves.
+existing scenario of `sm1/mvcc` changed. The tests not written
+yet are in [`NEXT.md`](NEXT.md).
 
 ### 15.1 mvcc: the rules of sm1
 
-New scenarios in `sm1/mvcc/in`, a series of their own. Each runs
-twice, on versioned and on chained stores, as every scenario
-does, and the rule is the same on both. The driver gets the
-verbs `seal <row>`, an erase with a sealed tombstone, and
-`sealput <row> <value>`, a moved marker. The sessions that seal
-run at READ COMMITTED.
+The scenarios `s01` to `s08` in `sm1/mvcc/in`. Each runs twice,
+on versioned and on chained stores, as every scenario does. The
+driver has the verbs `seal <row>`, an erase with a sealed
+tombstone, and `sealput <row> <value>`, a moved marker. The
+sessions that seal run at READ COMMITTED.
 
 | Scenario | Expected |
 | --- | --- |
-| an RR writer, whose snapshot is older than the seal of its row, writes the row | `SEALED`, not `CONFLICT` |
-| an RR writer, whose row changed after its snapshot and was then sealed, writes the row | `CONFLICT`: the change under the tombstone decides |
-| an RC writer waits on a seal in flight, and the seal commits | `BLOCK`, then `SEALED` |
-| an RC writer waits on a seal in flight, and the seal aborts | `BLOCK`, then the write succeeds |
-| a reader before and after the seal's commit | the row, then no row |
-| an insert over a sealed tombstone | `ok` |
-| the same with a plain erase (negative) | the reader fails with a serialization failure |
-| a seal meets a writer in flight, or prepared | the seal skips the row; the writer is not blocked |
-| a plain erase in the seal's place (negative) | the RR writer gets `conflict` |
+| `s01`: an RR writer, whose snapshot is older than the seal of its row, writes the row; an insert over a sealed tombstone | `sealed`, not `conflict`; the insert is `ok` |
+| `s02`: an RR writer, whose row changed after its snapshot and was then sealed, writes the row | `conflict`: the change under the tombstone decides |
+| `s03`: an RC writer waits on a seal in flight, and the seal commits | `BLOCK`, then `sealed` |
+| `s04`: an RC writer waits on a seal in flight, and the seal aborts | `BLOCK`, then the write succeeds |
+| `s05`: a reader before and after the seal's commit | the row, then no row |
+| `s06`: a moved marker | every write over it is `sealed`; a reader sees it as any version |
+| `s07`: a plain erase in the seal's place (negative) | the RR writer gets `conflict` |
+| `s08`: a row lock over a sealed tombstone | judged by the version under it |
 
 The Column Store's notions above sm1, such as RGs, scans and
 pruning, cannot be expressed here. §15.3 and §15.4 test them.
 
 ### 15.2 sm1 and sm2: unit tests
 
-`sm1/test`, file sets (§4.5, §13):
+`sm1/test/test_fileset.cc`, file sets (§4.5, §13): a committed
+file set read back; an abort and a rollback to a savepoint
+unlink its files; the sweep at open; a prepared file set across
+a restart; an erased file set's files kept for an old snapshot,
+then deleted by GC; an erase judged by newer commits; a missing
+file is corruption; a dropped store's directory goes.
 
-1. Write a file set, put its key, commit, and read the files.
-2. Abort, and roll back to a savepoint: the files are unlinked.
-3. Close the database with a file set's key in flight, and open
-   it: the sweep deletes the files.
-4. Prepare, close, and open: the files stay. `COMMIT PREPARED`
-   keeps them; `ROLLBACK PREPARED` lets GC delete them.
-5. Erase a key while an old snapshot is open: the snapshot
-   reads the files; past the watermark, GC deletes them.
-6. Change a byte of a file: a read fails with a data corruption
-   error. The same for one long value.
-7. Drop the store: its directory goes.
-
-`sm2/test`, the CG file and the statistics (§5, §6):
-
-1. Write and read a CG of each type, in each encoding: plain,
-   dictionary and delta.
-2. The choice of a dictionary when it is smaller; a range of
-   codes from a range of values.
-3. Min and max as key bytes, cut at 32 bytes with the inexact
-   bit; null counts; the NaN and infinity flags; `sorted`; the
-   collation version.
-4. The exact set at 4 KB and less, and a bloom filter above; the
-   hash of a non-deterministic collation's key.
-5. Long values: the pointer, the long-value file, `has_long`
-   and its rule.
-6. **Pruning never skips a match.** For random CGs and random
-   bounds, compare each skip against a test of every value.
+`sm2/test/test_cg.cc`, the CG file and the statistics (§5, §6):
+a CG of each encoding read back; a changed byte is corruption;
+NaN and infinity in the flags; pruning skips only CGs that
+cannot match; a long value with a short key is not skipped by
+the filter; **pruning never skips a match**, for random CGs and
+random bounds, against a test of every value.
 
 ### 15.3 sm3: unit tests
 
-1. The seal: an RG of 10k rows; a row with a writer in flight
-   or prepared skipped; TOAST chunks erased; the RG key and the
-   filter keys put.
-2. A snapshot before a seal and one after see each row once.
-3. A scan: the projection, the bounds, the merge of delete
-   markers, and the delta store.
-4. An update and a delete of a row in an RG: the delete marker,
-   the reinsert, the TID `(rg_id, _id)`, and the follow of `_id`
-   after `SEALED`.
-5. The locks of §9.1: a row lock on delta key `_id`, across a
-   seal and across RG compaction; a SERIALIZABLE read and write
-   refused, and READ COMMITTED and REPEATABLE READ allowed.
-6. RG compaction: the trigger at 20%; the merge of small RGs;
-   the moved markers and their follow; the give-up on a writer
-   in flight or prepared.
-7. A bulk load: whole RGs, the rest in the delta store, an
-   abort, and a rollback to a savepoint.
-8. `ANALYZE`: the exact row count and null fraction; the sample.
-9. DDL: `TRUNCATE`; `ADD COLUMN` with no CG in old RGs; `DROP
-   COLUMN`; a rewrite.
-10. **A column store table agrees with a row store table.** Run
-    one random workload on both, at each isolation level and
-    with seals and RG compactions between, and compare every
-    scan.
+`sm3/test/test_colstore.cc`:
+
+1. The kind across a restart; an index refused; a SERIALIZABLE
+   transaction refused; a dropped table's sequence.
+2. A bulk load: whole RGs, the rest in the delta store; an
+   abort.
+3. A scan: every row, its columns, and the bounds that skip RGs.
+4. An update and a delete of a row in an RG, by `(rg_id, _id)`
+   and by `_id` alone; concurrent writers at each level.
+5. The seal: no partial RG; a locked row passed over; a writer
+   that follows a sealed row; the job at an RG's worth of rows;
+   an update's new version counted.
+6. RG compaction: the live rows rewritten; the give-up on a
+   writer; a writer that follows a moved row; the trigger at
+   20%; the merge of small RGs.
+7. `ANALYZE`: the sample of RGs and of the delta store.
+8. DDL: `TRUNCATE`, `ADD COLUMN`, `DROP COLUMN` and a rewrite.
+
+A test can give its catalog smaller RGs (§3), so that a seal or
+an RG compaction comes after a few hundred rows.
 
 ### 15.4 rel and digres
 
-`rel/test`, through `sm.h`: a column store table across
-sessions; a seal between statements; an abort; a new attach,
-after which the sweep runs; 2PC across a restart.
+`rel/test/test_colstore.rel`, through `sm.h`: a load and a scan
+across a restart; SERIALIZABLE and an index refused; a delete by
+name and an abort; the seal's job; an update and a delete by
+`_id` alone; a scan of some columns, with bounds; an update
+counted toward the seal.
 
-`dg/test`:
-
-- `.sql` files for `run.sh`: `CREATE TABLE ... WITH (storage =
-  columnar)`; the warnings of §14.1, and the `NOT NULL` kept from
-  an ignored `PRIMARY KEY`; a foreign key that references a
-  column store table, which fails; queries with bounds, whose
-  results equal a row store table's; `COPY`; `TRUNCATE`;
-  `ALTER TABLE`; `ANALYZE`; a read of a column store table in a
-  SERIALIZABLE transaction, which fails.
-- `server.sh`: an RR update while a seal runs, which succeeds.
+`dg/test/columnar.sql`: `CREATE TABLE ... WITH (storage =
+columnar)`; the warnings of §14.1, and the `NOT NULL` kept from
+an ignored `PRIMARY KEY`; `INSERT ... SELECT` into RGs;
+`UPDATE`, `DELETE ... RETURNING` and `SELECT ... FOR UPDATE`;
+queries with bounds, whose results equal a row store table's;
+`ALTER TABLE` and `TRUNCATE`; `CREATE TABLE AS` and `COPY`; a
+SERIALIZABLE transaction refused with `0A000`; `storage =
+'row'`.
 
 ### 15.5 Layers with no test
 

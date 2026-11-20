@@ -430,6 +430,54 @@ Owed, and blocking nothing above:
   ([`../dg/GUCPLAN.md`](../dg/GUCPLAN.md) §5) must be set by
   `InitializeOneGUCOption()` before anything frees it.
 
+- **The Column Store's parts not built**
+  ([`COLSTORE.md`](COLSTORE.md)). Each is owed; none blocks the
+  table's use:
+  - **The collation version is not checked.** A CG records its
+    column's collation version, and nothing compares it: after
+    an ICU upgrade, a scan can skip an RG whose `text` min and
+    max sort differently. The check turns off pruning for a CG
+    of another version (§6.2).
+  - **A scan hands out sm2 tuples**, so a row of more than
+    64 KB fails in a scan. Datums handed out with no tuple
+    remove the limit (§12).
+  - **A lookup by `_id` reads every RG it may be in whole**:
+    every column, every marker, the `_id` CG row by row. It is
+    to read the `_id` filter, find `n` by a binary search, and
+    read one marker (§8).
+  - **A scan reads each long value of a column it reads**, for
+    each row. An external pointer, fetched on use, as TOAST is,
+    saves the reads a qual rules out (§5.4).
+  - **The writer of an RG holds its long values in memory**, up
+    to 10k of any size. Written to the long-value file as rows
+    come, the memory is one RG of short values (§5.4).
+  - **A bulk load draws each `_id` from the sequence one at a
+    time**, as sm1 has no draw of a batch (§9.2).
+  - **Nothing reads the `sorted` bit or the distinct count**, and
+    a predicate is not evaluated on dictionary codes (§5.2,
+    §6.1). Each waits for the columnar executor.
+  - **The commit's trigger of RG compaction is 2,000 markers**,
+    a fifth of a full RG, whatever the RG's rows; a scan
+    catches a small RG (§11.1).
+  - **Tests not written yet:**
+    - mvcc: a seal that meets a writer in flight or prepared;
+    - sm1: a changed byte in a file set's file; a long value
+      corrupt;
+    - sm2: the choice of a dictionary by size; the exact set at
+      4 KB and a bloom filter above it; the hash of a
+      non-deterministic collation's key; the collation version;
+    - sm3: TOAST chunks erased by the seal; a prepared writer
+      skipped by the seal and given up on by RG compaction; a
+      row lock across RG compaction; a bulk load's rollback to
+      a savepoint; `ANALYZE`'s null fraction; one random
+      workload on a column store table and a row store table,
+      compared at each level;
+    - rel: the sweep after a new attach; 2PC across a restart;
+    - digres: a foreign key that references a column store
+      table; an RR update while a seal runs (`server.sh`); an
+      `ANALYZE`, as `run.sh`'s tables are temporary, and sm
+      does not analyze those.
+
 ---
 
 ## 3. Not blocking
