@@ -903,3 +903,32 @@ TEST_CASE("decimal128 factorial and width_bucket") {
   CHECK(-1 == ty_decimal128_width_bucket(&op, &one, &ten, 0, &bucket));
   CHECK(TY_ERR_INVALID == ty_errnum());
 }
+
+// Verify the fit of a decimal128 to a decimal64.
+// 1. A value that fits is itself.
+// 2. Places past 17 are rounded; digits past 17 push out places.
+// 3. An integer part of more than 17 digits fails with TY_ERR_RANGE.
+TEST_CASE("decimal64 from decimal128 rounds places to fit 17 digits") {
+  ty_decimal64_t r;
+  ty_int128_t big = ten_to(36) - 1;
+
+  // 1. A value that fits is itself.
+  ty_decimal128_t a = {12345, 3};
+  CHECK(0 == ty_decimal64_from_decimal128(&a, &r));
+  CHECK(12345 == r.value);
+  CHECK(3 == r.scale);
+
+  // 2. Places past 17 are rounded; digits past 17 push out places.
+  a = {ten_to(19) + 5 * ten_to(2), 20};
+  CHECK(0 == ty_decimal64_from_decimal128(&a, &r));
+  CHECK(0 <= r.scale);
+  CHECK(r.scale <= 17);
+  a = {big, 20};
+  CHECK(0 == ty_decimal64_from_decimal128(&a, &r));
+  CHECK(10000000000000000 == r.value);
+
+  // 3. An integer part of more than 17 digits fails with TY_ERR_RANGE.
+  a = {ten_to(18), 0};
+  CHECK(-1 == ty_decimal64_from_decimal128(&a, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+}

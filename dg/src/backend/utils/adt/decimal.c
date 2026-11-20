@@ -449,6 +449,15 @@ static i128 dec_pow10(int n) {
   return r;
 }
 
+/* The number of decimal digits of u; 0 has one. */
+static int u128_digits(u128 u) {
+  int n = 1;
+
+  for (; u >= 10; u /= 10)
+    n++;
+  return n;
+}
+
 /* The digits of u, at least one, into out; returns how many. */
 static int dec_digits_text(u128 u, char *out) {
   char tmp[48];
@@ -819,6 +828,40 @@ static bool apply_typmod(wide_t *w, int32 typmod, Node *escontext) {
   return true;
 }
 
+/*
+ * *v rounded to typmod's scale and checked against its precision, as an
+ * assignment to numeric(p, s) does: ty rounds it; false with the error saved
+ * in escontext if it has too many digits before the point.
+ */
+static bool dec_apply_typmod(ty_decimal128_t *v, int32 typmod,
+                             Node *escontext) {
+  int precision, scale, maxdigits;
+  ty_decimal128_t r;
+
+  if (!is_valid_numeric_typmod(typmod))
+    return true;
+  precision = numeric_typmod_precision(typmod);
+  scale = numeric_typmod_scale(typmod);
+  maxdigits = precision - scale;
+  /* If it cannot pass the zeros that scale needs, it has too many digits. */
+  if (ty_decimal128_round(v, scale, &r) == 0) {
+    *v = r;
+    /* Digits before the point, of the rounded value. */
+    if (u128_digits(r.value < 0 ? -(u128)r.value : (u128)r.value) -
+            r.scale <=
+        maxdigits)
+      return true;
+  }
+  ereturn(escontext, false,
+          (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+           errmsg("numeric field overflow"),
+           errdetail("A field with precision %d, scale %d must round to an "
+                     "absolute value less than %s%d.",
+                     precision, scale,
+                     /* Display 10^0 as 1 */
+                     maxdigits ? "10^" : "", maxdigits ? maxdigits : 1)));
+}
+
 /* ----------------------------------------------------------------------
  * Input and output
  * ----------------------------------------------------------------------
@@ -1131,10 +1174,10 @@ Datum numeric_support(PG_FUNCTION_ARGS) {
  *	checked against its precision.
  */
 Datum numeric(PG_FUNCTION_ARGS) {
-  wide_t w = dec_wide(PG_GETARG_NUMERIC(0));
+  ty_decimal128_t a = dec_ty(PG_GETARG_NUMERIC(0));
 
-  (void)apply_typmod(&w, PG_GETARG_INT32(1), NULL);
-  PG_RETURN_NUMERIC(dec_from_wide(w));
+  (void)dec_apply_typmod(&a, PG_GETARG_INT32(1), NULL);
+  PG_RETURN_NUMERIC(dec_make(a.value, a.scale));
 }
 
 /*
@@ -1603,15 +1646,6 @@ static int select_div_scale(const wide_t &a, const wide_t &b) {
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
   return rscale;
-}
-
-/* The number of decimal digits of u; 0 has one. */
-static int u128_digits(u128 u) {
-  int n = 1;
-
-  for (; u >= 10; u /= 10)
-    n++;
-  return n;
 }
 
 /* The base-10000 shape of a value v at scale, as dec_nbase() gives it. */
@@ -3145,40 +3179,30 @@ static Numeric d64_numeric(Datum d) {
 }
 
 /*
- * w as a decimal64 in *out: places past the point rounded away, half away
- * from zero, until it has at most 17 digits and places; false, with the
- * error saved in escontext, if its integer part has more than 17 digits.
+ * a as a decimal64 in *out: places past the point rounded away, half away
+ * from zero, until it has at most 17 digits and places (ty fits it); false,
+ * with the error saved in escontext, if its integer part has more than 17
+ * digits.
  */
-static bool d64_of_wide(const wide_t &w, Datum *out, Node *escontext) {
-  wide_t r = w;
-  int digits;
+static bool d64_of_dec(const ty_decimal128_t &a, Datum *out, Node *escontext) {
+  ty_decimal64_t r;
 
-  if (r.scale > D64_MAX_DIGITS)
-    r = wide_round(r, D64_MAX_DIGITS, false);
-  digits = mag_digits(r.mag);
-  if (digits > D64_MAX_DIGITS && digits - D64_MAX_DIGITS <= r.scale) {
-    r = wide_round(r, r.scale - (digits - D64_MAX_DIGITS), false);
-    /* Rounding up may add a digit: 99.95 to 100.0. */
-    if (mag_digits(r.mag) > D64_MAX_DIGITS && r.scale > 0)
-      r = wide_round(r, r.scale - 1, false);
-  }
-  if (mag_digits(r.mag) > D64_MAX_DIGITS)
+  if (ty_decimal64_from_decimal128(&a, &r) != 0)
     ereturn(escontext, false,
             (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
              errmsg("value overflows numeric format"),
              errdetail("A numeric of precision %d or less has at most %d "
                        "digits.",
                        D64_MAX_DIGITS, D64_MAX_DIGITS)));
-  *out = d64_make(r.neg ? -(int64)r.mag.limb[0] : (int64)r.mag.limb[0],
-                  r.scale);
+  *out = d64_make(r.value, r.scale);
   return true;
 }
 
-/* w as a decimal64; more than 17 digits before the point is an error. */
-static Datum d64_from_wide(const wide_t &w) {
+/* a as a decimal64; more than 17 digits before the point is an error. */
+static Datum d64_from_dec(const ty_decimal128_t &a) {
   Datum d;
 
-  d64_of_wide(w, &d, NULL);
+  d64_of_dec(a, &d, NULL);
   return d;
 }
 
@@ -3187,11 +3211,13 @@ static Datum d64_from_wide(const wide_t &w) {
  * or places.  What a literal is typed by (parse_node.c).
  */
 bool numeric_to_decimal64(Numeric num, Datum *out) {
-  wide_t w = dec_wide(num);
+  ty_decimal128_t a = dec_ty(num);
 
-  if (w.scale > D64_MAX_DIGITS || mag_digits(w.mag) > D64_MAX_DIGITS)
+  if (a.scale > D64_MAX_DIGITS ||
+      u128_digits(a.value < 0 ? -(u128)a.value : (u128)a.value) >
+          D64_MAX_DIGITS)
     return false;
-  *out = d64_from_wide(w);
+  *out = d64_make((int64)a.value, a.scale);
   return true;
 }
 
@@ -3202,7 +3228,7 @@ Datum decimal64_in(PG_FUNCTION_ARGS) {
   if (!DirectInputFunctionCallSafe(numeric_in, PG_GETARG_CSTRING(0),
                                    InvalidOid, PG_GETARG_INT32(2),
                                    fcinfo->context, &num) ||
-      !d64_of_wide(dec_wide(DatumGetNumeric(num)), &res, fcinfo->context))
+      !d64_of_dec(dec_ty(DatumGetNumeric(num)), &res, fcinfo->context))
     PG_RETURN_NULL();
   return res;
 }
@@ -3219,7 +3245,7 @@ Datum decimal64_recv(PG_FUNCTION_ARGS) {
   Datum num = DirectFunctionCall3(numeric_recv, PG_GETARG_DATUM(0),
                                   PG_GETARG_DATUM(1), PG_GETARG_DATUM(2));
 
-  return d64_from_wide(dec_wide(DatumGetNumeric(num)));
+  return d64_from_dec(dec_ty(DatumGetNumeric(num)));
 }
 
 /* Binary output: numeric's format. */
@@ -3241,10 +3267,11 @@ Datum decimal64typmodin(PG_FUNCTION_ARGS) {
 
 /* The length coercion: d rounded to typmod's scale, checked against it. */
 Datum decimal64(PG_FUNCTION_ARGS) {
-  wide_t w = d64_wide(PG_GETARG_DATUM(0));
+  Datum d = PG_GETARG_DATUM(0);
+  ty_decimal128_t a = {d64_value(d), d64_scale(d)};
 
-  (void)apply_typmod(&w, PG_GETARG_INT32(1), NULL);
-  return d64_from_wide(w);
+  (void)dec_apply_typmod(&a, PG_GETARG_INT32(1), NULL);
+  return d64_from_dec(a);
 }
 
 /* decimal64 to decimal128. */
@@ -3254,7 +3281,7 @@ Datum decimal64_decimal128(PG_FUNCTION_ARGS) {
 
 /* decimal128 to decimal64: places rounded away to fit 17 digits. */
 Datum decimal128_decimal64(PG_FUNCTION_ARGS) {
-  return d64_from_wide(dec_wide(PG_GETARG_NUMERIC(0)));
+  return d64_from_dec(dec_ty(PG_GETARG_NUMERIC(0)));
 }
 
 /* int2 to decimal64. */
@@ -3269,21 +3296,21 @@ Datum int4_decimal64(PG_FUNCTION_ARGS) {
 
 /* int8 to decimal64: past 17 digits is an error. */
 Datum int8_decimal64(PG_FUNCTION_ARGS) {
-  return d64_from_wide(wide_of_int(PG_GETARG_INT64(0)));
+  return d64_from_dec(ty_decimal128_t{PG_GETARG_INT64(0), 0});
 }
 
 /* float4 to decimal64, as to numeric. */
 Datum float4_decimal64(PG_FUNCTION_ARGS) {
   Datum num = DirectFunctionCall1(float4_numeric, PG_GETARG_DATUM(0));
 
-  return d64_from_wide(dec_wide(DatumGetNumeric(num)));
+  return d64_from_dec(dec_ty(DatumGetNumeric(num)));
 }
 
 /* float8 to decimal64, as to numeric. */
 Datum float8_decimal64(PG_FUNCTION_ARGS) {
   Datum num = DirectFunctionCall1(float8_numeric, PG_GETARG_DATUM(0));
 
-  return d64_from_wide(dec_wide(DatumGetNumeric(num)));
+  return d64_from_dec(dec_ty(DatumGetNumeric(num)));
 }
 
 /* decimal64 to int2, as numeric's. */
@@ -3425,7 +3452,7 @@ Datum decimal64_smaller(PG_FUNCTION_ARGS) {
 Datum jsonb_decimal64(PG_FUNCTION_ARGS) {
   Datum num = DirectFunctionCall1(jsonb_numeric, PG_GETARG_DATUM(0));
 
-  return d64_from_wide(dec_wide(DatumGetNumeric(num)));
+  return d64_from_dec(dec_ty(DatumGetNumeric(num)));
 }
 
 /* decimal64 to money, as numeric's. */

@@ -759,8 +759,20 @@ int ty_decimal64_div(const ty_decimal64_t *a, const ty_decimal64_t *b,
   if (ty_decimal128_div(&x, &y, rscale, false, &q) != 0) {
     return -1;
   }
-  ty_int128_t v = q.value;
-  int s = q.scale;
+  return ty_decimal64_from_decimal128(&q, result);
+}
+
+/*
+ * *result = a, a decimal128, fitted to a decimal64.
+ * 1. If the scale is above 17, round to 17 places.
+ * 2. If there are more than 17 digits and places to spare, round away the
+ *    extra digits as places, and one place more if rounding up adds a digit.
+ * 3. If there are still more than 17 digits, fail.
+ */
+int ty_decimal64_from_decimal128(const ty_decimal128_t *a,
+                                 ty_decimal64_t *result) {
+  ty_int128_t v = a->value;
+  int s = a->scale;
 
   if (s > TY_DECIMAL64_MAX_SCALE) {
     v = drop_places128(v, s - TY_DECIMAL64_MAX_SCALE, false);

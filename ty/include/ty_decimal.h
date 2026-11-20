@@ -216,6 +216,15 @@ int ty_decimal128_width_bucket(const ty_decimal128_t* operand,
                                const ty_decimal128_t* b2, int32_t count,
                                int64_t* result);
 
+/*
+ * *result = a, a decimal128, fitted to a decimal64: places past 17, and
+ * places that digits past 17 push out, are rounded away, half away from
+ * zero. Fails with TY_ERR_RANGE only if the integer part has more than 17
+ * digits. The scale of a is at most 36.
+ */
+int ty_decimal64_from_decimal128(const ty_decimal128_t* a,
+                                 ty_decimal64_t* result);
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DECIMAL64_MAX_DIGITS 17
 #define TY_DECIMAL64_MAX_SCALE  17
