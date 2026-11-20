@@ -13,10 +13,9 @@ bulk loads, scans, deletes and updates, the seal and its job, RG
 compaction and its trigger, `ANALYZE`, the DDL of §14, and their
 C API; in digres, `WITH (storage = columnar)`, keys taken with a
 warning, loads, inserts, scans with their columns and bounds,
-updates, deletes, row locks and the DDL. Not built: the merge of
-small RGs by itself (`tbl_compact_rgs` merges the RGs it is
-given), and an `ANALYZE` test in digres, whose `run.sh` tests
-are of temporary tables, which sm does not analyze.
+updates, deletes, row locks and the DDL. Not built: an
+`ANALYZE` test in digres, whose `run.sh` tests are of temporary
+tables, which sm does not analyze.
 Where the code differs from this design today:
 
 - A scan hands out sm2 tuples, not datums, so a row of more than
@@ -721,20 +720,25 @@ So RG compaction does these steps:
 
 ### 11.1 When RG compaction runs
 
-- **At 20% dead rows.** The path that writes delete markers
-  counts the committed markers of each RG in memory. When they
-  reach 20% of the RG's rows, it queues an RG compaction job on
-  the builder queue of sm3. Below 20%, the dead rows cost a scan
-  less than a rewrite of the RG costs.
+- **At 20% dead rows.** A commit counts the delete markers it
+  committed on each RG, in memory. When they reach 20% of the
+  RG's rows, it queues an RG compaction job on the sealer's
+  queue (§10.4). Below 20%, the dead rows cost a scan less than
+  a rewrite of the RG costs.
 - **A scan counts too.** A scan reads each RG's markers to
   merge them with the `_id` CG, so it counts them at no cost,
   and queues a job at 20%. The counts in memory start at 0 when
   the database opens, and a scan catches what they miss.
-- **Small RGs are merged.** An RG with fewer than 50% of 10k
-  rows is merged with RGs near it in `rg_id` into one new RG,
-  by the steps above, with a moved marker for each row. A bulk
-  load leaves a partial last RG, and RG compaction can leave a
-  small one. Without merges, small files collect.
+- **Small RGs are merged.** When the job compacts an RG with
+  fewer than 50% of 10k rows live, it takes with it each small
+  RG next to it in `rg_id` order, after it and then before it,
+  while the live rows of all fit one RG. They go into one new
+  RG, by the steps above, with a moved marker for each row
+  (`merge_set()` in `sm3/src/colstore/sealer.cc`). RG compaction
+  can leave a small RG; a bulk load leaves none (§9.2). Without
+  merges, small files collect.
+- **An RG with nothing to gain is left.** A job for an RG that
+  is not small and is less than 20% dead does nothing.
 - **A snapshot needs nothing more.** An old snapshot sees the
   old RG key, and not the new one. GC keeps the old RG's files
   until the erase of its key is at or below the watermark

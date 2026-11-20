@@ -1092,3 +1092,97 @@ TEST_CASE("a column store table's DDL") {
   CHECK(row_groups(db, c) == 0);
   CHECK(scan_col(db, c, 2).empty());
 }
+
+namespace {
+
+/* The rows of c's row groups, as their RG keys count them. */
+uint64_t rg_rows(col_db_t &db, uint64_t c) {
+  uint64_t n = 0;
+  db.begin();
+  std::shared_ptr<const sm3::table_def_t> def = sm3::cat_get_table(db.cat, c);
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  REQUIRE(sm1::fileset_list(db.s, def->storeid, sets) == 0);
+  for (const auto &[rg, value] : sets) {
+    sm3::rg_meta_t meta;
+    REQUIRE(sm3::rg_meta_decode(value, meta) == 0);
+    n += meta.rows;
+  }
+  db.commit();
+  return n;
+}
+
+/* Delete the first n live rows of row group rg of c, by their names. */
+void delete_in(col_db_t &db, uint64_t c, uint64_t rg, size_t n) {
+  std::vector<uint64_t> ids;
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  while (ids.size() < n && sm3::tbl_scannxt(scan, id, tuple) == 0) {
+    if (sm3::tbl_scan_rg(scan) == rg) {
+      ids.push_back(id);
+    }
+  }
+  sm3::tbl_scanend(scan);
+  REQUIRE(ids.size() == n);
+  for (uint64_t x : ids) {
+    REQUIRE_MESSAGE(sm3::tbl_delete_at(t, rg, x) == 0, sm1::errmsg());
+  }
+  sm3::tbl_close(t);
+  db.commit();
+}
+
+} // namespace
+
+// Verify the sealer merges small row groups next to each other into
+// one (../COLSTORE.md §11.1), and leaves a row group with nothing to
+// gain as it is.
+// 1. Load 10,000 rows, delete 6,000, and compact by hand: a row group
+//    of 4,000, small.
+// 2. Load 10,000 more, delete 7,000, and compact: a second small row
+//    group, of 3,000, next to the first.
+// 3. Attach a sealer, and queue the first: both merge into one row
+//    group of 7,000 rows.
+// 4. Queue it again: not small, and no row dead, it stays.
+TEST_CASE("the sealer merges small row groups") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The first small row group.
+  load_rows(db, c, 10000);
+  std::vector<uint64_t> first = rg_ids(db, c);
+  REQUIRE(first.size() == 1);
+  delete_in(db, c, first[0], 6000);
+  REQUIRE(compact(db.ss, c, first));
+  std::vector<uint64_t> small1 = rg_ids(db, c);
+  REQUIRE(small1.size() == 1);
+  // 2. The second.
+  load_rows(db, c, 10000);
+  std::vector<uint64_t> both = rg_ids(db, c);
+  REQUIRE(both.size() == 2);
+  uint64_t second = both[0] == small1[0] ? both[1] : both[0];
+  delete_in(db, c, second, 7000);
+  REQUIRE(compact(db.ss, c, {second}));
+  REQUIRE(rg_ids(db, c).size() == 2);
+  // 3. The merge.
+  sm1::env_t *env = db.env();
+  REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+            sm1::session_t *s = nullptr;
+            return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+          }) == 0);
+  sm3::sealer_enqueue_rg(db.cat, c, small1[0]);
+  sm3::sealer_wait_idle(db.cat);
+  std::vector<uint64_t> merged = rg_ids(db, c);
+  REQUIRE(merged.size() == 1);
+  CHECK(merged[0] != small1[0]);
+  CHECK(rg_rows(db, c) == 7000);
+  // 4. Nothing to gain.
+  sm3::sealer_enqueue_rg(db.cat, c, merged[0]);
+  sm3::sealer_wait_idle(db.cat);
+  CHECK(rg_ids(db, c) == merged);
+  sm3::sealer_detach(db.cat);
+}

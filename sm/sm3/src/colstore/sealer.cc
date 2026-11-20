@@ -11,13 +11,15 @@
  * table's delta store, and queues the table at rg_max_rows; a scan
  * that reads that many of them queues it too, for counts a restart
  * lost. The same worker compacts a row group that delete markers
- * committed on it have made a fifth dead (../../COLSTORE.md §11.1).
+ * committed on it have made a fifth dead, and merges the small row
+ * groups next to it with it (../../COLSTORE.md §11.1).
  */
 
 #include "colstore.h"
 
 #include "sm0_log.h"
 
+#include <algorithm>
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -106,9 +108,85 @@ void seal_table(sealer_t *z, session_t *ss, uint64_t oid) {
 }
 
 /*
- * Compact row group rg_id of table oid, in a READ COMMITTED
- * transaction of its own. A writer in flight makes it give up: the
- * next delete markers committed on the row group queue it again.
+ * The live rows of the row group whose RG key value is value, rg_id's,
+ * into live, and its rows into rows: its rows less its delete markers.
+ */
+int live_rows(table_t *t, uint64_t rg_id, std::string_view value,
+              uint64_t &live, uint64_t &rows) {
+  rg_meta_t meta;
+  std::set<uint64_t> dead;
+  if (rg_meta_decode(value, meta) != 0 || col_markers(t, rg_id, dead) != 0) {
+    return -1;
+  }
+  rows = meta.rows;
+  live = rows - std::min<uint64_t>(dead.size(), rows);
+  return 0;
+}
+
+/*
+ * The row groups of table t to compact with rg_id, into out
+ * (../../COLSTORE.md §11.1): rg_id, and, if it is small, with under
+ * half a row group's rows live, the small row groups next to it in
+ * rg_id order, while the live rows of all fit one row group. None if
+ * there is nothing to gain, or rg_id is gone.
+ * 1. List the row groups, in rg_id order.
+ * 2. Count rg_id's live rows.
+ * 3. If it is small, take each small row group after it, then each
+ *    before it, while they fit.
+ * 4. Alone, and less than a fifth dead, it is left as it is.
+ */
+int merge_set(table_t *t, uint64_t rg_id, std::vector<uint64_t> &out) {
+  out.clear();
+  // 1. The row groups.
+  std::vector<std::pair<uint64_t, std::string>> rgs;
+  if (sm1::fileset_list(tbl_session(t)->sm1, tbl_def(t).storeid, rgs) != 0) {
+    return -1;
+  }
+  std::sort(rgs.begin(), rgs.end(),
+            [](const auto &a, const auto &b) { return a.first < b.first; });
+  auto at = std::find_if(rgs.begin(), rgs.end(),
+                         [&](const auto &r) { return r.first == rg_id; });
+  if (at == rgs.end()) {
+    return 0;
+  }
+  const ptrdiff_t x = at - rgs.begin();
+  // 2. Its live rows.
+  uint64_t live = 0, rows = 0;
+  if (live_rows(t, rg_id, at->second, live, rows) != 0) {
+    return -1;
+  }
+  out.push_back(rg_id);
+  // 3. The small row groups next to it.
+  const uint64_t half = rg_max_rows / 2;
+  if (live < half) {
+    uint64_t total = live;
+    for (ptrdiff_t dir : {ptrdiff_t(1), ptrdiff_t(-1)}) {
+      for (ptrdiff_t j = x + dir;
+           j >= 0 && j < static_cast<ptrdiff_t>(rgs.size()); j += dir) {
+        uint64_t lj = 0, rj = 0;
+        if (live_rows(t, rgs[j].first, rgs[j].second, lj, rj) != 0) {
+          return -1;
+        }
+        if (lj >= half || total + lj > rg_max_rows) {
+          break;
+        }
+        total += lj;
+        out.push_back(rgs[j].first);
+      }
+    }
+  }
+  // 4. Nothing to gain.
+  if (out.size() == 1 && (rows - live) * 5 < rows) {
+    out.clear();
+  }
+  return 0;
+}
+
+/*
+ * Compact row group rg_id of table oid, with the small row groups next
+ * to it (merge_set), in a READ COMMITTED transaction of its own. A
+ * writer in flight makes it give up: the next delete markers committed
+ * on the row group queue it again.
  */
 void compact_rg(session_t *ss, uint64_t oid, uint64_t rg_id) {
   if (begin(ss, sm1::xctlevel_t::read_committed) != 0) {
@@ -116,10 +194,13 @@ void compact_rg(session_t *ss, uint64_t oid, uint64_t rg_id) {
   }
   table_t *t = nullptr;
   bool done = false;
-  uint64_t rgs[1] = {rg_id};
+  std::vector<uint64_t> rgs;
   int rc = tbl_open(ss, oid, sm1::SM_LOCKMODE_IX, t);
   if (rc == 0) {
-    rc = tbl_compact_rgs(t, rgs, done);
+    rc = merge_set(t, rg_id, rgs);
+    if (rc == 0 && !rgs.empty()) {
+      rc = tbl_compact_rgs(t, rgs, done);
+    }
     tbl_close(t);
   }
   if (rc == 0 && commit(ss) == 0) {
