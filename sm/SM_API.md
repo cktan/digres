@@ -1314,6 +1314,47 @@ its primary key's, or with none its `_id`'s
 ([`CLUSTER.md`](CLUSTER.md#5-reading) §5). A
 sequential scan reads this.
 
+### `sm_row_scanopen_columns`
+
+```cpp
+struct sm_col_bound_t {
+    int32_t           attnum;
+    bool              is_null = false;  /* IS NULL */
+    bool              not_null = false; /* any other test */
+    bool              has_lo = false;
+    bool              lo_incl = true;
+    sm_datum_t        lo = 0;
+    bool              has_hi = false;
+    bool              hi_incl = true;
+    sm_datum_t        hi = 0;
+    bool              has_in = false; /* = or IN: in[0..n_in) */
+    const sm_datum_t* in = nullptr;
+    size_t            n_in = 0;
+};
+
+int sm_row_scanopen_columns(sm_tbl_t* tbl, const bool* cols, size_t ncols,
+                            const sm_col_bound_t* bounds, size_t nbounds,
+                            sm_row_scan_t** out);
+```
+
+Opens a cursor over each row of a column store table, as
+`sm_row_scanopen` does ([`COLSTORE.md`](COLSTORE.md#12-scans)
+§12):
+
+- **Of the row groups, it reads only the columns `cols` marks**,
+  `ncols` of them; with `ncols` 0, every column. A column not
+  read is null in a row group's row. The delta store's rows are
+  whole.
+- **It skips each row group whose zonemaps and filters cannot
+  hold a row that meets every bound.** A bound's values are
+  datums of its column's type, from 0, as a row's are. A bound
+  prunes; it does not filter: the caller tests each row.
+
+On any other table it is `sm_row_scanopen`: every column, every
+row.
+
+Errors: `SM_ERR_INVALID` (a bound on no live column).
+
 ### `sm_row_scanopen_idrange`
 
 ```cpp

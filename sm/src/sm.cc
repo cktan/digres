@@ -2649,6 +2649,73 @@ int sm_row_scanopen(sm_tbl_t *tbl, sm_row_scan_t **out) {
   });
 }
 
+/* Open a cursor over a column store table's columns, pruned by bounds. */
+int sm_row_scanopen_columns(sm_tbl_t *tbl, const bool *cols, size_t ncols,
+                            const sm_col_bound_t *bounds, size_t nbounds,
+                            sm_row_scan_t **out) {
+  return guard(tbl->session, [&] {
+    if (!out || (ncols > 0 && !cols) || (nbounds > 0 && !bounds)) {
+      return null_arg("sm_row_scanopen_columns", !out    ? "out"
+                                                 : !cols ? "cols"
+                                                         : "bounds");
+    }
+    const sm3::table_def_t &def = sm3::tbl_def(tbl->table);
+    sm3::scan_t *scan = nullptr;
+    if (!def.column_store) {
+      if (sm3::tbl_scan_rows(tbl->table, scan) != 0) {
+        return -1;
+      }
+      *out = reinterpret_cast<sm_row_scan_t *>(scan);
+      return 0;
+    }
+    // Each bound's values as key bytes of its column, as the
+    // zonemaps keep their min and max (../COLSTORE.md §6).
+    std::vector<sm3::col_bound_t> bs;
+    for (size_t i = 0; i < nbounds; i++) {
+      const sm_col_bound_t &b = bounds[i];
+      if (b.attnum < 0 || static_cast<size_t>(b.attnum) >= def.columns.size() ||
+          def.columns[b.attnum].dropped || (b.has_in && b.n_in > 0 && !b.in)) {
+        return sm1::seterr(sm1::SM_ERR_INVALID,
+                           "sm_row_scanopen_columns: a bound on no live "
+                           "column, or of no values");
+      }
+      const sm3::column_def_t &c = def.columns[b.attnum];
+      auto key = [&](sm_datum_t d, std::string &k) {
+        std::string_view bytes;
+        return sm2::datum_bytes(c.type, c.typmod, static_cast<sm2::datum_t>(d),
+                                bytes) != 0
+                   ? -1
+                   : c.type->key_encode(bytes, c.typmod, c.collation, k);
+      };
+      sm3::col_bound_t x{b.attnum, {}};
+      x.bound.is_null = b.is_null;
+      x.bound.not_null = b.not_null;
+      x.bound.has_lo = b.has_lo;
+      x.bound.lo_incl = b.lo_incl;
+      x.bound.has_hi = b.has_hi;
+      x.bound.hi_incl = b.hi_incl;
+      x.bound.has_in = b.has_in;
+      if ((b.has_lo && key(b.lo, x.bound.lo) != 0) ||
+          (b.has_hi && key(b.hi, x.bound.hi) != 0)) {
+        return -1;
+      }
+      for (size_t j = 0; b.has_in && j < b.n_in; j++) {
+        x.bound.in.emplace_back();
+        if (key(b.in[j], x.bound.in.back()) != 0) {
+          return -1;
+        }
+      }
+      bs.push_back(std::move(x));
+    }
+    if (sm3::tbl_scan_columns(tbl->table, std::vector<bool>(cols, cols + ncols),
+                              std::move(bs), 0, UINT64_MAX, scan) != 0) {
+      return -1;
+    }
+    *out = reinterpret_cast<sm_row_scan_t *>(scan);
+    return 0;
+  });
+}
+
 /* Open a cursor over the rows of the table's primary key. */
 int sm_row_scanopen_with_index(sm_tbl_t *tbl, uint64_t index,
                                const sm_bound_t *lo, const sm_bound_t *hi,

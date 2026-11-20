@@ -919,6 +919,18 @@ digres's scans step. What a scan costs in sm and RocksDB alone
 # => 9
 ```
 
+### `(scan-columns table [col ...] [[col op value] ...])`
+The rows of a scan of a column store table that reads of its row
+groups only the columns named, every one with none, and skips
+the row groups the bounds rule out (`sm_row_scanopen_columns`),
+as `scan` gives them. `op` is `:<`, `:<=`, `:=`, `:>=`, `:>`,
+`:null`, `:not-null`, or `:in` with a tuple of values. A bound
+prunes: a row that meets none may come.
+
+```janet
+(scan-columns ev [:a] [[:a :>= 15000]])
+```
+
 ### `(idx-scan index [:ge lo] [:gt lo] [:le hi] [:lt hi])`
 Scans a secondary index across key prefix bounds.
 Bounds are tuples matching key prefix columns.

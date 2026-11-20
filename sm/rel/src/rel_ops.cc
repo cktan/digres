@@ -2950,6 +2950,135 @@ static Janet cfun_scan(int32_t argc, Janet *argv) {
   return janet_wrap_array(rows);
 }
 
+/* The place of the column a keyword or string names in the table. */
+static size_t column_place(const table_def_t *p_tdef, Janet v, const char *op) {
+  std::string name =
+      janet_checktype(v, JANET_KEYWORD)
+          ? std::string(reinterpret_cast<const char *>(janet_unwrap_keyword(v)))
+          : std::string(reinterpret_cast<const char *>(janet_getstring(&v, 0)));
+  for (size_t i = 0; i < p_tdef->columns.size(); i++) {
+    if (p_tdef->columns[i].name == name) {
+      return i;
+    }
+  }
+  janet_panicf("%s: no column %s", op, name.c_str());
+}
+
+/*
+ * (scan-columns table [col ...] [[col op value] ...]): the rows of a
+ * scan that reads only the columns named, every one with none, of
+ * the row groups the bounds may match (sm_row_scanopen_columns), as
+ * (scan) gives them. op is :< :<= := :>= :> :null :not-null, or :in
+ * with a tuple of values.
+ */
+static Janet cfun_scan_columns(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 3);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef =
+      need_table(s, identifier_of(argv[0]), SM_LOCKMODE_IS, "scan-columns");
+  sm_tbl_t *tbl = p_tdef->tbl;
+  const size_t ncols = p_tdef->columns.size();
+  JanetView names = janet_getindexed(argv, 1);
+  std::unique_ptr<bool[]> cols(new bool[ncols]());
+  for (int32_t i = 0; i < names.len; i++) {
+    cols[column_place(p_tdef, names.items[i], "scan-columns")] = true;
+  }
+  JanetView tests = janet_getindexed(argv, 2);
+  std::vector<sm_col_bound_t> bounds;
+  std::vector<row_values_t> held;
+  held.reserve(tests.len);
+  for (int32_t i = 0; i < tests.len; i++) {
+    JanetView t = janet_getindexed(&tests.items[i], 0);
+    if (t.len < 2) {
+      janet_panicf("scan-columns: a bound is [col op value]");
+    }
+    size_t at = column_place(p_tdef, t.items[0], "scan-columns");
+    std::string op =
+        reinterpret_cast<const char *>(janet_getkeyword(&t.items[1], 0));
+    sm_col_bound_t b{};
+    b.attnum = static_cast<int32_t>(at);
+    if (op == "null") {
+      b.is_null = true;
+      bounds.push_back(b);
+      continue;
+    }
+    b.not_null = true;
+    if (op == "not-null") {
+      bounds.push_back(b);
+      continue;
+    }
+    if (t.len < 3) {
+      janet_panicf("scan-columns: %s needs a value", op.c_str());
+    }
+    const Janet *items = &t.items[2];
+    int32_t n = 1;
+    if (op == "in") {
+      JanetView v = janet_getindexed(&t.items[2], 0);
+      items = v.items;
+      n = v.len;
+    }
+    held.emplace_back(static_cast<size_t>(n));
+    row_values_t &vals = held.back();
+    for (int32_t j = 0; j < n; j++) {
+      if (janet_to_value(items[j], p_tdef->columns[at], vals.bufs[j],
+                         &vals.values[j], &vals.isnull[j]) != 0) {
+        janet_panicf("scan-columns: a value not of the column's type");
+      }
+    }
+    if (op == "in" || op == "=") {
+      b.has_in = true;
+      b.in = vals.values.data();
+      b.n_in = static_cast<size_t>(n);
+    } else if (op == ">" || op == ">=") {
+      b.has_lo = true;
+      b.lo_incl = op == ">=";
+      b.lo = vals.values[0];
+    } else if (op == "<" || op == "<=") {
+      b.has_hi = true;
+      b.hi_incl = op == "<=";
+      b.hi = vals.values[0];
+    } else {
+      janet_panicf("scan-columns: no op %s", op.c_str());
+    }
+    bounds.push_back(b);
+  }
+  sm_row_scan_t *rscan = nullptr;
+  if (sm_row_scanopen_columns(tbl, cols.get(), names.len > 0 ? ncols : 0,
+                              bounds.data(), bounds.size(), &rscan) != 0) {
+    panic_sm_error("scan-columns sm_row_scanopen_columns");
+  }
+  JanetArray *rows = janet_array(16);
+  uint64_t rowno = 0;
+  const void *tuple = nullptr;
+  size_t len = 0;
+  int rc;
+  while ((rc = sm_row_scannxt(rscan, &rowno, &tuple, &len)) == 0) {
+    Janet *vals = janet_tuple_begin(ncols);
+    for (size_t i = 0; i < ncols; i++) {
+      sm_datum_t val = 0;
+      bool isnull = false;
+      if (sm_tbl_decode(tbl, tuple, len, i, &val, &isnull) != 0) {
+        sm_row_scanclose(rscan);
+        panic_sm_error("scan-columns sm_tbl_decode");
+      }
+      vals[i] = value_to_janet(val, isnull, p_tdef->columns[i].type_code,
+                               p_tdef->columns[i].typmod, tbl);
+    }
+    Janet *pair = janet_tuple_begin(2);
+    pair[0] = janet_wrap_number(static_cast<double>(rowno));
+    pair[1] = janet_wrap_tuple(janet_tuple_end(vals));
+    janet_array_push(rows, janet_wrap_tuple(janet_tuple_end(pair)));
+  }
+  if (rc < 0) {
+    if (!engine_aborted()) {
+      sm_row_scanclose(rscan);
+    }
+    panic_sm_error("scan-columns sm_row_scannxt");
+  }
+  sm_row_scanclose(rscan);
+  return janet_wrap_array(rows);
+}
+
 /*
  * (scan-count table [:from first] [:to last]): the rows (scan) gives,
  * counted, none decoded. Each is stepped to in the cursor's pin, as
@@ -3582,6 +3711,7 @@ static const JanetReg s_rel_cfuns[] = {
     {"_delete-at", cfun_delete_at, "internal"},
     {"_scan", cfun_scan, "internal"},
     {"_scan-count", cfun_scan_count, "internal"},
+    {"_scan-columns", cfun_scan_columns, "internal"},
     {"_idx-scan", cfun_idx_scan, "internal"},
     {"_idx-rows", cfun_idx_rows, "internal"},
     {"_idx-entries", cfun_idx_entries, "internal"},
@@ -3745,6 +3875,8 @@ static const char *s_prelude = R"janet(
   ~(_scan (string ',tbl) ,;rest))
 (defmacro scan-count [tbl & rest]
   ~(_scan-count (string ',tbl) ,;rest))
+(defmacro scan-columns [tbl & rest]
+  ~(_scan-columns (string ',tbl) ,;rest))
 
 (defmacro seal [tbl]
   ~(_seal (string ',tbl)))

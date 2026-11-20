@@ -253,6 +253,8 @@ typedef struct RelationData
 	 * and the entry rebuilt if sm's has moved (RelationCheckSmVersion()).
 	 */
 	uint64		rd_smversion;
+	/* A column store table of sm's (../sm/COLSTORE.md). */
+	bool		rd_smcolumnar;
 } RelationData;
 
 

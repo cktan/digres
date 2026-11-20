@@ -635,6 +635,41 @@ struct sm_tbl_t;
 int sm_row_scanopen(sm_tbl_t* tbl, sm_row_scan_t** out);
 
 /*
+ * A bound on one column of a scan of a column store table
+ * (../COLSTORE.md section 12): the rows' values of column attnum,
+ * from 0, meet it. Each value is a datum of the column's type. A
+ * bound prunes row groups; it does not filter rows.
+ */
+struct sm_col_bound_t {
+    int32_t           attnum;
+    bool              is_null = false;  /* IS NULL */
+    bool              not_null = false; /* any other test */
+    bool              has_lo = false;
+    bool              lo_incl = true;
+    sm_datum_t        lo = 0;
+    bool              has_hi = false;
+    bool              hi_incl = true;
+    sm_datum_t        hi = 0;
+    bool              has_in = false; /* = or IN: in[0..n_in) */
+    const sm_datum_t* in = nullptr;
+    size_t            n_in = 0;
+};
+
+/*
+ * Open a cursor over every row of a column store table, as
+ * sm_row_scanopen does, reading of its row groups only the columns
+ * that cols marks, ncols of them (every one with ncols 0), and only
+ * the row groups that may hold a row meeting every bound. A column
+ * not read is null in a row group's row, and a row meeting no bound
+ * may come: the caller tests each row. On any other table,
+ * sm_row_scanopen: every column, every row. A bound on no live
+ * column is SM_ERR_INVALID.
+ */
+int sm_row_scanopen_columns(sm_tbl_t* tbl, const bool* cols, size_t ncols,
+                            const sm_col_bound_t* bounds, size_t nbounds,
+                            sm_row_scan_t** out);
+
+/*
  * Open a cursor over the rows with _id first..last, both included, of
  * a table without a primary key; SM_ERR_INVALID in one with.
  */

@@ -185,6 +185,7 @@ void get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
    * inheritance tree.  That will be computed in set_append_rel_size().
    */
   if (!inhparent)
+    rel->sm_columnar = relation->rd_smcolumnar;
     estimate_rel_size(relation, rel->attr_widths - rel->min_attr, &rel->pages,
                       &rel->tuples, &rel->allvisfrac);
 

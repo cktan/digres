@@ -10,11 +10,15 @@
 --    a row group, by the scan's name of the row; a DELETE by _id, a
 --    TID scan's, which sm finds the row group of; an UPDATE in a
 --    REPEATABLE READ transaction.
--- 5. ADD COLUMN with a default, DROP COLUMN, ALTER COLUMN TYPE, a
+-- 5. Scans with bounds, by each kind of qual a bound is made from,
+--    give what the same scans of a row store copy give; a scan of
+--    some columns gives them; an UPDATE writes every column, as
+--    its scan reads them all.
+-- 6. ADD COLUMN with a default, DROP COLUMN, ALTER COLUMN TYPE, a
 --    rewrite, and TRUNCATE.
--- 6. CREATE TABLE AS and COPY load one too.
--- 7. A SERIALIZABLE transaction cannot read it.
--- 8. storage = 'row' is a row store table ('row' quoted, as ROW is a
+-- 7. CREATE TABLE AS and COPY load one too.
+-- 8. A SERIALIZABLE transaction cannot read it.
+-- 9. storage = 'row' is a row store table ('row' quoted, as ROW is a
 --    keyword); another value is refused.
 \set ON_ERROR_STOP off
 create temp table columnar_ref (id int primary key);
@@ -45,6 +49,36 @@ update columnar_t set amount = amount + 1 where id = 7;
 commit;
 select count(*), sum(amount) from columnar_t;
 select id, amount from columnar_t where id between 1 and 7 order by id;
+create temp table columnar_rs as select * from columnar_t;
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where id >= 15000
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where id >= 15000;
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where 15000 > id and amount <= 3
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where 15000 > id and amount <= 3;
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where id in (3, 12000, 24000, 0)
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where id in (3, 12000, 24000, 0);
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code = 'c12345' or code = 'zero'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code = 'c12345' or code = 'zero';
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where ref is null and id between 9990 and 10010
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where ref is null and id between 9990 and 10010;
+select 'columnar' as t, count(*) from columnar_t where ref is not null
+union all select 'row', count(*) from columnar_rs where ref is not null;
+explain (verbose, costs off)
+  select sum(amount) from columnar_t where id > 100;
+select code from columnar_t where id = 12345;
+update columnar_t set amount = amount + 0 where id = 12345
+  returning id, code, amount;
+select * from columnar_t where id = 12345;
+drop table columnar_rs;
 alter table columnar_t add column z int default 42;
 select count(*), sum(z) from columnar_t;
 alter table columnar_t drop column code;

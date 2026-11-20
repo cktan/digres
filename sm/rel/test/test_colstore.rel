@@ -15,6 +15,9 @@
 #    digres names a row it has not just scanned: sm finds the row
 #    group, the update's new version is in the delta store, and the
 #    delete hands back the row as it was.
+# 6. A scan of some columns, pruned by bounds: a bound skips the row
+#    groups whose zonemaps cannot hold a match, and the delta store
+#    is read whole; a column not read is nil in a row group's rows.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -121,6 +124,24 @@
     (assert-eq (scan-count ev) 24998 "the deleted row is gone")
     (assert-eq (rg-of ev id9) 0 "the updated row is in the delta store")
     (assert-nil (rg-of ev id10) "no row has the deleted _id")
+(commit)
+
+# 6. Columns and bounds. Row group 1 holds a 0..9,999, 9,997 of them
+# live; row group 2 a 10,000..19,999; the delta store 5,001 rows.
+(defn nil-b [rows] (length (filter (fn [r] (nil? (get (get r 1) 1))) rows)))
+(begin :rr)
+    (assert-eq (length (scan-columns ev [] [[:a :>= 15000]])) 15001
+               "a >= 15000 skips row group 1")
+    (assert-eq (length (scan-columns ev [] [[:a :< 5000]])) 14998
+               "a < 5000 skips row group 2")
+    (assert-eq (length (scan-columns ev [] [[:a :null]])) 5001
+               "a IS NULL skips every row group: a holds no null")
+    (assert-eq (length (scan-columns ev [] [[:a :in [3 12000]]])) 24998
+               "an IN of both row groups' values skips neither")
+    (def some (scan-columns ev [:a] []))
+    (assert-eq (length some) 24998 "every row, of some columns")
+    (assert-eq (nil-b some) 19997 "b is not read in the row groups' rows")
+    (assert-eq (nil-b (scan-columns ev [] [])) 0 "every column, with none named")
 (commit)
 
 (db-close)

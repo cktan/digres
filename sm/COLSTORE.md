@@ -12,12 +12,11 @@ sealed tombstone, file sets, the CG file, the catalog's kind,
 bulk loads, scans, deletes and updates, the seal and its job, RG
 compaction and its trigger, `ANALYZE`, the DDL of §14, and their
 C API; in digres, `WITH (storage = columnar)`, keys taken with a
-warning, loads, inserts, scans, updates, deletes, row locks and
-the DDL. Not built: the merge of small RGs by itself
-(`tbl_compact_rgs` merges the RGs it is given), a scan's columns
-and bounds in the C API and digres, and an `ANALYZE` test in
-digres, whose `run.sh` tests are of temporary tables, which sm
-does not analyze.
+warning, loads, inserts, scans with their columns and bounds,
+updates, deletes, row locks and the DDL. Not built: the merge of
+small RGs by itself (`tbl_compact_rgs` merges the RGs it is
+given), and an `ANALYZE` test in digres, whose `run.sh` tests
+are of temporary tables, which sm does not analyze.
 Where the code differs from this design today:
 
 - A scan hands out sm2 tuples, not datums, so a row of more than
@@ -753,11 +752,16 @@ All access is by scan. A scan takes three things from digres:
 | the projection | the set of columns that the plan needs; the scan reads only their CGs, and the `_id` CG |
 | the bounds | a conjunction of bounds, one or more for each column: a range (`lo` and `hi`, each inclusive, exclusive or open), an `IN` set, `IS NULL` or `IS NOT NULL` |
 
-- **The planner of digres derives the bounds** from quals of the
-  form `Var op Const` and `Var op Param`, as it derives the key
-  range of an index. sm2 encodes them to key bytes. A qual of
-  another form, such as an `OR` across columns, an expression
-  or `LIKE`, gives no bound.
+- **digres derives the bounds when the scan begins**
+  (`qual_bounds()` in `dg/src/backend/access/sm/smstore.c`),
+  from the scan's quals of the forms `Var op Const`, `Const op
+  Var`, `Var = ANY (array)`, `IS NULL` and `IS NOT NULL`. `op` is
+  `<`, `<=`, `=`, `>=` or `>` of the default btree operator
+  family of the column's type, with both operands of that type
+  and the column's collation. sm encodes the values to key
+  bytes (`sm_row_scanopen_columns`). A qual of another form,
+  such as an `OR`, an expression, a `Param` or `LIKE`, gives no
+  bound.
 - **Pruning is not filtering.** A scan skips RGs that cannot
   match, and hands out every live row of the other RGs. The
   executor of digres applies the whole qual to each row, the
@@ -765,10 +769,17 @@ All access is by scan. A scan takes three things from digres:
   nothing ([`sm3/SM3_DESIGN.md`](sm3/SM3_DESIGN.md) §5).
 - **A scan hands out one row at a time** through `sm.h`, as the
   datums of the projected columns, into the virtual slot of
-  digres. It builds no sm2 tuple. The row's TID is `(rg_id,
+  digres. It builds no sm2 tuple. The row's name is `(rg_id,
   _id)` (§8).
 - **PostgreSQL's table access method has no projection
-  argument for a sequential scan.** digres adds one.
+  argument for a sequential scan.** digres takes the columns
+  from the scan's plan: its target list and quals. Its planner
+  gives a column store table's scan no physical target list
+  (`use_physical_tlist()`), which would name every column.
+- **A scan of a table the statement writes or locks reads every
+  column.** The write takes the old row from the scan on it.
+  digres never takes a row of a scan of some columns as the
+  table's row.
 - **A batch interface waits for the columnar executor.** It
   changes the rule of sm3 that its interface is one tuple at a
   time, so it is decided with that executor.

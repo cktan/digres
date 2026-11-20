@@ -10,11 +10,15 @@
 --    a row group, by the scan's name of the row; a DELETE by _id, a
 --    TID scan's, which sm finds the row group of; an UPDATE in a
 --    REPEATABLE READ transaction.
--- 5. ADD COLUMN with a default, DROP COLUMN, ALTER COLUMN TYPE, a
+-- 5. Scans with bounds, by each kind of qual a bound is made from,
+--    give what the same scans of a row store copy give; a scan of
+--    some columns gives them; an UPDATE writes every column, as
+--    its scan reads them all.
+-- 6. ADD COLUMN with a default, DROP COLUMN, ALTER COLUMN TYPE, a
 --    rewrite, and TRUNCATE.
--- 6. CREATE TABLE AS and COPY load one too.
--- 7. A SERIALIZABLE transaction cannot read it.
--- 8. storage = 'row' is a row store table ('row' quoted, as ROW is a
+-- 7. CREATE TABLE AS and COPY load one too.
+-- 8. A SERIALIZABLE transaction cannot read it.
+-- 9. storage = 'row' is a row store table ('row' quoted, as ROW is a
 --    keyword); another value is refused.
 \set ON_ERROR_STOP off
 create temp table columnar_ref (id int primary key);
@@ -24,14 +28,14 @@ create temp table columnar_t (
   ref int references columnar_ref (id),
   amount int)
   with (storage = columnar);
-psql:test/columnar.sql:26: WARNING:  column store table "columnar_t" has no primary key: it is not made
-psql:test/columnar.sql:26: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
-psql:test/columnar.sql:26: WARNING:  column store table "columnar_t" has no foreign key: it is not made
+psql:test/columnar.sql:30: WARNING:  column store table "columnar_t" has no primary key: it is not made
+psql:test/columnar.sql:30: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
+psql:test/columnar.sql:30: WARNING:  column store table "columnar_t" has no foreign key: it is not made
 insert into columnar_t values (null, 'x', null, 1);
-psql:test/columnar.sql:27: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
+psql:test/columnar.sql:31: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
 DETAIL:  Failing row contains (null, x, null, 1).
 create index columnar_t_amount on columnar_t (amount);
-psql:test/columnar.sql:28: WARNING:  column store table "columnar_t" has no index: it is not made
+psql:test/columnar.sql:32: WARNING:  column store table "columnar_t" has no index: it is not made
 insert into columnar_t
   select g, 'c' || g, null, g % 10 from generate_series(1, 25000) g;
 insert into columnar_t values (0, 'zero', 7, 0);
@@ -117,6 +121,96 @@ select id, amount from columnar_t where id between 1 and 7 order by id;
   7 |      8
 (3 rows)
 
+create temp table columnar_rs as select * from columnar_t;
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where id >= 15000
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where id >= 15000;
+    t     | count |  sum  |  min   |  max   
+----------+-------+-------+--------+--------
+ columnar | 10001 | 45000 | c15000 | c25000
+ row      | 10001 | 45000 | c15000 | c25000
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where 15000 > id and amount <= 3
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where 15000 > id and amount <= 3;
+    t     | count | sum  | min |  max  
+----------+-------+------+-----+-------
+ columnar |  5996 | 8994 | c10 | c9993
+ row      |  5996 | 8994 | c10 | c9993
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where id in (3, 12000, 24000, 0)
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where id in (3, 12000, 24000, 0);
+    t     | count | sum |  min   | max  
+----------+-------+-----+--------+------
+ columnar |     3 | 200 | c12000 | zero
+ row      |     3 | 200 | c12000 | zero
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code = 'c12345' or code = 'zero'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code = 'c12345' or code = 'zero';
+    t     | count | sum |  min   | max  
+----------+-------+-----+--------+------
+ columnar |     2 | 205 | c12345 | zero
+ row      |     2 | 205 | c12345 | zero
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where ref is null and id between 9990 and 10010
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where ref is null and id between 9990 and 10010;
+    t     | count | sum |  min   |  max  
+----------+-------+-----+--------+-------
+ columnar |    21 |  90 | c10000 | c9999
+ row      |    21 |  90 | c10000 | c9999
+(2 rows)
+
+select 'columnar' as t, count(*) from columnar_t where ref is not null
+union all select 'row', count(*) from columnar_rs where ref is not null;
+    t     | count 
+----------+-------
+ columnar |     1
+ row      |     1
+(2 rows)
+
+explain (verbose, costs off)
+  select sum(amount) from columnar_t where id > 100;
+              QUERY PLAN               
+---------------------------------------
+ Aggregate
+   Output: sum(amount)
+   ->  Seq Scan on pg_temp.columnar_t
+         Output: amount
+         Filter: (columnar_t.id > 100)
+(5 rows)
+
+select code from columnar_t where id = 12345;
+  code  
+--------
+ c12345
+(1 row)
+
+update columnar_t set amount = amount + 0 where id = 12345
+  returning id, code, amount;
+  id   |  code  | amount 
+-------+--------+--------
+ 12345 | c12345 |      5
+(1 row)
+
+select * from columnar_t where id = 12345;
+  id   |  code  | ref | amount 
+-------+--------+-----+--------
+ 12345 | c12345 |     |      5
+(1 row)
+
+drop table columnar_rs;
 alter table columnar_t add column z int default 42;
 select count(*), sum(z) from columnar_t;
  count |   sum   
@@ -164,7 +258,7 @@ select * from columnar_ctas where k = 5 order by id;
 drop table columnar_ctas;
 begin isolation level serializable;
 select count(*) from columnar_t;
-psql:test/columnar.sql:66: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
+psql:test/columnar.sql:100: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
 LINE 1: select count(*) from columnar_t;
                              ^
 rollback;
@@ -177,7 +271,7 @@ select * from columnar_row;
 (1 row)
 
 create temp table columnar_bad (a int) with (storage = banana);
-psql:test/columnar.sql:71: ERROR:  invalid value for option "storage": banana
+psql:test/columnar.sql:105: ERROR:  invalid value for option "storage": banana
 HINT:  Valid values are "row" and "columnar".
 drop table columnar_row;
 drop table columnar_t;

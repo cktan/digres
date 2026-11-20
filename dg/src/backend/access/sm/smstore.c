@@ -2792,6 +2792,7 @@ smstore_table_t *smstore_table_desc(Oid oid) {
   desc = (smstore_table_t *)palloc(sizeof(smstore_table_t));
   desc->oid = oid;
   desc->version = def->version;
+  desc->column_store = def->column_store;
   desc->nspoid =
       def->nspoid == SM_NSP_TEMP ? PG_TEMP_NAMESPACE : (Oid)def->nspoid;
   desc->name = pstrdup(def->name.c_str());
@@ -3373,6 +3374,11 @@ struct smstore_scan_t {
    */
   bool entries_only;
   bool ra_point;
+  /*
+   * A column store table's scan that reads some of its columns: its rows
+   * are not the table's, and no fetch takes them (scan_tuple()).
+   */
+  bool partial;
   bool ra_done;
   int ra_n;
   int ra_at;
@@ -3613,6 +3619,249 @@ smstore_scan_t *smstore_beginscan(Relation rel, bool by_rowno) {
   scan->relid = RelationGetRelid(rel);
   if ((by_rowno ? sm_row_scanopen_idrange(tbl, 0, UINT64_MAX, &scan->cursor)
                 : sm_row_scanopen(tbl, &scan->cursor)) != 0)
+    sm_error("scan a table");
+  open_scans.push_back(scan);
+  return scan;
+}
+
+/*
+ * Whether a scan of rel, the range table's scanrelid, may read some of its
+ * columns: not if the statement writes it or locks its rows, as a write
+ * then fetches the whole row the scan is on.
+ */
+static bool may_read_some(Index scanrelid, EState *estate) {
+  PlannedStmt *stmt = estate->es_plannedstmt;
+  ListCell *l;
+
+  if (NULL == stmt || NULL != estate->es_epq_active ||
+      list_member_int(stmt->resultRelations, (int)scanrelid))
+    return false;
+  foreach (l, stmt->rowMarks)
+    if (lfirst_node(PlanRowMark, l)->rti == scanrelid)
+      return false;
+  return true;
+}
+
+/*
+ * A datum of rel's column att as sm takes it, for a bound: a decimal its
+ * integer at the column's scale, a varlena read whole.
+ */
+static sm_datum_t bound_datum(Form_pg_attribute att, Datum d) {
+  if (is_decimal(att->atttypid))
+    return numeric_to_sm(d, att->atttypid, att->atttypmod);
+  if (-1 == att->attlen)
+    return (sm_datum_t)PG_DETOAST_DATUM_PACKED(d);
+  return (sm_datum_t)d;
+}
+
+/*
+ * The column of rel, from 1, that a qual's operand expr is, varno's Var of
+ * a live column; 0 if it is none.
+ */
+static AttrNumber bound_column(Relation rel, Node *expr, Index varno) {
+  if (NULL == expr || !IsA(expr, Var))
+    return 0;
+  Var *var = (Var *)expr;
+
+  if (var->varno != (int)varno || var->varattno <= 0 ||
+      var->varattno > RelationGetNumberOfAttributes(rel) ||
+      TupleDescAttr(RelationGetDescr(rel), var->varattno - 1)->attisdropped)
+    return 0;
+  return var->varattno;
+}
+
+/*
+ * The btree strategy of opno on column att, by the default btree operator
+ * family of its type, with both operands of its type and the column's
+ * collation; 0 if it has none.
+ */
+static int bound_strategy(Form_pg_attribute att, Oid opno, Oid collid) {
+  Oid opclass = GetDefaultOpClass(att->atttypid, BTREE_AM_OID);
+  int strategy;
+  Oid lefttype, righttype;
+
+  if (!OidIsValid(opclass) || collid != att->attcollation)
+    return 0;
+  Oid family = get_opclass_family(opclass);
+
+  if (!op_in_opfamily(opno, family))
+    return 0;
+  get_op_opfamily_properties(opno, family, false, &strategy, &lefttype,
+                             &righttype);
+  if (lefttype != att->atttypid || righttype != att->atttypid)
+    return 0;
+  return strategy;
+}
+
+/*
+ * The bounds a column store table's scan prunes its row groups by, from
+ * its quals (../sm/COLSTORE.md section 12): each qual of one live column of
+ * rel, varno's, against a constant, by the btree operator of the column's
+ * type and collation -- <, <=, =, >= or > -- or = ANY of an array, IS NULL
+ * or IS NOT NULL.  A qual of another shape gives none.  A bound prunes; the
+ * qual still tests each row.  The datums are palloc'd, or the plan's.
+ */
+static std::vector<sm_col_bound_t> qual_bounds(Relation rel, List *qual,
+                                               Index varno) {
+  std::vector<sm_col_bound_t> out;
+  TupleDesc desc = RelationGetDescr(rel);
+  ListCell *l;
+
+  foreach (l, qual) {
+    Node *q = (Node *)lfirst(l);
+    sm_col_bound_t b = {};
+
+    if (IsA(q, NullTest)) {
+      NullTest *t = (NullTest *)q;
+      AttrNumber att =
+          t->argisrow ? 0 : bound_column(rel, (Node *)t->arg, varno);
+
+      if (0 == att)
+        continue;
+      b.attnum = att - 1;
+      b.is_null = IS_NULL == t->nulltesttype;
+      b.not_null = !b.is_null;
+      out.push_back(b);
+    } else if (IsA(q, OpExpr) && 2 == list_length(((OpExpr *)q)->args)) {
+      OpExpr *op = (OpExpr *)q;
+      Node *left = (Node *)linitial(op->args);
+      Node *right = (Node *)lsecond(op->args);
+      bool flipped = false;
+      AttrNumber att = bound_column(rel, left, varno);
+
+      /* Const op Var: as Var op Const, the strategy turned around. */
+      if (0 == att) {
+        att = bound_column(rel, right, varno);
+        std::swap(left, right);
+        flipped = true;
+      }
+      if (0 == att || !IsA(right, Const) || ((Const *)right)->constisnull)
+        continue;
+      Form_pg_attribute form = TupleDescAttr(desc, att - 1);
+      int s = bound_strategy(form, op->opno, op->inputcollid);
+      sm_datum_t v = 0;
+
+      if (0 == s)
+        continue;
+      if (flipped)
+        s = BTLessStrategyNumber == s           ? BTGreaterStrategyNumber
+            : BTLessEqualStrategyNumber == s    ? BTGreaterEqualStrategyNumber
+            : BTGreaterStrategyNumber == s      ? BTLessStrategyNumber
+            : BTGreaterEqualStrategyNumber == s ? BTLessEqualStrategyNumber
+                                                : s;
+      v = bound_datum(form, ((Const *)right)->constvalue);
+      b.attnum = att - 1;
+      b.not_null = true;
+      if (BTEqualStrategyNumber == s) {
+        sm_datum_t *in = (sm_datum_t *)palloc(sizeof(sm_datum_t));
+
+        in[0] = v;
+        b.has_in = true;
+        b.in = in;
+        b.n_in = 1;
+      } else if (BTLessStrategyNumber == s || BTLessEqualStrategyNumber == s) {
+        b.has_hi = true;
+        b.hi_incl = BTLessEqualStrategyNumber == s;
+        b.hi = v;
+      } else {
+        b.has_lo = true;
+        b.lo_incl = BTGreaterEqualStrategyNumber == s;
+        b.lo = v;
+      }
+      out.push_back(b);
+    } else if (IsA(q, ScalarArrayOpExpr)) {
+      ScalarArrayOpExpr *op = (ScalarArrayOpExpr *)q;
+      AttrNumber att =
+          2 == list_length(op->args)
+              ? bound_column(rel, (Node *)linitial(op->args), varno)
+              : 0;
+      Node *arr = 0 != att ? (Node *)lsecond(op->args) : NULL;
+
+      if (0 == att || !op->useOr || !IsA(arr, Const) ||
+          ((Const *)arr)->constisnull)
+        continue;
+      Form_pg_attribute form = TupleDescAttr(desc, att - 1);
+
+      if (BTEqualStrategyNumber !=
+          bound_strategy(form, op->opno, op->inputcollid))
+        continue;
+      ArrayType *a = DatumGetArrayTypeP(((Const *)arr)->constvalue);
+      int16 elmlen;
+      bool elmbyval;
+      char elmalign;
+      Datum *elems;
+      bool *nulls;
+      int n, k = 0;
+
+      if (ARR_ELEMTYPE(a) != form->atttypid)
+        continue;
+      get_typlenbyvalalign(form->atttypid, &elmlen, &elmbyval, &elmalign);
+      deconstruct_array(a, form->atttypid, elmlen, elmbyval, elmalign, &elems,
+                        &nulls, &n);
+      sm_datum_t *in = (sm_datum_t *)palloc((n + 1) * sizeof(sm_datum_t));
+
+      /* A null element matches no row. */
+      for (int i = 0; i < n; i++)
+        if (!nulls[i])
+          in[k++] = bound_datum(form, elems[i]);
+      b.attnum = att - 1;
+      b.not_null = true;
+      b.has_in = true;
+      b.in = in;
+      b.n_in = k;
+      out.push_back(b);
+    }
+  }
+  return out;
+}
+
+/*
+ * Begin a sequential scan of rel, a table in sm, by plan, its scan of the
+ * range table's scanrelid.  A column store table's reads of its row groups
+ * only the columns the plan names, unless the statement writes or locks
+ * its rows (may_read_some()), and only the row groups the bounds of its
+ * quals may match (qual_bounds()).  Any other table's is
+ * smstore_beginscan()'s.
+ */
+smstore_scan_t *smstore_beginscan_seq(Relation rel, Plan *plan, Index scanrelid,
+                                      EState *estate) {
+  if (!rel->rd_smcolumnar)
+    return smstore_beginscan(rel, false);
+  sm_tbl_t *tbl = open_table(RelationGetRelid(rel), SM_LOCKMODE_IS);
+  int natts = RelationGetNumberOfAttributes(rel);
+  std::unique_ptr<bool[]> cols(new bool[natts]());
+  bool some = may_read_some(scanrelid, estate);
+
+  if (tbl == NULL)
+    ereport(ERROR, (errcode(ERRCODE_UNDEFINED_TABLE),
+                    errmsg("relation \"%s\" does not exist",
+                           RelationGetRelationName(rel))));
+  /* The columns the plan reads; the whole row, all of them. */
+  if (some) {
+    Bitmapset *attrs = NULL;
+    int x = -1;
+
+    pull_varattnos((Node *)plan->targetlist, scanrelid, &attrs);
+    pull_varattnos((Node *)plan->qual, scanrelid, &attrs);
+    while ((x = bms_next_member(attrs, x)) >= 0) {
+      AttrNumber att = x + FirstLowInvalidHeapAttributeNumber;
+
+      if (InvalidAttrNumber == att)
+        some = false;
+      else if (att > 0 && att <= natts)
+        cols[att - 1] = true;
+    }
+  }
+  std::vector<sm_col_bound_t> bounds = qual_bounds(rel, plan->qual, scanrelid);
+  smstore_scan_t *scan = (smstore_scan_t *)palloc0(sizeof(smstore_scan_t));
+
+  scan->tbl = tbl;
+  scan->relid = RelationGetRelid(rel);
+  /* Partial only if a column goes unread. */
+  scan->partial = some && std::find(cols.get(), cols.get() + natts, false) !=
+                              cols.get() + natts;
+  if (sm_row_scanopen_columns(tbl, cols.get(), some ? natts : 0, bounds.data(),
+                              bounds.size(), &scan->cursor) != 0)
     sm_error("scan a table");
   open_scans.push_back(scan);
   return scan;
@@ -9712,7 +9961,7 @@ static smstore_scan_t *scan_at(Oid oid, const std::string &key) {
  * pin has let it go.
  */
 static bool scan_tuple(smstore_scan_t *scan, const void **tuple, size_t *len) {
-  return scan != NULL && scan->cur_pinned &&
+  return scan != NULL && !scan->partial && scan->cur_pinned &&
          sm_pin_tuple(scan->cursor != NULL ? scan->row_ref : scan->ref, tuple,
                       len) == 0;
 }

@@ -13583,3 +13583,33 @@ A check hook took the new value as a `char **`, to change it with
   newest version is in the delta store. A row read ahead
   (`ra_rows`, `ra_point`) gives no row group, as the cursor is on
   past it; a column store table has no index, so none is.
+
+## Step 449: a column store table's scan reads its columns, and prunes
+
+- **What it is**: a sequential scan of a column store table
+  reads, of its row groups, only the columns its plan names,
+  and skips the row groups that the bounds of its quals rule out
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §12).
+  `smstore_beginscan_seq()` in `access/sm/smstore.c` opens it
+  with `sm_row_scanopen_columns`; `nodeSeqscan.c` calls it in
+  place of `smstore_beginscan()`.
+- **The columns**: those of the scan's target list and quals. A
+  whole-row reference reads every column. The planner gives the
+  scan no physical target list (`use_physical_tlist()` in
+  `optimizer/plan/createplan.c`), which would name them all:
+  `RelOptInfo::sm_columnar`, set in `plancat.c` from
+  `RelationData::rd_smcolumnar`, which `relcache.c` sets from
+  `smstore_table_t::column_store`.
+- **The bounds** (`qual_bounds()`): `Var op Const`, `Const op
+  Var`, `Var = ANY (array)`, `IS NULL` and `IS NOT NULL`, by the
+  default btree operator family of the column's type, with both
+  operands of the type and the column's collation. A bound
+  prunes; the qual still tests each row.
+- **Every column for a write**: a scan of a table the statement
+  writes or locks reads every column (`may_read_some()`), as a
+  write takes the old row from the scan on it. A scan that
+  leaves a column unread is `partial`, and `scan_tuple()` never
+  hands its row out as the table's.
+- **Left on purpose**: a `Param` gives no bound, as the scan
+  begins with the plan; the cost model does not see the
+  projection.
