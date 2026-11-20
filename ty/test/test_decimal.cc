@@ -307,3 +307,27 @@ TEST_CASE("decimal64 lcm is at the larger scale, and fails past 17 digits") {
   CHECK(TY_ERR_RANGE == ty_errnum());
   CHECK(7 == r.value);
 }
+
+// Verify decimal64 comparison at one scale and at two.
+// 1. Compare values of one scale: less, equal, greater.
+// 2. Compare values of two scales that are equal: 1.5 and 1.50.
+// 3. Compare values of two scales that differ, in both orders.
+// 4. Compare negatives, and the largest values at the farthest scales.
+TEST_CASE("decimal64 cmp is exact at any scales") {
+  // 1. Compare values of one scale: less, equal, greater.
+  CHECK(-1 == ty_decimal64_cmp({1, 2}, {2, 2}));
+  CHECK(0 == ty_decimal64_cmp({2, 2}, {2, 2}));
+  CHECK(1 == ty_decimal64_cmp({3, 2}, {2, 2}));
+
+  // 2. Compare values of two scales that are equal: 1.5 and 1.50.
+  CHECK(0 == ty_decimal64_cmp({15, 1}, {150, 2}));
+
+  // 3. Compare values of two scales that differ, in both orders.
+  CHECK(-1 == ty_decimal64_cmp({15, 1}, {151, 2}));
+  CHECK(1 == ty_decimal64_cmp({151, 2}, {15, 1}));
+
+  // 4. Compare negatives, and the largest values at the farthest scales.
+  CHECK(-1 == ty_decimal64_cmp({-151, 2}, {-15, 1}));
+  CHECK(1 == ty_decimal64_cmp({99999999999999999, 0}, {99999999999999999, 17}));
+  CHECK(-1 == ty_decimal64_cmp({-99999999999999999, 0}, {0, 17}));
+}

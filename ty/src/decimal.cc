@@ -194,3 +194,15 @@ int ty_decimal64_lcm(const ty_decimal64_t *a, const ty_decimal64_t *b,
   result->scale = s;
   return 0;
 }
+
+/*
+ * a <=> b, of two scales.
+ * 1. Put both values at the larger scale, in 128 bits.
+ * 2. Compare them.
+ */
+int ty_decimal64_cmp_scaled(ty_decimal64_t a, ty_decimal64_t b) {
+  ty_int128_t x, y;
+
+  common_scale(&a, &b, &x, &y);
+  return (x > y) - (x < y);
+}

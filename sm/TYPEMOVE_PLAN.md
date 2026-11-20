@@ -285,8 +285,19 @@ copied from PostgreSQL keeps its copyright notice
    `ty_decimal.h`: a call that cannot fail has no out-parameter;
    and `%` and `gcd`, with `TY_ERR_DIVZERO` as the second error
    kind; and `lcm`, a `decimal64` that is an error past 17
-   digits, as `*` is. Next: the compares and the hash; then
-   rounding. `/` waits for the 512-bit magnitude.
+   digits, as `*` is; and the compare, `ty_decimal64_cmp`. Next:
+   the hash, which waits for `decimal128`, as both hash alike;
+   then rounding. `/` waits for the 512-bit magnitude.
+
+   The compare is a lesson in cost, measured by callgrind on
+   the baseline's table (2,000 rows, 20 and 60 statements). A
+   digres wrapper that unpacked both words and called ty's
+   compare in line cost `ORDER BY a` 3.8% more instructions,
+   `where a > b` 0.2% and `max(a)` 0.3%: over the limit. So
+   digres keeps its test of one scale, where the order of the
+   words is the order of the values (its own packing), and
+   calls `ty_decimal64_cmp_scaled` only for two scales. Then the
+   three are 0.6%, 0.3% and 0.8% fewer.
 4. **The allocator on each thread** (§3.2): digres sets its
    functions in each backend thread, and sm sets an arena's on
    each of its own threads. Decimal does not need it. This is

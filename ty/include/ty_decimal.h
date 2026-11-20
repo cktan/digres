@@ -56,6 +56,20 @@ static inline int ty_decimal64_sign(ty_decimal64_t a) {
     return (a.value > 0) - (a.value < 0);
 }
 
+/*
+ * a <=> b at any scales: -1, 0 or 1. The scales of both are at most 17.
+ * Two values of one scale, the usual case, compare in line; others are
+ * put to one scale in 128 bits, out of line.
+ */
+int ty_decimal64_cmp_scaled(ty_decimal64_t a, ty_decimal64_t b);
+
+static inline int ty_decimal64_cmp(ty_decimal64_t a, ty_decimal64_t b) {
+    if (a.scale == b.scale) {
+        return (a.value > b.value) - (a.value < b.value);
+    }
+    return ty_decimal64_cmp_scaled(a, b);
+}
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DECIMAL64_MAX_DIGITS 17
 #define TY_DECIMAL64_MAX_SCALE  17
