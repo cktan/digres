@@ -1833,9 +1833,12 @@ int tbl_update_at(table_t *table, uint64_t rg_id, uint64_t id,
   }
   // The new version, in the delta store, under the row's _id: over
   // a seal's tombstone, or where no version was ever written.
-  return sm2::rel_reinsert_at(table->rel, id, values, isnull) != 0
-             ? row_failed(table)
-             : 0;
+  if (sm2::rel_reinsert_at(table->rel, id, values, isnull) != 0) {
+    return row_failed(table);
+  }
+  // It grows the delta toward its seal, as an insert does (§10.4).
+  table->session->col_inserts[table->def->oid]++;
+  return 0;
 }
 
 /* Seal a row group of a column store table's delta; see sm3.h. */

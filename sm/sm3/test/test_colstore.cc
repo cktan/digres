@@ -1198,3 +1198,61 @@ TEST_CASE("the sealer merges small row groups") {
   CHECK(rg_ids(db, c) == merged);
   sm3::sealer_detach(db.cat);
 }
+
+// Verify an update of a row group's rows counts their new versions
+// in the delta store toward the seal (../COLSTORE.md §10.4), with
+// row groups of 100 rows.
+// 1. Load 100 rows: one row group. Attach a sealer.
+// 2. Update every row by its name, and commit: 100 new versions in
+//    the delta store, and the row group all dead.
+// 3. The sealer seals the delta into a new row group of 100 rows,
+//    and compacts the old one away.
+TEST_CASE("an update of a row group's rows counts toward the seal") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The row group, and the sealer.
+  load_rows(db, c, 100);
+  std::vector<uint64_t> old = rg_ids(db, c);
+  REQUIRE(old.size() == 1);
+  sm1::env_t *env = db.env();
+  REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+            sm1::session_t *s = nullptr;
+            return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+          }) == 0);
+  // 2. Update every row.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  std::vector<std::tuple<uint64_t, uint64_t, int32_t>> rows;
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  while (sm3::tbl_scannxt(scan, id, tuple) == 0) {
+    sm2::datum_t d[2];
+    bool null[2];
+    REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+    rows.emplace_back(sm3::tbl_scan_rg(scan), id, sm2::datum_to_int32(d[0]));
+  }
+  sm3::tbl_scanend(scan);
+  REQUIRE(rows.size() == 100);
+  for (auto [rg, x, a] : rows) {
+    row_t r(a, "u");
+    REQUIRE_MESSAGE(sm3::tbl_update_at(t, rg, x, r.d, r.null) == 0,
+                    sm1::errmsg());
+  }
+  sm3::tbl_close(t);
+  db.commit();
+  // 3. Sealed, and the old row group gone.
+  sm3::sealer_wait_idle(db.cat);
+  std::vector<uint64_t> now = rg_ids(db, c);
+  REQUIRE(now.size() == 1);
+  CHECK(now[0] != old[0]);
+  CHECK(rg_rows(db, c) == 100);
+  auto after = scan_rows(db, c);
+  CHECK(after.size() == 100);
+  CHECK(after[99] == "u");
+  sm3::sealer_detach(db.cat);
+}

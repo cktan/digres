@@ -18,6 +18,9 @@
 # 6. A scan of some columns, pruned by bounds: a bound skips the row
 #    groups whose zonemaps cannot hold a match, and the delta store
 #    is read whole; a column not read is nil in a row group's rows.
+# 7. 9,999 rows inserted into tr and one row of its row group
+#    updated by _id: the update's new version counts toward the
+#    seal too, making a row group's worth, and the seal follows.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -142,6 +145,23 @@
     (assert-eq (length some) 24998 "every row, of some columns")
     (assert-eq (nil-b some) 19997 "b is not read in the row groups' rows")
     (assert-eq (nil-b (scan-columns ev [] [])) 0 "every column, with none named")
+(commit)
+
+# 7. An update counts toward the seal. tr's row group holds _id 1
+# to 10,000; its delta store 2,000 rows, counted already. No scan
+# comes between, as a scan of 10k delta rows queues a seal itself.
+(begin :rc)
+    (def tr-rg (rg-of tr 1))
+    (for i 0 9999
+      (insert tr [i "y"]))
+    (update tr 1 [1 "u"])
+(commit)
+(seal-wait)
+(begin :rr)
+    (def now (rg-of tr 1))
+    (assert-eq (and (> now 0) (not= now tr-rg)) true
+               "the updated row is sealed into a new row group")
+    (assert-eq (scan-count tr) 21999 "every row once")
 (commit)
 
 (db-close)

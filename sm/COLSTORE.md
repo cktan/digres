@@ -665,7 +665,8 @@ no rw-edge.
   catalog, with a queue of tables, as the btree reaper has its
   own. A table is queued once until its job starts.
 - **The insert path counts, for each table, in memory,** the
-  rows of its delta store: each transaction counts its own, and
+  rows of its delta store, an update's new version of a row of
+  an RG among them: each transaction counts its own, and
   hands them to the sealer at its commit, so a seal never starts
   before the rows it is to take are committed. At 10k rows the
   table is queued (§7).
