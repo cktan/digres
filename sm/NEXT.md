@@ -441,11 +441,6 @@ Owed, and blocking nothing above:
     row reads every CG of its RG. It is to read the `_id`
     filter, find `n` by a binary search, and read one marker
     (§8).
-  - **A prepared transaction's rows and delete markers are not
-    counted** toward a seal or an RG compaction: `sm3::prepare`
-    hands no count over, and `COMMIT PREPARED` has none. A scan
-    catches them; counts kept with the prepared transaction would
-    not need one (§10.4, §11.1).
   - **A scan reads each long value of a column it reads**, for
     each row. An external pointer, fetched on use, as TOAST is,
     saves the reads a qual rules out (§5.4).

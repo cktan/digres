@@ -691,8 +691,52 @@ int prepare(session_t *s, std::string_view gid) {
   if (sm1::prepare(s->sm1, gid) != 0) {
     return -1;
   }
+  // Its counts wait for its COMMIT PREPARED (../../COLSTORE.md §10.4).
+  if (!s->col_inserts.empty() || !s->col_marks.empty()) {
+    std::lock_guard<std::mutex> g(s->cat->prepared_mu);
+    catalog_t::prepared_counts_t &c = s->cat->prepared_counts[std::string(gid)];
+    c.inserts = std::move(s->col_inserts);
+    c.marks = std::move(s->col_marks);
+  }
+  s->col_inserts.clear();
+  s->col_marks.clear();
   // The prepared transaction is the coordinator's now.
   s->in_txn = false;
+  return 0;
+}
+
+/* Commit the prepared transaction gid; see sm3.h. */
+int commit_prepared(session_t *s, std::string_view gid) {
+  if (sm1::commit_prepared(s->sm1, gid) != 0) {
+    return -1;
+  }
+  // Its rows are committed: they count toward each table's seal.
+  catalog_t::prepared_counts_t c;
+  {
+    std::lock_guard<std::mutex> g(s->cat->prepared_mu);
+    auto it = s->cat->prepared_counts.find(std::string(gid));
+    if (it == s->cat->prepared_counts.end()) {
+      return 0;
+    }
+    c = std::move(it->second);
+    s->cat->prepared_counts.erase(it);
+  }
+  for (const auto &[oid, n] : c.inserts) {
+    sealer_count(s->cat, oid, n);
+  }
+  for (const auto &[key, n] : c.marks) {
+    sealer_count_marks(s->cat, key.first, key.second, n);
+  }
+  return 0;
+}
+
+/* Abort the prepared transaction gid; see sm3.h. */
+int abort_prepared(session_t *s, std::string_view gid) {
+  if (sm1::abort_prepared(s->sm1, gid) != 0) {
+    return -1;
+  }
+  std::lock_guard<std::mutex> g(s->cat->prepared_mu);
+  s->cat->prepared_counts.erase(std::string(gid));
   return 0;
 }
 

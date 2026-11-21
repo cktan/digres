@@ -150,6 +150,19 @@ struct sm3::catalog_t {
   /* The rows of a row group; 0 is rg_max_rows (cat_set_rg_rows). */
   uint32_t rg_rows = 0;
 
+  /*
+   * The delta rows and delete markers of each prepared transaction,
+   * by its gid, counted toward the seal and RG compaction at its
+   * COMMIT PREPARED (../../COLSTORE.md §10.4). In memory: a restart
+   * loses them, and a scan catches what they miss.
+   */
+  struct prepared_counts_t {
+    std::unordered_map<uint64_t, uint64_t> inserts;
+    std::map<std::pair<uint64_t, uint64_t>, uint64_t> marks;
+  };
+  std::mutex prepared_mu;
+  std::unordered_map<std::string, prepared_counts_t> prepared_counts;
+
   /* Close every collation the catalog holds. */
   ~catalog_t() {
     for (auto &[oid, c] : collations) {

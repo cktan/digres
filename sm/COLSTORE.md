@@ -716,9 +716,10 @@ no rw-edge.
   an RG among them: each transaction counts its own, and
   hands them to the sealer at its commit, so a seal never starts
   before the rows it is to take are committed. At 10k rows the
-  table is queued (§7). A prepared transaction's counts are
-  lost: `sm3::prepare` hands none over, and `COMMIT PREPARED`
-  has none to hand. A scan catches its rows (below).
+  table is queued (§7). A prepared transaction's counts wait,
+  by its gid, for its `COMMIT PREPARED` (`sm3::commit_prepared`);
+  `ROLLBACK PREPARED` drops them. A restart loses them, and a
+  scan catches the rows (below).
 - **A scan that reads more than 10k rows of a delta store also
   queues a seal job.** The counts start at 0 when the database
   opens, so this catches a delta store that grew before a
@@ -783,8 +784,8 @@ committed state:
 ### 11.1 When RG compaction runs
 
 - **At 20% dead rows.** A commit counts the delete markers it
-  committed on each RG, in memory; a prepared transaction's, as
-  its rows' (§10.4), are lost, and a scan catches them. When
+  committed on each RG, in memory; a prepared transaction's at
+  its `COMMIT PREPARED`, as its rows' (§10.4). When
   they reach 20% of a full RG's rows, 2,000, it queues an RG
   compaction job on the sealer's queue (§10.4). Below 20%, the
   dead rows cost a scan less than a rewrite of the RG costs.
@@ -1078,6 +1079,9 @@ random CGs and random bounds, against a test of every value.
 16. A second delete or update of a row of an RG in one statement
     fails with `SM_ERR_SELFMODIFIED`; in the next statement, the
     first one's result is seen.
+17. A prepared transaction's delta rows and delete markers count
+    toward the seal and RG compaction at its `COMMIT PREPARED`,
+    and not after `ROLLBACK PREPARED`.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.
@@ -1089,7 +1093,8 @@ across a restart; SERIALIZABLE and an index refused; a delete by
 name and an abort; the seal's job; an update and a delete by
 `_id` alone; a scan of some columns, with bounds; an update
 counted toward the seal; two loads prepared across a restart,
-one committed and one aborted; bounds on a text column.
+one committed and one aborted; bounds on a text column; a
+prepared transaction's inserts sealed after `COMMIT PREPARED`.
 `rel/test/test_toast.rel`, with TOAST on: 10k rows of long
 values inserted one at a time, sealed by the seal's job, read
 back whole.

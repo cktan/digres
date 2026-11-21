@@ -1909,3 +1909,77 @@ TEST_CASE("a second write of a row group's row in a statement is "
   db.commit();
   CHECK(scan_rows(db, c).size() == 99);
 }
+
+// Verify a prepared transaction's delta rows and delete markers count
+// toward the seal and RG compaction at its COMMIT PREPARED, and not
+// after ROLLBACK PREPARED, with row groups of 100 rows.
+// 1. Attach a sealer. Insert 60 rows and prepare; COMMIT PREPARED;
+//    insert 40 more: the 100 are a row group's worth, and are sealed.
+// 2. Delete 20 of its rows and prepare; COMMIT PREPARED: a fifth dead,
+//    the row group is compacted into one of 80 rows.
+// 3. Insert 100 rows and prepare; ROLLBACK PREPARED: nothing is
+//    sealed, and 80 rows are left.
+TEST_CASE("a prepared transaction's rows count at COMMIT PREPARED") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  sm1::env_t *env = db.env();
+  REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+            sm1::session_t *s = nullptr;
+            return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+          }) == 0);
+  // S2 prepares; a session with a prepared transaction begins no
+  // other until it is resolved.
+  sm1::session_t *s2 = db.open();
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
+  auto insert_prepared = [&](int from, int to, const char *gid) {
+    REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+    sm3::table_t *t = nullptr;
+    REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+    for (int i = from; i < to; i++) {
+      row_t r(i, "p");
+      uint64_t id = 0;
+      REQUIRE(sm3::tbl_insert(t, r.d, r.null, id) == 0);
+    }
+    sm3::tbl_close(t);
+    REQUIRE_MESSAGE(sm3::prepare(ss2, gid) == 0, sm1::errmsg());
+  };
+  // 1. Inserts.
+  insert_prepared(0, 60, "g1");
+  sm3::sealer_wait_idle(db.cat);
+  CHECK(row_groups(db, c) == 0);
+  REQUIRE_MESSAGE(sm3::commit_prepared(db.ss, "g1") == 0, sm1::errmsg());
+  insert_rows(db, c, 60, 100);
+  sm3::sealer_wait_idle(db.cat);
+  std::vector<uint64_t> rgs = rg_ids(db, c);
+  REQUIRE(rgs.size() == 1);
+  // 2. Deletes.
+  std::vector<std::pair<uint64_t, uint64_t>> names;
+  for (int a = 0; a < 20; a++) {
+    names.push_back(where(db, c, a));
+  }
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  for (auto [rg, id] : names) {
+    REQUIRE(sm3::tbl_delete_at(t, rg, id) == 0);
+  }
+  sm3::tbl_close(t);
+  REQUIRE_MESSAGE(sm3::prepare(ss2, "g2") == 0, sm1::errmsg());
+  REQUIRE_MESSAGE(sm3::commit_prepared(db.ss, "g2") == 0, sm1::errmsg());
+  sm3::sealer_wait_idle(db.cat);
+  std::vector<uint64_t> after = rg_ids(db, c);
+  REQUIRE(after.size() == 1);
+  CHECK(after[0] != rgs[0]);
+  CHECK(rg_rows(db, c) == 80);
+  // 3. An abort.
+  insert_prepared(1000, 1100, "g3");
+  REQUIRE_MESSAGE(sm3::abort_prepared(db.ss, "g3") == 0, sm1::errmsg());
+  sm3::sealer_wait_idle(db.cat);
+  CHECK(rg_ids(db, c) == after);
+  CHECK(scan_rows(db, c).size() == 80);
+  sm3::sealer_detach(db.cat);
+  sm3::session_close(ss2);
+}

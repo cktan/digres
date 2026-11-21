@@ -1099,16 +1099,27 @@ int sm_list_prepared(sm_session_t *session, std::vector<sm_prepared_t> &out) {
   });
 }
 
-/* Commit the prepared transaction gid. */
+/*
+ * Commit the prepared transaction gid: through sm3, which hands its
+ * column store counts to the sealer, on a session with a catalog.
+ */
 int sm_commit_prepared(sm_session_t *session, const char *gid) {
   sm1::session_t *s = session_of(session);
-  return guard(session, [&] { return sm1::commit_prepared(s, name_of(gid)); });
+  return guard(session, [&] {
+    return session && session->sm3
+               ? sm3::commit_prepared(session->sm3, name_of(gid))
+               : sm1::commit_prepared(s, name_of(gid));
+  });
 }
 
-/* Abort the prepared transaction gid. */
+/* Abort the prepared transaction gid, as sm_commit_prepared commits. */
 int sm_abort_prepared(sm_session_t *session, const char *gid) {
   sm1::session_t *s = session_of(session);
-  return guard(session, [&] { return sm1::abort_prepared(s, name_of(gid)); });
+  return guard(session, [&] {
+    return session && session->sm3
+               ? sm3::abort_prepared(session->sm3, name_of(gid))
+               : sm1::abort_prepared(s, name_of(gid));
+  });
 }
 
 namespace {

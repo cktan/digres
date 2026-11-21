@@ -1059,7 +1059,11 @@ int sm_commit_prepared(sm_session_t* session, const char* gid);
 ```
 
 Commits the prepared transaction `gid`. It needs no active
-transaction on `session`, and disturbs none.
+transaction on `session`, and disturbs none. The rows it put into
+a column store table's delta store, and its delete markers, then
+count toward the seal and RG compaction
+([`COLSTORE.md`](COLSTORE.md#104-when-the-seal-runs) §10.4);
+`sm_abort_prepared` drops them.
 
 Errors: `SM_ERR_NOTFOUND`.
 

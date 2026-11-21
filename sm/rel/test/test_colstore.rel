@@ -26,6 +26,8 @@
 #    the committed one's row group is read, the aborted one's not.
 # 9. Bounds on a text column through sm.h: of two row groups, b "aa"
 #    and b "zz", b < 'b' and b IN ('zz') each read one.
+# 10. 10,000 rows inserted one at a time and prepared: COMMIT PREPARED
+#     counts them toward the seal, which seals them.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -212,6 +214,24 @@
                "b < 'b' reads the first row group")
     (assert-eq (length (scan-columns tt [] [[:b :in ["zz"]]])) 10000
                "b IN ('zz') reads the second")
+(commit)
+
+# 10. A prepared transaction's inserts count at COMMIT PREPARED. No
+# scan comes between, as a scan of 10k delta rows queues a seal.
+(begin :rc)
+    (table-create tq
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (for i 0 10000
+      (insert tq [i "q"]))
+(prepare "cs_q1")
+(commit-prepared "cs_q1")
+(seal-wait)
+(begin :rr)
+    (assert-eq (> (rg-of tq 1) 0) true
+               "COMMIT PREPARED's rows are sealed")
 (commit)
 
 (db-close)

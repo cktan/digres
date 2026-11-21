@@ -509,6 +509,16 @@ int abort(session_t* s);
  */
 int prepare(session_t* s, std::string_view gid);
 
+/*
+ * Commit, or abort, the prepared transaction gid, as
+ * sm1::commit_prepared and sm1::abort_prepared do. A commit hands
+ * the transaction's counts of a column store table's delta rows and
+ * delete markers to the sealer (../COLSTORE.md §10.4); an abort drops
+ * them. After a restart there are none: a scan catches the rows.
+ */
+int commit_prepared(session_t* s, std::string_view gid);
+int abort_prepared(session_t* s, std::string_view gid);
+
 /* The table with oid, or nullptr, as s's transaction sees it. */
 std::shared_ptr<const table_def_t> cat_get_table(const session_t* s,
                                              uint64_t oid);
