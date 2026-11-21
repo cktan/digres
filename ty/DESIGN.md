@@ -470,4 +470,30 @@ The vectors are a reference of Python strings of `0` and `1`,
 which are the plainest way to say what each operation means; the
 hand tests are in `test/test_bits.cc`.
 
+## 14. inet and cidr
+
+`ty_inet.h` holds `ty_inet_t`: the family (2 for IPv4, 3 for
+IPv6), the mask length and 16 bytes of address. It has the layout
+PostgreSQL stores, so a stored value is a `ty_inet_t` after its
+varlena header.
+
+The text parse and format are the ISC code PostgreSQL uses:
+`src/inet_pton.cc`, `inet_ntop.cc` and `inet_cidr_ntop.cc`, moved
+from digres with their copyright notices. They read the short
+forms (`10/8`, `10.1.2/24`) and write the IPv6 forms with `::`.
+The other operations are new code, from the cases of `network.c`:
+order, the five containment tests, `host`, `network`,
+`broadcast`, `netmask`, `hostmask`, `merge`, `~`, `&`, `|`, `+`
+and `-` with an integer, `-` of two values, the cidr check for a
+bit right of the mask, and the hash.
+
+A cidr with a bit right of its mask is `TY_ERR_RANGE`; any other
+bad text is `TY_ERR_INVALID`. The caller words the message, as
+`inet_in` and `cidr_in` do.
+
+The tests: the text is `test/known.txt`, what the old digres
+printed for about 450 inputs, each as an inet and as a cidr; the
+other operations are in `test/vectors.txt`, from a reference of
+Python integers; the hand tests are in `test/test_inet.cc`.
+
 

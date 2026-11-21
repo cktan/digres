@@ -23,6 +23,7 @@
 #include "ty_decimal.h"
 #include "ty_float.h"
 #include "ty_hash.h"
+#include "ty_inet.h"
 #include "ty_int.h"
 #include "ty_mac.h"
 #include "ty_uuid.h"
@@ -675,11 +676,159 @@ bool run_bits(const vec_t &v) {
   return true;
 }
 
+/*
+ * An inet or cidr text (known.txt): the forms PostgreSQL printed, joined by
+ * commas: for an inet, the output, host(), text() and abbrev(); for a cidr,
+ * the output, text() and abbrev().
+ */
+bool run_inet_text(const vec_t &v) {
+  const bool cidr = v.op == "cidr.parse";
+  std::vector<uint8_t> t = bytes_of(v.args[0]);
+  std::string z(reinterpret_cast<const char *>(t.data()), t.size());
+  ty_inet_t a;
+  char buf[TY_INET_TEXT_MAX];
+  int rc = ty_inet_parse(z.c_str(), cidr, &a);
+  std::string got;
+
+  if (rc == 0) {
+    int modes_inet[] = {TY_INET_OUT, TY_INET_HOST, TY_INET_SHOW,
+                        TY_INET_ABBREV};
+    int modes_cidr[] = {TY_INET_CIDR, TY_INET_SHOW, TY_INET_CIDR_ABBREV};
+
+    for (int i = 0; i < (cidr ? 3 : 4); i++) {
+      REQUIRE(0 ==
+              ty_inet_format(&a, cidr ? modes_cidr[i] : modes_inet[i], buf));
+      got += (i ? "," : "") + std::string(buf);
+    }
+  }
+  INFO(v.line);
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    CHECK(errnum_of(v.res[1]) == ty_errnum());
+  } else {
+    REQUIRE(0 == rc);
+    CHECK(v.res[0] == got);
+  }
+  return true;
+}
+
+/* An inet token "family:bits:hex" as a value. */
+ty_inet_t inet_of(const std::string &tok) {
+  ty_inet_t a;
+  int fam = 0, bits = 0;
+  char hex[40];
+
+  memset(&a, 0, sizeof a);
+  REQUIRE(3 == sscanf(tok.c_str(), "%d:%d:%39s", &fam, &bits, hex));
+  a.family = fam == 4 ? TY_INET_V4 : TY_INET_V6;
+  a.bits = (uint8_t)bits;
+  for (size_t i = 0; i < strlen(hex) / 2; i++) {
+    unsigned b;
+
+    sscanf(hex + 2 * i, "%2x", &b);
+    a.addr[i] = (uint8_t)b;
+  }
+  return a;
+}
+
+/* A value as its token. */
+std::string inet_token(const ty_inet_t &a) {
+  char t[64];
+  int n =
+      snprintf(t, sizeof t, "%d:%d:", a.family == TY_INET_V4 ? 4 : 6, a.bits);
+
+  for (int i = 0; i < ty_inet_addrsize(&a); i++) {
+    n += snprintf(t + n, sizeof t - (size_t)n, "%02x", a.addr[i]);
+  }
+  return t;
+}
+
+/* Run one inet vector; false if its op is not one. */
+bool run_inet(const vec_t &v) {
+  const std::string &op = v.op;
+
+  /* inet.parse is the known-answer text vector, in run_known */
+  if (op.compare(0, 5, "inet.") != 0 || op == "inet.parse") {
+    return false;
+  }
+  const std::string name = op.substr(5);
+  ty_inet_t a = inet_of(v.args[0]), b, r;
+  int rc = 0;
+  int64_t i64 = 0;
+  auto sign = [](int c) { return (c > 0) - (c < 0); };
+
+  memset(&r, 0, sizeof r);
+  if (v.args.size() > 1 && name != "add" && name != "cidrmask") {
+    b = inet_of(v.args[1]);
+  }
+  INFO(v.line);
+  if (name == "cmp") {
+    CHECK(std::stoi(v.res[0]) == sign(ty_inet_cmp(&a, &b)));
+  } else if (name == "sub") {
+    CHECK(std::stoi(v.res[0]) == ty_inet_sub(&a, &b));
+  } else if (name == "subeq") {
+    CHECK(std::stoi(v.res[0]) == ty_inet_subeq(&a, &b));
+  } else if (name == "sup") {
+    CHECK(std::stoi(v.res[0]) == ty_inet_sup(&a, &b));
+  } else if (name == "supeq") {
+    CHECK(std::stoi(v.res[0]) == ty_inet_supeq(&a, &b));
+  } else if (name == "overlap") {
+    CHECK(std::stoi(v.res[0]) == ty_inet_overlap(&a, &b));
+  } else if (name == "broadcast") {
+    ty_inet_broadcast(&a, &r);
+    CHECK(v.res[0] == inet_token(r));
+  } else if (name == "network") {
+    ty_inet_network(&a, &r);
+    CHECK(v.res[0] == inet_token(r));
+  } else if (name == "netmask") {
+    ty_inet_netmask(&a, &r);
+    CHECK(v.res[0] == inet_token(r));
+  } else if (name == "hostmask") {
+    ty_inet_hostmask(&a, &r);
+    CHECK(v.res[0] == inet_token(r));
+  } else if (name == "not") {
+    ty_inet_not(&a, &r);
+    CHECK(v.res[0] == inet_token(r));
+  } else if (name == "cidrmask") {
+    ty_inet_set_masklen_cidr(&a, std::stoi(v.args[1]), &r);
+    CHECK(v.res[0] == inet_token(r));
+  } else if (name == "merge" || name == "and" || name == "or") {
+    rc = name == "merge" ? ty_inet_merge(&a, &b, &r)
+         : name == "and" ? ty_inet_and(&a, &b, &r)
+                         : ty_inet_or(&a, &b, &r);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(v.res[0] == inet_token(r));
+    }
+  } else if (name == "add") {
+    rc = ty_inet_add(&a, std::stoll(v.args[1]), &r);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(v.res[0] == inet_token(r));
+    }
+  } else if (name == "subinet") {
+    rc = ty_inet_sub_inet(&a, &b, &i64);
+    check_int(v, rc, i64);
+  } else {
+    return false;
+  }
+  return true;
+}
+
 /* Run a vector of what PostgreSQL did with a text (known.txt): the text is hex.
  */
 bool run_known(const vec_t &v) {
   const std::string &op = v.op;
 
+  if (op == "inet.parse" || op == "cidr.parse") {
+    return run_inet_text(v);
+  }
   if (op != "macaddr.parse" && op != "macaddr8.parse") {
     return false;
   }
@@ -1278,10 +1427,10 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_bits(v) || run_known(v) || run_float_text(v) ||
-                 run_float(v) || run_hash(v) || run_bytea(v) ||
-                 run_int_convert(v) || run64(v) || run128(v) || run_i16(v) ||
-                 run_i32(v) || run_i64(v);
+    bool known = run_inet(v) || run_bits(v) || run_known(v) ||
+                 run_float_text(v) || run_float(v) || run_hash(v) ||
+                 run_bytea(v) || run_int_convert(v) || run64(v) || run128(v) ||
+                 run_i16(v) || run_i32(v) || run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

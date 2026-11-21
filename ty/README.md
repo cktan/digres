@@ -48,6 +48,7 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty_uuid.h` | the uuid operations |
 | `include/ty_bytea.h` | the bytea operations |
 | `include/ty_bits.h` | the bit and bit varying operations |
+| `include/ty_inet.h` | the inet and cidr operations |
 | `include/ty_error.h` | the error codes |
 | `src/` | the library |
 | `test/` | the unit tests, in doctest, and the vectors |

@@ -412,6 +412,7 @@ def main():
     gen_trig()
     gen_float_aggs()
     gen_bits()
+    gen_inet()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -1889,6 +1890,100 @@ def gen_bits():
         ln = random.choice([-2, 0, 1, 3, 8, 32, 63, 64, 65, 100])
         n = 1 if ln <= 0 else ln
         emit("bits.fromint64", (v, ln), btok(format(v % (1 << n), "0%db" % n)))
+
+
+def itok(fam, bits, addr):
+    """An inet value as a token: family (4 or 6), mask length, address hex."""
+    n = 8 if fam == 4 else 32
+    return "%d:%d:%0*x" % (fam, bits, n, addr)
+
+
+def ip_mask(fam, bits):
+    """The mask of the first bits of an address of family fam."""
+    mb = 32 if fam == 4 else 128
+    return ((1 << bits) - 1) << (mb - bits)
+
+
+def rand_inets():
+    """Pairs of inet values that share prefixes: the cases that matter are
+    the ones where the networks nearly agree."""
+    out = []
+    for fam in (4, 6):
+        mb = 32 if fam == 4 else 128
+        for _ in range(120):
+            base = random.getrandbits(mb)
+            if random.random() < 0.3:
+                base = random.choice([0, (1 << mb) - 1, 1 << (mb - 1), 1])
+            ba = random.choice([0, mb, 8, 16, mb - 1, 1, random.randint(0, mb), random.randint(0, mb)])
+            other = base
+            if random.random() < 0.7:
+                flip = random.randint(0, mb - 1)
+                other = base ^ (1 << flip)
+            bb = random.choice([ba, ba, random.randint(0, mb), 0, mb, ba - 1 if ba > 0 else 0, ba + 1 if ba < mb else mb])
+            out.append(((fam, ba, base), (fam, bb, other)))
+    for _ in range(20):
+        out.append(((4, random.randint(0, 32), random.getrandbits(32)), (6, random.randint(0, 128), random.getrandbits(128))))
+    return out
+
+
+def gen_inet():
+    """The vectors of inet and cidr, from Python integers: an address is an
+    int, a mask is a prefix of ones."""
+    def prefix(x, bits):
+        fam, b, a = x
+        mb = 32 if fam == 4 else 128
+        return a >> (mb - bits) if bits else 0
+
+    for x, y in rand_inets():
+        fx, bx, ax = x
+        fy, by, ay = y
+        t, u = itok(*x), itok(*y)
+        mbx = 32 if fx == 4 else 128
+        if fx == fy:
+            m = min(bx, by)
+            px, py = prefix(x, m), prefix(y, m)
+            if px != py:
+                c = (px > py) - (px < py)
+            elif bx != by:
+                c = (bx > by) - (bx < by)
+            else:
+                c = (ax > ay) - (ax < ay)
+        else:
+            c = (fx > fy) - (fx < fy)
+        emit("inet.cmp", (t, u), c)
+        same = fx == fy
+        emit("inet.sub", (t, u), int(same and bx > by and prefix(x, by) == prefix(y, by)))
+        emit("inet.subeq", (t, u), int(same and bx >= by and prefix(x, by) == prefix(y, by)))
+        emit("inet.sup", (t, u), int(same and bx < by and prefix(x, bx) == prefix(y, bx)))
+        emit("inet.supeq", (t, u), int(same and bx <= by and prefix(x, bx) == prefix(y, bx)))
+        emit("inet.overlap", (t, u), int(same and prefix(x, min(bx, by)) == prefix(y, min(bx, by))))
+        full = (1 << mbx) - 1
+        mask = ip_mask(fx, bx)
+        emit("inet.broadcast", (t,), itok(fx, bx, ax | (full ^ mask)))
+        emit("inet.network", (t,), itok(fx, bx, ax & mask))
+        emit("inet.netmask", (t,), itok(fx, mbx, mask))
+        emit("inet.hostmask", (t,), itok(fx, mbx, full ^ mask))
+        emit("inet.not", (t,), itok(fx, bx, ax ^ full))
+        if same:
+            m = min(bx, by)
+            common = 0
+            while common < m and ((ax >> (mbx - 1 - common)) & 1) == ((ay >> (mbx - 1 - common)) & 1):
+                common += 1
+            emit("inet.merge", (t, u), itok(fx, common, ax & ip_mask(fx, common)))
+            emit("inet.and", (t, u), itok(fx, max(bx, by), ax & ay))
+            emit("inet.or", (t, u), itok(fx, max(bx, by), ax | ay))
+            d = ax - ay
+            emit("inet.subinet", (t, u), d if -2 ** 63 <= d < 2 ** 63 else ("E", "RANGE"))
+        else:
+            emit("inet.merge", (t, u), ("E", "INVALID"))
+            emit("inet.and", (t, u), ("E", "INVALID"))
+            emit("inet.or", (t, u), ("E", "INVALID"))
+            emit("inet.subinet", (t, u), ("E", "INVALID"))
+        for n in (0, 1, -1, 255, 256, -256, 2 ** 31, -2 ** 31, 2 ** 32, 2 ** 63 - 1, -2 ** 63, random.randint(-2 ** 40, 2 ** 40), random.randint(-2 ** 63, 2 ** 63 - 1)):
+            r = ax + n
+            emit("inet.add", (t, n), itok(fx, bx, r) if 0 <= r <= full else ("E", "RANGE"))
+        nb = random.randint(0, mbx)
+        emit("inet.cidrmask", (t, nb), itok(fx, nb, ax & ip_mask(fx, nb)))
 
 
 def gen_ints():

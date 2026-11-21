@@ -72,13 +72,63 @@ def mac8_inputs():
     return out
 
 
+def inet_inputs():
+    """Text of inet and cidr values: good and bad, v4 and v6, the short
+    forms the ISC parser reads, and random addresses with random masks."""
+    out = ["1.2.3.4", "1.2.3.4/24", "10", "10.1", "10.1.2", "10/8", "10.1/16", "10.1.2/24", "255.255.255.255/32",
+           "0.0.0.0/0", "0.0.0.0", "1.2.3.4/33", "1.2.3.4/", "1.2.3.4/-1", "256.1.1.1", "01.2.3.4", "0x0a010203",
+           "0xc0a80101/24", "0xc0a8", " 1.2.3.4", "1.2.3.4 ", "1.2.3", "1.2.3.4.5", "1..2.3", "a.b.c.d", "1.2.3.4/8",
+           "192.168.1.0/24", "192.168.1.5/24", "192.168.0.0/16", "128.0.0.0/1", "128.0.0.0/2", "10.0.0.0/7", "172.16.0.0/12",
+           "1.2.3.4/0", "1.2.3.4/32", "1.2.3.4/31", "1.2.3.4/x", "1.2.3.4//8", "1.2.3.4/8/8", "224", "224/4", "192.168", "192.168/16",
+           "::", "::1", "::1/128", "1::", "1:2:3:4:5:6:7:8", "1:2:3:4:5:6:7:8/64", "::ffff:1.2.3.4", "::ffff:1.2.3.4/96",
+           "::1.2.3.4", "1:2:3:4:5:6:1.2.3.4", "1::2::3", "12345::", "g::", ":::", "1:2:3:4:5:6:7", "::/0", "ffff::/16",
+           "2001:db8::/32", "2001:db8::1/129", "2001:db8::1", "2001:db8:0:0:0:0:0:1", "2001:0db8:0000:0000:0000:0000:0000:0001",
+           "2001:db8::", "fe80::1%eth0", "FE80::ABCD", "1:0:0:2:0:0:0:3", "1:0:0:0:2:0:0:3", "0:0:0:0:0:0:0:1", "1:2:3:4:5:6:7:0",
+           "0:2:3:4:5:6:7:8", "1:2:3:4:5:6:7::", "::2:3:4:5:6:7:8", "1::8", "1:2::7:8", "::ffff:0:0", "64:ff9b::1.2.3.4", "::ffff:255.255.255.255",
+           "::1/0", "8000::/1", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128", "ffff:ffff::/32", "::ffff:1.2.3", "::1.2.3.4.5", "1:2:3:4:5:6:7:8:9",
+           "", " ", "/", "/8", "abc", "1.2.3.4/08", "1.2.3.4/008", "::1/", "::1/-1", "[::1]", "1.2.3.4\n"]
+    for _ in range(120):
+        a = ".".join(str(random.randint(0, 255)) for _ in range(4))
+        out.append(a + random.choice(["", "", "/" + str(random.randint(0, 32))]))
+    for _ in range(120):
+        w = ["%x" % random.choice([0, 0, 0, 1, random.randint(0, 65535)]) for _ in range(8)]
+        t = ":".join(w)
+        if random.random() < 0.5:
+            i = random.randint(0, 7)
+            j = random.randint(i + 1, 8)
+            t = ":".join(w[:i]) + "::" + ":".join(w[j:])
+        out.append(t + random.choice(["", "", "/" + str(random.randint(0, 128))]))
+    for _ in range(60):
+        # cidr-style: an address with the host bits cleared, and with them not
+        n = random.randint(0, 32)
+        v = random.getrandbits(32)
+        if random.random() < 0.7:
+            v &= ~((1 << (32 - n)) - 1) & 0xFFFFFFFF
+        out.append(".".join(str((v >> s) & 255) for s in (24, 16, 8, 0)) + "/" + str(n))
+        n = random.randint(0, 128)
+        v = random.getrandbits(128)
+        if random.random() < 0.7:
+            v &= ~((1 << (128 - n)) - 1) & ((1 << 128) - 1)
+        out.append(":".join("%x" % ((v >> (16 * k)) & 0xFFFF) for k in range(7, -1, -1)) + "/" + str(n))
+    return out
+
+
+OPS["inet.parse"] = ("inet", inet_inputs)
+OPS["cidr.parse"] = ("cidr", inet_inputs)
+
+
 def run(psql_args, sql):
-    r = subprocess.run(["psql", "-X", "-A", "-t", "-q", "-v", "VERBOSITY=sqlstate"] + psql_args + ["-c", sql],
+    r = subprocess.run(["psql", "-X", "-A", "-t", "-q", "-F", ",", "-v", "VERBOSITY=sqlstate"] + psql_args + ["-c", sql],
                        capture_output=True, text=True)
     if r.returncode == 0:
         return r.stdout.strip()
     err = r.stderr
     if "22P02" in err:
+        if "cidr" in sql:
+            # a cidr with host bits is the same SQLSTATE: tell it by its message
+            r2 = subprocess.run(["psql", "-X", "-A", "-t", "-q"] + psql_args + ["-c", sql], capture_output=True, text=True)
+            if "invalid cidr value" in r2.stderr:
+                return "E RANGE"
         return "E INVALID"
     if "22003" in err:
         return "E RANGE"
@@ -91,6 +141,10 @@ def main():
         for text in gen():
             lit = text.replace("'", "''")
             sql = "select E'%s'::%s" % (lit.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t"), sqltype)
+            if sqltype == "inet":
+                sql = "select a, host(a), text(a), abbrev(a) from (select E'%s'::inet a) t" % lit.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+            elif sqltype == "cidr":
+                sql = "select a, text(a), abbrev(a) from (select E'%s'::cidr a) t" % lit.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
             res = run(args, sql)
             tok = text.encode().hex() or "-"
             print("%s %s => %s" % (name, tok, res))

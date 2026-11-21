@@ -4496,6 +4496,8 @@ done
 # 8. Bit strings of two lengths in a bit operation, a digit that is none, a
 #    length that does not match, a negative substring length, an index outside
 #    the string, and a string too long for an integer.
+# 9. Bad inet and cidr text, values of two families in an operation, an
+#    address past the end of its range, and a mask length too long.
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4613,7 +4615,18 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "set_bit(B'101', -1, 1)|bit index -1 out of valid range (0..2)" \
   "set_bit(B'101', 0, 2)|new bit must be 0 or 1" \
   "B'111111111111111111111111111111111'::int4|integer out of range" \
-  "B'11111111111111111111111111111111111111111111111111111111111111111'::int8|bigint out of range"; do
+  "B'11111111111111111111111111111111111111111111111111111111111111111'::int8|bigint out of range" \
+  "'1.2.3'::inet|invalid input syntax for type inet" \
+  "'1.2.3.4/33'::inet|invalid input syntax for type inet" \
+  "'::1/129'::inet|invalid input syntax for type inet" \
+  "'1.2.3.4/24'::cidr|invalid cidr value" \
+  "inet_merge('1.2.3.4', '::1')|cannot merge addresses from different families" \
+  "'1.2.3.4'::inet & '::1'::inet|cannot AND inet values of different sizes" \
+  "'1.2.3.4'::inet - '::1'::inet|cannot subtract inet values of different sizes" \
+  "'255.255.255.255'::inet + 1|result is out of range" \
+  "'0.0.0.0'::inet - 1|result is out of range" \
+  "'::'::inet - '8000::'::inet|result is out of range" \
+  "set_masklen('1.2.3.4'::inet, 33)|invalid mask length: 33"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"
 done

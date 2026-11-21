@@ -456,6 +456,25 @@ copied from PostgreSQL keeps its copyright notice
      read before the compare of the bytes. Now the common case
      is in line in `ty_bits.h`, the copies go a byte at a time,
      and `ty_bits_cmp_bytes` takes pointers to the lengths.
+   - **inet and cidr moved (2026-11-21), unattended.**
+     `ty_inet.h`: the order, the containment tests, `host`,
+     `network`, `broadcast`, `netmask`, `hostmask`, `merge`,
+     `~`, `&`, `|`, `+` and `-`, the cidr check, and the hash.
+     The ISC text code (`inet_net_pton.c`, `inet_net_ntop.c`,
+     `inet_cidr_ntop.c`) moved from digres to ty with its
+     notices; digres's copies are gone. The tests: known
+     answers from the old digres for about 450 texts, as inet
+     and as cidr; vectors from a Python reference;
+     `dg/test/select_inet.sql` prints the same, byte for byte,
+     on the digres before the move. Left in digres: `recv`,
+     `send`, the sort support and abbreviated keys, the planner
+     support, and the selectivity functions.
+     Measured by callgrind (old, new): a sort of inet -1.06%;
+     a group by -1.39%; host, text and abbrev -49.48%;
+     containment and `+` -2.92%. The first version was +21.74%
+     on the text: digres's `sprintf` is PostgreSQL's, and
+     glibc's, which ty called, is slower; ty now writes the
+     numbers itself.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,
