@@ -1702,17 +1702,6 @@ int ty_interval_parse(const char *str, int range, int intervalstyle,
   return 0;
 }
 
-/* The code of a unit word, if it is one: see ty_datetime.h. */
-int ty_datetime_unit(const char *lowtoken, int *code) {
-  int val = 0;
-
-  if (DecodeUnits(0, lowtoken, &val) != UNITS) {
-    return 0;
-  }
-  *code = val;
-  return 1;
-}
-
 /*
  * The words that extract is nearly always asked with, with what the tables of
  * words say of them (the unit tests check it). A word that is not here goes
@@ -1767,6 +1756,17 @@ static int common_unit(const char *w, int *code) {
     break;
   }
   return 0;
+}
+
+/* The code of a unit word, if it is one: see ty_datetime.h. */
+int ty_datetime_unit(const char *lowtoken, int *code) {
+  int val = 0;
+
+  if (DecodeUnits(0, lowtoken, &val) != UNITS) {
+    return 0;
+  }
+  *code = val;
+  return 1;
 }
 
 /* The kind of a word for extract: see ty_datetime.h. */

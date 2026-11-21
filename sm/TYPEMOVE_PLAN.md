@@ -687,8 +687,11 @@ copied from PostgreSQL keeps its copyright notice
      were not remeasured by function; their query totals were
      +1.5% to +2.7% against the old binary, which includes the
      earlier moves of `interval * double` and
-     `timestamp + interval`. Measure these again before a
-     release.
+     `timestamp + interval`. Measured again on tables, so the
+     query holds no earlier-moved operator: `date_trunc` of a
+     timestamp -0.1%, `age` -1.6%, the cast to timestamp(p)
+     +0.07%, to interval(p) +0.64%, `date_trunc` of an interval
+     +0.90% (after its cases fell through in a switch).
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

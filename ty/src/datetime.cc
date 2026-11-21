@@ -853,47 +853,35 @@ int ty_interval_trunc(int code, const ty_interval_t *iv, ty_interval_t *out) {
           min = tm.min, sec = tm.sec, usec = tm.usec;
 
   switch (code) {
+  /* each case cuts its field, and falls through to the smaller ones */
   case MILLENNIUM:
+    year = (year / 1000) * 1000;
+    [[fallthrough]];
   case CENTURY:
+    year = (year / 100) * 100;
+    [[fallthrough]];
   case DECADE:
+    year = (year / 10) * 10;
+    [[fallthrough]];
   case YEAR:
+    mon = 0;
+    [[fallthrough]];
   case QUARTER:
+    mon = 3 * (mon / 3);
+    [[fallthrough]];
   case MONTH:
+    mday = 0;
+    [[fallthrough]];
   case DAY:
+    hour = 0;
+    [[fallthrough]];
   case HOUR:
+    min = 0;
+    [[fallthrough]];
   case MINUTE:
+    sec = 0;
+    [[fallthrough]];
   case SECOND:
-    /* each case cuts its field, and goes on to the smaller ones */
-    if (code == MILLENNIUM) {
-      year = (year / 1000) * 1000;
-    }
-    if (code == MILLENNIUM || code == CENTURY) {
-      year = (year / 100) * 100;
-    }
-    if (code == MILLENNIUM || code == CENTURY || code == DECADE) {
-      year = (year / 10) * 10;
-    }
-    if (code == MILLENNIUM || code == CENTURY || code == DECADE ||
-        code == YEAR) {
-      mon = 0;
-    }
-    if (code == MILLENNIUM || code == CENTURY || code == DECADE ||
-        code == YEAR || code == QUARTER) {
-      mon = 3 * (mon / 3);
-    }
-    if (code == MILLENNIUM || code == CENTURY || code == DECADE ||
-        code == YEAR || code == QUARTER || code == MONTH) {
-      mday = 0;
-    }
-    if (code != HOUR && code != MINUTE && code != SECOND) {
-      hour = 0;
-    }
-    if (code != MINUTE && code != SECOND) {
-      min = 0;
-    }
-    if (code != SECOND) {
-      sec = 0;
-    }
     usec = 0;
     break;
   case MILLISEC:
