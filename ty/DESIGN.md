@@ -603,4 +603,33 @@ money value were wrong in the old digres (a signed overflow,
 which the compiler used): ty gives "Minus ninety two quadrillion
 ...".
 
+## 18. interval
+
+`ty_interval.h` holds the arithmetic of interval: a span of
+months, days and microseconds, in PostgreSQL's layout (`int64`
+time, `int32` day, `int32` month). The months, the days and the
+microseconds are kept apart, as a month has no fixed number of
+days and a day no fixed number of hours.
+
+The functions are the order (the span in 128 bits, with a month
+of 30 days and a day of 24 hours, so that it cannot overflow),
+the sign, the hash, `-`, `+` and `-` of two values, `*` and `/`
+by a float (the fraction of a month goes to days, and the
+fraction of a day to microseconds, as PostgreSQL does), and
+`justify_hours`, `justify_days` and `justify_interval`. Minus
+infinity and plus infinity are the values with the smallest and
+the largest value in all three fields; the cases of an operand
+that is infinite are PostgreSQL's.
+
+The text in and out depend on `DateStyle` and `IntervalStyle` and
+are still in digres, as are `extract`, `date_trunc`, `age` and
+the arithmetic with a date or a timestamp.
+
+The tests: the vectors, from Python integers for the order and
+the sum, and from a port of the steps of PostgreSQL's code in
+Python floats for the product, the quotient and the justify
+functions (about 4,300); `test/test_interval.cc`; and
+`dg/test/select_interval_ops.sql`, which prints the same as the
+digres before the move.
+
 

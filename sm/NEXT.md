@@ -243,8 +243,10 @@ are the catalog tables psql reads
        (`ty_bits.h`), inet and cidr (`ty_inet.h`), and tid,
        pg_lsn and "char" (`ty_small.h`), and text for the C
        collation, with varchar, bpchar and name (`ty_text.h`).
-       and money (`ty_money.h`). **Left: date, time and
-       interval, the case functions, and the rest.**
+       money (`ty_money.h`), and the arithmetic of interval
+       (`ty_interval.h`). **Left: date, time and timestamp,
+       the text of interval, the case functions, and the
+       rest.**
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.

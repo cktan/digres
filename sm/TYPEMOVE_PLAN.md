@@ -541,6 +541,21 @@ copied from PostgreSQL keeps its copyright notice
      -16.55%; text in +0.74%. The first version was +14.0% on
      the text out: glibc's `snprintf` is slower than
      PostgreSQL's.
+   - **interval arithmetic moved (2026-11-21), unattended.**
+     `ty_interval.h`: the order, the sign, the hash, `-`, `+`
+     and `-` of two values, `*` and `/` by a float, and the
+     three justify functions, with the infinities. Left in
+     digres: the text (it reads `DateStyle` and
+     `IntervalStyle`), `extract`, `date_trunc`, `age`, the
+     typmod, and the arithmetic with dates and timestamps. The
+     tests: about 4,300 vectors, from Python integers and a port
+     of PostgreSQL's steps in Python floats; `test_interval.cc`;
+     and `dg/test/select_interval_ops.sql`, which prints the
+     same as the digres before the move. Measured by callgrind
+     (old, new): a sort +0.13%; `sum` and `max` +0.93%; a group
+     by -1.03%; `justify_interval` +0.57%. The first version
+     was +2.97% on the sort: a product of 128 by 64 bits, where
+     64 by 64 is enough.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

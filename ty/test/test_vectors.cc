@@ -24,6 +24,7 @@
 #include "ty_float.h"
 #include "ty_hash.h"
 #include "ty_inet.h"
+#include "ty_interval.h"
 #include "ty_money.h"
 #include "ty_small.h"
 #include "ty_text.h"
@@ -874,6 +875,79 @@ bool run_money(const vec_t &v) {
     return false;
   }
   check_int(v, rc, r);
+  return true;
+}
+
+/* An interval token "months:days:microseconds". */
+ty_interval_t iv_of(const std::string &tok) {
+  ty_interval_t a;
+  long long m, d, t;
+
+  REQUIRE(3 == sscanf(tok.c_str(), "%lld:%lld:%lld", &m, &d, &t));
+  a.month = (int32_t)m;
+  a.day = (int32_t)d;
+  a.time = t;
+  return a;
+}
+
+/* The token of an interval. */
+std::string iv_token(const ty_interval_t &a) {
+  char buf[96];
+
+  snprintf(buf, sizeof buf, "%d:%d:%lld", a.month, a.day, (long long)a.time);
+  return buf;
+}
+
+/* Run one interval vector. */
+bool run_interval(const vec_t &v) {
+  const std::string &op = v.op;
+
+  if (op.compare(0, 3, "iv.") != 0) {
+    return false;
+  }
+  const std::string name = op.substr(3);
+  ty_interval_t a = iv_of(v.args[0]), b, r;
+  int rc = 0;
+
+  memset(&r, 0, sizeof r);
+  INFO(v.line);
+  if (name == "sign") {
+    CHECK(std::stoi(v.res[0]) == ty_interval_sign(&a));
+    return true;
+  }
+  if (name == "cmp") {
+    b = iv_of(v.args[1]);
+    int c = ty_interval_cmp(&a, &b);
+    CHECK(std::stoi(v.res[0]) == (c > 0) - (c < 0));
+    return true;
+  }
+  if (name == "add" || name == "sub") {
+    b = iv_of(v.args[1]);
+    rc = name == "add" ? ty_interval_add(&a, &b, &r)
+                       : ty_interval_sub(&a, &b, &r);
+  } else if (name == "mul" || name == "div") {
+    double f = std::stod(v.args[1]);
+
+    rc =
+        name == "mul" ? ty_interval_mul(&a, f, &r) : ty_interval_div(&a, f, &r);
+  } else if (name == "neg") {
+    rc = ty_interval_neg(&a, &r);
+  } else if (name == "justify_hours") {
+    rc = ty_interval_justify_hours(&a, &r);
+  } else if (name == "justify_days") {
+    rc = ty_interval_justify_days(&a, &r);
+  } else if (name == "justify") {
+    rc = ty_interval_justify(&a, &r);
+  } else {
+    return false;
+  }
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    CHECK(errnum_of(v.res[1]) == ty_errnum());
+  } else {
+    REQUIRE(0 == rc);
+    CHECK(v.res[0] == iv_token(r));
+  }
   return true;
 }
 
@@ -1796,11 +1870,11 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_money(v) || run_bpchar(v) || run_text(v) || run_inet(v) ||
-                 run_bits(v) || run_known(v) || run_float_text(v) ||
-                 run_float(v) || run_hash(v) || run_bytea(v) ||
-                 run_int_convert(v) || run64(v) || run128(v) || run_i16(v) ||
-                 run_i32(v) || run_i64(v);
+    bool known = run_interval(v) || run_money(v) || run_bpchar(v) ||
+                 run_text(v) || run_inet(v) || run_bits(v) || run_known(v) ||
+                 run_float_text(v) || run_float(v) || run_hash(v) ||
+                 run_bytea(v) || run_int_convert(v) || run64(v) || run128(v) ||
+                 run_i16(v) || run_i32(v) || run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

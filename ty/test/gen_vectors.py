@@ -416,6 +416,7 @@ def main():
     gen_text()
     gen_like()
     gen_money()
+    gen_interval()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -2350,6 +2351,234 @@ def gen_money():
                 emit("money.div_f64", (a, repr(f)), res)
             else:
                 emit("money.div_f64", (a, repr(f)), ("E", "DIVZERO"))
+
+
+I32MIN, I32MAX = -2 ** 31, 2 ** 31 - 1
+
+
+def ivtok(m, d, t):
+    """An interval as a token: months, days, microseconds."""
+    return "%d:%d:%d" % (m, d, t)
+
+
+def iv_nobegin():
+    return (I32MIN, I32MIN, I64MIN)
+
+
+def iv_noend():
+    return (I32MAX, I32MAX, I64MAX)
+
+
+def iv_inf(v):
+    return v == iv_nobegin() or v == iv_noend()
+
+
+def iv_values():
+    out = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (-1, 0, 0), (0, -1, 0), (0, 0, -1), (1, 1, 1), (-1, -1, -1),
+           (1, -1, 1), (0, 29, 86399999999), (0, 30, 0), (0, -30, 0), (13, 45, 90000000000), (-13, -45, -90000000000),
+           (0, 1, -1), (0, -1, 1), (1, 0, -1), (-1, 0, 1), (0, 0, 86400000000), (0, 0, -86400000000),
+           (I32MAX, 0, 0), (I32MIN + 1, 0, 0), (0, I32MAX, 0), (0, I32MIN + 1, 0), (0, 0, I64MAX), (0, 0, I64MIN + 1),
+           (I32MAX - 1, I32MAX - 1, I64MAX - 1), (I32MIN + 1, I32MIN + 1, I64MIN + 1), (0, 0, I64MAX - 1),
+           iv_nobegin(), iv_noend(), (I32MAX, I32MAX, 0), (0, I32MIN, 0), (5, 0, I64MIN), (0, 5, I64MAX)]
+    for _ in range(40):
+        out.append((random.choice([0, random.randint(-100, 100), random.randint(I32MIN, I32MAX)]),
+                    random.choice([0, random.randint(-100, 100), random.randint(I32MIN, I32MAX)]),
+                    random.choice([0, random.randint(-10 ** 11, 10 ** 11), random.randint(I64MIN, I64MAX)])))
+    return out
+
+
+def iv_span(v):
+    return v[2] + (v[0] * 30 + v[1]) * 86400000000
+
+
+def iv_fit(v):
+    """A result is out of range if a field passes its type, or it has
+    all three at an end (that is infinity)."""
+    return I32MIN <= v[0] <= I32MAX and I32MIN <= v[1] <= I32MAX and I64MIN <= v[2] <= I64MAX and not iv_inf(v)
+
+
+def tsround(j):
+    return round(j * 1000000.0) / 1000000.0
+
+
+def iv_scale(v, f, mul):
+    """The finite part of interval_mul and interval_div, from the same
+    steps in Python's float arithmetic."""
+    sc = (lambda x: x * f) if mul else (lambda x: x / f)
+    import math
+    r = scale = None
+    rm = sc(float(v[0]))
+    if math.isnan(rm) or not (-2147483648.0 <= rm < 2147483648.0):
+        return None
+    rm = int(rm)
+    rd = sc(float(v[1]))
+    if math.isnan(rd) or not (-2147483648.0 <= rd < 2147483648.0):
+        return None
+    rd = int(rd)
+    mrd = tsround((sc(float(v[0])) - rm) * 30)
+    secr = tsround((sc(float(v[1])) - rd + mrd - int(mrd)) * 86400.0)
+    if abs(secr) >= 86400.0:
+        rd += int(secr / 86400.0)
+        if not (I32MIN <= rd <= I32MAX):
+            return None
+        secr -= int(secr / 86400.0) * 86400.0
+    rd += int(mrd)
+    if not (I32MIN <= rd <= I32MAX):
+        return None
+    rt = sc(float(v[2])) + secr * 1000000.0
+    if math.isnan(rt) or math.isinf(rt):
+        return None
+    rt = round(rt)
+    if not (-9223372036854775808 <= rt < 9223372036854775808):
+        return None
+    res = (rm, rd, int(rt))
+    return None if iv_inf(res) else res
+
+
+def gen_interval():
+    """The vectors of interval: the order and the sum from Python integers,
+    the scaling and the justify functions from a port of PostgreSQL's steps."""
+    import math
+    vals = iv_values()
+    for a in vals:
+        emit("iv.sign", (ivtok(*a),), (iv_span(a) > 0) - (iv_span(a) < 0))
+        t = iv_span(a) & (2 ** 64 - 1)
+        for b in random.sample(vals, 6):
+            emit("iv.cmp", (ivtok(*a), ivtok(*b)), (iv_span(a) > iv_span(b)) - (iv_span(a) < iv_span(b)))
+            # add
+            if a == iv_nobegin():
+                res = ("E", "RANGE") if b == iv_noend() else iv_nobegin()
+            elif a == iv_noend():
+                res = ("E", "RANGE") if b == iv_nobegin() else iv_noend()
+            elif iv_inf(b):
+                res = b
+            else:
+                r = (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+                res = r if iv_fit(r) else ("E", "RANGE")
+            emit("iv.add", (ivtok(*a), ivtok(*b)), ivtok(*res) if isinstance(res, tuple) and res[0] != "E" else res)
+            # sub
+            if a == iv_nobegin():
+                res = ("E", "RANGE") if b == iv_nobegin() else iv_nobegin()
+            elif a == iv_noend():
+                res = ("E", "RANGE") if b == iv_noend() else iv_noend()
+            elif b == iv_nobegin():
+                res = iv_noend()
+            elif b == iv_noend():
+                res = iv_nobegin()
+            else:
+                r = (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+                res = r if iv_fit(r) else ("E", "RANGE")
+            emit("iv.sub", (ivtok(*a), ivtok(*b)), ivtok(*res) if isinstance(res, tuple) and res[0] != "E" else res)
+        # neg
+        if a == iv_nobegin():
+            res = iv_noend()
+        elif a == iv_noend():
+            res = iv_nobegin()
+        else:
+            r = (-a[0], -a[1], -a[2])
+            res = r if iv_fit(r) else ("E", "RANGE")
+        emit("iv.neg", (ivtok(*a),), ivtok(*res) if res[0] != "E" else res)
+        # mul and div
+        for f in (0.0, 1.0, -1.0, 2.0, 0.5, -0.5, 1.5, 3.0, 0.1, 7.0, 1e10, 1e-10, 12.5, float("inf"), float("-inf"), float("nan"), -3.25):
+            for op in ("mul", "div"):
+                if op == "div" and f == 0.0:
+                    emit("iv.div", (ivtok(*a), repr(f)), ("E", "DIVZERO"))
+                    continue
+                if math.isnan(f):
+                    res = ("E", "RANGE")
+                elif iv_inf(a):
+                    if (op == "mul" and f == 0.0) or (op == "div" and math.isinf(f)):
+                        res = ("E", "RANGE")
+                    elif f < 0.0:
+                        res = iv_noend() if a == iv_nobegin() else iv_nobegin()
+                    else:
+                        res = a
+                elif op == "mul" and math.isinf(f):
+                    sg = (iv_span(a) > 0) - (iv_span(a) < 0)
+                    res = ("E", "RANGE") if sg == 0 else (iv_nobegin() if f * sg < 0 else iv_noend())
+                else:
+                    res = iv_scale(a, f, op == "mul")
+                    if res is None:
+                        res = ("E", "RANGE")
+                emit("iv." + op, (ivtok(*a), repr(f)), ivtok(*res) if res[0] != "E" else res)
+        # justify
+        if iv_inf(a):
+            for nm in ("justify_hours", "justify_days", "justify"):
+                emit("iv." + nm, (ivtok(*a),), ivtok(*a))
+            continue
+
+        def tmod(t):
+            q = abs(t) // 86400000000 * (1 if t >= 0 else -1)
+            return q, t - q * 86400000000
+        m, d, t = a
+        # justify_hours
+        q, t2 = tmod(t)
+        d2 = d + q
+        res = None
+        if not (I32MIN <= d2 <= I32MAX):
+            res = ("E", "RANGE")
+        else:
+            if d2 > 0 and t2 < 0:
+                t2 += 86400000000
+                d2 -= 1
+            elif d2 < 0 and t2 > 0:
+                t2 -= 86400000000
+                d2 += 1
+            res = (m, d2, t2)
+        emit("iv.justify_hours", (ivtok(*a),), ivtok(*res) if res[0] != "E" else res)
+        # justify_days
+        wm = int(d / 30)
+        d2 = d - wm * 30
+        m2 = m + wm
+        if not (I32MIN <= m2 <= I32MAX):
+            res = ("E", "RANGE")
+        else:
+            if m2 > 0 and d2 < 0:
+                d2 += 30
+                m2 -= 1
+            elif m2 < 0 and d2 > 0:
+                d2 -= 30
+                m2 += 1
+            res = (m2, d2, t)
+        emit("iv.justify_days", (ivtok(*a),), ivtok(*res) if res[0] != "E" else res)
+        # justify_interval
+        m2, d2, t2 = m, d, t
+        bad = False
+        if (d2 > 0 and t2 > 0) or (d2 < 0 and t2 < 0):
+            wm = int(d2 / 30)
+            d2 -= wm * 30
+            m2 += wm
+            if not (I32MIN <= m2 <= I32MAX):
+                bad = True
+        if not bad:
+            q, t2 = tmod(t2)
+            d2 = d2 + q
+            d2 = ((d2 + 2 ** 31) % 2 ** 32) - 2 ** 31  # cut to an int32
+            wm = int(d2 / 30)
+            d2 -= wm * 30
+            m2 += wm
+            if not (I32MIN <= m2 <= I32MAX):
+                bad = True
+        if bad:
+            res = ("E", "RANGE")
+        else:
+            if m2 > 0 and (d2 < 0 or (d2 == 0 and t2 < 0)):
+                d2 += 30
+                m2 -= 1
+            elif m2 < 0 and (d2 > 0 or (d2 == 0 and t2 > 0)):
+                d2 -= 30
+                m2 += 1
+            if d2 > 0 and t2 < 0:
+                t2 += 86400000000
+                d2 -= 1
+            elif d2 < 0 and t2 > 0:
+                t2 -= 86400000000
+                d2 += 1
+            res = (m2, d2, t2)
+        emit("iv.justify", (ivtok(*a),), ivtok(*res) if res[0] != "E" else res)
+    for a in vals:
+        for seed in (0,):
+            pass
 
 
 def gen_ints():

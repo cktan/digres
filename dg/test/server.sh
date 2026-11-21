@@ -4503,6 +4503,7 @@ done
 #     the limit, and a character number that is none.
 # 12. LIKE with a backslash at the end of the pattern, and a bad ESCAPE.
 # 13. money out of range, a division by zero, and bad money text.
+# 14. interval arithmetic out of range, and a division by zero.
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4657,6 +4658,12 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\$92233720368547758.07'::money + '\$1'::money|money out of range" \
   "'\$92233720368547758.07'::money * 2|money out of range" \
   "'abc'::money|invalid input syntax for type money" \
+  "'infinity'::interval + '-infinity'::interval|interval out of range" \
+  "'1 day'::interval / 0|division by zero" \
+  "'1 day'::interval * 'nan'::float8|interval out of range" \
+  "'2147483647 months'::interval + '1 month'|interval out of range" \
+  "'2147483647 days'::interval * 2|interval out of range" \
+  "'infinity'::interval * 0|interval out of range" \
   "'\$92233720368547758.08'::money|is out of range for type money"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"

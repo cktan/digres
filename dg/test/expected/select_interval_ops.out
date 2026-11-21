@@ -1,0 +1,120 @@
+-- Verify the arithmetic of interval, which ty does (ty/DESIGN.md section 18):
+-- the order, the sum, the product, the quotient and the justify functions,
+-- including the infinities. (The text is DateStyle's, and stays in digres.)
+-- 1. The order: a month is 30 days, a day 24 hours.
+-- 2. + - * / and unary minus, and the infinities.
+-- 3. justify_hours, justify_days and justify_interval.
+-- 4. min, max, sum and avg, a sort, the hash and a group by.
+-- (Errors are server.sh's: a run stops at its first.)
+SELECT a, b, a < b AS lt, a = b AS eq, a > b AS gt, a <> b AS ne, interval_cmp(a, b) AS cmp FROM (VALUES ('1 month'::interval, '30 days'::interval), ('1 day', '24 hours'), ('1 month', '31 days'), ('-1 day', '1 hour'), ('0', '0 days'), ('1 year', '12 months'), ('1 year', '365 days'), ('infinity', '1000 years'), ('-infinity', '-1000 years'), ('infinity', 'infinity'), ('00:00:00.000001', '0')) v(a, b);
+        a        |      b      | lt | eq | gt | ne | cmp 
+-----------------+-------------+----+----+----+----+-----
+ 1 mon           | 30 days     | f  | t  | f  | f  |   0
+ 1 day           | 24:00:00    | f  | t  | f  | f  |   0
+ 1 mon           | 31 days     | t  | f  | f  | t  |  -1
+ -1 days         | 01:00:00    | t  | f  | f  | t  |  -1
+ 00:00:00        | 00:00:00    | f  | t  | f  | f  |   0
+ 1 year          | 1 year      | f  | t  | f  | f  |   0
+ 1 year          | 365 days    | t  | f  | f  | t  |  -1
+ infinity        | 1000 years  | f  | f  | t  | t  |   1
+ -infinity       | -1000 years | t  | f  | f  | t  |  -1
+ infinity        | infinity    | f  | t  | f  | f  |   0
+ 00:00:00.000001 | 00:00:00    | f  | f  | t  | t  |   1
+(11 rows)
+
+SELECT a, b, a + b AS pl, a - b AS mi, -a AS neg FROM (VALUES ('1 month 2 days 3 hours'::interval, '1 day 90 minutes'::interval), ('1 month', '-1 month'), ('10 days', '-20 days 5 hours'), ('infinity', '1 day'), ('1 day', 'infinity'), ('-infinity', '1 day'), ('0', '0'), ('2 years 3 months', '-1 year -2 months')) v(a, b);
+           a           |         b          |          pl           |          mi          |            neg            
+-----------------------+--------------------+-----------------------+----------------------+---------------------------
+ 1 mon 2 days 03:00:00 | 1 day 01:30:00     | 1 mon 3 days 04:30:00 | 1 mon 1 day 01:30:00 | -1 mons -2 days -03:00:00
+ 1 mon                 | -1 mons            | 00:00:00              | 2 mons               | -1 mons
+ 10 days               | -20 days +05:00:00 | -10 days +05:00:00    | 30 days -05:00:00    | -10 days
+ infinity              | 1 day              | infinity              | infinity             | -infinity
+ 1 day                 | infinity           | infinity              | -infinity            | -1 days
+ -infinity             | 1 day              | -infinity             | -infinity            | infinity
+ 00:00:00              | 00:00:00           | 00:00:00              | 00:00:00             | 00:00:00
+ 2 years 3 mons        | -1 years -2 mons   | 1 year 1 mon          | 3 years 5 mons       | -2 years -3 mons
+(8 rows)
+
+SELECT a, a * 2 AS m2, a * 0.5 AS mh, a * 1.5 AS m15, a * -1 AS mn, a / 2 AS d2, a / 3 AS d3, a / 0.5 AS dh, a / -4 AS dn, 2.5 * a AS lm FROM (VALUES ('1 month'::interval), ('1 day'), ('1 hour'), ('1 month 1 day 1 hour'), ('-3 days 7 hours'), ('1.5 months'), ('0'), ('100 years'), ('15 days'), ('00:00:00.000001')) v(a);
+          a           |           m2           |        mh         |          m15           |            mn             |        d2         |        d3         |           dh           |         dn         |           lm            
+----------------------+------------------------+-------------------+------------------------+---------------------------+-------------------+-------------------+------------------------+--------------------+-------------------------
+ 1 mon                | 2 mons                 | 15 days           | 1 mon 15 days          | -1 mons                   | 15 days           | 10 days           | 2 mons                 | -7 days -12:00:00  | 2 mons 15 days
+ 1 day                | 2 days                 | 12:00:00          | 1 day 12:00:00         | -1 days                   | 12:00:00          | 08:00:00          | 2 days                 | -06:00:00          | 2 days 12:00:00
+ 01:00:00             | 02:00:00               | 00:30:00          | 01:30:00               | -01:00:00                 | 00:30:00          | 00:20:00          | 02:00:00               | -00:15:00          | 02:30:00
+ 1 mon 1 day 01:00:00 | 2 mons 2 days 02:00:00 | 15 days 12:30:00  | 1 mon 16 days 13:30:00 | -1 mons -1 days -01:00:00 | 15 days 12:30:00  | 10 days 08:20:00  | 2 mons 2 days 02:00:00 | -7 days -18:15:00  | 2 mons 17 days 14:30:00
+ -3 days +07:00:00    | -6 days +14:00:00      | -1 days -08:30:00 | -4 days -01:30:00      | 3 days -07:00:00          | -1 days -08:30:00 | -1 days +02:20:00 | -6 days +14:00:00      | 16:15:00           | -7 days +05:30:00
+ 1 mon 15 days        | 2 mons 30 days         | 22 days 12:00:00  | 1 mon 37 days 12:00:00 | -1 mons -15 days          | 22 days 12:00:00  | 15 days           | 2 mons 30 days         | -11 days -06:00:00 | 2 mons 52 days 12:00:00
+ 00:00:00             | 00:00:00               | 00:00:00          | 00:00:00               | 00:00:00                  | 00:00:00          | 00:00:00          | 00:00:00               | 00:00:00           | 00:00:00
+ 100 years            | 200 years              | 50 years          | 150 years              | -100 years                | 50 years          | 33 years 4 mons   | 200 years              | -25 years          | 250 years
+ 15 days              | 30 days                | 7 days 12:00:00   | 22 days 12:00:00       | -15 days                  | 7 days 12:00:00   | 5 days            | 30 days                | -3 days -18:00:00  | 37 days 12:00:00
+ 00:00:00.000001      | 00:00:00.000002        | 00:00:00          | 00:00:00.000002        | -00:00:00.000001          | 00:00:00          | 00:00:00          | 00:00:00.000002        | 00:00:00           | 00:00:00.000002
+(10 rows)
+
+SELECT a, a * 'infinity'::float8 AS mi, a * '-infinity'::float8 AS mni, 'infinity'::interval * 2 AS i2, '-infinity'::interval * -2 AS i3, 'infinity'::interval / 2 AS id FROM (VALUES ('1 day'::interval), ('-1 day')) v(a);
+    a    |    mi     |    mni    |    i2    |    i3    |    id    
+---------+-----------+-----------+----------+----------+----------
+ 1 day   | infinity  | -infinity | infinity | infinity | infinity
+ -1 days | -infinity | infinity  | infinity | infinity | infinity
+(2 rows)
+
+SELECT a, justify_hours(a) AS jh, justify_days(a) AS jd, justify_interval(a) AS ji FROM (VALUES ('1 month 40 days 50 hours'::interval), ('-1 month 40 days 50 hours'), ('29 days 25 hours'), ('1 day -1 hour'), ('-1 day 1 hour'), ('1 month -1 day'), ('-1 month 1 day'), ('35 days'), ('-35 days'), ('100 hours'), ('-100 hours'), ('1 month 2 days -3 hours'), ('infinity'), ('0')) v(a);
+             a             |            jh             |           jd            |           ji            
+---------------------------+---------------------------+-------------------------+-------------------------
+ 1 mon 40 days 50:00:00    | 1 mon 42 days 02:00:00    | 2 mons 10 days 50:00:00 | 2 mons 12 days 02:00:00
+ -1 mons +40 days 50:00:00 | -1 mons +42 days 02:00:00 | 10 days 50:00:00        | 12 days 02:00:00
+ 29 days 25:00:00          | 30 days 01:00:00          | 29 days 25:00:00        | 1 mon 01:00:00
+ 1 day -01:00:00           | 23:00:00                  | 1 day -01:00:00         | 23:00:00
+ -1 days +01:00:00         | -23:00:00                 | -1 days +01:00:00       | -23:00:00
+ 1 mon -1 days             | 1 mon -1 days             | 29 days                 | 29 days
+ -1 mons +1 day            | -1 mons +1 day            | -29 days                | -29 days
+ 35 days                   | 35 days                   | 1 mon 5 days            | 1 mon 5 days
+ -35 days                  | -35 days                  | -1 mons -5 days         | -1 mons -5 days
+ 100:00:00                 | 4 days 04:00:00           | 100:00:00               | 4 days 04:00:00
+ -100:00:00                | -4 days -04:00:00         | -100:00:00              | -4 days -04:00:00
+ 1 mon 2 days -03:00:00    | 1 mon 1 day 21:00:00      | 1 mon 2 days -03:00:00  | 1 mon 1 day 21:00:00
+ infinity                  | infinity                  | infinity                | infinity
+ 00:00:00                  | 00:00:00                  | 00:00:00                | 00:00:00
+(14 rows)
+
+SELECT min(a) AS mn, max(a) AS mx, sum(a) AS sm, avg(a) AS av, count(DISTINCT a) AS dc FROM (VALUES ('1 month'::interval), ('2 days'), ('3 hours'), ('30 days'), ('-1 day')) v(a);
+   mn    |   mx    |           sm           |        av        | dc 
+---------+---------+------------------------+------------------+----
+ -1 days | 30 days | 1 mon 31 days 03:00:00 | 12 days 05:24:00 |  4
+(1 row)
+
+SELECT a FROM (VALUES ('1 month'::interval), ('2 days'), ('3 hours'), ('30 days'), ('-1 day'), ('0'), ('infinity'), ('-infinity'), ('720 hours')) v(a) ORDER BY a;
+     a     
+-----------
+ -infinity
+ -1 days
+ 00:00:00
+ 03:00:00
+ 2 days
+ 720:00:00
+ 30 days
+ 1 mon
+ infinity
+(9 rows)
+
+SELECT hashint8(1) IS NOT NULL AS ok, interval_hash('1 month') = interval_hash('30 days') AS h1, interval_hash('1 day') = interval_hash('24 hours') AS h2, interval_hash('1 day') = interval_hash('2 days') AS h3, interval_hash('1 month') AS h, interval_hash_extended('1 day', 5) AS hx;
+ ok | h1 | h2 | h3 |     h      |          hx          
+----+----+----+----+------------+----------------------
+ t  | t  | t  | f  | 1574789525 | -4720678035368750082
+(1 row)
+
+SELECT a, count(*) FROM (SELECT ((i % 5) || ' days')::interval a FROM generate_series(1, 100) i) x GROUP BY a ORDER BY a;
+    a     | count 
+----------+-------
+ 00:00:00 |    20
+ 1 day    |    20
+ 2 days   |    20
+ 3 days   |    20
+ 4 days   |    20
+(5 rows)
+
+SELECT count(*) FROM (SELECT (i || ' hours')::interval a FROM generate_series(1, 500) i) x JOIN (SELECT (i * 2 || ' hours')::interval b FROM generate_series(1, 500) i) y ON a = b;
+ count 
+-------
+   250
+(1 row)
+

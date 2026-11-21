@@ -42,6 +42,7 @@
 #include "utils/numeric.h"
 #include "utils/skipsupport.h"
 #include "utils/sortsupport.h"
+#include "ty_interval.h"
 
 /*
  * gcc's -ffast-math switch breaks routines that expect exact results from
@@ -2186,39 +2187,39 @@ Datum timestamptz_cmp_timestamp(PG_FUNCTION_ARGS) {
  * wider-than-int64 datatype for the linear representation, so use INT128.
  */
 
-static inline INT128 interval_cmp_value(const Interval *interval) {
-  INT128 span;
-  int64 days;
+/* The ty value of an Interval: the layouts are the same. */
+#define TY_IV(p) ((const ty_interval_t *)(p))
 
-  /*
-   * Combine the month and day fields into an integral number of days.
-   * Because the inputs are int32, int64 arithmetic suffices here.
-   */
-  days = interval->month * INT64CONST(30);
-  days += interval->day;
-
-  /* Widen time field to 128 bits */
-  span = int64_to_int128(interval->time);
-
-  /* Scale up days to microseconds, forming a 128-bit product */
-  int128_add_int64_mul_int64(&span, days, USECS_PER_DAY);
-
-  return span;
+/* Raise the error of a failed ty interval call. */
+static pg_noreturn void interval_raise(void) {
+  if (ty_errnum() == TY_ERR_DIVZERO)
+    ereport(ERROR,
+            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
+  ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                  errmsg("interval out of range")));
 }
+
+/* The sum and the difference of two finite intervals, for the aggregates. */
+static void finite_interval_pl(const Interval *span1, const Interval *span2,
+                               Interval *result) {
+  if (ty_interval_add(TY_IV(span1), TY_IV(span2), (ty_interval_t *)result))
+    interval_raise();
+}
+
+static void finite_interval_mi(const Interval *span1, const Interval *span2,
+                               Interval *result) {
+  if (ty_interval_sub(TY_IV(span1), TY_IV(span2), (ty_interval_t *)result))
+    interval_raise();
+}
+
 
 static int interval_cmp_internal(const Interval *interval1,
                                  const Interval *interval2) {
-  INT128 span1 = interval_cmp_value(interval1);
-  INT128 span2 = interval_cmp_value(interval2);
-
-  return int128_compare(span1, span2);
+  return ty_interval_cmp(TY_IV(interval1), TY_IV(interval2));
 }
 
 static int interval_sign(const Interval *interval) {
-  INT128 span = interval_cmp_value(interval);
-  INT128 zero = int64_to_int128(0);
-
-  return int128_compare(span, zero);
+  return ty_interval_sign(TY_IV(interval));
 }
 
 Datum interval_eq(PG_FUNCTION_ARGS) {
@@ -2279,30 +2280,15 @@ Datum interval_cmp(PG_FUNCTION_ARGS) {
  */
 Datum interval_hash(PG_FUNCTION_ARGS) {
   Interval *interval = PG_GETARG_INTERVAL_P(0);
-  INT128 span = interval_cmp_value(interval);
-  int64 span64;
 
-  /*
-   * Use only the least significant 64 bits for hashing.  The upper 64 bits
-   * seldom add any useful information, and besides we must do it like this
-   * for compatibility with hashes calculated before use of INT128 was
-   * introduced.
-   */
-  span64 = int128_to_int64(span);
-
-  return DirectFunctionCall1(hashint8, Int64GetDatumFast(span64));
+  return UInt32GetDatum(ty_interval_hash(TY_IV(interval)));
 }
 
 Datum interval_hash_extended(PG_FUNCTION_ARGS) {
   Interval *interval = PG_GETARG_INTERVAL_P(0);
-  INT128 span = interval_cmp_value(interval);
-  int64 span64;
 
-  /* Same approach as interval_hash */
-  span64 = int128_to_int64(span);
-
-  return DirectFunctionCall2(hashint8extended, Int64GetDatumFast(span64),
-                             PG_GETARG_DATUM(1));
+  return Int64GetDatum(
+      ty_interval_hash_extended(TY_IV(interval), PG_GETARG_INT64(1)));
 }
 
 /* overlaps_timestamp() --- implements the SQL OVERLAPS operator.
@@ -2531,61 +2517,10 @@ Datum timestamp_mi(PG_FUNCTION_ARGS) {
  */
 Datum interval_justify_interval(PG_FUNCTION_ARGS) {
   Interval *span = PG_GETARG_INTERVAL_P(0);
-  Interval *result;
-  TimeOffset wholeday;
-  int32 wholemonth;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  result = (Interval *)palloc(sizeof(Interval));
-  result->month = span->month;
-  result->day = span->day;
-  result->time = span->time;
-
-  /* do nothing for infinite intervals */
-  if (INTERVAL_NOT_FINITE(result))
-    PG_RETURN_INTERVAL_P(result);
-
-  /* pre-justify days if it might prevent overflow */
-  if ((result->day > 0 && result->time > 0) ||
-      (result->day < 0 && result->time < 0)) {
-    wholemonth = result->day / DAYS_PER_MONTH;
-    result->day -= wholemonth * DAYS_PER_MONTH;
-    if (pg_add_s32_overflow(result->month, wholemonth, &result->month))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-  }
-
-  /*
-   * Since TimeOffset is int64, abs(wholeday) can't exceed about 1.07e8.  If
-   * we pre-justified then abs(result->day) is less than DAYS_PER_MONTH, so
-   * this addition can't overflow.  If we didn't pre-justify, then day and
-   * time are of different signs, so it still can't overflow.
-   */
-  TMODULO(result->time, wholeday, USECS_PER_DAY);
-  result->day += wholeday;
-
-  wholemonth = result->day / DAYS_PER_MONTH;
-  result->day -= wholemonth * DAYS_PER_MONTH;
-  if (pg_add_s32_overflow(result->month, wholemonth, &result->month))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("interval out of range")));
-
-  if (result->month > 0 &&
-      (result->day < 0 || (result->day == 0 && result->time < 0))) {
-    result->day += DAYS_PER_MONTH;
-    result->month--;
-  } else if (result->month < 0 &&
-             (result->day > 0 || (result->day == 0 && result->time > 0))) {
-    result->day -= DAYS_PER_MONTH;
-    result->month++;
-  }
-
-  if (result->day > 0 && result->time < 0) {
-    result->time += USECS_PER_DAY;
-    result->day--;
-  } else if (result->day < 0 && result->time > 0) {
-    result->time -= USECS_PER_DAY;
-    result->day++;
-  }
+  if (ty_interval_justify(TY_IV(span), (ty_interval_t *)result))
+    interval_raise();
 
   PG_RETURN_INTERVAL_P(result);
 }
@@ -2600,30 +2535,10 @@ Datum interval_justify_interval(PG_FUNCTION_ARGS) {
  */
 Datum interval_justify_hours(PG_FUNCTION_ARGS) {
   Interval *span = PG_GETARG_INTERVAL_P(0);
-  Interval *result;
-  TimeOffset wholeday;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  result = (Interval *)palloc(sizeof(Interval));
-  result->month = span->month;
-  result->day = span->day;
-  result->time = span->time;
-
-  /* do nothing for infinite intervals */
-  if (INTERVAL_NOT_FINITE(result))
-    PG_RETURN_INTERVAL_P(result);
-
-  TMODULO(result->time, wholeday, USECS_PER_DAY);
-  if (pg_add_s32_overflow(result->day, wholeday, &result->day))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("interval out of range")));
-
-  if (result->day > 0 && result->time < 0) {
-    result->time += USECS_PER_DAY;
-    result->day--;
-  } else if (result->day < 0 && result->time > 0) {
-    result->time -= USECS_PER_DAY;
-    result->day++;
-  }
+  if (ty_interval_justify_hours(TY_IV(span), (ty_interval_t *)result))
+    interval_raise();
 
   PG_RETURN_INTERVAL_P(result);
 }
@@ -2636,31 +2551,10 @@ Datum interval_justify_hours(PG_FUNCTION_ARGS) {
  */
 Datum interval_justify_days(PG_FUNCTION_ARGS) {
   Interval *span = PG_GETARG_INTERVAL_P(0);
-  Interval *result;
-  int32 wholemonth;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  result = (Interval *)palloc(sizeof(Interval));
-  result->month = span->month;
-  result->day = span->day;
-  result->time = span->time;
-
-  /* do nothing for infinite intervals */
-  if (INTERVAL_NOT_FINITE(result))
-    PG_RETURN_INTERVAL_P(result);
-
-  wholemonth = result->day / DAYS_PER_MONTH;
-  result->day -= wholemonth * DAYS_PER_MONTH;
-  if (pg_add_s32_overflow(result->month, wholemonth, &result->month))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("interval out of range")));
-
-  if (result->month > 0 && result->day < 0) {
-    result->day += DAYS_PER_MONTH;
-    result->month--;
-  } else if (result->month < 0 && result->day > 0) {
-    result->day -= DAYS_PER_MONTH;
-    result->month++;
-  }
+  if (ty_interval_justify_days(TY_IV(span), (ty_interval_t *)result))
+    interval_raise();
 
   PG_RETURN_INTERVAL_P(result);
 }
@@ -2951,19 +2845,8 @@ Datum timestamptz_mi_interval_at_zone(PG_FUNCTION_ARGS) {
  * Negate an interval.
  */
 static void interval_um_internal(const Interval *interval, Interval *result) {
-  if (INTERVAL_IS_NOBEGIN(interval))
-    INTERVAL_NOEND(result);
-  else if (INTERVAL_IS_NOEND(interval))
-    INTERVAL_NOBEGIN(result);
-  else {
-    /* Negate each field, guarding against overflow */
-    if (pg_sub_s64_overflow(INT64CONST(0), interval->time, &result->time) ||
-        pg_sub_s32_overflow(0, interval->day, &result->day) ||
-        pg_sub_s32_overflow(0, interval->month, &result->month) ||
-        INTERVAL_NOT_FINITE(result))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-  }
+  if (ty_interval_neg(TY_IV(interval), (ty_interval_t *)result))
+    interval_raise();
 }
 
 Datum interval_um(PG_FUNCTION_ARGS) {
@@ -3001,96 +2884,26 @@ Datum interval_larger(PG_FUNCTION_ARGS) {
   PG_RETURN_INTERVAL_P(result);
 }
 
-static void finite_interval_pl(const Interval *span1, const Interval *span2,
-                               Interval *result) {
-  Assert(!INTERVAL_NOT_FINITE(span1));
-  Assert(!INTERVAL_NOT_FINITE(span2));
-
-  if (pg_add_s32_overflow(span1->month, span2->month, &result->month) ||
-      pg_add_s32_overflow(span1->day, span2->day, &result->day) ||
-      pg_add_s64_overflow(span1->time, span2->time, &result->time) ||
-      INTERVAL_NOT_FINITE(result))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("interval out of range")));
-}
 
 Datum interval_pl(PG_FUNCTION_ARGS) {
   Interval *span1 = PG_GETARG_INTERVAL_P(0);
   Interval *span2 = PG_GETARG_INTERVAL_P(1);
-  Interval *result;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  result = (Interval *)palloc(sizeof(Interval));
-
-  /*
-   * Handle infinities.
-   *
-   * We treat anything that amounts to "infinity - infinity" as an error,
-   * since the interval type has nothing equivalent to NaN.
-   */
-  if (INTERVAL_IS_NOBEGIN(span1)) {
-    if (INTERVAL_IS_NOEND(span2))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-    else
-      INTERVAL_NOBEGIN(result);
-  } else if (INTERVAL_IS_NOEND(span1)) {
-    if (INTERVAL_IS_NOBEGIN(span2))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-    else
-      INTERVAL_NOEND(result);
-  } else if (INTERVAL_NOT_FINITE(span2))
-    memcpy(result, span2, sizeof(Interval));
-  else
-    finite_interval_pl(span1, span2, result);
+  if (ty_interval_add(TY_IV(span1), TY_IV(span2), (ty_interval_t *)result))
+    interval_raise();
 
   PG_RETURN_INTERVAL_P(result);
 }
 
-static void finite_interval_mi(const Interval *span1, const Interval *span2,
-                               Interval *result) {
-  Assert(!INTERVAL_NOT_FINITE(span1));
-  Assert(!INTERVAL_NOT_FINITE(span2));
-
-  if (pg_sub_s32_overflow(span1->month, span2->month, &result->month) ||
-      pg_sub_s32_overflow(span1->day, span2->day, &result->day) ||
-      pg_sub_s64_overflow(span1->time, span2->time, &result->time) ||
-      INTERVAL_NOT_FINITE(result))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("interval out of range")));
-}
 
 Datum interval_mi(PG_FUNCTION_ARGS) {
   Interval *span1 = PG_GETARG_INTERVAL_P(0);
   Interval *span2 = PG_GETARG_INTERVAL_P(1);
-  Interval *result;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  result = (Interval *)palloc(sizeof(Interval));
-
-  /*
-   * Handle infinities.
-   *
-   * We treat anything that amounts to "infinity - infinity" as an error,
-   * since the interval type has nothing equivalent to NaN.
-   */
-  if (INTERVAL_IS_NOBEGIN(span1)) {
-    if (INTERVAL_IS_NOBEGIN(span2))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-    else
-      INTERVAL_NOBEGIN(result);
-  } else if (INTERVAL_IS_NOEND(span1)) {
-    if (INTERVAL_IS_NOEND(span2))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-    else
-      INTERVAL_NOEND(result);
-  } else if (INTERVAL_IS_NOBEGIN(span2))
-    INTERVAL_NOEND(result);
-  else if (INTERVAL_IS_NOEND(span2))
-    INTERVAL_NOBEGIN(result);
-  else
-    finite_interval_mi(span1, span2, result);
+  if (ty_interval_sub(TY_IV(span1), TY_IV(span2), (ty_interval_t *)result))
+    interval_raise();
 
   PG_RETURN_INTERVAL_P(result);
 }
@@ -3104,112 +2917,12 @@ Datum interval_mi(PG_FUNCTION_ARGS) {
 Datum interval_mul(PG_FUNCTION_ARGS) {
   Interval *span = PG_GETARG_INTERVAL_P(0);
   float8 factor = PG_GETARG_FLOAT8(1);
-  double month_remainder_days, sec_remainder, result_double;
-  int32 orig_month = span->month, orig_day = span->day;
-  Interval *result;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  result = (Interval *)palloc(sizeof(Interval));
-
-  /*
-   * Handle NaN and infinities.
-   *
-   * We treat "0 * infinity" and "infinity * 0" as errors, since the
-   * interval type has nothing equivalent to NaN.
-   */
-  if (isnan(factor))
-    goto out_of_range;
-
-  if (INTERVAL_NOT_FINITE(span)) {
-    if (factor == 0.0)
-      goto out_of_range;
-
-    if (factor < 0.0)
-      interval_um_internal(span, result);
-    else
-      memcpy(result, span, sizeof(Interval));
-
-    PG_RETURN_INTERVAL_P(result);
-  }
-  if (isinf(factor)) {
-    int isign = interval_sign(span);
-
-    if (isign == 0)
-      goto out_of_range;
-
-    if (factor * isign < 0)
-      INTERVAL_NOBEGIN(result);
-    else
-      INTERVAL_NOEND(result);
-
-    PG_RETURN_INTERVAL_P(result);
-  }
-
-  result_double = span->month * factor;
-  if (isnan(result_double) || !FLOAT8_FITS_IN_INT32(result_double))
-    goto out_of_range;
-  result->month = (int32)result_double;
-
-  result_double = span->day * factor;
-  if (isnan(result_double) || !FLOAT8_FITS_IN_INT32(result_double))
-    goto out_of_range;
-  result->day = (int32)result_double;
-
-  /*
-   * The above correctly handles the whole-number part of the month and day
-   * products, but we have to do something with any fractional part
-   * resulting when the factor is non-integral.  We cascade the fractions
-   * down to lower units using the conversion factors DAYS_PER_MONTH and
-   * SECS_PER_DAY.  Note we do NOT cascade up, since we are not forced to do
-   * so by the representation.  The user can choose to cascade up later,
-   * using justify_hours and/or justify_days.
-   */
-
-  /*
-   * Fractional months full days into days.
-   *
-   * Floating point calculation are inherently imprecise, so these
-   * calculations are crafted to produce the most reliable result possible.
-   * TSROUND() is needed to more accurately produce whole numbers where
-   * appropriate.
-   */
-  month_remainder_days = (orig_month * factor - result->month) * DAYS_PER_MONTH;
-  month_remainder_days = TSROUND(month_remainder_days);
-  sec_remainder = (orig_day * factor - result->day + month_remainder_days -
-                   (int)month_remainder_days) *
-                  SECS_PER_DAY;
-  sec_remainder = TSROUND(sec_remainder);
-
-  /*
-   * Might have 24:00:00 hours due to rounding, or >24 hours because of time
-   * cascade from months and days.  It might still be >24 if the combination
-   * of cascade and the seconds factor operation itself.
-   */
-  if (fabs(sec_remainder) >= SECS_PER_DAY) {
-    if (pg_add_s32_overflow(result->day, (int)(sec_remainder / SECS_PER_DAY),
-                            &result->day))
-      goto out_of_range;
-    sec_remainder -= (int)(sec_remainder / SECS_PER_DAY) * SECS_PER_DAY;
-  }
-
-  /* cascade units down */
-  if (pg_add_s32_overflow(result->day, (int32)month_remainder_days,
-                          &result->day))
-    goto out_of_range;
-  result_double = rint(span->time * factor + sec_remainder * USECS_PER_SEC);
-  if (isnan(result_double) || !FLOAT8_FITS_IN_INT64(result_double))
-    goto out_of_range;
-  result->time = (int64)result_double;
-
-  if (INTERVAL_NOT_FINITE(result))
-    goto out_of_range;
+  if (ty_interval_mul(TY_IV(span), factor, (ty_interval_t *)result))
+    interval_raise();
 
   PG_RETURN_INTERVAL_P(result);
-
-out_of_range:
-  ereport(ERROR, errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-          errmsg("interval out of range"));
-
-  PG_RETURN_NULL(); /* keep compiler quiet */
 }
 
 Datum mul_d_interval(PG_FUNCTION_ARGS) {
@@ -3223,83 +2936,12 @@ Datum mul_d_interval(PG_FUNCTION_ARGS) {
 Datum interval_div(PG_FUNCTION_ARGS) {
   Interval *span = PG_GETARG_INTERVAL_P(0);
   float8 factor = PG_GETARG_FLOAT8(1);
-  double month_remainder_days, sec_remainder, result_double;
-  int32 orig_month = span->month, orig_day = span->day;
-  Interval *result;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  result = (Interval *)palloc(sizeof(Interval));
-
-  if (factor == 0.0)
-    ereport(ERROR,
-            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
-
-  /*
-   * Handle NaN and infinities.
-   *
-   * We treat "infinity / infinity" as an error, since the interval type has
-   * nothing equivalent to NaN.  Otherwise, dividing by infinity is handled
-   * by the regular division code, causing all fields to be set to zero.
-   */
-  if (isnan(factor))
-    goto out_of_range;
-
-  if (INTERVAL_NOT_FINITE(span)) {
-    if (isinf(factor))
-      goto out_of_range;
-
-    if (factor < 0.0)
-      interval_um_internal(span, result);
-    else
-      memcpy(result, span, sizeof(Interval));
-
-    PG_RETURN_INTERVAL_P(result);
-  }
-
-  result_double = span->month / factor;
-  if (isnan(result_double) || !FLOAT8_FITS_IN_INT32(result_double))
-    goto out_of_range;
-  result->month = (int32)result_double;
-
-  result_double = span->day / factor;
-  if (isnan(result_double) || !FLOAT8_FITS_IN_INT32(result_double))
-    goto out_of_range;
-  result->day = (int32)result_double;
-
-  /*
-   * Fractional months full days into days.  See comment in interval_mul().
-   */
-  month_remainder_days = (orig_month / factor - result->month) * DAYS_PER_MONTH;
-  month_remainder_days = TSROUND(month_remainder_days);
-  sec_remainder = (orig_day / factor - result->day + month_remainder_days -
-                   (int)month_remainder_days) *
-                  SECS_PER_DAY;
-  sec_remainder = TSROUND(sec_remainder);
-  if (fabs(sec_remainder) >= SECS_PER_DAY) {
-    if (pg_add_s32_overflow(result->day, (int)(sec_remainder / SECS_PER_DAY),
-                            &result->day))
-      goto out_of_range;
-    sec_remainder -= (int)(sec_remainder / SECS_PER_DAY) * SECS_PER_DAY;
-  }
-
-  /* cascade units down */
-  if (pg_add_s32_overflow(result->day, (int32)month_remainder_days,
-                          &result->day))
-    goto out_of_range;
-  result_double = rint(span->time / factor + sec_remainder * USECS_PER_SEC);
-  if (isnan(result_double) || !FLOAT8_FITS_IN_INT64(result_double))
-    goto out_of_range;
-  result->time = (int64)result_double;
-
-  if (INTERVAL_NOT_FINITE(result))
-    goto out_of_range;
+  if (ty_interval_div(TY_IV(span), factor, (ty_interval_t *)result))
+    interval_raise();
 
   PG_RETURN_INTERVAL_P(result);
-
-out_of_range:
-  ereport(ERROR, errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-          errmsg("interval out of range"));
-
-  PG_RETURN_NULL(); /* keep compiler quiet */
 }
 
 /*
