@@ -4489,6 +4489,10 @@ done
 # 4. A bytea of more bytes than the integer has.
 # 5. encode and decode of a bad base64, hex or escape text, and a name of
 #    an encoding that does not exist.
+# 6. Float overflow, underflow, division by zero, a domain error, a text
+#    that is no float or is out of range, and a bad width_bucket.
+# 7. macaddr and macaddr8 text that is no address, an octet past 255, and a
+#    macaddr8 that does not fit a macaddr.
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4530,7 +4534,70 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "decode('a\\', 'escape')|invalid input syntax for type bytea" \
   "decode('a\\4', 'escape')|invalid input syntax for type bytea" \
   "encode('\\x61'::bytea, 'rot13')|unrecognized encoding: \"rot13\"" \
-  "decode('61', 'rot13')|unrecognized encoding: \"rot13\""; do
+  "decode('61', 'rot13')|unrecognized encoding: \"rot13\"" \
+  "1e308::float8 * 10::float8|value out of range: overflow" \
+  "1e-200::float8 * 1e-200::float8|value out of range: underflow" \
+  "1e308::float8 + 1e308::float8|value out of range: overflow" \
+  "1::float8 / 0::float8|division by zero" \
+  "1::float4 / 0::float4|division by zero" \
+  "3e38::float4 * 3e38::float4|value out of range: overflow" \
+  "sqrt(-1::float8)|cannot take square root of a negative number" \
+  "ln(0::float8)|cannot take logarithm of zero" \
+  "ln(-1::float8)|cannot take logarithm of a negative number" \
+  "log(0::float8)|cannot take logarithm of zero" \
+  "power(0::float8, -1)|zero raised to a negative power is undefined" \
+  "power(-8::float8, 0.5)|a negative number raised to a non-integer power yields a complex result" \
+  "exp(1000::float8)|value out of range: overflow" \
+  "exp(-1000::float8)|value out of range: underflow" \
+  "1e39::float8::float4|value out of range: overflow" \
+  "1e-50::float8::float4|value out of range: underflow" \
+  "40000::float8::int2|smallint out of range" \
+  "3e9::float8::int4|integer out of range" \
+  "'NaN'::float8::int4|integer out of range" \
+  "'abc'::float8|invalid input syntax for type double precision: \"abc\"" \
+  "''::float8|invalid input syntax for type double precision" \
+  "'1.5 x'::float4|invalid input syntax for type real: \"1.5 x\"" \
+  "'1e999'::float8|\"1e999\" is out of range for type double precision" \
+  "'1e39'::float4|\"1e39\" is out of range for type real" \
+  "'1e-400'::float8|\"1e-400\" is out of range for type double precision" \
+  "width_bucket(1::float8, 1, 1, 5)|lower bound cannot equal upper bound" \
+  "width_bucket(1::float8, 0, 10, 0)|count must be greater than zero" \
+  "width_bucket('NaN'::float8, 0, 10, 5)|operand, lower bound, and upper bound cannot be NaN" \
+  "width_bucket(1::float8, 0, 'Infinity', 5)|lower and upper bounds must be finite" \
+  "acos(2::float8)|input is out of range" \
+  "asin(-2::float8)|input is out of range" \
+  "sin('Infinity'::float8)|input is out of range" \
+  "cos('-Infinity'::float8)|input is out of range" \
+  "tan('Infinity'::float8)|input is out of range" \
+  "cot('Infinity'::float8)|input is out of range" \
+  "sind('Infinity'::float8)|input is out of range" \
+  "cosd('Infinity'::float8)|input is out of range" \
+  "tand('-Infinity'::float8)|input is out of range" \
+  "cotd('Infinity'::float8)|input is out of range" \
+  "acosd(1.5::float8)|input is out of range" \
+  "asind(-1.5::float8)|input is out of range" \
+  "acosh(0.5::float8)|input is out of range" \
+  "atanh(2::float8)|input is out of range" \
+  "gamma(0::float8)|value out of range: overflow" \
+  "gamma(-1::float8)|value out of range: overflow" \
+  "gamma(200::float8)|value out of range: overflow" \
+  "lgamma(0::float8)|value out of range: overflow" \
+  "degrees(1e308::float8 * 1)|value out of range: overflow" \
+  "(select sum(x) from (values (1e308::float8), (1e308::float8)) v(x))|value out of range: overflow" \
+  "(select var_pop(x) from (values (1e200::float8), (-1e200::float8), (1e200::float8)) v(x))|value out of range: overflow" \
+  "'08:00:2b:01:02'::macaddr|invalid input syntax for type macaddr: \"08:00:2b:01:02\"" \
+  "'08:00:2b:01:02:03:04'::macaddr|invalid input syntax for type macaddr" \
+  "'g8:00:2b:01:02:03'::macaddr|invalid input syntax for type macaddr" \
+  "'08:00:2b:01:02:03x'::macaddr|invalid input syntax for type macaddr" \
+  "''::macaddr|invalid input syntax for type macaddr" \
+  "'100:00:2b:01:02:03'::macaddr|invalid octet value in \"macaddr\" value" \
+  "'08:00:2b:01:02:03:04:05'::macaddr8::macaddr|macaddr8 data out of range to convert to macaddr" \
+  "'08:00:2b:01:02:03:04:05'::macaddr8::macaddr|Only addresses that have FF and FE" \
+  "'08:00:2b:01:02'::macaddr8|invalid input syntax for type macaddr8: \"08:00:2b:01:02\"" \
+  "'08:00:2b-01:02:03'::macaddr8|invalid input syntax for type macaddr8" \
+  "'08:00:2b:01:02:03:04:05:06'::macaddr8|invalid input syntax for type macaddr8" \
+  "'0g:00:2b:01:02:03'::macaddr8|invalid input syntax for type macaddr8" \
+  "''::macaddr8|invalid input syntax for type macaddr8"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"
 done

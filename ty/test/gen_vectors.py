@@ -407,6 +407,10 @@ def main():
     gen_hashes()
     gen_encodings()
     gen_int_text()
+    gen_floats()
+    gen_float_parse()
+    gen_trig()
+    gen_float_aggs()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -1053,6 +1057,731 @@ def gen_int_text():
         emit("u64.fmt", (v,), str(v))
     for _ in range(100):
         emit("u64.fmt", (random.getrandbits(random.randint(1, 64)),), None) if False else None
+
+
+import struct
+
+INF = float("inf")
+NAN = float("nan")
+
+
+def f32(x):
+    """x rounded to a float32 (as a Python float)."""
+    if x != x or x in (INF, -INF):
+        return x
+    try:
+        return struct.unpack("f", struct.pack("f", x))[0]
+    except OverflowError:
+        return INF if x > 0 else -INF
+
+
+def ftok(x):
+    """A float as a token; repr round-trips, and the specials are named."""
+    if x != x:
+        return "nan"
+    if x == INF:
+        return "inf"
+    if x == -INF:
+        return "-inf"
+    return repr(x)
+
+
+def fres(x):
+    return ftok(x)
+
+
+def zsign(r, a):
+    """r, with the sign of a if r is zero: rint, ceil and the like keep it."""
+    return math.copysign(0.0, a) if r == 0 else r
+
+
+def float_values(bits):
+    """Edge and random floats of the width."""
+    cv = f32 if bits == 32 else (lambda v: v)
+    hi = 3.4028234663852886e38 if bits == 32 else 1.7976931348623157e308
+    tiny = 1.1754943508222875e-38 if bits == 32 else 2.2250738585072014e-308
+    den = 1.401298464324817e-45 if bits == 32 else 5e-324
+    vals = [0.0, -0.0, 1.0, -1.0, 0.5, 1.5, 2.5, -2.5, 3.5, 0.1, 10.0, 1e3,
+            hi, -hi, tiny, -tiny, den, -den, INF, -INF, NAN, 2.0 ** 31,
+            -2.0 ** 31, 2.0 ** 63, -2.0 ** 63, 32767.5, -32768.5, 123456.789]
+    for _ in range(25):
+        e = random.randint(-30, 30)
+        vals.append(cv(random.uniform(-1, 1) * 10.0 ** e))
+    for _ in range(8):
+        vals.append(cv(random.choice([-1, 1]) * random.uniform(1, 9) * 10.0 ** random.randint(-300 if bits == 64 else -37, 300 if bits == 64 else 37)))
+    return [cv(v) for v in vals]
+
+
+def f_check(bits, r, a, b, op):
+    """The rules of ty_float.h for a result r of a op b: a value, or an error
+    name."""
+    zero = 0.0
+    if r in (INF, -INF) and a not in (INF, -INF) and (b is None or b not in (INF, -INF)):
+        return ("E", "RANGE")
+    if op == "mul" and r == 0 and a != 0 and b != 0:
+        return ("E", "UNDERFLOW")
+    if op == "div" and r == 0 and a != 0 and b not in (INF, -INF):
+        return ("E", "UNDERFLOW")
+    return r
+
+
+def ref_arith(bits, op, a, b):
+    cv = f32 if bits == 32 else (lambda v: v)
+    try:
+        if op == "add":
+            r = a + b
+        elif op == "sub":
+            r = a - b
+        elif op == "mul":
+            r = a * b
+        else:
+            if b == 0 and a == a:
+                return ("E", "DIVZERO")
+            r = a / b if b != 0 else NAN
+    except OverflowError:
+        r = INF
+    r = cv(r)
+    if op in ("add", "sub"):
+        if r in (INF, -INF) and a not in (INF, -INF) and b not in (INF, -INF):
+            return ("E", "RANGE")
+        return r
+    if op == "mul":
+        return f_check(bits, r, a, b, "mul")
+    if r in (INF, -INF) and a not in (INF, -INF):
+        return ("E", "RANGE")
+    if r == 0 and a != 0 and b not in (INF, -INF):
+        return ("E", "UNDERFLOW")
+    return r
+
+
+def fnan_cmp(a, b):
+    """-1, 0, 1 with every NaN equal and last."""
+    an, bn = a != a, b != b
+    if an and bn:
+        return 0
+    if an:
+        return 1
+    if bn:
+        return -1
+    return (a > b) - (a < b)
+
+
+def ref_hash_float(a, seed):
+    if a == 0:
+        return seed
+    if a != a:
+        a = struct.unpack("<d", bytes.fromhex("000000000000f87f"))[0]
+    return pg_hash_bytes(struct.pack("<d", a), seed)
+
+
+def gen_floats():
+    """The vectors of float32 and float64: arithmetic, compare, conversion,
+    rounding, powers, logs, width_bucket and the hash."""
+    import math
+    for bits in (32, 64):
+        p = "f%d" % bits
+        cv = f32 if bits == 32 else (lambda v: v)
+        vals = float_values(bits)
+        pairs = [(a, b) for a in vals for b in vals]
+        random.shuffle(pairs)
+        for a, b in pairs[:500]:
+            for op in ("add", "sub", "mul", "div"):
+                r = ref_arith(bits, op, a, b)
+                emit("%s.%s" % (p, op), (ftok(a), ftok(b)), ("E", r[1]) if isinstance(r, tuple) else ftok(r))
+            emit(p + ".cmp", (ftok(a), ftok(b)), fnan_cmp(a, b))
+            c = fnan_cmp(a, b)
+            for nm, v in (("eq", c == 0), ("ne", c != 0), ("lt", c < 0),
+                          ("le", c <= 0), ("gt", c > 0), ("ge", c >= 0)):
+                emit(p + "." + nm, (ftok(a), ftok(b)), int(v))
+            emit(p + ".larger", (ftok(a), ftok(b)), ftok(a if fnan_cmp(a, b) > 0 else b))
+            emit(p + ".smaller", (ftok(a), ftok(b)), ftok(a if fnan_cmp(a, b) < 0 else b))
+        for a in vals:
+            emit(p + ".neg", (ftok(a),), ftok(-a))
+            emit(p + ".abs", (ftok(a),), ftok(abs(a)))
+            sd = random.choice([0, 1, 2 ** 40, 2 ** 64 - 1])
+            emit(p + ".hash", (ftok(a), sd), ref_hash_float(a, sd))
+            for bi in (16, 32, 64):
+                if a != a or a in (INF, -INF):
+                    res = ("E", "RANGE")
+                else:
+                    n = round(a)
+                    res = n if -(1 << (bi - 1)) <= n < (1 << (bi - 1)) else ("E", "RANGE")
+                emit("%s.toint%d" % (p, bi), (ftok(a),), res)
+    # float64 to float32 and back
+    for a in float_values(64):
+        if a != a or a in (INF, -INF):
+            r = a
+        else:
+            r = f32(a)
+            if r in (INF, -INF):
+                emit("f64.to32", (ftok(a),), ("E", "RANGE"))
+                continue
+            if r == 0 and a != 0:
+                emit("f64.to32", (ftok(a),), ("E", "UNDERFLOW"))
+                continue
+        emit("f64.to32", (ftok(a),), ftok(r))
+    # rounding, powers, logs
+    for a in float_values(64):
+        if a == a and a not in (INF, -INF):
+            emit("f64.round", (ftok(a),), ftok(zsign(float(round(a)), a)) if abs(a) < 2 ** 52 else ftok(a))
+            emit("f64.ceil", (ftok(a),), ftok(zsign(float(math.ceil(a)), a)) if abs(a) < 2 ** 52 else ftok(a))
+            emit("f64.floor", (ftok(a),), ftok(zsign(float(math.floor(a)), a)) if abs(a) < 2 ** 52 else ftok(a))
+            emit("f64.trunc", (ftok(a),), ftok(zsign(float(math.trunc(a)), a)) if abs(a) < 2 ** 52 else ftok(a))
+        emit("f64.sign", (ftok(a),), ftok(1.0 if a > 0 else -1.0 if a < 0 else 0.0))
+        # sqrt
+        if a < 0:
+            r = ("E", "INVALID")
+        elif a != a:
+            r = NAN
+        else:
+            r = math.sqrt(a) if a != INF else INF
+        emit("f64.sqrt", (ftok(a),), ("E", r[1]) if isinstance(r, tuple) else ftok(r))
+        if a == a:
+            c = math.copysign(abs(a) ** (1.0 / 3.0), a) if a not in (INF, -INF) else a
+        # ln / log10
+        for nm, fn in (("ln", math.log), ("log10", math.log10)):
+            if a == 0:
+                r = ("E", "INVALID")
+            elif a < 0:
+                r = ("E", "INVALID")
+            elif a != a:
+                r = NAN
+            elif a == INF:
+                r = INF
+            else:
+                r = fn(a)
+            emit("f64." + nm, (ftok(a),), ("E", r[1]) if isinstance(r, tuple) else ftok(r))
+        # exp, away from the subnormal results
+        if a != a:
+            r = NAN
+        elif a == INF:
+            r = INF
+        elif a == -INF:
+            r = 0.0
+        else:
+            try:
+                r = math.exp(a)
+            except OverflowError:
+                r = ("E", "RANGE")
+            if not isinstance(r, tuple) and r == 0:
+                r = ("E", "UNDERFLOW")
+            if not isinstance(r, tuple) and 0 < r < 2.2250738585072014e-308:
+                r = None
+        if r is not None:
+            emit("f64.exp", (ftok(a),), ("E", r[1]) if isinstance(r, tuple) else ftok(r))
+    base = float_values(64)
+    for a in base[:30]:
+        for b in [0.0, 1.0, -1.0, 2.0, 0.5, -2.0, 3.0, 10.0, -0.5, INF, -INF, NAN, 1e3, -1e3, 700.0]:
+            if a != a:
+                r = NAN if (b != b or b != 0.0) else 1.0
+            elif b != b:
+                r = NAN if a != 1.0 else 1.0
+            elif a == 0 and b < 0:
+                r = ("E", "INVALID")
+            elif a < 0 and b not in (INF, -INF) and math.floor(b) != b:
+                r = ("E", "INVALID")
+            elif b in (INF, -INF) or a in (INF, -INF):
+                try:
+                    r = math.pow(a, b)
+                except (OverflowError, ValueError):
+                    r = None
+            else:
+                try:
+                    r = math.pow(a, b)
+                except OverflowError:
+                    r = ("E", "RANGE")
+                except ValueError:
+                    r = None
+                if r is not None and not isinstance(r, tuple):
+                    if r in (INF, -INF):
+                        r = ("E", "RANGE")
+                    elif r == 0 and a != 0:
+                        r = ("E", "UNDERFLOW")
+                    elif 0 < abs(r) < 2.2250738585072014e-308:
+                        r = None
+            if r is not None:
+                emit("f64.pow", (ftok(a), ftok(b)), ("E", r[1]) if isinstance(r, tuple) else ftok(r))
+    # width_bucket
+    for _ in range(300):
+        b1 = random.choice([0.0, -10.0, 5.0, 1e308, -1e308, 100.0, 0.5])
+        b2 = random.choice([10.0, 0.0, -5.0, 1e308, -1e308, 0.5, 100.0, INF, NAN])
+        op = random.choice([-1e309 if False else -INF, INF, NAN, 0.0, 5.0, 7.5, -3.0, 1e308, 99.9, 0.25])
+        cnt = random.choice([1, 2, 5, 10, 2 ** 31 - 1, 0, -1])
+        if cnt <= 0:
+            r = ("E", "INVALID")
+        elif op != op or b1 != b1 or b2 != b2:
+            r = ("E", "INVALID")
+        elif b1 in (INF, -INF) or b2 in (INF, -INF):
+            r = ("E", "INVALID")
+        elif b1 == b2:
+            r = ("E", "INVALID")
+        else:
+            lo, hi, asc = (b1, b2, True) if b1 < b2 else (b2, b1, False)
+            below = op < b1 if asc else op > b1
+            beyond = op >= b2 if asc else op <= b2
+            if below:
+                r = 0
+            elif beyond:
+                r = ("E", "RANGE") if cnt == 2 ** 31 - 1 else cnt + 1
+            else:
+                # the same double arithmetic as the C, step for step
+                if asc:
+                    num, den = op - b1, b2 - b1
+                    if den in (INF, -INF):
+                        num, den = op / 2 - b1 / 2, b2 / 2 - b1 / 2
+                else:
+                    num, den = b1 - op, b1 - b2
+                    if den in (INF, -INF):
+                        num, den = b1 / 2 - op / 2, b1 / 2 - b2 / 2
+                if op in (INF, -INF):
+                    r = None
+                else:
+                    r = int(cnt * (num / den))
+                    r = min(r, cnt - 1) + 1
+        if r is not None:
+            emit("f64.wb", (ftok(op), ftok(b1), ftok(b2), cnt), r)
+
+
+def ref_parse_float(t, bits):
+    """The float of a text of bytes t, as ty_float.h says: a float, or
+    "RANGE" or "INVALID"."""
+    import re
+    from decimal import Decimal
+    sp = b" \t\n\v\f\r"
+    i = 0
+    while i < len(t) and t[i] in sp:
+        i += 1
+    if i == len(t):
+        return "INVALID"
+    rest = t[i:]
+    m = re.match(rb"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?", rest)
+    cv = f32 if bits == 32 else (lambda v: v)
+    if m:
+        txt = m.group(0).decode()
+        val = cv(float(txt)) if bits == 64 else None
+        if bits == 32:
+            try:
+                val = f32(float(txt))
+            except OverflowError:
+                val = INF
+        end = m.end()
+        if val in (INF, -INF) or (val == 0 and Decimal(txt) != 0):
+            return "RANGE"
+    else:
+        m = re.match(rb"([+-]?)(?:(infinity|inf)|nan(?:\([A-Za-z0-9_]*\))?)", rest, re.I)
+        if not m:
+            return "INVALID"
+        if m.group(2):
+            val = -INF if m.group(1) == b"-" else INF
+        else:
+            val = NAN
+        end = m.end()
+    tail = rest[end:]
+    j = 0
+    while j < len(tail) and tail[j] in sp:
+        j += 1
+    if j != len(tail):
+        return "INVALID"
+    return val
+
+
+def gen_float_parse():
+    """The vectors of float text read, in many forms."""
+    texts = [b"", b" ", b"x", b"1", b"-1", b"+1", b"1.", b".5", b"-.5", b"1e5",
+             b"1E+5", b"1e-5", b"1e", b"1e+", b".", b"-", b"+", b"1.5.5",
+             b"1 2", b" 1 ", b"\t1\n", b"0e0", b"0.0000e5", b"00012", b"1_0",
+             b"NaN", b"nan", b"NAN", b"-nan", b"nan(123)", b"nan(", b"Infinity",
+             b"-Infinity", b"+Infinity", b"inf", b"-inf", b"+inf", b"INF",
+             b"infin", b"infinity ", b"in", b"1e308", b"1e309", b"-1e309",
+             b"1e-323", b"1e-324", b"1e-400", b"0.1", b"3.4028235e38",
+             b"3.4028236e38", b"3.5e38", b"1e-45", b"1e-46", b"1e-50",
+             b"1.7976931348623157e308", b"1.7976931348623159e308",
+             b"123456789012345678901234567890", b"0.000000000000000000001",
+             b"1,5", b"1e5x", b"1ex", b"\xc3\xa9", b"1\xc3\xa9"]
+    for _ in range(150):
+        mant = "%d.%d" % (random.randrange(10 ** random.randint(1, 18)), random.randrange(10 ** random.randint(1, 18)))
+        e = random.choice(["", "e%d" % random.randint(-330, 310), "E+%d" % random.randint(0, 40)])
+        t = random.choice(["", "-", "+"]) + mant + e
+        if random.random() < .2:
+            t = " " + t + "\t"
+        if random.random() < .1:
+            k = random.randrange(len(t) + 1)
+            t = t[:k] + random.choice("x_,.e-+ ") + t[k:]
+        texts.append(t.encode())
+    for bits in (32, 64):
+        for t in texts:
+            r = ref_parse_float(t, bits)
+            if isinstance(r, str):
+                res = ("E", r)
+            else:
+                res = ftok(r)
+            emit("f%d.parse" % bits, (hx(t),), res)
+
+
+RPD = 0.0174532925199432957692
+
+
+def _deg_consts():
+    sin_30 = math.sin(30.0 * RPD)
+    omc60 = 1.0 - math.cos(60.0 * RPD)
+    asin05 = math.asin(0.5)
+    acos05 = math.acos(0.5)
+    atan1 = math.atan(1.0)
+
+    def sind0_30(x):
+        return (math.sin(x * RPD) / sin_30) / 2.0
+
+    def cosd0_60(x):
+        return 1.0 - ((1.0 - math.cos(x * RPD)) / omc60) / 2.0
+
+    def sq1(x):
+        return sind0_30(x) if x <= 30.0 else cosd0_60(90.0 - x)
+
+    def cq1(x):
+        return cosd0_60(x) if x <= 60.0 else sind0_30(90.0 - x)
+
+    tan45 = sq1(45.0) / cq1(45.0)
+    cot45 = cq1(45.0) / sq1(45.0)
+    return sin_30, omc60, asin05, acos05, atan1, sq1, cq1, tan45, cot45
+
+
+def _fold(x, neg0, neg180, neg90):
+    sign = 1
+    x = math.fmod(x, 360.0)
+    if x < 0.0:
+        x = -x
+        sign = -sign if neg0 else sign
+    if x > 180.0:
+        x = 360.0 - x
+        sign = -sign if neg180 else sign
+    if x > 90.0:
+        x = 180.0 - x
+        sign = -sign if neg90 else sign
+    return x, sign
+
+
+def fdiv(a, b):
+    """a / b as C does it: an infinity or NaN for a zero divisor."""
+    if b == 0:
+        if a == 0 or a != a:
+            return NAN
+        return math.copysign(INF, a) * math.copysign(1.0, b)
+    return a / b
+
+
+def ref_unary(name, a):
+    """The result of the float64 function `name` at a: a float, or an error
+    name; None if the case is not a rule (a subnormal result of the libm)."""
+    OOR = ("E", "INVALID")
+    RNG = ("E", "RANGE")
+    sin30, omc60, asin05, acos05, atan1, sq1, cq1, tan45, cot45 = _deg_consts()
+    if a != a and name not in ("sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "erf", "erfc", "lgamma"):
+        return NAN
+    inf = a in (INF, -INF)
+
+    def fin(v):
+        return RNG if v in (INF, -INF) else v
+
+    if name in ("acos", "asin", "acosd", "asind"):
+        if a < -1 or a > 1:
+            return OOR
+        if name == "acos":
+            return fin(math.acos(a))
+        if name == "asin":
+            return fin(math.asin(a))
+        def asd(x):
+            return (math.asin(x) / asin05) * 30.0 if x <= 0.5 else 90.0 - (math.acos(x) / acos05) * 60.0
+        def acd(x):
+            return 90.0 - (math.asin(x) / asin05) * 30.0 if x <= 0.5 else (math.acos(x) / acos05) * 60.0
+        if name == "acosd":
+            return fin(acd(a) if a >= 0 else 90.0 + asd(-a))
+        return fin(asd(a) if a >= 0 else -asd(-a))
+    if name == "atan":
+        return fin(math.atan(a))
+    if name == "atand":
+        return fin((math.atan(a) / atan1) * 45.0)
+    if name in ("cos", "sin", "tan", "cot"):
+        if inf:
+            return OOR
+        if name == "cos":
+            return fin(math.cos(a))
+        if name == "sin":
+            return fin(math.sin(a))
+        if name == "tan":
+            return math.tan(a)
+        t = math.tan(a)
+        return INF if t == 0 and math.copysign(1, t) > 0 else (-INF if t == 0 else 1.0 / t)
+    if name in ("cosd", "sind", "tand", "cotd"):
+        if inf:
+            return OOR
+        if name == "cosd":
+            x, sg = _fold(a, False, False, True)
+            return fin(sg * cq1(x))
+        if name == "sind":
+            x, sg = _fold(a, True, True, False)
+            return fin(sg * sq1(x))
+        x, sg = _fold(a, True, True, True)
+        if name == "tand":
+            v = sg * (fdiv(fdiv(sq1(x), cq1(x)), tan45))
+        else:
+            v = sg * (fdiv(fdiv(cq1(x), sq1(x)), cot45))
+        return 0.0 if v == 0 else v
+    if name in ("sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "erf", "erfc"):
+        if a != a:
+            return NAN
+        try:
+            if name == "sinh":
+                return math.sinh(a)
+            if name == "cosh":
+                v = math.cosh(a)
+                return ("E", "UNDERFLOW") if v == 0 else v
+            if name == "tanh":
+                return math.tanh(a)
+            if name == "asinh":
+                return math.asinh(a)
+            if name == "acosh":
+                return OOR if a < 1.0 else math.acosh(a)
+            if name == "atanh":
+                if a < -1 or a > 1:
+                    return OOR
+                return -INF if a == -1 else INF if a == 1 else math.atanh(a)
+            if name == "erf":
+                return math.erf(a)
+            return math.erfc(a)
+        except OverflowError:
+            return (INF if a > 0 else -INF) if name == "sinh" else INF if name == "cosh" else None
+    if name == "gamma":
+        if a == INF:
+            return INF
+        if a == -INF:
+            return RNG
+        # Python's gamma is not the libm's, so only what is exact in both:
+        # a positive integer is a factorial, and the poles are errors.
+        if a == int(a) and 1 <= a <= 20:
+            return float(math.factorial(int(a) - 1))
+        if a == int(a) and a <= 0:
+            return RNG
+        if a > 171.7:
+            return RNG
+        return None
+    if name == "lgamma":
+        if a != a:
+            return NAN
+        if a in (INF, -INF):
+            return INF
+        # as for gamma: only the exact and the errors
+        if a in (1.0, 2.0):
+            return 0.0
+        if a == int(a) and a <= 0:
+            return RNG
+        if a > 2.5e305:
+            return RNG
+        return None
+    raise Exception(name)
+
+
+def gen_trig():
+    """The vectors of the trigonometric, hyperbolic and special functions."""
+    base = float_values(64) + [30.0, 45.0, 60.0, 90.0, 120.0, 135.0, 150.0, 180.0, 210.0, 270.0,
+                               300.0, 315.0, 330.0, 360.0, 720.5, -30.0, -45.0, -90.0,
+                               -180.0, 0.5, -0.5, 0.25, 0.75, 1.0000000000000002, 3.0, 0.1,
+                               -1.5, 5.5, 20.0, 170.0, 171.5, 1e5, 710.0, 711.0, -711.0,
+                               -2.0, -3.0, -4.5, 100.0, 200.0, 1e-8, 1e10]
+    names = ["acos", "asin", "atan", "cos", "sin", "tan", "cot", "acosd", "asind",
+             "atand", "cosd", "sind", "tand", "cotd", "sinh", "cosh", "tanh",
+             "asinh", "acosh", "atanh", "erf", "erfc", "gamma", "lgamma"]
+    for nm in names:
+        for a in base:
+            r = ref_unary(nm, a)
+            if r is None:
+                continue
+            emit("f64." + nm, (ftok(a),), ("E", r[1]) if isinstance(r, tuple) else ftok(r))
+    # atan2 and atan2d
+    pts = [0.0, -0.0, 1.0, -1.0, 2.0, -3.5, INF, -INF, NAN, 1e308, 1e-300]
+    atan1 = math.atan(1.0)
+    for y in pts:
+        for x in pts:
+            if y != y or x != x:
+                r1 = r2 = NAN
+            else:
+                r1 = math.atan2(y, x)
+                r2 = (r1 / atan1) * 45.0
+            emit("f64.atan2", (ftok(y), ftok(x)), ftok(r1))
+            emit("f64.atan2d", (ftok(y), ftok(x)), ftok(r2))
+    # degrees and radians: the checks of div and mul
+    for a in base:
+        r = ref_arith(64, "div", a, RPD)
+        emit("f64.degrees", (ftok(a),), ("E", r[1]) if isinstance(r, tuple) else ftok(r))
+        r = ref_arith(64, "mul", a, RPD)
+        emit("f64.radians", (ftok(a),), ("E", r[1]) if isinstance(r, tuple) else ftok(r))
+
+
+def isinf_(x):
+    return x in (INF, -INF)
+
+
+def ref_var_accum(st, x):
+    """Youngs-Cramer step; st = [n, sx, sxx]. Returns the new state or None
+    for an overflow."""
+    n0, sx0, sxx0 = st
+    n = n0 + 1.0
+    sx = sx0 + x
+    sxx = sxx0
+    if n0 > 0.0:
+        tmp = x * n - sx
+        try:
+            sxx = sxx0 + tmp * tmp / (n * n0)
+        except OverflowError:
+            sxx = INF
+        if isinf_(sx) or isinf_(sxx):
+            if not isinf_(sx0) and not isinf_(x):
+                return None
+            sxx = NAN
+    elif x != x or isinf_(x):
+        sxx = NAN
+    return [n, sx, sxx]
+
+
+def safe(f):
+    """Evaluate f() with C's IEEE results for overflow and zero division."""
+    try:
+        return f()
+    except OverflowError:
+        return INF
+    except ZeroDivisionError:
+        return NAN
+
+
+def ref_var_final(name, st):
+    n, sx, sxx = st
+    if name == "avg":
+        return None if n == 0 else fdiv(sx, n)
+    if name == "pop":
+        return None if n == 0 else fdiv(sxx, n)
+    if name == "samp":
+        return None if n <= 1 else fdiv(sxx, n - 1.0)
+    if name == "stddevpop":
+        if n == 0:
+            return None
+        v = fdiv(sxx, n)
+        return NAN if v != v or v < 0 else math.sqrt(v) if v != INF else INF
+    if name == "stddevsamp":
+        if n <= 1:
+            return None
+        v = fdiv(sxx, n - 1.0)
+        return NAN if v != v or v < 0 else math.sqrt(v) if v != INF else INF
+
+
+def stok(st):
+    return " ".join(ftok(v) for v in st)
+
+
+def gen_float_aggs():
+    """The vectors of the statistical aggregates: states built by a run of
+    values, combined, and the final functions."""
+    sets = []
+    for _ in range(40):
+        k = random.choice([0, 1, 2, 3, 5, 10])
+        pool = random.choice([
+            lambda: random.uniform(-100, 100),
+            lambda: float(random.randint(-5, 5)),
+            lambda: random.choice([1e308, -1e308, 1.0, 2.0, 0.5]),
+            lambda: random.choice([INF, -INF, NAN, 1.0, 2.0, 0.0]) if random.random() < .3 else random.uniform(-1, 1),
+        ])
+        sets.append([pool() for _ in range(k)])
+    for xs in sets:
+        st = [0.0, 0.0, 0.0]
+        ok = True
+        for x in xs:
+            st = ref_var_accum(st, x)
+            if st is None:
+                ok = False
+                break
+        emit("f64.vaccum", ((" ".join(ftok(x) for x in xs)) or "-",),
+             stok(st) if ok else ("E", "RANGE"))
+        if ok:
+            for nm in ("avg", "pop", "samp", "stddevpop", "stddevsamp"):
+                r = ref_var_final(nm, st)
+                emit("f64.vfinal", (nm, stok(st)), "NULL" if r is None else ftok(r))
+    states = []
+    for xs in sets:
+        st = [0.0, 0.0, 0.0]
+        good = True
+        for x in xs:
+            st = ref_var_accum(st, x)
+            if st is None:
+                good = False
+                break
+        if good:
+            states.append(st)
+    for _ in range(80):
+        a, b = random.choice(states), random.choice(states)
+        if a[0] == 0:
+            r = list(b)
+        elif b[0] == 0:
+            r = list(a)
+        else:
+            n = a[0] + b[0]
+            sx = a[1] + b[1]
+            if isinf_(sx) and not isinf_(a[1]) and not isinf_(b[1]):
+                emit("f64.vcombine", (stok(a), stok(b)), ("E", "RANGE"))
+                continue
+            tmp = fdiv(a[1], a[0]) - fdiv(b[1], b[0])
+            sxx = a[2] + b[2] + safe(lambda: a[0] * b[0] * tmp * tmp / n)
+            if isinf_(sxx) and not isinf_(a[2]) and not isinf_(b[2]):
+                emit("f64.vcombine", (stok(a), stok(b)), ("E", "RANGE"))
+                continue
+            r = [n, sx, sxx]
+        emit("f64.vcombine", (stok(a), stok(b)), stok(r))
+    # regression: a run of pairs, then the finals
+    for _ in range(40):
+        k = random.choice([0, 1, 2, 3, 6, 10])
+        pairs = [(random.uniform(-50, 50), random.uniform(-50, 50)) if random.random() < .6
+                 else (float(random.randint(-3, 3)), float(random.randint(-3, 3))) for _ in range(k)]
+        if random.random() < .1:
+            pairs = [(1.0, 2.0)] * k
+        st = [0.0] * 6
+        for (y, x) in pairs:
+            n0, sx0, sxx0, sy0, syy0, sxy0 = st
+            n = n0 + 1.0
+            sx = sx0 + x
+            sy = sy0 + y
+            if n0 > 0.0:
+                tx = x * n - sx
+                ty = y * n - sy
+                sc = 1.0 / (n * n0)
+                sxx = sxx0 + tx * tx * sc
+                syy = syy0 + ty * ty * sc
+                sxy = sxy0 + tx * ty * sc
+            else:
+                sxx, syy, sxy = sxx0, syy0, sxy0
+            st = [n, sx, sxx, sy, syy, sxy]
+        emit("f64.raccum", (" ".join("%s %s" % (ftok(y), ftok(x)) for y, x in pairs) or "-",), stok(st))
+        n, sx, sxx, sy, syy, sxy = st
+        def fin(name):
+            if name in ("sxx", "syy", "sxy", "avgx", "avgy", "covarpop", "slope", "intercept", "r2", "corr") and n < 1:
+                return None
+            if name == "sxx": return sxx
+            if name == "syy": return syy
+            if name == "sxy": return sxy
+            if name == "avgx": return sx / n
+            if name == "avgy": return sy / n
+            if name == "covarpop": return sxy / n
+            if name == "covarsamp": return None if n < 2 else sxy / (n - 1.0)
+            if name == "corr":
+                if sxx == 0 or syy == 0: return None
+                return sxy / math.sqrt(sxx * syy)
+            if name == "r2":
+                if sxx == 0: return None
+                if syy == 0: return 1.0
+                return (sxy * sxy) / (sxx * syy)
+            if name == "slope":
+                return None if sxx == 0 else sxy / sxx
+            if name == "intercept":
+                return None if sxx == 0 else (sy - sx * sxy / sxx) / n
+        for nm in ("sxx", "syy", "sxy", "avgx", "avgy", "covarpop", "covarsamp", "corr", "r2", "slope", "intercept"):
+            r = fin(nm)
+            emit("f64.rfinal", (nm, stok(st)), "NULL" if r is None else ftok(r))
 
 
 def gen_ints():

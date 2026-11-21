@@ -127,7 +127,7 @@ endif
 # Every directory may include sm_sys.h: the services dg is built on, in
 # sm's level 0 (../sm/sm0); and aa.h, roles and privileges (../aa),
 # which utils/pg_global.h includes.
-CPPFLAGS := -I$(I) -I$(SM)/sm0/include -I$(AA)/include -D_GNU_SOURCE $(ASSERT)
+CPPFLAGS := -I$(I) -I$(SM)/sm0/include -I$(AA)/include -I$(TY)/include -D_GNU_SOURCE $(ASSERT)
 
 # The directories that see more: the bridges to the storage manager
 # (sm.h) and to the parser (sq.h).
@@ -137,7 +137,7 @@ $(OBJDIR)/backend/storage/ipc/%.o:  CPPFLAGS += -I$(SM)/include
 $(OBJDIR)/backend/utils/init/%.o:   CPPFLAGS += -I$(SM)/include
 $(OBJDIR)/backend/parser/%.o:       CPPFLAGS += -I$(SQ)/include
 $(OBJDIR)/backend/utils/adt/%.o:    CPPFLAGS += -I$(TY)/include
-$(OBJDIR)/common/hashfn.o:           CPPFLAGS += -I$(TY)/include
+$(OBJDIR)/common/hashfn.o $(OBJDIR)/common/d2s.o: CPPFLAGS += -I$(TY)/include
 $(OBJDIR)/backend/access/nbtree/%.o: CPPFLAGS += -I$(TY)/include
 $(OBJDIR)/backend/main/%.o:         CPPFLAGS += -I$(SM)/include -I$(SQ)/include
 

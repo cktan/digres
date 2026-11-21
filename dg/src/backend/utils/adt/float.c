@@ -40,41 +40,6 @@
  * decimal rounding method.
  */
 
-/* Cached constants for degree-based trig functions */
-static thread_local /*LOCAL*/ bool degree_consts_set = false;
-static thread_local /*LOCAL*/ float8 sin_30 = 0;
-static thread_local /*LOCAL*/ float8 one_minus_cos_60 = 0;
-static thread_local /*LOCAL*/ float8 asin_0_5 = 0;
-static thread_local /*LOCAL*/ float8 acos_0_5 = 0;
-static thread_local /*LOCAL*/ float8 atan_1_0 = 0;
-static thread_local /*LOCAL*/ float8 tan_45 = 0;
-static thread_local /*LOCAL*/ float8 cot_45 = 0;
-
-/*
- * These are intentionally not static; don't "fix" them.  They will never
- * be referenced by other files, much less changed; but we don't want the
- * compiler to know that, else it might try to precompute expressions
- * involving them.  See comments for init_degree_constants().
- *
- * The additional extern declarations are to silence
- * -Wmissing-variable-declarations.
- */
-extern thread_local /*LOCAL*/ float8 degree_c_thirty;
-extern thread_local /*LOCAL*/ float8 degree_c_forty_five;
-extern thread_local /*LOCAL*/ float8 degree_c_sixty;
-extern thread_local /*LOCAL*/ float8 degree_c_one_half;
-extern thread_local /*LOCAL*/ float8 degree_c_one;
-thread_local /*LOCAL*/ float8 degree_c_thirty = 30.0;
-thread_local /*LOCAL*/ float8 degree_c_forty_five = 45.0;
-thread_local /*LOCAL*/ float8 degree_c_sixty = 60.0;
-thread_local /*LOCAL*/ float8 degree_c_one_half = 0.5;
-thread_local /*LOCAL*/ float8 degree_c_one = 1.0;
-
-/* Local function prototypes */
-static double sind_q1(double x);
-static double cosd_q1(double x);
-static void init_degree_constants(void);
-
 /*
  * We use these out-of-line ereport() calls to report float overflow,
  * underflow, and zero-divide, because following our usual practice of
@@ -164,112 +129,36 @@ Datum float4in(PG_FUNCTION_ARGS) {
  */
 float4 float4in_internal(char *num, char **endptr_p, const char *type_name,
                          const char *orig_string, struct Node *escontext) {
-  float val;
-  char *endptr;
+  float4 val;
+  const char *end;
+  size_t len;
+  const char *first = num;
 
-  /*
-   * endptr points to the first character _after_ the sequence we recognized
-   * as a valid floating point number. orig_string points to the original
-   * input string.
-   */
-
-  /* skip leading whitespace */
-  while (*num != '\0' && isspace((unsigned char)*num))
-    num++;
-
-  /*
-   * Check for an empty-string input to begin with, to avoid the vagaries of
-   * strtod() on different platforms.
-   */
-  if (*num == '\0')
-    ereturn(escontext, 0,
-            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-             errmsg("invalid input syntax for type %s: \"%s\"", type_name,
-                    orig_string)));
-
-  errno = 0;
-  val = strtof(num, &endptr);
-
-  /* did we not see anything that looks like a double? */
-  if (endptr == num || errno != 0) {
-    int save_errno = errno;
-
-    /*
-     * C99 requires that strtof() accept NaN, [+-]Infinity, and [+-]Inf,
-     * but not all platforms support all of these (and some accept them
-     * but set ERANGE anyway...)  Therefore, we check for these inputs
-     * ourselves if strtof() fails.
-     *
-     * Note: C99 also requires hexadecimal input as well as some extended
-     * forms of NaN, but we consider these forms unportable and don't try
-     * to support them.  You can use 'em if your strtof() takes 'em.
-     */
-    if (pg_strncasecmp(num, "NaN", 3) == 0) {
-      val = get_float4_nan();
-      endptr = num + 3;
-    } else if (pg_strncasecmp(num, "Infinity", 8) == 0) {
-      val = get_float4_infinity();
-      endptr = num + 8;
-    } else if (pg_strncasecmp(num, "+Infinity", 9) == 0) {
-      val = get_float4_infinity();
-      endptr = num + 9;
-    } else if (pg_strncasecmp(num, "-Infinity", 9) == 0) {
-      val = -get_float4_infinity();
-      endptr = num + 9;
-    } else if (pg_strncasecmp(num, "inf", 3) == 0) {
-      val = get_float4_infinity();
-      endptr = num + 3;
-    } else if (pg_strncasecmp(num, "+inf", 4) == 0) {
-      val = get_float4_infinity();
-      endptr = num + 4;
-    } else if (pg_strncasecmp(num, "-inf", 4) == 0) {
-      val = -get_float4_infinity();
-      endptr = num + 4;
-    } else if (save_errno == ERANGE) {
-      /*
-       * Some platforms return ERANGE for denormalized numbers (those
-       * that are not zero, but are too close to zero to have full
-       * precision).  We'd prefer not to throw error for that, so try to
-       * detect whether it's a "real" out-of-range condition by checking
-       * to see if the result is zero or huge.
-       */
-      if (val == 0.0 ||
-#if !defined(HUGE_VALF)
-          isinf(val)
-#else
-          (val >= HUGE_VALF || val <= -HUGE_VALF)
-#endif
-      ) {
-        /* see comments in float8in_internal for rationale */
-        char *errnumber = pstrdup(num);
-
-        errnumber[endptr - num] = '\0';
-
-        ereturn(escontext, 0,
-                (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                 errmsg("\"%s\" is out of range for type real", errnumber)));
-      }
-    } else
-      ereturn(escontext, 0,
-              (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-               errmsg("invalid input syntax for type %s: \"%s\"", type_name,
-                      orig_string)));
+  /* ty reads the number, the names NaN and Infinity, and the space around */
+  if (ty_float32_parse(num, &val, endptr_p ? &end : NULL, &len) == 0) {
+    if (endptr_p)
+      *endptr_p = (char *)end;
+    return val;
   }
 
-  /* skip trailing whitespace */
-  while (*endptr != '\0' && isspace((unsigned char)*endptr))
-    endptr++;
+  if (ty_errnum() == TY_ERR_RANGE) {
+    char *errnumber;
 
-  /* report stopping point if wanted, else complain if not end of string */
-  if (endptr_p)
-    *endptr_p = endptr;
-  else if (*endptr != '\0')
+    /* the message shows the number, not the space before it or text after */
+    while (*first != '\0' && isspace((unsigned char)*first))
+      first++;
+    errnumber = pstrdup(first);
+    errnumber[len] = '\0';
+
     ereturn(escontext, 0,
-            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-             errmsg("invalid input syntax for type %s: \"%s\"", type_name,
-                    orig_string)));
+            (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+             errmsg("\"%s\" is out of range for type real", errnumber)));
+  }
 
-  return val;
+  ereturn(escontext, 0,
+          (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+           errmsg("invalid input syntax for type %s: \"%s\"", type_name,
+                  orig_string)));
 }
 
 /*
@@ -277,16 +166,10 @@ float4 float4in_internal(char *num, char **endptr_p, const char *type_name,
  *						  using a standard output format
  */
 Datum float4out(PG_FUNCTION_ARGS) {
-  float4 num = PG_GETARG_FLOAT4(0);
-  char *ascii = (char *)palloc(32);
-  int ndig = FLT_DIG + tcb->guc.extra_float_digits;
+  char *ascii = (char *)palloc(TY_FLOAT_TEXT_SIZE);
 
-  if (tcb->guc.extra_float_digits > 0) {
-    float_to_shortest_decimal_buf(num, ascii);
-    PG_RETURN_CSTRING(ascii);
-  }
-
-  (void)pg_strfromd(ascii, 32, ndig, num);
+  /* ty prints the shortest text if extra_float_digits is above 0, else %g */
+  ty_float32_format(PG_GETARG_FLOAT4(0), tcb->guc.extra_float_digits, ascii);
   PG_RETURN_CSTRING(ascii);
 }
 
@@ -347,103 +230,36 @@ Datum float8in(PG_FUNCTION_ARGS) {
  */
 float8 float8in_internal(char *num, char **endptr_p, const char *type_name,
                          const char *orig_string, struct Node *escontext) {
-  double val;
-  char *endptr;
+  float8 val;
+  const char *end;
+  size_t len;
+  const char *first = num;
 
-  /* skip leading whitespace */
-  while (*num != '\0' && isspace((unsigned char)*num))
-    num++;
-
-  /*
-   * Check for an empty-string input to begin with, to avoid the vagaries of
-   * strtod() on different platforms.
-   */
-  if (*num == '\0')
-    ereturn(escontext, 0,
-            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-             errmsg("invalid input syntax for type %s: \"%s\"", type_name,
-                    orig_string)));
-
-  errno = 0;
-  val = strtod(num, &endptr);
-
-  /* did we not see anything that looks like a double? */
-  if (endptr == num || errno != 0) {
-    int save_errno = errno;
-
-    /*
-     * C99 requires that strtod() accept NaN, [+-]Infinity, and [+-]Inf,
-     * but not all platforms support all of these (and some accept them
-     * but set ERANGE anyway...)  Therefore, we check for these inputs
-     * ourselves if strtod() fails.
-     *
-     * Note: C99 also requires hexadecimal input as well as some extended
-     * forms of NaN, but we consider these forms unportable and don't try
-     * to support them.  You can use 'em if your strtod() takes 'em.
-     */
-    if (pg_strncasecmp(num, "NaN", 3) == 0) {
-      val = get_float8_nan();
-      endptr = num + 3;
-    } else if (pg_strncasecmp(num, "Infinity", 8) == 0) {
-      val = get_float8_infinity();
-      endptr = num + 8;
-    } else if (pg_strncasecmp(num, "+Infinity", 9) == 0) {
-      val = get_float8_infinity();
-      endptr = num + 9;
-    } else if (pg_strncasecmp(num, "-Infinity", 9) == 0) {
-      val = -get_float8_infinity();
-      endptr = num + 9;
-    } else if (pg_strncasecmp(num, "inf", 3) == 0) {
-      val = get_float8_infinity();
-      endptr = num + 3;
-    } else if (pg_strncasecmp(num, "+inf", 4) == 0) {
-      val = get_float8_infinity();
-      endptr = num + 4;
-    } else if (pg_strncasecmp(num, "-inf", 4) == 0) {
-      val = -get_float8_infinity();
-      endptr = num + 4;
-    } else if (save_errno == ERANGE) {
-      /*
-       * Some platforms return ERANGE for denormalized numbers (those
-       * that are not zero, but are too close to zero to have full
-       * precision).  We'd prefer not to throw error for that, so try to
-       * detect whether it's a "real" out-of-range condition by checking
-       * to see if the result is zero or huge.
-       *
-       * On error, we intentionally complain about double precision not
-       * the given type name, and we print only the part of the string
-       * that is the current number.
-       */
-      if (val == 0.0 || val >= HUGE_VAL || val <= -HUGE_VAL) {
-        char *errnumber = pstrdup(num);
-
-        errnumber[endptr - num] = '\0';
-        ereturn(escontext, 0,
-                (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                 errmsg("\"%s\" is out of range for type double precision",
-                        errnumber)));
-      }
-    } else
-      ereturn(escontext, 0,
-              (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-               errmsg("invalid input syntax for type %s: \"%s\"", type_name,
-                      orig_string)));
+  /* ty reads the number, the names NaN and Infinity, and the space around */
+  if (ty_float64_parse(num, &val, endptr_p ? &end : NULL, &len) == 0) {
+    if (endptr_p)
+      *endptr_p = (char *)end;
+    return val;
   }
 
-  /* skip trailing whitespace */
-  while (*endptr != '\0' && isspace((unsigned char)*endptr))
-    endptr++;
+  if (ty_errnum() == TY_ERR_RANGE) {
+    char *errnumber;
 
-  /* report stopping point if wanted, else complain if not end of string */
-  if (endptr_p)
-    *endptr_p = endptr;
-  else if (*endptr != '\0')
+    /* the message shows the number, not the space before it or text after */
+    while (*first != '\0' && isspace((unsigned char)*first))
+      first++;
+    errnumber = pstrdup(first);
+    errnumber[len] = '\0';
+
     ereturn(escontext, 0,
-            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-             errmsg("invalid input syntax for type %s: \"%s\"", type_name,
-                    orig_string)));
+            (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+             errmsg("\"%s\" is out of range for type double precision", errnumber)));
+  }
 
-  return val;
+  ereturn(escontext, 0,
+          (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+           errmsg("invalid input syntax for type %s: \"%s\"", type_name,
+                  orig_string)));
 }
 
 /*
@@ -464,15 +280,9 @@ Datum float8out(PG_FUNCTION_ARGS) {
  * The result is always palloc'd.
  */
 char *float8out_internal(double num) {
-  char *ascii = (char *)palloc(32);
-  int ndig = DBL_DIG + tcb->guc.extra_float_digits;
+  char *ascii = (char *)palloc(TY_FLOAT_TEXT_SIZE);
 
-  if (tcb->guc.extra_float_digits > 0) {
-    double_to_shortest_decimal_buf(num, ascii);
-    return ascii;
-  }
-
-  (void)pg_strfromd(ascii, 32, ndig, num);
+  ty_float64_format(num, tcb->guc.extra_float_digits, ascii);
   return ascii;
 }
 
@@ -499,6 +309,18 @@ Datum float8send(PG_FUNCTION_ARGS) {
   PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
 }
 
+/*
+ * Raise PostgreSQL's error for a ty float function that failed: a domain
+ * error (TY_ERR_INVALID) with the given SQLSTATE and ty's message, which is
+ * PostgreSQL's text; any other as float.h says.
+ */
+static pg_noreturn pg_noinline void float_ty_error(int sqlstate) {
+  if (ty_errnum() == TY_ERR_INVALID)
+    ereport(ERROR, (errcode(sqlstate), errmsg("%s", ty_errmsg())));
+  float_raise_ty();
+}
+
+
 /* ========== PUBLIC ROUTINES ========== */
 
 /*
@@ -511,20 +333,14 @@ Datum float8send(PG_FUNCTION_ARGS) {
  *		float4abs		- returns |arg1| (absolute value)
  */
 Datum float4abs(PG_FUNCTION_ARGS) {
-  float4 arg1 = PG_GETARG_FLOAT4(0);
-
-  PG_RETURN_FLOAT4(fabsf(arg1));
+  PG_RETURN_FLOAT4(ty_float32_abs(PG_GETARG_FLOAT4(0)));
 }
 
 /*
  *		float4um		- returns -arg1 (unary minus)
  */
 Datum float4um(PG_FUNCTION_ARGS) {
-  float4 arg1 = PG_GETARG_FLOAT4(0);
-  float4 result;
-
-  result = -arg1;
-  PG_RETURN_FLOAT4(result);
+  PG_RETURN_FLOAT4(ty_float32_neg(PG_GETARG_FLOAT4(0)));
 }
 
 Datum float4up(PG_FUNCTION_ARGS) {
@@ -534,27 +350,11 @@ Datum float4up(PG_FUNCTION_ARGS) {
 }
 
 Datum float4larger(PG_FUNCTION_ARGS) {
-  float4 arg1 = PG_GETARG_FLOAT4(0);
-  float4 arg2 = PG_GETARG_FLOAT4(1);
-  float4 result;
-
-  if (float4_gt(arg1, arg2))
-    result = arg1;
-  else
-    result = arg2;
-  PG_RETURN_FLOAT4(result);
+  PG_RETURN_FLOAT4(ty_float32_larger(PG_GETARG_FLOAT4(0), PG_GETARG_FLOAT4(1)));
 }
 
 Datum float4smaller(PG_FUNCTION_ARGS) {
-  float4 arg1 = PG_GETARG_FLOAT4(0);
-  float4 arg2 = PG_GETARG_FLOAT4(1);
-  float4 result;
-
-  if (float4_lt(arg1, arg2))
-    result = arg1;
-  else
-    result = arg2;
-  PG_RETURN_FLOAT4(result);
+  PG_RETURN_FLOAT4(ty_float32_smaller(PG_GETARG_FLOAT4(0), PG_GETARG_FLOAT4(1)));
 }
 
 /*
@@ -567,20 +367,14 @@ Datum float4smaller(PG_FUNCTION_ARGS) {
  *		float8abs		- returns |arg1| (absolute value)
  */
 Datum float8abs(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-
-  PG_RETURN_FLOAT8(fabs(arg1));
+  PG_RETURN_FLOAT8(ty_float64_abs(PG_GETARG_FLOAT8(0)));
 }
 
 /*
  *		float8um		- returns -arg1 (unary minus)
  */
 Datum float8um(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-  float8 result;
-
-  result = -arg1;
-  PG_RETURN_FLOAT8(result);
+  PG_RETURN_FLOAT8(ty_float64_neg(PG_GETARG_FLOAT8(0)));
 }
 
 Datum float8up(PG_FUNCTION_ARGS) {
@@ -590,27 +384,11 @@ Datum float8up(PG_FUNCTION_ARGS) {
 }
 
 Datum float8larger(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-  float8 arg2 = PG_GETARG_FLOAT8(1);
-  float8 result;
-
-  if (float8_gt(arg1, arg2))
-    result = arg1;
-  else
-    result = arg2;
-  PG_RETURN_FLOAT8(result);
+  PG_RETURN_FLOAT8(ty_float64_larger(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1)));
 }
 
 Datum float8smaller(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-  float8 arg2 = PG_GETARG_FLOAT8(1);
-  float8 result;
-
-  if (float8_lt(arg1, arg2))
-    result = arg1;
-  else
-    result = arg2;
-  PG_RETURN_FLOAT8(result);
+  PG_RETURN_FLOAT8(ty_float64_smaller(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1)));
 }
 
 /*
@@ -698,11 +476,7 @@ Datum float8div(PG_FUNCTION_ARGS) {
  *comparison operations
  */
 int float4_cmp_internal(float4 a, float4 b) {
-  if (float4_gt(a, b))
-    return 1;
-  if (float4_lt(a, b))
-    return -1;
-  return 0;
+  return ty_float32_cmp(a, b);
 }
 
 Datum float4eq(PG_FUNCTION_ARGS) {
@@ -773,11 +547,7 @@ Datum btfloat4sortsupport(PG_FUNCTION_ARGS) {
  *comparison operations
  */
 int float8_cmp_internal(float8 a, float8 b) {
-  if (float8_gt(a, b))
-    return 1;
-  if (float8_lt(a, b))
-    return -1;
-  return 0;
+  return ty_float64_cmp(a, b);
 }
 
 Datum float8eq(PG_FUNCTION_ARGS) {
@@ -1010,9 +780,7 @@ Datum in_range_float4_float8(PG_FUNCTION_ARGS) {
  *number
  */
 Datum ftod(PG_FUNCTION_ARGS) {
-  float4 num = PG_GETARG_FLOAT4(0);
-
-  PG_RETURN_FLOAT8((float8)num);
+  PG_RETURN_FLOAT8(ty_float32_to_float64(PG_GETARG_FLOAT4(0)));
 }
 
 /*
@@ -1020,14 +788,10 @@ Datum ftod(PG_FUNCTION_ARGS) {
  *number
  */
 Datum dtof(PG_FUNCTION_ARGS) {
-  float8 num = PG_GETARG_FLOAT8(0);
   float4 result;
 
-  result = (float4)num;
-  if (unlikely(isinf(result)) && !isinf(num))
-    float_overflow_error();
-  if (unlikely(result == 0.0f) && num != 0.0)
-    float_underflow_error();
+  if (ty_float64_to_float32(PG_GETARG_FLOAT8(0), &result))
+    float_raise_ty();
 
   PG_RETURN_FLOAT4(result);
 }
@@ -1037,21 +801,14 @@ Datum dtof(PG_FUNCTION_ARGS) {
  *number
  */
 Datum dtoi4(PG_FUNCTION_ARGS) {
-  float8 num = PG_GETARG_FLOAT8(0);
+  int32 result;
 
-  /*
-   * Get rid of any fractional part in the input.  This is so we don't fail
-   * on just-out-of-range values that would round into range.  Note
-   * assumption that rint() will pass through a NaN or Inf unchanged.
-   */
-  num = rint(num);
-
-  /* Range check */
-  if (unlikely(isnan(num) || !FLOAT8_FITS_IN_INT32(num)))
+  /* ty rounds to the nearest and checks the range */
+  if (ty_float64_to_int32(PG_GETARG_FLOAT8(0), &result))
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("integer out of range")));
 
-  PG_RETURN_INT32((int32)num);
+  PG_RETURN_INT32(result);
 }
 
 /*
@@ -1059,21 +816,14 @@ Datum dtoi4(PG_FUNCTION_ARGS) {
  *number
  */
 Datum dtoi2(PG_FUNCTION_ARGS) {
-  float8 num = PG_GETARG_FLOAT8(0);
+  int16 result;
 
-  /*
-   * Get rid of any fractional part in the input.  This is so we don't fail
-   * on just-out-of-range values that would round into range.  Note
-   * assumption that rint() will pass through a NaN or Inf unchanged.
-   */
-  num = rint(num);
-
-  /* Range check */
-  if (unlikely(isnan(num) || !FLOAT8_FITS_IN_INT16(num)))
+  /* ty rounds to the nearest and checks the range */
+  if (ty_float64_to_int16(PG_GETARG_FLOAT8(0), &result))
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("smallint out of range")));
 
-  PG_RETURN_INT16((int16)num);
+  PG_RETURN_INT16(result);
 }
 
 /*
@@ -1081,9 +831,7 @@ Datum dtoi2(PG_FUNCTION_ARGS) {
  *number
  */
 Datum i4tod(PG_FUNCTION_ARGS) {
-  int32 num = PG_GETARG_INT32(0);
-
-  PG_RETURN_FLOAT8((float8)num);
+  PG_RETURN_FLOAT8(ty_int32_to_float64(PG_GETARG_INT32(0)));
 }
 
 /*
@@ -1091,9 +839,7 @@ Datum i4tod(PG_FUNCTION_ARGS) {
  *number
  */
 Datum i2tod(PG_FUNCTION_ARGS) {
-  int16 num = PG_GETARG_INT16(0);
-
-  PG_RETURN_FLOAT8((float8)num);
+  PG_RETURN_FLOAT8(ty_int16_to_float64(PG_GETARG_INT16(0)));
 }
 
 /*
@@ -1101,21 +847,14 @@ Datum i2tod(PG_FUNCTION_ARGS) {
  *number
  */
 Datum ftoi4(PG_FUNCTION_ARGS) {
-  float4 num = PG_GETARG_FLOAT4(0);
+  int32 result;
 
-  /*
-   * Get rid of any fractional part in the input.  This is so we don't fail
-   * on just-out-of-range values that would round into range.  Note
-   * assumption that rint() will pass through a NaN or Inf unchanged.
-   */
-  num = rint(num);
-
-  /* Range check */
-  if (unlikely(isnan(num) || !FLOAT4_FITS_IN_INT32(num)))
+  /* ty rounds to the nearest and checks the range */
+  if (ty_float32_to_int32(PG_GETARG_FLOAT4(0), &result))
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("integer out of range")));
 
-  PG_RETURN_INT32((int32)num);
+  PG_RETURN_INT32(result);
 }
 
 /*
@@ -1123,21 +862,14 @@ Datum ftoi4(PG_FUNCTION_ARGS) {
  *number
  */
 Datum ftoi2(PG_FUNCTION_ARGS) {
-  float4 num = PG_GETARG_FLOAT4(0);
+  int16 result;
 
-  /*
-   * Get rid of any fractional part in the input.  This is so we don't fail
-   * on just-out-of-range values that would round into range.  Note
-   * assumption that rint() will pass through a NaN or Inf unchanged.
-   */
-  num = rint(num);
-
-  /* Range check */
-  if (unlikely(isnan(num) || !FLOAT4_FITS_IN_INT16(num)))
+  /* ty rounds to the nearest and checks the range */
+  if (ty_float32_to_int16(PG_GETARG_FLOAT4(0), &result))
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("smallint out of range")));
 
-  PG_RETURN_INT16((int16)num);
+  PG_RETURN_INT16(result);
 }
 
 /*
@@ -1145,9 +877,7 @@ Datum ftoi2(PG_FUNCTION_ARGS) {
  *number
  */
 Datum i4tof(PG_FUNCTION_ARGS) {
-  int32 num = PG_GETARG_INT32(0);
-
-  PG_RETURN_FLOAT4((float4)num);
+  PG_RETURN_FLOAT4(ty_int32_to_float32(PG_GETARG_INT32(0)));
 }
 
 /*
@@ -1155,9 +885,7 @@ Datum i4tof(PG_FUNCTION_ARGS) {
  *number
  */
 Datum i2tof(PG_FUNCTION_ARGS) {
-  int16 num = PG_GETARG_INT16(0);
-
-  PG_RETURN_FLOAT4((float4)num);
+  PG_RETURN_FLOAT4(ty_int16_to_float32(PG_GETARG_INT16(0)));
 }
 
 /*
@@ -1170,9 +898,7 @@ Datum i2tof(PG_FUNCTION_ARGS) {
  *		dround			- returns	ROUND(arg1)
  */
 Datum dround(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-
-  PG_RETURN_FLOAT8(rint(arg1));
+  PG_RETURN_FLOAT8(ty_float64_round(PG_GETARG_FLOAT8(0)));
 }
 
 /*
@@ -1180,9 +906,7 @@ Datum dround(PG_FUNCTION_ARGS) {
  *than or equal to the specified float
  */
 Datum dceil(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-
-  PG_RETURN_FLOAT8(ceil(arg1));
+  PG_RETURN_FLOAT8(ty_float64_ceil(PG_GETARG_FLOAT8(0)));
 }
 
 /*
@@ -1190,9 +914,7 @@ Datum dceil(PG_FUNCTION_ARGS) {
  *than or equal to the specified float
  */
 Datum dfloor(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-
-  PG_RETURN_FLOAT8(floor(arg1));
+  PG_RETURN_FLOAT8(ty_float64_floor(PG_GETARG_FLOAT8(0)));
 }
 
 /*
@@ -1201,17 +923,7 @@ Datum dfloor(PG_FUNCTION_ARGS) {
  *zero.
  */
 Datum dsign(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-  float8 result;
-
-  if (arg1 > 0)
-    result = 1.0;
-  else if (arg1 < 0)
-    result = -1.0;
-  else
-    result = 0.0;
-
-  PG_RETURN_FLOAT8(result);
+  PG_RETURN_FLOAT8(ty_float64_sign(PG_GETARG_FLOAT8(0)));
 }
 
 /*
@@ -1220,33 +932,17 @@ Datum dsign(PG_FUNCTION_ARGS) {
  *... the least integer greater than or equal to arg1
  */
 Datum dtrunc(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-  float8 result;
-
-  if (arg1 >= 0)
-    result = floor(arg1);
-  else
-    result = -floor(-arg1);
-
-  PG_RETURN_FLOAT8(result);
+  PG_RETURN_FLOAT8(ty_float64_trunc(PG_GETARG_FLOAT8(0)));
 }
 
 /*
  *		dsqrt			- returns square root of arg1
  */
 Datum dsqrt(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  if (arg1 < 0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
-                    errmsg("cannot take square root of a negative number")));
-
-  result = sqrt(arg1);
-  if (unlikely(isinf(result)) && !isinf(arg1))
-    float_overflow_error();
-  if (unlikely(result == 0.0) && arg1 != 0.0)
-    float_underflow_error();
+  if (ty_float64_sqrt(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1255,14 +951,10 @@ Datum dsqrt(PG_FUNCTION_ARGS) {
  *		dcbrt			- returns cube root of arg1
  */
 Datum dcbrt(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  result = cbrt(arg1);
-  if (unlikely(isinf(result)) && !isinf(arg1))
-    float_overflow_error();
-  if (unlikely(result == 0.0) && arg1 != 0.0)
-    float_underflow_error();
+  if (ty_float64_cbrt(PG_GETARG_FLOAT8(0), &result))
+    float_raise_ty();
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1271,134 +963,11 @@ Datum dcbrt(PG_FUNCTION_ARGS) {
  *		dpow			- returns pow(arg1,arg2)
  */
 Datum dpow(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-  float8 arg2 = PG_GETARG_FLOAT8(1);
   float8 result;
 
-  /*
-   * The POSIX spec says that NaN ^ 0 = 1, and 1 ^ NaN = 1, while all other
-   * cases with NaN inputs yield NaN (with no error).  Many older platforms
-   * get one or more of these cases wrong, so deal with them via explicit
-   * logic rather than trusting pow(3).
-   */
-  if (isnan(arg1)) {
-    if (isnan(arg2) || arg2 != 0.0)
-      PG_RETURN_FLOAT8(get_float8_nan());
-    PG_RETURN_FLOAT8(1.0);
-  }
-  if (isnan(arg2)) {
-    if (arg1 != 1.0)
-      PG_RETURN_FLOAT8(get_float8_nan());
-    PG_RETURN_FLOAT8(1.0);
-  }
-
-  /*
-   * The SQL spec requires that we emit a particular SQLSTATE error code for
-   * certain error conditions.  Specifically, we don't return a
-   * divide-by-zero error code for 0 ^ -1.
-   */
-  if (arg1 == 0 && arg2 < 0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
-                    errmsg("zero raised to a negative power is undefined")));
-  if (arg1 < 0 && floor(arg2) != arg2)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
-                    errmsg("a negative number raised to a non-integer power "
-                           "yields a complex result")));
-
-  /*
-   * We don't trust the platform's pow() to handle infinity cases per POSIX
-   * spec either, so deal with those explicitly too.  It's easier to handle
-   * infinite y first, so that it doesn't matter if x is also infinite.
-   */
-  if (isinf(arg2)) {
-    float8 absx = fabs(arg1);
-
-    if (absx == 1.0)
-      result = 1.0;
-    else if (arg2 > 0.0) /* y = +Inf */
-    {
-      if (absx > 1.0)
-        result = arg2;
-      else
-        result = 0.0;
-    } else /* y = -Inf */
-    {
-      if (absx > 1.0)
-        result = 0.0;
-      else
-        result = -arg2;
-    }
-  } else if (isinf(arg1)) {
-    if (arg2 == 0.0)
-      result = 1.0;
-    else if (arg1 > 0.0) /* x = +Inf */
-    {
-      if (arg2 > 0.0)
-        result = arg1;
-      else
-        result = 0.0;
-    } else /* x = -Inf */
-    {
-      /*
-       * Per POSIX, the sign of the result depends on whether y is an
-       * odd integer.  Since x < 0, we already know from the previous
-       * domain check that y is an integer.  It is odd if y/2 is not
-       * also an integer.
-       */
-      float8 halfy = arg2 / 2; /* should be computed exactly */
-      bool yisoddinteger = (floor(halfy) != halfy);
-
-      if (arg2 > 0.0)
-        result = yisoddinteger ? arg1 : -arg1;
-      else
-        result = yisoddinteger ? -0.0 : 0.0;
-    }
-  } else {
-    /*
-     * pow() sets errno on only some platforms, depending on whether it
-     * follows _IEEE_, _POSIX_, _XOPEN_, or _SVID_, so we must check both
-     * errno and invalid output values.  (We can't rely on just the
-     * latter, either; some old platforms return a large-but-finite
-     * HUGE_VAL when reporting overflow.)
-     */
-    errno = 0;
-    result = pow(arg1, arg2);
-    if (errno == EDOM || isnan(result)) {
-      /*
-       * We handled all possible domain errors above, so this should be
-       * impossible.  However, old glibc versions on x86 have a bug that
-       * causes them to fail this way for abs(y) greater than 2^63:
-       *
-       * https://sourceware.org/bugzilla/show_bug.cgi?id=3866
-       *
-       * Hence, if we get here, assume y is finite but large (large
-       * enough to be certainly even). The result should be 0 if x == 0,
-       * 1.0 if abs(x) == 1.0, otherwise an overflow or underflow error.
-       */
-      if (arg1 == 0.0)
-        result = 0.0; /* we already verified y is positive */
-      else {
-        float8 absx = fabs(arg1);
-
-        if (absx == 1.0)
-          result = 1.0;
-        else if (arg2 >= 0.0 ? (absx > 1.0) : (absx < 1.0))
-          float_overflow_error();
-        else
-          float_underflow_error();
-      }
-    } else if (errno == ERANGE) {
-      if (result != 0.0)
-        float_overflow_error();
-      else
-        float_underflow_error();
-    } else {
-      if (unlikely(isinf(result)))
-        float_overflow_error();
-      if (unlikely(result == 0.0) && arg1 != 0.0)
-        float_underflow_error();
-    }
-  }
+  /* ty decides the NaN, the infinities and the domain errors as POSIX says */
+  if (ty_float64_pow(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1), &result))
+    float_ty_error(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1408,36 +977,10 @@ Datum dpow(PG_FUNCTION_ARGS) {
  *arg1
  */
 Datum dexp(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * Handle NaN and Inf cases explicitly.  This avoids needing to assume
-   * that the platform's exp() conforms to POSIX for these cases, and it
-   * removes some edge cases for the overflow checks below.
-   */
-  if (isnan(arg1))
-    result = arg1;
-  else if (isinf(arg1)) {
-    /* Per POSIX, exp(-Inf) is 0 */
-    result = (arg1 > 0.0) ? arg1 : 0;
-  } else {
-    /*
-     * On some platforms, exp() will not set errno but just return Inf or
-     * zero to report overflow/underflow; therefore, test both cases.
-     */
-    errno = 0;
-    result = exp(arg1);
-    if (unlikely(errno == ERANGE)) {
-      if (result != 0.0)
-        float_overflow_error();
-      else
-        float_underflow_error();
-    } else if (unlikely(isinf(result)))
-      float_overflow_error();
-    else if (unlikely(result == 0.0))
-      float_underflow_error();
-  }
+  if (ty_float64_exp(PG_GETARG_FLOAT8(0), &result))
+    float_raise_ty();
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1446,25 +989,11 @@ Datum dexp(PG_FUNCTION_ARGS) {
  *		dlog1			- returns the natural logarithm of arg1
  */
 Datum dlog1(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * Emit particular SQLSTATE error codes for ln(). This is required by the
-   * SQL standard.
-   */
-  if (arg1 == 0.0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_LOG),
-                    errmsg("cannot take logarithm of zero")));
-  if (arg1 < 0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_LOG),
-                    errmsg("cannot take logarithm of a negative number")));
-
-  result = log(arg1);
-  if (unlikely(isinf(result)) && !isinf(arg1))
-    float_overflow_error();
-  if (unlikely(result == 0.0) && arg1 != 1.0)
-    float_underflow_error();
+  /* the SQL standard asks for particular SQLSTATE codes for ln() */
+  if (ty_float64_ln(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_INVALID_ARGUMENT_FOR_LOG);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1473,26 +1002,10 @@ Datum dlog1(PG_FUNCTION_ARGS) {
  *		dlog10			- returns the base 10 logarithm of arg1
  */
 Datum dlog10(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * Emit particular SQLSTATE error codes for log(). The SQL spec doesn't
-   * define log(), but it does define ln(), so it makes sense to emit the
-   * same error code for an analogous error condition.
-   */
-  if (arg1 == 0.0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_LOG),
-                    errmsg("cannot take logarithm of zero")));
-  if (arg1 < 0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_LOG),
-                    errmsg("cannot take logarithm of a negative number")));
-
-  result = log10(arg1);
-  if (unlikely(isinf(result)) && !isinf(arg1))
-    float_overflow_error();
-  if (unlikely(result == 0.0) && arg1 != 1.0)
-    float_underflow_error();
+  if (ty_float64_log10(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_INVALID_ARGUMENT_FOR_LOG);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1501,25 +1014,10 @@ Datum dlog10(PG_FUNCTION_ARGS) {
  *		dacos			- returns the arccos of arg1 (radians)
  */
 Datum dacos(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  /*
-   * The principal branch of the inverse cosine function maps values in the
-   * range [-1, 1] to values in the range [0, Pi], so we should reject any
-   * inputs outside that range and the result will always be finite.
-   */
-  if (arg1 < -1.0 || arg1 > 1.0)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  result = acos(arg1);
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_acos(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1528,25 +1026,10 @@ Datum dacos(PG_FUNCTION_ARGS) {
  *		dasin			- returns the arcsin of arg1 (radians)
  */
 Datum dasin(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  /*
-   * The principal branch of the inverse sine function maps values in the
-   * range [-1, 1] to values in the range [-Pi/2, Pi/2], so we should reject
-   * any inputs outside that range and the result will always be finite.
-   */
-  if (arg1 < -1.0 || arg1 > 1.0)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  result = asin(arg1);
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_asin(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1555,21 +1038,10 @@ Datum dasin(PG_FUNCTION_ARGS) {
  *		datan			- returns the arctan of arg1 (radians)
  */
 Datum datan(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  /*
-   * The principal branch of the inverse tangent function maps all inputs to
-   * values in the range [-Pi/2, Pi/2], so the result should always be
-   * finite, even if the input is infinite.
-   */
-  result = atan(arg1);
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_atan(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1579,21 +1051,10 @@ Datum datan(PG_FUNCTION_ARGS) {
  *(radians)
  */
 Datum datan2(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-  float8 arg2 = PG_GETARG_FLOAT8(1);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if either input is NaN */
-  if (isnan(arg1) || isnan(arg2))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  /*
-   * atan2 maps all inputs to values in the range [-Pi, Pi], so the result
-   * should always be finite, even if the inputs are infinite.
-   */
-  result = atan2(arg1, arg2);
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_atan2(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1602,35 +1063,10 @@ Datum datan2(PG_FUNCTION_ARGS) {
  *		dcos			- returns the cosine of arg1 (radians)
  */
 Datum dcos(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  /*
-   * cos() is periodic and so theoretically can work for all finite inputs,
-   * but some implementations may choose to throw error if the input is so
-   * large that there are no significant digits in the result.  So we should
-   * check for errors.  POSIX allows an error to be reported either via
-   * errno or via fetestexcept(), but currently we only support checking
-   * errno.  (fetestexcept() is rumored to report underflow unreasonably
-   * early on some platforms, so it's not clear that believing it would be a
-   * net improvement anyway.)
-   *
-   * For infinite inputs, POSIX specifies that the trigonometric functions
-   * should return a domain error; but we won't notice that unless the
-   * platform reports via errno, so also explicitly test for infinite
-   * inputs.
-   */
-  errno = 0;
-  result = cos(arg1);
-  if (errno != 0 || isinf(arg1))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_cos(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1640,22 +1076,10 @@ Datum dcos(PG_FUNCTION_ARGS) {
  *(radians)
  */
 Datum dcot(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  /* Be sure to throw an error if the input is infinite --- see dcos() */
-  errno = 0;
-  result = tan(arg1);
-  if (errno != 0 || isinf(arg1))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  result = 1.0 / result;
-  /* Not checking for overflow because cot(0) == Inf */
+  if (ty_float64_cot(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1664,21 +1088,10 @@ Datum dcot(PG_FUNCTION_ARGS) {
  *		dsin			- returns the sine of arg1 (radians)
  */
 Datum dsin(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  /* Be sure to throw an error if the input is infinite --- see dcos() */
-  errno = 0;
-  result = sin(arg1);
-  if (errno != 0 || isinf(arg1))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_sin(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1687,20 +1100,10 @@ Datum dsin(PG_FUNCTION_ARGS) {
  *		dtan			- returns the tangent of arg1 (radians)
  */
 Datum dtan(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  /* Be sure to throw an error if the input is infinite --- see dcos() */
-  errno = 0;
-  result = tan(arg1);
-  if (errno != 0 || isinf(arg1))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-  /* Not checking for overflow because tan(pi/2) == Inf */
+  if (ty_float64_tan(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1708,133 +1111,13 @@ Datum dtan(PG_FUNCTION_ARGS) {
 /* ========== DEGREE-BASED TRIGONOMETRIC FUNCTIONS ========== */
 
 /*
- * Initialize the cached constants declared at the head of this file
- * (sin_30 etc).  The fact that we need those at all, let alone need this
- * Rube-Goldberg-worthy method of initializing them, is because there are
- * compilers out there that will precompute expressions such as sin(constant)
- * using a sin() function different from what will be used at runtime.  If we
- * want exact results, we must ensure that none of the scaling constants used
- * in the degree-based trig functions are computed that way.  To do so, we
- * compute them from the variables degree_c_thirty etc, which are also really
- * constants, but the compiler cannot assume that.
- *
- * Other hazards we are trying to forestall with this kluge include the
- * possibility that compilers will rearrange the expressions, or compute
- * some intermediate results in registers wider than a standard double.
- *
- * In the places where we use these constants, the typical pattern is like
- *		volatile float8 sin_x = sin(x * RADIANS_PER_DEGREE);
- *		return (sin_x / sin_30);
- * where we hope to get a value of exactly 1.0 from the division when x = 30.
- * The volatile temporary variable is needed on machines with wide float
- * registers, to ensure that the result of sin(x) is rounded to double width
- * the same as the value of sin_30 has been.  Experimentation with gcc shows
- * that marking the temp variable volatile is necessary to make the store and
- * reload actually happen; hopefully the same trick works for other compilers.
- * (gcc's documentation suggests using the -ffloat-store compiler switch to
- * ensure this, but that is compiler-specific and it also pessimizes code in
- * many places where we don't care about this.)
- */
-static void init_degree_constants(void) {
-  sin_30 = sin(degree_c_thirty * RADIANS_PER_DEGREE);
-  one_minus_cos_60 = 1.0 - cos(degree_c_sixty * RADIANS_PER_DEGREE);
-  asin_0_5 = asin(degree_c_one_half);
-  acos_0_5 = acos(degree_c_one_half);
-  atan_1_0 = atan(degree_c_one);
-  tan_45 = sind_q1(degree_c_forty_five) / cosd_q1(degree_c_forty_five);
-  cot_45 = cosd_q1(degree_c_forty_five) / sind_q1(degree_c_forty_five);
-  degree_consts_set = true;
-}
-
-#define INIT_DEGREE_CONSTANTS() \
-do { \
-	if (!degree_consts_set) \
-		init_degree_constants(); \
-} while(0)
-
-/*
- *		asind_q1		- returns the inverse sine of x in
- *degrees, for x in the range [0, 1].  The result is an angle in the first
- *quadrant --- [0, 90] degrees.
- *
- *						  For the 3 special case inputs
- *(0, 0.5 and 1), this function will return exact values (0, 30 and 90 degrees
- *respectively).
- */
-static double asind_q1(double x) {
-  /*
-   * Stitch together inverse sine and cosine functions for the ranges [0,
-   * 0.5] and (0.5, 1].  Each expression below is guaranteed to return
-   * exactly 30 for x=0.5, so the result is a continuous monotonic function
-   * over the full range.
-   */
-  if (x <= 0.5) {
-    volatile float8 asin_x = asin(x);
-
-    return (asin_x / asin_0_5) * 30.0;
-  } else {
-    volatile float8 acos_x = acos(x);
-
-    return 90.0 - (acos_x / acos_0_5) * 60.0;
-  }
-}
-
-/*
- *		acosd_q1		- returns the inverse cosine of x in
- *degrees, for x in the range [0, 1].  The result is an angle in the first
- *quadrant --- [0, 90] degrees.
- *
- *						  For the 3 special case inputs
- *(0, 0.5 and 1), this function will return exact values (0, 60 and 90 degrees
- *respectively).
- */
-static double acosd_q1(double x) {
-  /*
-   * Stitch together inverse sine and cosine functions for the ranges [0,
-   * 0.5] and (0.5, 1].  Each expression below is guaranteed to return
-   * exactly 60 for x=0.5, so the result is a continuous monotonic function
-   * over the full range.
-   */
-  if (x <= 0.5) {
-    volatile float8 asin_x = asin(x);
-
-    return 90.0 - (asin_x / asin_0_5) * 30.0;
-  } else {
-    volatile float8 acos_x = acos(x);
-
-    return (acos_x / acos_0_5) * 60.0;
-  }
-}
-
-/*
  *		dacosd			- returns the arccos of arg1 (degrees)
  */
 Datum dacosd(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  INIT_DEGREE_CONSTANTS();
-
-  /*
-   * The principal branch of the inverse cosine function maps values in the
-   * range [-1, 1] to values in the range [0, 180], so we should reject any
-   * inputs outside that range and the result will always be finite.
-   */
-  if (arg1 < -1.0 || arg1 > 1.0)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  if (arg1 >= 0.0)
-    result = acosd_q1(arg1);
-  else
-    result = 90.0 + asind_q1(-arg1);
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_acosd(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1843,31 +1126,10 @@ Datum dacosd(PG_FUNCTION_ARGS) {
  *		dasind			- returns the arcsin of arg1 (degrees)
  */
 Datum dasind(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  INIT_DEGREE_CONSTANTS();
-
-  /*
-   * The principal branch of the inverse sine function maps values in the
-   * range [-1, 1] to values in the range [-90, 90], so we should reject any
-   * inputs outside that range and the result will always be finite.
-   */
-  if (arg1 < -1.0 || arg1 > 1.0)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  if (arg1 >= 0.0)
-    result = asind_q1(arg1);
-  else
-    result = -asind_q1(-arg1);
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_asind(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1876,27 +1138,10 @@ Datum dasind(PG_FUNCTION_ARGS) {
  *		datand			- returns the arctan of arg1 (degrees)
  */
 Datum datand(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
-  volatile float8 atan_arg1;
 
-  /* Per the POSIX spec, return NaN if the input is NaN */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  INIT_DEGREE_CONSTANTS();
-
-  /*
-   * The principal branch of the inverse tangent function maps all inputs to
-   * values in the range [-90, 90], so the result should always be finite,
-   * even if the input is infinite.  Additionally, we take care to ensure
-   * than when arg1 is 1, the result is exactly 45.
-   */
-  atan_arg1 = atan(arg1);
-  result = (atan_arg1 / atan_1_0) * 45.0;
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_atand(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -1906,135 +1151,22 @@ Datum datand(PG_FUNCTION_ARGS) {
  *(degrees)
  */
 Datum datan2d(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
-  float8 arg2 = PG_GETARG_FLOAT8(1);
   float8 result;
-  volatile float8 atan2_arg1_arg2;
 
-  /* Per the POSIX spec, return NaN if either input is NaN */
-  if (isnan(arg1) || isnan(arg2))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  INIT_DEGREE_CONSTANTS();
-
-  /*
-   * atan2d maps all inputs to values in the range [-180, 180], so the
-   * result should always be finite, even if the inputs are infinite.
-   *
-   * Note: this coding assumes that atan(1.0) is a suitable scaling constant
-   * to get an exact result from atan2().  This might well fail on us at
-   * some point, requiring us to decide exactly what inputs we think we're
-   * going to guarantee an exact result for.
-   */
-  atan2_arg1_arg2 = atan2(arg1, arg2);
-  result = (atan2_arg1_arg2 / atan_1_0) * 45.0;
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_atan2d(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
-}
-
-/*
- *		sind_0_to_30	- returns the sine of an angle that lies between
- *0 and 30 degrees.  This will return exactly 0 when x is 0, and exactly 0.5
- *when x is 30 degrees.
- */
-static double sind_0_to_30(double x) {
-  volatile float8 sin_x = sin(x * RADIANS_PER_DEGREE);
-
-  return (sin_x / sin_30) / 2.0;
-}
-
-/*
- *		cosd_0_to_60	- returns the cosine of an angle that lies
- *between 0 and 60 degrees.  This will return exactly 1 when x is 0, and exactly
- *0.5 when x is 60 degrees.
- */
-static double cosd_0_to_60(double x) {
-  volatile float8 one_minus_cos_x = 1.0 - cos(x * RADIANS_PER_DEGREE);
-
-  return 1.0 - (one_minus_cos_x / one_minus_cos_60) / 2.0;
-}
-
-/*
- *		sind_q1			- returns the sine of an angle in the
- *first quadrant (0 to 90 degrees).
- */
-static double sind_q1(double x) {
-  /*
-   * Stitch together the sine and cosine functions for the ranges [0, 30]
-   * and (30, 90].  These guarantee to return exact answers at their
-   * endpoints, so the overall result is a continuous monotonic function
-   * that gives exact results when x = 0, 30 and 90 degrees.
-   */
-  if (x <= 30.0)
-    return sind_0_to_30(x);
-  else
-    return cosd_0_to_60(90.0 - x);
-}
-
-/*
- *		cosd_q1			- returns the cosine of an angle in the
- *first quadrant (0 to 90 degrees).
- */
-static double cosd_q1(double x) {
-  /*
-   * Stitch together the sine and cosine functions for the ranges [0, 60]
-   * and (60, 90].  These guarantee to return exact answers at their
-   * endpoints, so the overall result is a continuous monotonic function
-   * that gives exact results when x = 0, 60 and 90 degrees.
-   */
-  if (x <= 60.0)
-    return cosd_0_to_60(x);
-  else
-    return sind_0_to_30(90.0 - x);
 }
 
 /*
  *		dcosd			- returns the cosine of arg1 (degrees)
  */
 Datum dcosd(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
-  int sign = 1;
 
-  /*
-   * Per the POSIX spec, return NaN if the input is NaN and throw an error
-   * if the input is infinite.
-   */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  if (isinf(arg1))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  INIT_DEGREE_CONSTANTS();
-
-  /* Reduce the range of the input to [0,90] degrees */
-  arg1 = fmod(arg1, 360.0);
-
-  if (arg1 < 0.0) {
-    /* cosd(-x) = cosd(x) */
-    arg1 = -arg1;
-  }
-
-  if (arg1 > 180.0) {
-    /* cosd(360-x) = cosd(x) */
-    arg1 = 360.0 - arg1;
-  }
-
-  if (arg1 > 90.0) {
-    /* cosd(180-x) = -cosd(x) */
-    arg1 = 180.0 - arg1;
-    sign = -sign;
-  }
-
-  result = sign * cosd_q1(arg1);
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_cosd(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2044,57 +1176,10 @@ Datum dcosd(PG_FUNCTION_ARGS) {
  *(degrees)
  */
 Datum dcotd(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
-  volatile float8 cot_arg1;
-  int sign = 1;
 
-  /*
-   * Per the POSIX spec, return NaN if the input is NaN and throw an error
-   * if the input is infinite.
-   */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  if (isinf(arg1))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  INIT_DEGREE_CONSTANTS();
-
-  /* Reduce the range of the input to [0,90] degrees */
-  arg1 = fmod(arg1, 360.0);
-
-  if (arg1 < 0.0) {
-    /* cotd(-x) = -cotd(x) */
-    arg1 = -arg1;
-    sign = -sign;
-  }
-
-  if (arg1 > 180.0) {
-    /* cotd(360-x) = -cotd(x) */
-    arg1 = 360.0 - arg1;
-    sign = -sign;
-  }
-
-  if (arg1 > 90.0) {
-    /* cotd(180-x) = -cotd(x) */
-    arg1 = 180.0 - arg1;
-    sign = -sign;
-  }
-
-  cot_arg1 = cosd_q1(arg1) / sind_q1(arg1);
-  result = sign * (cot_arg1 / cot_45);
-
-  /*
-   * On some machines we get cotd(270) = minus zero, but this isn't always
-   * true.  For portability, and because the user constituency for this
-   * function probably doesn't want minus zero, force it to plain zero.
-   */
-  if (result == 0.0)
-    result = 0.0;
-
-  /* Not checking for overflow because cotd(0) == Inf */
+  if (ty_float64_cotd(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2103,47 +1188,10 @@ Datum dcotd(PG_FUNCTION_ARGS) {
  *		dsind			- returns the sine of arg1 (degrees)
  */
 Datum dsind(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
-  int sign = 1;
 
-  /*
-   * Per the POSIX spec, return NaN if the input is NaN and throw an error
-   * if the input is infinite.
-   */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  if (isinf(arg1))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  INIT_DEGREE_CONSTANTS();
-
-  /* Reduce the range of the input to [0,90] degrees */
-  arg1 = fmod(arg1, 360.0);
-
-  if (arg1 < 0.0) {
-    /* sind(-x) = -sind(x) */
-    arg1 = -arg1;
-    sign = -sign;
-  }
-
-  if (arg1 > 180.0) {
-    /* sind(360-x) = -sind(x) */
-    arg1 = 360.0 - arg1;
-    sign = -sign;
-  }
-
-  if (arg1 > 90.0) {
-    /* sind(180-x) = sind(x) */
-    arg1 = 180.0 - arg1;
-  }
-
-  result = sign * sind_q1(arg1);
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_sind(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2152,57 +1200,10 @@ Datum dsind(PG_FUNCTION_ARGS) {
  *		dtand			- returns the tangent of arg1 (degrees)
  */
 Datum dtand(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
-  volatile float8 tan_arg1;
-  int sign = 1;
 
-  /*
-   * Per the POSIX spec, return NaN if the input is NaN and throw an error
-   * if the input is infinite.
-   */
-  if (isnan(arg1))
-    PG_RETURN_FLOAT8(get_float8_nan());
-
-  if (isinf(arg1))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  INIT_DEGREE_CONSTANTS();
-
-  /* Reduce the range of the input to [0,90] degrees */
-  arg1 = fmod(arg1, 360.0);
-
-  if (arg1 < 0.0) {
-    /* tand(-x) = -tand(x) */
-    arg1 = -arg1;
-    sign = -sign;
-  }
-
-  if (arg1 > 180.0) {
-    /* tand(360-x) = -tand(x) */
-    arg1 = 360.0 - arg1;
-    sign = -sign;
-  }
-
-  if (arg1 > 90.0) {
-    /* tand(180-x) = -tand(x) */
-    arg1 = 180.0 - arg1;
-    sign = -sign;
-  }
-
-  tan_arg1 = sind_q1(arg1) / cosd_q1(arg1);
-  result = sign * (tan_arg1 / tan_45);
-
-  /*
-   * On some machines we get tand(180) = minus zero, but this isn't always
-   * true.  For portability, and because the user constituency for this
-   * function probably doesn't want minus zero, force it to plain zero.
-   */
-  if (result == 0.0)
-    result = 0.0;
-
-  /* Not checking for overflow because tand(90) == Inf */
+  if (ty_float64_tand(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2211,23 +1212,29 @@ Datum dtand(PG_FUNCTION_ARGS) {
  *		degrees		- returns degrees converted from radians
  */
 Datum degrees(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
+  float8 result;
 
-  PG_RETURN_FLOAT8(float8_div(arg1, RADIANS_PER_DEGREE));
+  if (ty_float64_degrees(PG_GETARG_FLOAT8(0), &result))
+    float_raise_ty();
+
+  PG_RETURN_FLOAT8(result);
 }
 
 /*
  *		dpi				- returns the constant PI
  */
-Datum dpi(PG_FUNCTION_ARGS) { PG_RETURN_FLOAT8(M_PI); }
+Datum dpi(PG_FUNCTION_ARGS) { PG_RETURN_FLOAT8(ty_float64_pi()); }
 
 /*
- *		radians		- returns radians converted from degrees
+ *		radians			- converts degrees to radians
  */
 Datum radians(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
+  float8 result;
 
-  PG_RETURN_FLOAT8(float8_mul(arg1, RADIANS_PER_DEGREE));
+  if (ty_float64_radians(PG_GETARG_FLOAT8(0), &result))
+    float_raise_ty();
+
+  PG_RETURN_FLOAT8(result);
 }
 
 /* ========== HYPERBOLIC FUNCTIONS ========== */
@@ -2236,23 +1243,10 @@ Datum radians(PG_FUNCTION_ARGS) {
  *		dsinh			- returns the hyperbolic sine of arg1
  */
 Datum dsinh(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  errno = 0;
-  result = sinh(arg1);
-
-  /*
-   * if an ERANGE error occurs, it means there is an overflow.  For sinh,
-   * the result should be either -infinity or infinity, depending on the
-   * sign of arg1.
-   */
-  if (errno == ERANGE) {
-    if (arg1 < 0)
-      result = -get_float8_infinity();
-    else
-      result = get_float8_infinity();
-  }
+  if (ty_float64_sinh(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2261,21 +1255,10 @@ Datum dsinh(PG_FUNCTION_ARGS) {
  *		dcosh			- returns the hyperbolic cosine of arg1
  */
 Datum dcosh(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  errno = 0;
-  result = cosh(arg1);
-
-  /*
-   * if an ERANGE error occurs, it means there is an overflow.  As cosh is
-   * always positive, it always means the result is positive infinity.
-   */
-  if (errno == ERANGE)
-    result = get_float8_infinity();
-
-  if (unlikely(result == 0.0))
-    float_underflow_error();
+  if (ty_float64_cosh(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2284,16 +1267,10 @@ Datum dcosh(PG_FUNCTION_ARGS) {
  *		dtanh			- returns the hyperbolic tangent of arg1
  */
 Datum dtanh(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * For tanh, we don't need an errno check because it never overflows.
-   */
-  result = tanh(arg1);
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_tanh(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2303,13 +1280,10 @@ Datum dtanh(PG_FUNCTION_ARGS) {
  *arg1
  */
 Datum dasinh(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * For asinh, we don't need an errno check because it never overflows.
-   */
-  result = asinh(arg1);
+  if (ty_float64_asinh(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2319,20 +1293,10 @@ Datum dasinh(PG_FUNCTION_ARGS) {
  *of arg1
  */
 Datum dacosh(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * acosh is only defined for inputs >= 1.0.  By checking this ourselves,
-   * we need not worry about checking for an EDOM error, which is a good
-   * thing because some implementations will report that for NaN. Otherwise,
-   * no error is possible.
-   */
-  if (arg1 < 1.0)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  result = acosh(arg1);
+  if (ty_float64_acosh(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2342,29 +1306,10 @@ Datum dacosh(PG_FUNCTION_ARGS) {
  *of arg1
  */
 Datum datanh(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * atanh is only defined for inputs between -1 and 1.  By checking this
-   * ourselves, we need not worry about checking for an EDOM error, which is
-   * a good thing because some implementations will report that for NaN.
-   */
-  if (arg1 < -1.0 || arg1 > 1.0)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("input is out of range")));
-
-  /*
-   * Also handle the infinity cases ourselves; this is helpful because old
-   * glibc versions may produce the wrong errno for this.  All other inputs
-   * cannot produce an error.
-   */
-  if (arg1 == -1.0)
-    result = -get_float8_infinity();
-  else if (arg1 == 1.0)
-    result = get_float8_infinity();
-  else
-    result = atanh(arg1);
+  if (ty_float64_atanh(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2375,16 +1320,10 @@ Datum datanh(PG_FUNCTION_ARGS) {
  *		derf			- returns the error function: erf(arg1)
  */
 Datum derf(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * For erf, we don't need an errno check because it never overflows.
-   */
-  result = erf(arg1);
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_erf(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2394,16 +1333,10 @@ Datum derf(PG_FUNCTION_ARGS) {
  *function: 1 - erf(arg1)
  */
 Datum derfc(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * For erfc, we don't need an errno check because it never overflows.
-   */
-  result = erfc(arg1);
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
+  if (ty_float64_erfc(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2414,42 +1347,10 @@ Datum derfc(PG_FUNCTION_ARGS) {
  *		dgamma			- returns the gamma function of arg1
  */
 Datum dgamma(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * Handle NaN and Inf cases explicitly.  This simplifies the overflow
-   * checks on platforms that do not set errno.
-   */
-  if (isnan(arg1))
-    result = arg1;
-  else if (isinf(arg1)) {
-    /* Per POSIX, an input of -Inf causes a domain error */
-    if (arg1 < 0) {
-      float_overflow_error();
-      result = get_float8_nan(); /* keep compiler quiet */
-    } else
-      result = arg1;
-  } else {
-    /*
-     * Note: the POSIX/C99 gamma function is called "tgamma", not "gamma".
-     *
-     * On some platforms, tgamma() will not set errno but just return Inf,
-     * NaN, or zero to report overflow/underflow; therefore, test those
-     * cases explicitly (note that, like the exponential function, the
-     * gamma function has no zeros).
-     */
-    errno = 0;
-    result = tgamma(arg1);
-
-    if (errno != 0 || isinf(result) || isnan(result)) {
-      if (result != 0.0)
-        float_overflow_error();
-      else
-        float_underflow_error();
-    } else if (result == 0.0)
-      float_underflow_error();
-  }
+  if (ty_float64_gamma(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2459,26 +1360,10 @@ Datum dgamma(PG_FUNCTION_ARGS) {
  *gamma of arg1
  */
 Datum dlgamma(PG_FUNCTION_ARGS) {
-  float8 arg1 = PG_GETARG_FLOAT8(0);
   float8 result;
 
-  /*
-   * Note: lgamma may not be thread-safe because it may write to a global
-   * variable signgam, which may not be thread-local. However, this doesn't
-   * matter to us, since we don't use signgam.
-   */
-  errno = 0;
-  result = lgamma(arg1);
-
-  /*
-   * If an ERANGE error occurs, it means there was an overflow or a pole
-   * error (which happens for zero and negative integer inputs).
-   *
-   * On some platforms, lgamma() will not set errno but just return infinity
-   * to report overflow, but it should never underflow.
-   */
-  if (errno == ERANGE || (isinf(result) && !isinf(arg1)))
-    float_overflow_error();
+  if (ty_float64_lgamma(PG_GETARG_FLOAT8(0), &result))
+    float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
 }
@@ -2546,6 +1431,62 @@ static float8 *check_float8_array(ArrayType *transarray, const char *caller,
 }
 
 /*
+ * Put a variance state back: into the transition array in place, if we are
+ * an aggregate's step and so may change it, else into a new array.
+ */
+static Datum float_var_store(FunctionCallInfo fcinfo, ArrayType *transarray,
+                             float8 *tv, const ty_float_var_t *st) {
+  if (AggCheckCallContext(fcinfo, NULL)) {
+    tv[0] = st->n;
+    tv[1] = st->sx;
+    tv[2] = st->sxx;
+
+    PG_RETURN_ARRAYTYPE_P(transarray);
+  } else {
+    Datum transdatums[3];
+    ArrayType *result;
+
+    transdatums[0] = Float8GetDatumFast(st->n);
+    transdatums[1] = Float8GetDatumFast(st->sx);
+    transdatums[2] = Float8GetDatumFast(st->sxx);
+
+    result = construct_array_builtin(transdatums, 3, FLOAT8OID);
+
+    PG_RETURN_ARRAYTYPE_P(result);
+  }
+}
+
+/* The same for a regression state of six values. */
+static Datum float_regr_store(FunctionCallInfo fcinfo, ArrayType *transarray,
+                              float8 *tv, const ty_float_regr_t *st) {
+  if (AggCheckCallContext(fcinfo, NULL)) {
+    tv[0] = st->n;
+    tv[1] = st->sx;
+    tv[2] = st->sxx;
+    tv[3] = st->sy;
+    tv[4] = st->syy;
+    tv[5] = st->sxy;
+
+    PG_RETURN_ARRAYTYPE_P(transarray);
+  } else {
+    Datum transdatums[6];
+    ArrayType *result;
+
+    transdatums[0] = Float8GetDatumFast(st->n);
+    transdatums[1] = Float8GetDatumFast(st->sx);
+    transdatums[2] = Float8GetDatumFast(st->sxx);
+    transdatums[3] = Float8GetDatumFast(st->sy);
+    transdatums[4] = Float8GetDatumFast(st->syy);
+    transdatums[5] = Float8GetDatumFast(st->sxy);
+
+    result = construct_array_builtin(transdatums, 6, FLOAT8OID);
+
+    PG_RETURN_ARRAYTYPE_P(result);
+  }
+}
+
+
+/*
  * float8_combine
  *
  * An aggregate combine function used to combine two 3 fields
@@ -2556,307 +1497,104 @@ static float8 *check_float8_array(ArrayType *transarray, const char *caller,
 Datum float8_combine(PG_FUNCTION_ARGS) {
   ArrayType *transarray1 = PG_GETARG_ARRAYTYPE_P(0);
   ArrayType *transarray2 = PG_GETARG_ARRAYTYPE_P(1);
-  float8 *transvalues1;
-  float8 *transvalues2;
-  float8 N1, Sx1, Sxx1, N2, Sx2, Sxx2, tmp, N, Sx, Sxx;
+  float8 *transvalues1 = check_float8_array(transarray1, "float8_combine", 3);
+  float8 *transvalues2 = check_float8_array(transarray2, "float8_combine", 3);
+  ty_float_var_t a = {transvalues1[0], transvalues1[1], transvalues1[2]};
+  ty_float_var_t b = {transvalues2[0], transvalues2[1], transvalues2[2]};
 
-  transvalues1 = check_float8_array(transarray1, "float8_combine", 3);
-  transvalues2 = check_float8_array(transarray2, "float8_combine", 3);
+  if (ty_float_var_combine(&a, &b))
+    float_raise_ty();
 
-  N1 = transvalues1[0];
-  Sx1 = transvalues1[1];
-  Sxx1 = transvalues1[2];
-
-  N2 = transvalues2[0];
-  Sx2 = transvalues2[1];
-  Sxx2 = transvalues2[2];
-
-  /*--------------------
-   * The transition values combine using a generalization of the
-   * Youngs-Cramer algorithm as follows:
-   *
-   *	N = N1 + N2
-   *	Sx = Sx1 + Sx2
-   *	Sxx = Sxx1 + Sxx2 + N1 * N2 * (Sx1/N1 - Sx2/N2)^2 / N;
-   *
-   * It's worth handling the special cases N1 = 0 and N2 = 0 separately
-   * since those cases are trivial, and we then don't need to worry about
-   * division-by-zero errors in the general case.
-   *--------------------
-   */
-  if (N1 == 0.0) {
-    N = N2;
-    Sx = Sx2;
-    Sxx = Sxx2;
-  } else if (N2 == 0.0) {
-    N = N1;
-    Sx = Sx1;
-    Sxx = Sxx1;
-  } else {
-    N = N1 + N2;
-    Sx = float8_pl(Sx1, Sx2);
-    tmp = Sx1 / N1 - Sx2 / N2;
-    Sxx = Sxx1 + Sxx2 + N1 * N2 * tmp * tmp / N;
-    if (unlikely(isinf(Sxx)) && !isinf(Sxx1) && !isinf(Sxx2))
-      float_overflow_error();
-  }
-
-  /*
-   * If we're invoked as an aggregate, we can cheat and modify our first
-   * parameter in-place to reduce palloc overhead. Otherwise we construct a
-   * new array with the updated transition data and return it.
-   */
-  if (AggCheckCallContext(fcinfo, NULL)) {
-    transvalues1[0] = N;
-    transvalues1[1] = Sx;
-    transvalues1[2] = Sxx;
-
-    PG_RETURN_ARRAYTYPE_P(transarray1);
-  } else {
-    Datum transdatums[3];
-    ArrayType *result;
-
-    transdatums[0] = Float8GetDatumFast(N);
-    transdatums[1] = Float8GetDatumFast(Sx);
-    transdatums[2] = Float8GetDatumFast(Sxx);
-
-    result = construct_array_builtin(transdatums, 3, FLOAT8OID);
-
-    PG_RETURN_ARRAYTYPE_P(result);
-  }
+  return float_var_store(fcinfo, transarray1, transvalues1, &a);
 }
 
 Datum float8_accum(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 newval = PG_GETARG_FLOAT8(1);
-  float8 *transvalues;
-  float8 N, Sx, Sxx, tmp;
+  float8 *transvalues = check_float8_array(transarray, "float8_accum", 3);
+  ty_float_var_t st = {transvalues[0], transvalues[1], transvalues[2]};
 
-  transvalues = check_float8_array(transarray, "float8_accum", 3);
-  N = transvalues[0];
-  Sx = transvalues[1];
-  Sxx = transvalues[2];
+  /* ty adds the value by the Youngs-Cramer method */
+  if (ty_float_var_accum(&st, PG_GETARG_FLOAT8(1)))
+    float_raise_ty();
 
-  /*
-   * Use the Youngs-Cramer algorithm to incorporate the new value into the
-   * transition values.
-   */
-  N += 1.0;
-  Sx += newval;
-  if (transvalues[0] > 0.0) {
-    tmp = newval * N - Sx;
-    Sxx += tmp * tmp / (N * transvalues[0]);
-
-    /*
-     * Overflow check.  We only report an overflow error when finite
-     * inputs lead to infinite results.  Note also that Sxx should be NaN
-     * if any of the inputs are infinite, so we intentionally prevent Sxx
-     * from becoming infinite.
-     */
-    if (isinf(Sx) || isinf(Sxx)) {
-      if (!isinf(transvalues[1]) && !isinf(newval))
-        float_overflow_error();
-
-      Sxx = get_float8_nan();
-    }
-  } else {
-    /*
-     * At the first input, we normally can leave Sxx as 0.  However, if
-     * the first input is Inf or NaN, we'd better force Sxx to NaN;
-     * otherwise we will falsely report variance zero when there are no
-     * more inputs.
-     */
-    if (isnan(newval) || isinf(newval))
-      Sxx = get_float8_nan();
-  }
-
-  /*
-   * If we're invoked as an aggregate, we can cheat and modify our first
-   * parameter in-place to reduce palloc overhead. Otherwise we construct a
-   * new array with the updated transition data and return it.
-   */
-  if (AggCheckCallContext(fcinfo, NULL)) {
-    transvalues[0] = N;
-    transvalues[1] = Sx;
-    transvalues[2] = Sxx;
-
-    PG_RETURN_ARRAYTYPE_P(transarray);
-  } else {
-    Datum transdatums[3];
-    ArrayType *result;
-
-    transdatums[0] = Float8GetDatumFast(N);
-    transdatums[1] = Float8GetDatumFast(Sx);
-    transdatums[2] = Float8GetDatumFast(Sxx);
-
-    result = construct_array_builtin(transdatums, 3, FLOAT8OID);
-
-    PG_RETURN_ARRAYTYPE_P(result);
-  }
+  return float_var_store(fcinfo, transarray, transvalues, &st);
 }
 
 Datum float4_accum(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
+  float8 *transvalues = check_float8_array(transarray, "float4_accum", 3);
+  ty_float_var_t st = {transvalues[0], transvalues[1], transvalues[2]};
 
-  /* do computations as float8 */
-  float8 newval = PG_GETARG_FLOAT4(1);
-  float8 *transvalues;
-  float8 N, Sx, Sxx, tmp;
+  /* ty adds the value by the Youngs-Cramer method */
+  if (ty_float_var_accum(&st, PG_GETARG_FLOAT4(1)))
+    float_raise_ty();
 
-  transvalues = check_float8_array(transarray, "float4_accum", 3);
-  N = transvalues[0];
-  Sx = transvalues[1];
-  Sxx = transvalues[2];
-
-  /*
-   * Use the Youngs-Cramer algorithm to incorporate the new value into the
-   * transition values.
-   */
-  N += 1.0;
-  Sx += newval;
-  if (transvalues[0] > 0.0) {
-    tmp = newval * N - Sx;
-    Sxx += tmp * tmp / (N * transvalues[0]);
-
-    /*
-     * Overflow check.  We only report an overflow error when finite
-     * inputs lead to infinite results.  Note also that Sxx should be NaN
-     * if any of the inputs are infinite, so we intentionally prevent Sxx
-     * from becoming infinite.
-     */
-    if (isinf(Sx) || isinf(Sxx)) {
-      if (!isinf(transvalues[1]) && !isinf(newval))
-        float_overflow_error();
-
-      Sxx = get_float8_nan();
-    }
-  } else {
-    /*
-     * At the first input, we normally can leave Sxx as 0.  However, if
-     * the first input is Inf or NaN, we'd better force Sxx to NaN;
-     * otherwise we will falsely report variance zero when there are no
-     * more inputs.
-     */
-    if (isnan(newval) || isinf(newval))
-      Sxx = get_float8_nan();
-  }
-
-  /*
-   * If we're invoked as an aggregate, we can cheat and modify our first
-   * parameter in-place to reduce palloc overhead. Otherwise we construct a
-   * new array with the updated transition data and return it.
-   */
-  if (AggCheckCallContext(fcinfo, NULL)) {
-    transvalues[0] = N;
-    transvalues[1] = Sx;
-    transvalues[2] = Sxx;
-
-    PG_RETURN_ARRAYTYPE_P(transarray);
-  } else {
-    Datum transdatums[3];
-    ArrayType *result;
-
-    transdatums[0] = Float8GetDatumFast(N);
-    transdatums[1] = Float8GetDatumFast(Sx);
-    transdatums[2] = Float8GetDatumFast(Sxx);
-
-    result = construct_array_builtin(transdatums, 3, FLOAT8OID);
-
-    PG_RETURN_ARRAYTYPE_P(result);
-  }
+  return float_var_store(fcinfo, transarray, transvalues, &st);
 }
 
 Datum float8_avg(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sx;
+  float8 *transvalues = check_float8_array(transarray, "float8_avg", 3);
+  ty_float_var_t st = {transvalues[0], transvalues[1], transvalues[2]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_avg", 3);
-  N = transvalues[0];
-  Sx = transvalues[1];
-  /* ignore Sxx */
-
-  /* SQL defines AVG of no values to be NULL */
-  if (N == 0.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_var_avg(&st, &result))
     PG_RETURN_NULL();
 
-  PG_RETURN_FLOAT8(Sx / N);
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_var_pop(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxx;
+  float8 *transvalues = check_float8_array(transarray, "float8_var_pop", 3);
+  ty_float_var_t st = {transvalues[0], transvalues[1], transvalues[2]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_var_pop", 3);
-  N = transvalues[0];
-  /* ignore Sx */
-  Sxx = transvalues[2];
-
-  /* Population variance is undefined when N is 0, so return NULL */
-  if (N == 0.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_var_pop(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Sxx is guaranteed to be non-negative */
-
-  PG_RETURN_FLOAT8(Sxx / N);
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_var_samp(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxx;
+  float8 *transvalues = check_float8_array(transarray, "float8_var_samp", 3);
+  ty_float_var_t st = {transvalues[0], transvalues[1], transvalues[2]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_var_samp", 3);
-  N = transvalues[0];
-  /* ignore Sx */
-  Sxx = transvalues[2];
-
-  /* Sample variance is undefined when N is 0 or 1, so return NULL */
-  if (N <= 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_var_samp(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Sxx is guaranteed to be non-negative */
-
-  PG_RETURN_FLOAT8(Sxx / (N - 1.0));
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_stddev_pop(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxx;
+  float8 *transvalues = check_float8_array(transarray, "float8_stddev_pop", 3);
+  ty_float_var_t st = {transvalues[0], transvalues[1], transvalues[2]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_stddev_pop", 3);
-  N = transvalues[0];
-  /* ignore Sx */
-  Sxx = transvalues[2];
-
-  /* Population stddev is undefined when N is 0, so return NULL */
-  if (N == 0.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_stddev_pop(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Sxx is guaranteed to be non-negative */
-
-  PG_RETURN_FLOAT8(sqrt(Sxx / N));
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_stddev_samp(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxx;
+  float8 *transvalues = check_float8_array(transarray, "float8_stddev_samp", 3);
+  ty_float_var_t st = {transvalues[0], transvalues[1], transvalues[2]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_stddev_samp", 3);
-  N = transvalues[0];
-  /* ignore Sx */
-  Sxx = transvalues[2];
-
-  /* Sample stddev is undefined when N is 0 or 1, so return NULL */
-  if (N <= 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_stddev_samp(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Sxx is guaranteed to be non-negative */
-
-  PG_RETURN_FLOAT8(sqrt(Sxx / (N - 1.0)));
+  PG_RETURN_FLOAT8(result);
 }
 
 /*
@@ -2882,98 +1620,13 @@ Datum float8_stddev_samp(PG_FUNCTION_ARGS) {
 
 Datum float8_regr_accum(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 newvalY = PG_GETARG_FLOAT8(1);
-  float8 newvalX = PG_GETARG_FLOAT8(2);
-  float8 *transvalues;
-  float8 N, Sx, Sxx, Sy, Syy, Sxy, tmpX, tmpY, scale;
+  float8 *tv = check_float8_array(transarray, "float8_regr_accum", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
 
-  transvalues = check_float8_array(transarray, "float8_regr_accum", 6);
-  N = transvalues[0];
-  Sx = transvalues[1];
-  Sxx = transvalues[2];
-  Sy = transvalues[3];
-  Syy = transvalues[4];
-  Sxy = transvalues[5];
+  if (ty_float_regr_accum(&st, PG_GETARG_FLOAT8(1), PG_GETARG_FLOAT8(2)))
+    float_raise_ty();
 
-  /*
-   * Use the Youngs-Cramer algorithm to incorporate the new values into the
-   * transition values.
-   */
-  N += 1.0;
-  Sx += newvalX;
-  Sy += newvalY;
-  if (transvalues[0] > 0.0) {
-    tmpX = newvalX * N - Sx;
-    tmpY = newvalY * N - Sy;
-    scale = 1.0 / (N * transvalues[0]);
-    Sxx += tmpX * tmpX * scale;
-    Syy += tmpY * tmpY * scale;
-    Sxy += tmpX * tmpY * scale;
-
-    /*
-     * Overflow check.  We only report an overflow error when finite
-     * inputs lead to infinite results.  Note also that Sxx, Syy and Sxy
-     * should be NaN if any of the relevant inputs are infinite, so we
-     * intentionally prevent them from becoming infinite.
-     */
-    if (isinf(Sx) || isinf(Sxx) || isinf(Sy) || isinf(Syy) || isinf(Sxy)) {
-      if (((isinf(Sx) || isinf(Sxx)) && !isinf(transvalues[1]) &&
-           !isinf(newvalX)) ||
-          ((isinf(Sy) || isinf(Syy)) && !isinf(transvalues[3]) &&
-           !isinf(newvalY)) ||
-          (isinf(Sxy) && !isinf(transvalues[1]) && !isinf(newvalX) &&
-           !isinf(transvalues[3]) && !isinf(newvalY)))
-        float_overflow_error();
-
-      if (isinf(Sxx))
-        Sxx = get_float8_nan();
-      if (isinf(Syy))
-        Syy = get_float8_nan();
-      if (isinf(Sxy))
-        Sxy = get_float8_nan();
-    }
-  } else {
-    /*
-     * At the first input, we normally can leave Sxx et al as 0.  However,
-     * if the first input is Inf or NaN, we'd better force the dependent
-     * sums to NaN; otherwise we will falsely report variance zero when
-     * there are no more inputs.
-     */
-    if (isnan(newvalX) || isinf(newvalX))
-      Sxx = Sxy = get_float8_nan();
-    if (isnan(newvalY) || isinf(newvalY))
-      Syy = Sxy = get_float8_nan();
-  }
-
-  /*
-   * If we're invoked as an aggregate, we can cheat and modify our first
-   * parameter in-place to reduce palloc overhead. Otherwise we construct a
-   * new array with the updated transition data and return it.
-   */
-  if (AggCheckCallContext(fcinfo, NULL)) {
-    transvalues[0] = N;
-    transvalues[1] = Sx;
-    transvalues[2] = Sxx;
-    transvalues[3] = Sy;
-    transvalues[4] = Syy;
-    transvalues[5] = Sxy;
-
-    PG_RETURN_ARRAYTYPE_P(transarray);
-  } else {
-    Datum transdatums[6];
-    ArrayType *result;
-
-    transdatums[0] = Float8GetDatumFast(N);
-    transdatums[1] = Float8GetDatumFast(Sx);
-    transdatums[2] = Float8GetDatumFast(Sxx);
-    transdatums[3] = Float8GetDatumFast(Sy);
-    transdatums[4] = Float8GetDatumFast(Syy);
-    transdatums[5] = Float8GetDatumFast(Sxy);
-
-    result = construct_array_builtin(transdatums, 6, FLOAT8OID);
-
-    PG_RETURN_ARRAYTYPE_P(result);
-  }
+  return float_regr_store(fcinfo, transarray, tv, &st);
 }
 
 /*
@@ -2987,322 +1640,158 @@ Datum float8_regr_accum(PG_FUNCTION_ARGS) {
 Datum float8_regr_combine(PG_FUNCTION_ARGS) {
   ArrayType *transarray1 = PG_GETARG_ARRAYTYPE_P(0);
   ArrayType *transarray2 = PG_GETARG_ARRAYTYPE_P(1);
-  float8 *transvalues1;
-  float8 *transvalues2;
-  float8 N1, Sx1, Sxx1, Sy1, Syy1, Sxy1, N2, Sx2, Sxx2, Sy2, Syy2, Sxy2, tmp1,
-      tmp2, N, Sx, Sxx, Sy, Syy, Sxy;
+  float8 *t1 = check_float8_array(transarray1, "float8_regr_combine", 6);
+  float8 *t2 = check_float8_array(transarray2, "float8_regr_combine", 6);
+  ty_float_regr_t a = {t1[0], t1[1], t1[2], t1[3], t1[4], t1[5]};
+  ty_float_regr_t b = {t2[0], t2[1], t2[2], t2[3], t2[4], t2[5]};
 
-  transvalues1 = check_float8_array(transarray1, "float8_regr_combine", 6);
-  transvalues2 = check_float8_array(transarray2, "float8_regr_combine", 6);
+  if (ty_float_regr_combine(&a, &b))
+    float_raise_ty();
 
-  N1 = transvalues1[0];
-  Sx1 = transvalues1[1];
-  Sxx1 = transvalues1[2];
-  Sy1 = transvalues1[3];
-  Syy1 = transvalues1[4];
-  Sxy1 = transvalues1[5];
-
-  N2 = transvalues2[0];
-  Sx2 = transvalues2[1];
-  Sxx2 = transvalues2[2];
-  Sy2 = transvalues2[3];
-  Syy2 = transvalues2[4];
-  Sxy2 = transvalues2[5];
-
-  /*--------------------
-   * The transition values combine using a generalization of the
-   * Youngs-Cramer algorithm as follows:
-   *
-   *	N = N1 + N2
-   *	Sx = Sx1 + Sx2
-   *	Sxx = Sxx1 + Sxx2 + N1 * N2 * (Sx1/N1 - Sx2/N2)^2 / N
-   *	Sy = Sy1 + Sy2
-   *	Syy = Syy1 + Syy2 + N1 * N2 * (Sy1/N1 - Sy2/N2)^2 / N
-   *	Sxy = Sxy1 + Sxy2 + N1 * N2 * (Sx1/N1 - Sx2/N2) * (Sy1/N1 - Sy2/N2) / N
-   *
-   * It's worth handling the special cases N1 = 0 and N2 = 0 separately
-   * since those cases are trivial, and we then don't need to worry about
-   * division-by-zero errors in the general case.
-   *--------------------
-   */
-  if (N1 == 0.0) {
-    N = N2;
-    Sx = Sx2;
-    Sxx = Sxx2;
-    Sy = Sy2;
-    Syy = Syy2;
-    Sxy = Sxy2;
-  } else if (N2 == 0.0) {
-    N = N1;
-    Sx = Sx1;
-    Sxx = Sxx1;
-    Sy = Sy1;
-    Syy = Syy1;
-    Sxy = Sxy1;
-  } else {
-    N = N1 + N2;
-    Sx = float8_pl(Sx1, Sx2);
-    tmp1 = Sx1 / N1 - Sx2 / N2;
-    Sxx = Sxx1 + Sxx2 + N1 * N2 * tmp1 * tmp1 / N;
-    if (unlikely(isinf(Sxx)) && !isinf(Sxx1) && !isinf(Sxx2))
-      float_overflow_error();
-    Sy = float8_pl(Sy1, Sy2);
-    tmp2 = Sy1 / N1 - Sy2 / N2;
-    Syy = Syy1 + Syy2 + N1 * N2 * tmp2 * tmp2 / N;
-    if (unlikely(isinf(Syy)) && !isinf(Syy1) && !isinf(Syy2))
-      float_overflow_error();
-    Sxy = Sxy1 + Sxy2 + N1 * N2 * tmp1 * tmp2 / N;
-    if (unlikely(isinf(Sxy)) && !isinf(Sxy1) && !isinf(Sxy2))
-      float_overflow_error();
-  }
-
-  /*
-   * If we're invoked as an aggregate, we can cheat and modify our first
-   * parameter in-place to reduce palloc overhead. Otherwise we construct a
-   * new array with the updated transition data and return it.
-   */
-  if (AggCheckCallContext(fcinfo, NULL)) {
-    transvalues1[0] = N;
-    transvalues1[1] = Sx;
-    transvalues1[2] = Sxx;
-    transvalues1[3] = Sy;
-    transvalues1[4] = Syy;
-    transvalues1[5] = Sxy;
-
-    PG_RETURN_ARRAYTYPE_P(transarray1);
-  } else {
-    Datum transdatums[6];
-    ArrayType *result;
-
-    transdatums[0] = Float8GetDatumFast(N);
-    transdatums[1] = Float8GetDatumFast(Sx);
-    transdatums[2] = Float8GetDatumFast(Sxx);
-    transdatums[3] = Float8GetDatumFast(Sy);
-    transdatums[4] = Float8GetDatumFast(Syy);
-    transdatums[5] = Float8GetDatumFast(Sxy);
-
-    result = construct_array_builtin(transdatums, 6, FLOAT8OID);
-
-    PG_RETURN_ARRAYTYPE_P(result);
-  }
+  return float_regr_store(fcinfo, transarray1, t1, &a);
 }
 
 Datum float8_regr_sxx(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxx;
+  float8 *tv = check_float8_array(transarray, "float8_regr_sxx", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_regr_sxx", 6);
-  N = transvalues[0];
-  Sxx = transvalues[2];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_regr_sxx(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Sxx is guaranteed to be non-negative */
-
-  PG_RETURN_FLOAT8(Sxx);
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_regr_syy(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Syy;
+  float8 *tv = check_float8_array(transarray, "float8_regr_syy", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_regr_syy", 6);
-  N = transvalues[0];
-  Syy = transvalues[4];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_regr_syy(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Syy is guaranteed to be non-negative */
-
-  PG_RETURN_FLOAT8(Syy);
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_regr_sxy(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxy;
+  float8 *tv = check_float8_array(transarray, "float8_regr_sxy", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_regr_sxy", 6);
-  N = transvalues[0];
-  Sxy = transvalues[5];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_regr_sxy(&st, &result))
     PG_RETURN_NULL();
 
-  /* A negative result is valid here */
-
-  PG_RETURN_FLOAT8(Sxy);
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_regr_avgx(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sx;
+  float8 *tv = check_float8_array(transarray, "float8_regr_avgx", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_regr_avgx", 6);
-  N = transvalues[0];
-  Sx = transvalues[1];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_regr_avgx(&st, &result))
     PG_RETURN_NULL();
 
-  PG_RETURN_FLOAT8(Sx / N);
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_regr_avgy(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sy;
+  float8 *tv = check_float8_array(transarray, "float8_regr_avgy", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_regr_avgy", 6);
-  N = transvalues[0];
-  Sy = transvalues[3];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_regr_avgy(&st, &result))
     PG_RETURN_NULL();
 
-  PG_RETURN_FLOAT8(Sy / N);
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_covar_pop(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxy;
+  float8 *tv = check_float8_array(transarray, "float8_covar_pop", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_covar_pop", 6);
-  N = transvalues[0];
-  Sxy = transvalues[5];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_covar_pop(&st, &result))
     PG_RETURN_NULL();
 
-  PG_RETURN_FLOAT8(Sxy / N);
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_covar_samp(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxy;
+  float8 *tv = check_float8_array(transarray, "float8_covar_samp", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_covar_samp", 6);
-  N = transvalues[0];
-  Sxy = transvalues[5];
-
-  /* if N is <= 1 we should return NULL */
-  if (N < 2.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_covar_samp(&st, &result))
     PG_RETURN_NULL();
 
-  PG_RETURN_FLOAT8(Sxy / (N - 1.0));
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_corr(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxx, Syy, Sxy;
+  float8 *tv = check_float8_array(transarray, "float8_corr", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_corr", 6);
-  N = transvalues[0];
-  Sxx = transvalues[2];
-  Syy = transvalues[4];
-  Sxy = transvalues[5];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_corr(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Sxx and Syy are guaranteed to be non-negative */
-
-  /* per spec, return NULL for horizontal and vertical lines */
-  if (Sxx == 0 || Syy == 0)
-    PG_RETURN_NULL();
-
-  PG_RETURN_FLOAT8(Sxy / sqrt(Sxx * Syy));
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_regr_r2(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxx, Syy, Sxy;
+  float8 *tv = check_float8_array(transarray, "float8_regr_r2", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_regr_r2", 6);
-  N = transvalues[0];
-  Sxx = transvalues[2];
-  Syy = transvalues[4];
-  Sxy = transvalues[5];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_regr_r2(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Sxx and Syy are guaranteed to be non-negative */
-
-  /* per spec, return NULL for a vertical line */
-  if (Sxx == 0)
-    PG_RETURN_NULL();
-
-  /* per spec, return 1.0 for a horizontal line */
-  if (Syy == 0)
-    PG_RETURN_FLOAT8(1.0);
-
-  PG_RETURN_FLOAT8((Sxy * Sxy) / (Sxx * Syy));
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_regr_slope(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sxx, Sxy;
+  float8 *tv = check_float8_array(transarray, "float8_regr_slope", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_regr_slope", 6);
-  N = transvalues[0];
-  Sxx = transvalues[2];
-  Sxy = transvalues[5];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_regr_slope(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Sxx is guaranteed to be non-negative */
-
-  /* per spec, return NULL for a vertical line */
-  if (Sxx == 0)
-    PG_RETURN_NULL();
-
-  PG_RETURN_FLOAT8(Sxy / Sxx);
+  PG_RETURN_FLOAT8(result);
 }
 
 Datum float8_regr_intercept(PG_FUNCTION_ARGS) {
   ArrayType *transarray = PG_GETARG_ARRAYTYPE_P(0);
-  float8 *transvalues;
-  float8 N, Sx, Sxx, Sy, Sxy;
+  float8 *tv = check_float8_array(transarray, "float8_regr_intercept", 6);
+  ty_float_regr_t st = {tv[0], tv[1], tv[2], tv[3], tv[4], tv[5]};
+  float8 result;
 
-  transvalues = check_float8_array(transarray, "float8_regr_intercept", 6);
-  N = transvalues[0];
-  Sx = transvalues[1];
-  Sxx = transvalues[2];
-  Sy = transvalues[3];
-  Sxy = transvalues[5];
-
-  /* if N is 0 we should return NULL */
-  if (N < 1.0)
+  /* ty returns 1 where SQL's result is NULL */
+  if (ty_float_regr_intercept(&st, &result))
     PG_RETURN_NULL();
 
-  /* Note that Sxx is guaranteed to be non-negative */
-
-  /* per spec, return NULL for a vertical line */
-  if (Sxx == 0)
-    PG_RETURN_NULL();
-
-  PG_RETURN_FLOAT8((Sy - Sx * Sxy / Sxx) / N);
+  PG_RETURN_FLOAT8(result);
 }
 
 /*
@@ -3492,77 +1981,17 @@ Datum float84ge(PG_FUNCTION_ARGS) {
  * don't allow either of the histogram bounds to be +/- infinity.
  */
 Datum width_bucket_float8(PG_FUNCTION_ARGS) {
-  float8 operand = PG_GETARG_FLOAT8(0);
-  float8 bound1 = PG_GETARG_FLOAT8(1);
-  float8 bound2 = PG_GETARG_FLOAT8(2);
-  int32 count = PG_GETARG_INT32(3);
   int32 result;
 
-  if (count <= 0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),
-                    errmsg("count must be greater than zero")));
-
-  if (isnan(operand) || isnan(bound1) || isnan(bound2))
-    ereport(ERROR,
-            (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),
-             errmsg("operand, lower bound, and upper bound cannot be NaN")));
-
-  /* Note that we allow "operand" to be infinite */
-  if (isinf(bound1) || isinf(bound2))
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),
-                    errmsg("lower and upper bounds must be finite")));
-
-  if (bound1 < bound2) {
-    if (operand < bound1)
-      result = 0;
-    else if (operand >= bound2) {
-      if (pg_add_s32_overflow(count, 1, &result))
-        ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                        errmsg("integer out of range")));
-    } else {
-      if (!isinf(bound2 - bound1)) {
-        /* The quotient is surely in [0,1], so this can't overflow */
-        result = count * ((operand - bound1) / (bound2 - bound1));
-      } else {
-        /*
-         * We get here if bound2 - bound1 overflows DBL_MAX.  Since
-         * both bounds are finite, their difference can't exceed twice
-         * DBL_MAX; so we can perform the computation without overflow
-         * by dividing all the inputs by 2.  That should be exact too,
-         * except in the case where a very small operand underflows to
-         * zero, which would have negligible impact on the result
-         * given such large bounds.
-         */
-        result =
-            count * ((operand / 2 - bound1 / 2) / (bound2 / 2 - bound1 / 2));
-      }
-      /* The quotient could round to 1.0, which would be a lie */
-      if (result >= count)
-        result = count - 1;
-      /* Having done that, we can add 1 without fear of overflow */
-      result++;
-    }
-  } else if (bound1 > bound2) {
-    if (operand > bound1)
-      result = 0;
-    else if (operand <= bound2) {
-      if (pg_add_s32_overflow(count, 1, &result))
-        ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                        errmsg("integer out of range")));
-    } else {
-      if (!isinf(bound1 - bound2))
-        result = count * ((bound1 - operand) / (bound1 - bound2));
-      else
-        result =
-            count * ((bound1 / 2 - operand / 2) / (bound1 / 2 - bound2 / 2));
-      if (result >= count)
-        result = count - 1;
-      result++;
-    }
-  } else {
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),
-                    errmsg("lower bound cannot equal upper bound")));
-    result = 0; /* keep the compiler quiet */
+  if (ty_float64_width_bucket(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1),
+                              PG_GETARG_FLOAT8(2), PG_GETARG_INT32(3),
+                              &result)) {
+    if (ty_errnum() == TY_ERR_INVALID)
+      ereport(ERROR,
+              (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),
+               errmsg("%s", ty_errmsg())));
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("integer out of range")));
   }
 
   PG_RETURN_INT32(result);

@@ -19,6 +19,8 @@
 
 #include <math.h>
 
+#include "ty_float.h"
+
 /* X/Open (XSI) requires <math.h> to provide M_PI, but core POSIX does not */
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -134,12 +136,27 @@ static inline float8 get_float8_nan(void) {
  * 1.4013e-45.
  */
 
+/*
+ * Raise PostgreSQL's error for the failure of a ty float call: an overflow,
+ * an underflow or a division by zero.
+ */
+static pg_noinline pg_noreturn void float_raise_ty(void) {
+  switch (ty_errnum()) {
+  case TY_ERR_RANGE:
+    float_overflow_error();
+  case TY_ERR_UNDERFLOW:
+    float_underflow_error();
+  default:
+    float_zero_divide_error();
+  }
+}
+
 static inline float4 float4_pl(const float4 val1, const float4 val2) {
   float4 result;
 
-  result = val1 + val2;
-  if (unlikely(isinf(result)) && !isinf(val1) && !isinf(val2))
-    float_overflow_error();
+  /* ty checks the overflow, the underflow and the division by zero */
+  if (unlikely(ty_float32_add(val1, val2, &result)))
+    float_raise_ty();
 
   return result;
 }
@@ -147,9 +164,9 @@ static inline float4 float4_pl(const float4 val1, const float4 val2) {
 static inline float8 float8_pl(const float8 val1, const float8 val2) {
   float8 result;
 
-  result = val1 + val2;
-  if (unlikely(isinf(result)) && !isinf(val1) && !isinf(val2))
-    float_overflow_error();
+  /* ty checks the overflow, the underflow and the division by zero */
+  if (unlikely(ty_float64_add(val1, val2, &result)))
+    float_raise_ty();
 
   return result;
 }
@@ -157,9 +174,9 @@ static inline float8 float8_pl(const float8 val1, const float8 val2) {
 static inline float4 float4_mi(const float4 val1, const float4 val2) {
   float4 result;
 
-  result = val1 - val2;
-  if (unlikely(isinf(result)) && !isinf(val1) && !isinf(val2))
-    float_overflow_error();
+  /* ty checks the overflow, the underflow and the division by zero */
+  if (unlikely(ty_float32_sub(val1, val2, &result)))
+    float_raise_ty();
 
   return result;
 }
@@ -167,9 +184,9 @@ static inline float4 float4_mi(const float4 val1, const float4 val2) {
 static inline float8 float8_mi(const float8 val1, const float8 val2) {
   float8 result;
 
-  result = val1 - val2;
-  if (unlikely(isinf(result)) && !isinf(val1) && !isinf(val2))
-    float_overflow_error();
+  /* ty checks the overflow, the underflow and the division by zero */
+  if (unlikely(ty_float64_sub(val1, val2, &result)))
+    float_raise_ty();
 
   return result;
 }
@@ -177,11 +194,9 @@ static inline float8 float8_mi(const float8 val1, const float8 val2) {
 static inline float4 float4_mul(const float4 val1, const float4 val2) {
   float4 result;
 
-  result = val1 * val2;
-  if (unlikely(isinf(result)) && !isinf(val1) && !isinf(val2))
-    float_overflow_error();
-  if (unlikely(result == 0.0f) && val1 != 0.0f && val2 != 0.0f)
-    float_underflow_error();
+  /* ty checks the overflow, the underflow and the division by zero */
+  if (unlikely(ty_float32_mul(val1, val2, &result)))
+    float_raise_ty();
 
   return result;
 }
@@ -189,11 +204,9 @@ static inline float4 float4_mul(const float4 val1, const float4 val2) {
 static inline float8 float8_mul(const float8 val1, const float8 val2) {
   float8 result;
 
-  result = val1 * val2;
-  if (unlikely(isinf(result)) && !isinf(val1) && !isinf(val2))
-    float_overflow_error();
-  if (unlikely(result == 0.0) && val1 != 0.0 && val2 != 0.0)
-    float_underflow_error();
+  /* ty checks the overflow, the underflow and the division by zero */
+  if (unlikely(ty_float64_mul(val1, val2, &result)))
+    float_raise_ty();
 
   return result;
 }
@@ -201,13 +214,9 @@ static inline float8 float8_mul(const float8 val1, const float8 val2) {
 static inline float4 float4_div(const float4 val1, const float4 val2) {
   float4 result;
 
-  if (unlikely(val2 == 0.0f) && !isnan(val1))
-    float_zero_divide_error();
-  result = val1 / val2;
-  if (unlikely(isinf(result)) && !isinf(val1))
-    float_overflow_error();
-  if (unlikely(result == 0.0f) && val1 != 0.0f && !isinf(val2))
-    float_underflow_error();
+  /* ty checks the overflow, the underflow and the division by zero */
+  if (unlikely(ty_float32_div(val1, val2, &result)))
+    float_raise_ty();
 
   return result;
 }
@@ -215,13 +224,9 @@ static inline float4 float4_div(const float4 val1, const float4 val2) {
 static inline float8 float8_div(const float8 val1, const float8 val2) {
   float8 result;
 
-  if (unlikely(val2 == 0.0) && !isnan(val1))
-    float_zero_divide_error();
-  result = val1 / val2;
-  if (unlikely(isinf(result)) && !isinf(val1))
-    float_overflow_error();
-  if (unlikely(result == 0.0) && val1 != 0.0 && !isinf(val2))
-    float_underflow_error();
+  /* ty checks the overflow, the underflow and the division by zero */
+  if (unlikely(ty_float64_div(val1, val2, &result)))
+    float_raise_ty();
 
   return result;
 }
@@ -235,67 +240,67 @@ static inline float8 float8_div(const float8 val1, const float8 val2) {
  */
 
 static inline bool float4_eq(const float4 val1, const float4 val2) {
-  return isnan(val1) ? isnan(val2) : !isnan(val2) && val1 == val2;
+  return ty_float32_eq(val1, val2);
 }
 
 static inline bool float8_eq(const float8 val1, const float8 val2) {
-  return isnan(val1) ? isnan(val2) : !isnan(val2) && val1 == val2;
+  return ty_float64_eq(val1, val2);
 }
 
 static inline bool float4_ne(const float4 val1, const float4 val2) {
-  return isnan(val1) ? !isnan(val2) : isnan(val2) || val1 != val2;
+  return ty_float32_ne(val1, val2);
 }
 
 static inline bool float8_ne(const float8 val1, const float8 val2) {
-  return isnan(val1) ? !isnan(val2) : isnan(val2) || val1 != val2;
+  return ty_float64_ne(val1, val2);
 }
 
 static inline bool float4_lt(const float4 val1, const float4 val2) {
-  return !isnan(val1) && (isnan(val2) || val1 < val2);
+  return ty_float32_lt(val1, val2);
 }
 
 static inline bool float8_lt(const float8 val1, const float8 val2) {
-  return !isnan(val1) && (isnan(val2) || val1 < val2);
+  return ty_float64_lt(val1, val2);
 }
 
 static inline bool float4_le(const float4 val1, const float4 val2) {
-  return isnan(val2) || (!isnan(val1) && val1 <= val2);
+  return ty_float32_le(val1, val2);
 }
 
 static inline bool float8_le(const float8 val1, const float8 val2) {
-  return isnan(val2) || (!isnan(val1) && val1 <= val2);
+  return ty_float64_le(val1, val2);
 }
 
 static inline bool float4_gt(const float4 val1, const float4 val2) {
-  return !isnan(val2) && (isnan(val1) || val1 > val2);
+  return ty_float32_gt(val1, val2);
 }
 
 static inline bool float8_gt(const float8 val1, const float8 val2) {
-  return !isnan(val2) && (isnan(val1) || val1 > val2);
+  return ty_float64_gt(val1, val2);
 }
 
 static inline bool float4_ge(const float4 val1, const float4 val2) {
-  return isnan(val1) || (!isnan(val2) && val1 >= val2);
+  return ty_float32_ge(val1, val2);
 }
 
 static inline bool float8_ge(const float8 val1, const float8 val2) {
-  return isnan(val1) || (!isnan(val2) && val1 >= val2);
+  return ty_float64_ge(val1, val2);
 }
 
 static inline float4 float4_min(const float4 val1, const float4 val2) {
-  return float4_lt(val1, val2) ? val1 : val2;
+  return ty_float32_smaller(val1, val2);
 }
 
 static inline float8 float8_min(const float8 val1, const float8 val2) {
-  return float8_lt(val1, val2) ? val1 : val2;
+  return ty_float64_smaller(val1, val2);
 }
 
 static inline float4 float4_max(const float4 val1, const float4 val2) {
-  return float4_gt(val1, val2) ? val1 : val2;
+  return ty_float32_larger(val1, val2);
 }
 
 static inline float8 float8_max(const float8 val1, const float8 val2) {
-  return float8_gt(val1, val2) ? val1 : val2;
+  return ty_float64_larger(val1, val2);
 }
 
 #endif /* FLOAT_H */

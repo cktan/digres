@@ -77,3 +77,8 @@ int ty_err_divzero(void) {
 int ty_err_invalid(const char *msg) {
   return ty_internal::set_error(TY_ERR_INVALID, msg);
 }
+
+/* Record the underflow that an inline operation found; returns -1. */
+int ty_err_underflow(void) {
+  return ty_internal::set_error(TY_ERR_UNDERFLOW, "result underflows");
+}

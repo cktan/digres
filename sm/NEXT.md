@@ -237,8 +237,11 @@ are the catalog tables psql reads
        `ty_hash.h`; and the rest of their operations, text in
        and out and encode and decode included. Left over in
        digres: aggregate states (`string_agg` of bytea, the bool
-       and integer averages), and sort support. **The group of
-       date, time, interval, float text and text is next.**
+       and integer averages), and sort support. Done after that:
+       the floats, with their text, and macaddr and macaddr8
+       (`ty_float.h`, `ty_mac.h`). **Left: date, time and
+       interval, text, and the other types with no session
+       state (inet and cidr, bit and varbit, oid, tid, pg_lsn).**
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.

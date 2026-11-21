@@ -42,6 +42,12 @@ $(shell mkdir -p $(BUILD); \
 
 LIB_SRCS  := $(wildcard src/*.cc)
 LIB_OBJS  := $(LIB_SRCS:src/%.cc=$(BUILD)/src/%.o)
+# PostgreSQL's float printers (src/ryu/, which has its own notice), compiled
+# as C++ with -DFRONTEND, which makes them include their own shim.
+RYU_SRCS  := $(wildcard src/ryu/*.c)
+RYU_OBJS  := $(RYU_SRCS:src/%.c=$(BUILD)/src/%.o)
+RYU_FLAGS := -w -DFRONTEND -Isrc/ryu
+LIB_OBJS  += $(RYU_OBJS)
 TEST_SRCS := $(wildcard test/*.cc)
 TEST_OBJS := $(TEST_SRCS:test/%.cc=$(BUILD)/test/%.o)
 
@@ -64,6 +70,10 @@ $(BUILD)/src/%.o: src/%.cc $(FLAGS_FILE)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
+$(BUILD)/src/ryu/%.o: src/ryu/%.c $(FLAGS_FILE)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(RYU_FLAGS) -x c++ -c -o $@ $<
+
 $(BUILD)/test/%.o: test/%.cc $(FLAGS_FILE)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
@@ -85,12 +95,16 @@ $(BUILD)/rel/src/%.o: src/%.cc
 	@mkdir -p $(dir $@)
 	$(CXX) $(REL_CXXFLAGS) -c -o $@ $<
 
+$(BUILD)/rel/src/ryu/%.o: src/ryu/%.c
+	@mkdir -p $(dir $@)
+	$(CXX) $(REL_CXXFLAGS) $(RYU_FLAGS) -x c++ -c -o $@ $<
+
 # The tests again, with the library built into them under the thread
 # sanitizer. setarch -R stops the kernel's randomisation from moving
 # the sanitizer's shadow memory.
-$(BUILD)/test_ty_tsan: $(LIB_SRCS) $(TEST_SRCS)
-	$(CXX) -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc -O1 -g \
-	    -fsanitize=thread -o $@ $^ $(LDLIBS)
+$(BUILD)/test_ty_tsan: $(LIB_SRCS) $(RYU_SRCS) $(TEST_SRCS)
+	$(CXX) -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc -O1 -g -w \
+	    $(RYU_FLAGS) -x c++ -fsanitize=thread -o $@ $^ $(LDLIBS)
 
 tsan: $(BUILD)/test_ty_tsan
 	setarch $$(uname -m) -R $(BUILD)/test_ty_tsan

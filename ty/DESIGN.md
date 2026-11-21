@@ -342,3 +342,107 @@ lookup3 in Python, `gen_vectors.py`, for every type. The key of
 a decimal is the one thing the reference takes from ty's
 description, not from PostgreSQL: PostgreSQL has no decimal of
 this form.
+
+## 11. The floats
+
+`ty_float.h` holds `float32` and `float64` (SQL's `real` and
+`double precision`), as `ty_decimal.h` holds the decimals. The
+cases and the errors are PostgreSQL's, from `float.c` and
+`utils/float.h`; the code is new.
+
+- **Arithmetic** (`add`, `sub`, `mul`, `div`) fails with
+  `TY_ERR_RANGE` for a result that is infinite when no operand
+  was, `TY_ERR_UNDERFLOW` for a product or quotient that is zero
+  when no operand was, and `TY_ERR_DIVZERO` for a zero divisor
+  unless the dividend is NaN. Infinity and NaN that come in go
+  through.
+- **Order.** All NaNs are equal and above every number, and `0`
+  equals `-0`: `cmp`, `eq`, `ne`, `lt`, `le`, `gt`, `ge`,
+  `larger` and `smaller`, in line.
+- **Conversions.** `float64` to `float32` overflows or underflows
+  as above. A float to an integer rounds to the nearest, a tie to
+  the even, and is `TY_ERR_RANGE` for NaN or a value that does
+  not fit. An integer to a float is C's.
+- **Rounding**: `round`, `ceil`, `floor`, `trunc` and `sign`.
+- **Powers and logarithms**: `sqrt`, `cbrt`, `exp`, `ln`, `log10`
+  and `pow`. `pow` decides the NaN and the infinity cases itself,
+  as POSIX says, so that no platform changes them. A domain error
+  (the root of a negative, the logarithm of zero or of a
+  negative, 0 to a negative power, a negative to a fraction) is
+  `TY_ERR_INVALID` with PostgreSQL's message. The host picks the
+  SQLSTATE: digres uses the power-function code for `sqrt` and
+  `pow` and the logarithm code for `ln` and `log`.
+- **`width_bucket`** of a float, in either direction.
+- **The hash** is PostgreSQL's: `0` and `-0` hash as the seed,
+  every NaN as one NaN, and a `float32` as the `float64` of its
+  value.
+- **Text.** `ty_floatN_format` takes `extra_float_digits` as an
+  argument, not from a session: above 0 it prints the shortest
+  text with PostgreSQL's Ryu, else `%.Ng` with `N` the digits of
+  the type plus the argument. `ty_floatN_parse` reads what
+  `strtod` (`strtof` for `float32`) takes, and the names NaN and
+  Infinity, and reports the length of a number that is out of
+  range so the host can quote it. This is how ty takes a setting:
+  the host passes it (the plan's question of hooks,
+  `TYPEMOVE_PLAN` section 8).
+- **Ryu.** `src/ryu/` is PostgreSQL's copy of the Ryu printers,
+  with its notices, as sm2 has one. Its functions are renamed
+  (`ty_rename.h`) so that a host with functions of the old names,
+  as digres has, does not capture ty's calls. digres's own copy
+  is gone: its `double_to_shortest_decimal_buf` and the others
+  call ty.
+
+
+- **Trigonometry and the like.** `acos`, `asin`, `atan`, `atan2`,
+  `cos`, `sin`, `tan` and `cot` in radians; the same in degrees,
+  `acosd` to `cotd`, exact at the angles that have exact values
+  (`sind(30)` is `0.5`, `tand(45)` is `1`), by PostgreSQL's
+  method, scaling by values the library computes once; `sinh`,
+  `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `erf`, `erfc`,
+  `gamma` and `lgamma`; and `degrees`, `radians` and `pi`. A NaN
+  gives NaN. An argument outside the domain, or an infinite
+  angle, is `TY_ERR_INVALID` with the message "input is out of
+  range"; digres gives it the out-of-range SQLSTATE.
+- **Statistical aggregates.** `ty_float_var_t` and
+  `ty_float_regr_t` are the states of `avg`, the variances and
+  deviations, and the regression family, kept by the
+  Youngs-Cramer method. `accum` adds a value, `combine` adds
+  another state, and the final functions return 1 where SQL gives
+  NULL. digres keeps its array of doubles as the state, and these
+  functions do the arithmetic on it.
+- **In line, for speed.** The common path of `sqrt`, `cbrt`,
+  `exp`, `ln`, `log10`, `pow`, `sin`, `cos`, `tan`, `asin`,
+  `acos` and `atan`, and the accumulate step of the aggregates,
+  are in `ty_float.h`, so a wrapper in a host costs no call.
+  Anything unusual goes to an out-of-line `_slow` function, which
+  decides it. Even so, a query of nothing but ten math functions
+  reads 1.4% more instructions than before the move; see the
+  plan.
+
+The tests are `test/test_float.cc`, by hand; the vectors of a
+Python reference (`gen_vectors.py`), which use the same libm as
+ty, so a subnormal result of `exp` or `pow` is left out, as
+`glibc`'s `errno` for it is not a rule; and
+`test/float_text.txt`, 1,230 texts that digres printed before the
+move (`test/gen_float_text.py`).
+
+## 12. macaddr and macaddr8
+
+`ty_mac.h` holds `ty_macaddr_t` (6 bytes) and `ty_macaddr8_t` (8
+bytes), from PostgreSQL's `mac.c` and `mac8.c`; the code is new.
+`parse` reads the forms PostgreSQL reads: for a macaddr seven
+forms, each as `scanf`'s `%x` reads them (so a field may have
+fewer than two digits, or a sign, and a field past 255 is
+`TY_ERR_RANGE`); for a macaddr8 six or eight pairs of hex digits
+with one spacer, which a six-byte form widens with `FF:FE`.
+`format`, `cmp` (the order of the bytes), `not`, `and`, `or`,
+`trunc`, `set7bit` and the two conversions are as PostgreSQL's.
+The hash is that of the bytes.
+
+The text forms have too many odd cases to rewrite as a reference,
+so `test/known.txt` holds what a digres built before the move
+printed for a few hundred texts, good and bad
+(`test/gen_known.py` made it); `test/test_mac.cc` covers the
+rest. digres's storage does not hold these types yet, so they
+have no key in a table.
+

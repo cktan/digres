@@ -407,6 +407,37 @@ copied from PostgreSQL keeps its copyright notice
      247,138,294 and 247,420,911 (+0.11%); `int2` 281,683,442
      and 282,185,798 (+0.18%); bit operations, `abs` and `gcd`
      296,682,450 and 298,764,434 (+0.70%).
+   - **Floats, and then macaddr, moved (2026-11-21), unattended.**
+     The user asked for as many types as could be done in a
+     long run; the hooks of section 8 were settled by passing a
+     setting in: `ty_floatN_format` takes `extra_float_digits` as
+     an argument. `ty_float.h`: arithmetic with PostgreSQL's
+     overflow, underflow and division-by-zero rules; NaN-last
+     order; the conversions; rounding; `sqrt`, `cbrt`, `exp`,
+     `ln`, `log10` and `pow`; all of the trigonometry, the
+     degree functions, the hyperbolics, `erf` and `gamma`;
+     `width_bucket`; the hash; the text in and out; and the
+     arithmetic of the statistical aggregates. PostgreSQL's Ryu
+     is in `ty/src/ryu/`, and digres's copy is gone. `ty_mac.h`:
+     macaddr and macaddr8. The tests, besides ty's vectors: the
+     new `dg/test/select_float.sql` and `select_mac.sql` print
+     the same, byte for byte, on a digres built before the
+     move, so the move kept the behavior; and
+     `float_text.txt` and `known.txt` hold what that digres
+     printed. Measured by callgrind (old, new): float
+     arithmetic and compares -0.02%; float sort -0.00%; hash
+     aggregate on a float +0.29%; float text in and out
+     +0.45%; float aggregates +0.02%; **a query of nothing but
+     ten math functions +1.39%**, over the 1% limit. The call
+     into ty, and the degree functions (`sind` +37 instructions
+     a call, from a function that is not in line), cost it; the
+     common path of the others is in line. The user should say
+     if 1.4% on such a query is too much; the fix would be to
+     put the degree functions in line too. Found on the way:
+     the Ryu shim, copied from sm2, lacked `SIZEOF_SIZE_T`, so
+     the Ryu code took its 32-bit path, 17% slower; ty's is
+     fixed, sm2's `src/ryu/postgres_fe.h` has the same defect
+     (the output is the same, only slower).
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

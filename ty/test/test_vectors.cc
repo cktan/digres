@@ -20,8 +20,10 @@
 #include "ty_bool.h"
 #include "ty_bytea.h"
 #include "ty_decimal.h"
+#include "ty_float.h"
 #include "ty_hash.h"
 #include "ty_int.h"
+#include "ty_mac.h"
 #include "ty_uuid.h"
 
 namespace {
@@ -252,6 +254,355 @@ bool run_hash(const vec_t &v) {
   INFO(v.line);
   CHECK(std::stoull(v.res[0]) == got);
   return true;
+}
+
+/* A float from a token: a number, inf, -inf or nan. */
+double flt(const std::string &tok) { return std::strtod(tok.c_str(), nullptr); }
+
+/* True if two floats are the same: the same bits, or both NaN. */
+bool same_float(double want, double got) {
+  if (want != want) {
+    return got != got;
+  }
+  return memcmp(&want, &got, sizeof want) == 0;
+}
+
+/* Check a call that gives a float against the vector: a value or an error. */
+void check_float(const vec_t &v, int rc, double got) {
+  INFO(v.line);
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    CHECK(errnum_of(v.res[1]) == ty_errnum());
+  } else {
+    REQUIRE(0 == rc);
+    CHECK(same_float(flt(v.res[0]), got));
+  }
+}
+
+/* The unary float64 functions of the trig family, by name. */
+struct unary_t {
+  const char *name;
+  int (*fn)(double, double *);
+};
+
+const unary_t unary_fns[] = {
+    {"acos", ty_float64_acos},   {"asin", ty_float64_asin},
+    {"atan", ty_float64_atan},   {"cos", ty_float64_cos},
+    {"sin", ty_float64_sin},     {"tan", ty_float64_tan},
+    {"cot", ty_float64_cot},     {"acosd", ty_float64_acosd},
+    {"asind", ty_float64_asind}, {"atand", ty_float64_atand},
+    {"cosd", ty_float64_cosd},   {"sind", ty_float64_sind},
+    {"tand", ty_float64_tand},   {"cotd", ty_float64_cotd},
+    {"sinh", ty_float64_sinh},   {"cosh", ty_float64_cosh},
+    {"tanh", ty_float64_tanh},   {"asinh", ty_float64_asinh},
+    {"acosh", ty_float64_acosh}, {"atanh", ty_float64_atanh},
+    {"erf", ty_float64_erf},     {"erfc", ty_float64_erfc},
+    {"gamma", ty_float64_gamma}, {"lgamma", ty_float64_lgamma}};
+
+/* True if name is one of them. */
+bool is_unary(const std::string &name) {
+  for (const unary_t &u : unary_fns) {
+    if (name == u.name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* Call the one that name says. */
+int call_unary(const std::string &name, double a, double *r) {
+  for (const unary_t &u : unary_fns) {
+    if (name == u.name) {
+      return u.fn(a, r);
+    }
+  }
+  return -1;
+}
+
+/* Run one float vector; false if its op is not one of them. */
+bool run_float(const vec_t &v) {
+  const std::string &op = v.op;
+
+  if (op.compare(0, 4, "f32.") != 0 && op.compare(0, 4, "f64.") != 0) {
+    return false;
+  }
+  const bool is32 = op[1] == '3';
+  const std::string name = op.substr(4);
+  double r = 0;
+  int rc = 0;
+
+  /* the arguments of a float32 are exact floats: read them as floats */
+  auto a32 = [&](size_t i) { return (float)flt(v.args[i]); };
+  auto a64 = [&](size_t i) { return flt(v.args[i]); };
+
+#define BIN(NAME, OP32, OP64)                                  \
+  if (name == NAME) {                                          \
+    if (is32) {                                                \
+      float x = 0;                                             \
+      rc = OP32(a32(0), a32(1), &x);                           \
+      r = x;                                                   \
+    } else {                                                   \
+      rc = OP64(a64(0), a64(1), &r);                           \
+    }                                                          \
+    check_float(v, rc, r);                                     \
+    return true;                                               \
+  }
+  BIN("add", ty_float32_add, ty_float64_add)
+  BIN("sub", ty_float32_sub, ty_float64_sub)
+  BIN("mul", ty_float32_mul, ty_float64_mul)
+  BIN("div", ty_float32_div, ty_float64_div)
+#undef BIN
+
+#define PRED(NAME)                                                         \
+  if (name == #NAME) {                                                     \
+    int got = is32 ? ty_float32_##NAME(a32(0), a32(1))                     \
+                   : ty_float64_##NAME(a64(0), a64(1));                    \
+    INFO(v.line);                                                          \
+    CHECK(std::stoi(v.res[0]) == got);                                     \
+    return true;                                                           \
+  }
+  PRED(cmp)
+  PRED(eq)
+  PRED(ne)
+  PRED(lt)
+  PRED(le)
+  PRED(gt)
+  PRED(ge)
+#undef PRED
+
+  if (name == "larger" || name == "smaller") {
+    r = is32 ? (name == "larger" ? ty_float32_larger(a32(0), a32(1))
+                                 : ty_float32_smaller(a32(0), a32(1)))
+             : (name == "larger" ? ty_float64_larger(a64(0), a64(1))
+                                 : ty_float64_smaller(a64(0), a64(1)));
+    check_float(v, 0, r);
+  } else if (name == "neg") {
+    check_float(v, 0, is32 ? ty_float32_neg(a32(0)) : ty_float64_neg(a64(0)));
+  } else if (name == "abs") {
+    check_float(v, 0, is32 ? ty_float32_abs(a32(0)) : ty_float64_abs(a64(0)));
+  } else if (name == "hash") {
+    uint64_t seed = std::stoull(v.args[1]);
+    uint64_t got =
+        is32 ? ty_float32_hash(a32(0), seed) : ty_float64_hash(a64(0), seed);
+    INFO(v.line);
+    CHECK(std::stoull(v.res[0]) == got);
+  } else if (name == "toint16" || name == "toint32" || name == "toint64") {
+    int16_t r16 = 0;
+    int32_t r32 = 0;
+    int64_t r64 = 0;
+    rc = name == "toint16"   ? (is32 ? ty_float32_to_int16(a32(0), &r16)
+                                     : ty_float64_to_int16(a64(0), &r16))
+         : name == "toint32" ? (is32 ? ty_float32_to_int32(a32(0), &r32)
+                                     : ty_float64_to_int32(a64(0), &r32))
+                             : (is32 ? ty_float32_to_int64(a32(0), &r64)
+                                     : ty_float64_to_int64(a64(0), &r64));
+    check_int(v, rc, name == "toint16" ? r16 : name == "toint32" ? r32 : r64);
+  } else if (name == "to32") {
+    float x = 0;
+    rc = ty_float64_to_float32(a64(0), &x);
+    check_float(v, rc, x);
+  } else if (name == "round") {
+    check_float(v, 0, ty_float64_round(a64(0)));
+  } else if (name == "ceil") {
+    check_float(v, 0, ty_float64_ceil(a64(0)));
+  } else if (name == "floor") {
+    check_float(v, 0, ty_float64_floor(a64(0)));
+  } else if (name == "trunc") {
+    check_float(v, 0, ty_float64_trunc(a64(0)));
+  } else if (name == "sign") {
+    check_float(v, 0, ty_float64_sign(a64(0)));
+  } else if (name == "sqrt" || name == "ln" || name == "log10" ||
+             name == "exp") {
+    rc = name == "sqrt"    ? ty_float64_sqrt(a64(0), &r)
+         : name == "ln"    ? ty_float64_ln(a64(0), &r)
+         : name == "log10" ? ty_float64_log10(a64(0), &r)
+                           : ty_float64_exp(a64(0), &r);
+    check_float(v, rc, r);
+  } else if (name == "atan2" || name == "atan2d") {
+    rc = name == "atan2" ? ty_float64_atan2(a64(0), a64(1), &r)
+                         : ty_float64_atan2d(a64(0), a64(1), &r);
+    check_float(v, rc, r);
+  } else if (name == "degrees" || name == "radians") {
+    rc = name == "degrees" ? ty_float64_degrees(a64(0), &r)
+                           : ty_float64_radians(a64(0), &r);
+    check_float(v, rc, r);
+  } else if (is_unary(name)) {
+    rc = call_unary(name, a64(0), &r);
+    check_float(v, rc, r);
+  } else if (name == "vaccum") {
+    ty_float_var_t st = {0, 0, 0};
+    rc = 0;
+    if (v.args[0] != "-") {
+      for (const std::string &x : v.args) {
+        rc = ty_float_var_accum(&st, flt(x));
+        if (rc != 0) {
+          break;
+        }
+      }
+    }
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(TY_ERR_RANGE == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(same_float(flt(v.res[0]), st.n));
+      CHECK(same_float(flt(v.res[1]), st.sx));
+      CHECK(same_float(flt(v.res[2]), st.sxx));
+    }
+  } else if (name == "vcombine") {
+    ty_float_var_t a = {flt(v.args[0]), flt(v.args[1]), flt(v.args[2])};
+    ty_float_var_t b = {flt(v.args[3]), flt(v.args[4]), flt(v.args[5])};
+    rc = ty_float_var_combine(&a, &b);
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(same_float(flt(v.res[0]), a.n));
+      CHECK(same_float(flt(v.res[1]), a.sx));
+      CHECK(same_float(flt(v.res[2]), a.sxx));
+    }
+  } else if (name == "vfinal") {
+    ty_float_var_t st = {flt(v.args[1]), flt(v.args[2]), flt(v.args[3])};
+    const std::string &f = v.args[0];
+    rc = f == "avg"         ? ty_float_var_avg(&st, &r)
+         : f == "pop"       ? ty_float_var_pop(&st, &r)
+         : f == "samp"      ? ty_float_var_samp(&st, &r)
+         : f == "stddevpop" ? ty_float_stddev_pop(&st, &r)
+                            : ty_float_stddev_samp(&st, &r);
+    INFO(v.line);
+    if (v.res[0] == "NULL") {
+      CHECK(1 == rc);
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(same_float(flt(v.res[0]), r));
+    }
+  } else if (name == "raccum") {
+    ty_float_regr_t st = {0, 0, 0, 0, 0, 0};
+    rc = 0;
+    if (v.args[0] != "-") {
+      for (size_t i = 0; i + 1 < v.args.size() && rc == 0; i += 2) {
+        rc = ty_float_regr_accum(&st, flt(v.args[i]), flt(v.args[i + 1]));
+      }
+    }
+    INFO(v.line);
+    REQUIRE(0 == rc);
+    CHECK(same_float(flt(v.res[0]), st.n));
+    CHECK(same_float(flt(v.res[1]), st.sx));
+    CHECK(same_float(flt(v.res[2]), st.sxx));
+    CHECK(same_float(flt(v.res[3]), st.sy));
+    CHECK(same_float(flt(v.res[4]), st.syy));
+    CHECK(same_float(flt(v.res[5]), st.sxy));
+  } else if (name == "rfinal") {
+    ty_float_regr_t st = {flt(v.args[1]), flt(v.args[2]), flt(v.args[3]),
+                          flt(v.args[4]), flt(v.args[5]), flt(v.args[6])};
+    const std::string &f = v.args[0];
+    rc = f == "sxx"         ? ty_float_regr_sxx(&st, &r)
+         : f == "syy"       ? ty_float_regr_syy(&st, &r)
+         : f == "sxy"       ? ty_float_regr_sxy(&st, &r)
+         : f == "avgx"      ? ty_float_regr_avgx(&st, &r)
+         : f == "avgy"      ? ty_float_regr_avgy(&st, &r)
+         : f == "covarpop"  ? ty_float_covar_pop(&st, &r)
+         : f == "covarsamp" ? ty_float_covar_samp(&st, &r)
+         : f == "corr"      ? ty_float_corr(&st, &r)
+         : f == "r2"        ? ty_float_regr_r2(&st, &r)
+         : f == "slope"     ? ty_float_regr_slope(&st, &r)
+                            : ty_float_regr_intercept(&st, &r);
+    INFO(v.line);
+    if (v.res[0] == "NULL") {
+      CHECK(1 == rc);
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(same_float(flt(v.res[0]), r));
+    }
+  } else if (name == "pow") {
+    rc = ty_float64_pow(a64(0), a64(1), &r);
+    check_float(v, rc, r);
+  } else if (name == "wb") {
+    int32_t bucket = 0;
+    rc = ty_float64_width_bucket(a64(0), a64(1), a64(2),
+                                 (int32_t)std::stoll(v.args[3]), &bucket);
+    check_int(v, rc, bucket);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+/* Run a vector of what PostgreSQL did with a text (known.txt): the text is hex.
+ */
+bool run_known(const vec_t &v) {
+  const std::string &op = v.op;
+
+  if (op != "macaddr.parse" && op != "macaddr8.parse") {
+    return false;
+  }
+  std::vector<uint8_t> t = bytes_of(v.args[0]);
+  std::string z(reinterpret_cast<const char *>(t.data()), t.size());
+  char out[TY_MACADDR8_TEXT_SIZE];
+  int rc;
+
+  if (op == "macaddr.parse") {
+    ty_macaddr_t a;
+    rc = ty_macaddr_parse(z.c_str(), &a);
+    if (rc == 0) {
+      ty_macaddr_format(&a, out);
+    }
+  } else {
+    ty_macaddr8_t a;
+    rc = ty_macaddr8_parse(z.c_str(), &a);
+    if (rc == 0) {
+      ty_macaddr8_format(&a, out);
+    }
+  }
+  INFO(v.line);
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    CHECK(errnum_of(v.res[1]) == ty_errnum());
+  } else {
+    REQUIRE(0 == rc);
+    CHECK(v.res[0] == std::string(out));
+  }
+  return true;
+}
+
+/* Run a float text vector: parse (the text is hex) or format (known). */
+bool run_float_text(const vec_t &v) {
+  const std::string &op = v.op;
+
+  if (op == "f32.parse" || op == "f64.parse") {
+    std::vector<uint8_t> t = bytes_of(v.args[0]);
+    std::string z(reinterpret_cast<const char *>(t.data()), t.size());
+    double r = 0;
+    float f = 0;
+    int rc = 0;
+
+    /* the text has no NUL of its own: one ends the string for strtod */
+    if (z.find('\0') != std::string::npos) {
+      return true;
+    }
+    if (op == "f32.parse") {
+      rc = ty_float32_parse(z.c_str(), &f, nullptr, nullptr);
+      r = f;
+    } else {
+      rc = ty_float64_parse(z.c_str(), &r, nullptr, nullptr);
+    }
+    check_float(v, rc, r);
+    return true;
+  }
+  if (op == "f32.fmt" || op == "f64.fmt") {
+    char out[TY_FLOAT_TEXT_SIZE];
+    int digits = std::stoi(v.args[1]);
+    size_t n = op == "f32.fmt"
+                   ? ty_float32_format((float)flt(v.args[0]), digits, out)
+                   : ty_float64_format(flt(v.args[0]), digits, out);
+    INFO(v.line);
+    CHECK(v.res[0] == std::string(out, n));
+    CHECK(strlen(out) == n);
+    return true;
+  }
+  return false;
 }
 
 /* Run one bytea vector; false if its op is not one of them. */
@@ -768,11 +1119,22 @@ TEST_CASE(
   std::vector<vec_t> vecs = read_vectors(path ? path : "test/vectors.txt");
 
   // 1. Read the vectors of test/vectors.txt: a line each, with its result.
+  {
+    /* what PostgreSQL printed for float text, next to the vectors */
+    std::string dir = path ? path : "test/vectors.txt";
+    std::vector<vec_t> text = read_vectors(
+        (dir.substr(0, dir.rfind('/') + 1) + "float_text.txt").c_str());
+    vecs.insert(vecs.end(), text.begin(), text.end());
+    std::vector<vec_t> known =
+        read_vectors((dir.substr(0, dir.rfind('/') + 1) + "known.txt").c_str());
+    vecs.insert(vecs.end(), known.begin(), known.end());
+  }
   REQUIRE(vecs.size() > 1000);
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_hash(v) || run_bytea(v) || run_int_convert(v) ||
+    bool known = run_known(v) || run_float_text(v) || run_float(v) ||
+                 run_hash(v) || run_bytea(v) || run_int_convert(v) ||
                  run64(v) || run128(v) || run_i16(v) || run_i32(v) ||
                  run_i64(v);
     INFO(v.line);

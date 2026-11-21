@@ -108,87 +108,22 @@ Datum hashenumextended(PG_FUNCTION_ARGS) {
 }
 
 Datum hashfloat4(PG_FUNCTION_ARGS) {
-  float4 key = PG_GETARG_FLOAT4(0);
-  float8 key8;
-
-  /*
-   * On IEEE-float machines, minus zero and zero have different bit patterns
-   * but should compare as equal.  We must ensure that they have the same
-   * hash value, which is most reliably done this way:
-   */
-  if (key == (float4)0)
-    PG_RETURN_UINT32(0);
-
-  /*
-   * To support cross-type hashing of float8 and float4, we want to return
-   * the same hash value hashfloat8 would produce for an equal float8 value.
-   * So, widen the value to float8 and hash that.  (We must do this rather
-   * than have hashfloat8 try to narrow its value to float4; that could fail
-   * on overflow.)
-   */
-  key8 = key;
-
-  /*
-   * Similarly, NaNs can have different bit patterns but they should all
-   * compare as equal.  For backwards-compatibility reasons we force them to
-   * have the hash value of a standard float8 NaN.  (You'd think we could
-   * replace key with a float4 NaN and then widen it; but on some old
-   * platforms, that way produces a different bit pattern.)
-   */
-  if (isnan(key8))
-    key8 = get_float8_nan();
-
-  return hash_any((unsigned char *)&key8, sizeof(key8));
+  /* ty: zero and -0 alike, every NaN alike, and a float4 as its float8 */
+  PG_RETURN_UINT32((uint32)ty_float32_hash(PG_GETARG_FLOAT4(0), 0));
 }
 
 Datum hashfloat4extended(PG_FUNCTION_ARGS) {
-  float4 key = PG_GETARG_FLOAT4(0);
-  uint64 seed = PG_GETARG_INT64(1);
-  float8 key8;
-
-  /* Same approach as hashfloat4 */
-  if (key == (float4)0)
-    PG_RETURN_UINT64(seed);
-  key8 = key;
-  if (isnan(key8))
-    key8 = get_float8_nan();
-
-  return hash_any_extended((unsigned char *)&key8, sizeof(key8), seed);
+  PG_RETURN_UINT64(
+      ty_float32_hash(PG_GETARG_FLOAT4(0), (uint64)PG_GETARG_INT64(1)));
 }
 
 Datum hashfloat8(PG_FUNCTION_ARGS) {
-  float8 key = PG_GETARG_FLOAT8(0);
-
-  /*
-   * On IEEE-float machines, minus zero and zero have different bit patterns
-   * but should compare as equal.  We must ensure that they have the same
-   * hash value, which is most reliably done this way:
-   */
-  if (key == (float8)0)
-    PG_RETURN_UINT32(0);
-
-  /*
-   * Similarly, NaNs can have different bit patterns but they should all
-   * compare as equal.  For backwards-compatibility reasons we force them to
-   * have the hash value of a standard NaN.
-   */
-  if (isnan(key))
-    key = get_float8_nan();
-
-  return hash_any((unsigned char *)&key, sizeof(key));
+  PG_RETURN_UINT32((uint32)ty_float64_hash(PG_GETARG_FLOAT8(0), 0));
 }
 
 Datum hashfloat8extended(PG_FUNCTION_ARGS) {
-  float8 key = PG_GETARG_FLOAT8(0);
-  uint64 seed = PG_GETARG_INT64(1);
-
-  /* Same approach as hashfloat8 */
-  if (key == (float8)0)
-    PG_RETURN_UINT64(seed);
-  if (isnan(key))
-    key = get_float8_nan();
-
-  return hash_any_extended((unsigned char *)&key, sizeof(key), seed);
+  PG_RETURN_UINT64(
+      ty_float64_hash(PG_GETARG_FLOAT8(0), (uint64)PG_GETARG_INT64(1)));
 }
 
 Datum hashoidvector(PG_FUNCTION_ARGS) {
