@@ -725,3 +725,198 @@ void ty_name_parse(const char *s, size_t len, char *out) {
   memset(out, 0, TY_NAMEDATALEN);
   memcpy(out, s, n);
 }
+
+namespace {
+
+const int k_like_true = 1, k_like_false = 0, k_like_abort = -1,
+          k_like_error = -2;
+
+/* Step over one character (utf8), or one byte. */
+inline void like_next(const char *&t, size_t &tlen, int utf8) {
+  t++, tlen--;
+  if (utf8) {
+    while (tlen > 0 && ((unsigned char)*t & 0xC0) == 0x80) {
+      t++, tlen--;
+    }
+  }
+}
+
+/*
+ * The match of LIKE, in three values: a match; no match here, so another
+ * start of the text may do; and no match at any start, so the caller stops.
+ * Each % calls this for the rest of the pattern, at each start of the text
+ * that begins with the next literal.
+ */
+int like_match(const char *t, size_t tlen, const char *p, size_t plen, int utf8,
+               int depth) {
+  if (plen == 1 && *p == '%') {
+    return k_like_true;
+  }
+  if (depth > 5000) {
+    ty_internal::set_error(TY_ERR_RANGE, "stack depth limit exceeded");
+    return k_like_error;
+  }
+  while (tlen > 0 && plen > 0) {
+    if (*p == '%') {
+      p++, plen--;
+      /* a run of % and _ : each _ takes a character of the text */
+      while (plen > 0) {
+        if (*p == '%') {
+          p++, plen--;
+        } else if (*p == '_') {
+          if (tlen <= 0) {
+            return k_like_abort;
+          }
+          like_next(t, tlen, utf8);
+          p++, plen--;
+        } else {
+          break;
+        }
+      }
+      if (plen <= 0) {
+        return k_like_true;
+      }
+      char first;
+
+      if (*p == '\\') {
+        if (plen < 2) {
+          ty_internal::set_error(
+              TY_ERR_INVALID,
+              "LIKE pattern must not end with escape character");
+          return k_like_error;
+        }
+        first = p[1];
+      } else {
+        first = *p;
+      }
+      /*
+       * Try each start of the text that has the next literal. If the literal
+       * is an ASCII byte (or the text is bytes), memchr finds the starts: an
+       * ASCII byte is never inside a multibyte character.
+       */
+      if (!utf8 || (unsigned char)first < 0x80) {
+        while (tlen > 0) {
+          const char *m = (const char *)memchr(t, (unsigned char)first, tlen);
+
+          if (m == nullptr) {
+            break;
+          }
+          tlen -= (size_t)(m - t);
+          t = m;
+          int r = like_match(t, tlen, p, plen, utf8, depth + 1);
+
+          if (r != k_like_false) {
+            return r; /* a match, an abort or an error */
+          }
+          t++, tlen--;
+        }
+        return k_like_abort;
+      }
+      while (tlen > 0) {
+        if (*t == first) {
+          int m = like_match(t, tlen, p, plen, utf8, depth + 1);
+
+          if (m != k_like_false) {
+            return m; /* a match, an abort or an error */
+          }
+        }
+        like_next(t, tlen, utf8);
+      }
+      return k_like_abort;
+    } else if (*p == '_') {
+      like_next(t, tlen, utf8);
+      p++, plen--;
+      continue;
+    } else if (*p == '\\') {
+      p++, plen--;
+      if (plen <= 0) {
+        ty_internal::set_error(
+            TY_ERR_INVALID, "LIKE pattern must not end with escape character");
+        return k_like_error;
+      }
+      if (*p != *t) {
+        return k_like_false;
+      }
+    } else if (*p != *t) {
+      return k_like_false;
+    }
+    t++, tlen--;
+    p++, plen--;
+  }
+  if (tlen > 0) {
+    return k_like_false; /* the end of the pattern, but not of the text */
+  }
+  while (plen > 0 && *p == '%') {
+    p++, plen--;
+  }
+  return plen <= 0 ? k_like_true : k_like_abort;
+}
+
+} // namespace
+
+/* LIKE: a match, or not, or an error. */
+int ty_text_like(const char *t, size_t tlen, const char *p, size_t plen,
+                 int utf8) {
+  int m = like_match(t, tlen, p, plen, utf8, 0);
+
+  return m == k_like_error ? -1 : m == k_like_true ? 1 : 0;
+}
+
+/*
+ * The pattern with the default escape.
+ * 1. With no escape wanted, double each backslash, so it is plain.
+ * 2. With a backslash as the escape, the pattern is as it is.
+ * 3. With another character, change it to a backslash, and double a
+ *    backslash, unless it comes right after the escape.
+ */
+int ty_text_like_escape(const char *pat, size_t plen, const char *esc,
+                        size_t elen, int utf8, char *out, size_t *outlen) {
+  const char *p = pat, *pend = pat + plen;
+  char *r = out;
+
+  if (elen == 0) {
+    while (p < pend) {
+      if (*p == '\\') {
+        *r++ = '\\';
+      }
+      const char *q = utf8 ? next_char(p, pend) : p + 1;
+
+      memcpy(r, p, (size_t)(q - p));
+      r += q - p;
+      p = q;
+    }
+  } else {
+    if ((utf8 ? next_char(esc, esc + elen) : esc + 1) != esc + elen) {
+      return ty_internal::set_error(TY_ERR_INVALID, "invalid escape string");
+    }
+    if (*esc == '\\') {
+      memcpy(out, pat, plen);
+      *outlen = plen;
+      return 0;
+    }
+    bool after = false;
+
+    while (p < pend) {
+      const char *q = utf8 ? next_char(p, pend) : p + 1;
+      size_t n = (size_t)(q - p);
+
+      if (n == elen && memcmp(p, esc, n) == 0 && !after) {
+        *r++ = '\\';
+        after = true;
+      } else if (*p == '\\') {
+        *r++ = '\\';
+        if (!after) {
+          *r++ = '\\';
+        }
+        after = false;
+      } else {
+        memcpy(r, p, n);
+        r += n;
+        after = false;
+      }
+      p = q;
+    }
+  }
+  *outlen = (size_t)(r - out);
+  return 0;
+}

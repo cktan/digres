@@ -513,6 +513,17 @@ copied from PostgreSQL keeps its copyright notice
      `split_part` -6.98%; the pad and trim functions
      -49.97%; a sort of text -0.03%; compares and a group by
      -1.29%.
+   - **LIKE moved (2026-11-21), unattended.** `ty_text_like`
+     for text and bytea, and `ty_text_like_escape`, with
+     PostgreSQL's lazy error for a backslash at the end of
+     the pattern; a nondeterministic collation keeps the old
+     matcher in digres. The tests: 800 vectors from a Python
+     regular-expression reference, known answers from the old
+     digres for 34 pairs, and `dg/test/select_like_ops.sql`,
+     which prints the same as the digres before the move.
+     Measured by callgrind (old, new): LIKE -12.61% and
+     -5.64%, ILIKE -8.91%. The first version was +1.55% on
+     ILIKE; `memchr` finds the starts of a match after a `%`.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

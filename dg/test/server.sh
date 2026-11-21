@@ -4645,7 +4645,10 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "chr(-1)|character number must be positive" \
   "chr(0)|null character not permitted" \
   "chr(1114112)|requested character too large for encoding: 1114112" \
-  "chr(55296)|requested character not valid for encoding: 55296"; do
+  "chr(55296)|requested character not valid for encoding: 55296" \
+  "'abc' LIKE 'a\\'|LIKE pattern must not end with escape character" \
+  "'abc' LIKE '%\\'|LIKE pattern must not end with escape character" \
+  "'a' LIKE 'a' ESCAPE 'xy'|invalid escape string"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"
 done

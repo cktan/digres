@@ -144,9 +144,26 @@ def char_inputs():
     return out
 
 
+def like_pairs():
+    """Pairs of a text and a LIKE pattern, with the cases where an escape
+    at the end of the pattern is an error only if the match gets to it."""
+    out = [("abc", "a%"), ("abc", "a\\"), ("abc", "x\\"), ("abc", "%\\"), ("abc", "abc\\"), ("", "\\"), ("", ""),
+           ("", "%"), ("a", "\\"), ("a", "a\\"), ("ab", "%b\\"), ("ab", "_\\"), ("a\\", "a\\\\"),
+           ("abc", "%\\b"), ("a%c", "a\\%c"), ("a_c", "a\\_c"), ("abc", "a\\%c"), ("é", "_"), ("日本語", "%本%"),
+           ("😀x", "_x"), ("😀x", "__"), ("😀x", "%x"), ("é", "\xc3_"), ("abab", "%ab%ab"), ("aaaa", "%a%a%a%a"),
+           ("aaaa", "%a%a%a%a%a"), ("abc", "%%%"), ("abc", "_%_%_"), ("abc", "_%_%_%_"), ("a" * 40, "%a" * 20 + "b"),
+           ("x" * 30, "%x" * 15), ("abc", "a%\\"), ("abc", "ab\\c"), ("abc", "\\a%")]
+    return out
+
+
+def like_ops():
+    return [(t, p) for t, p in like_pairs()]
+
+
 OPS["tid.parse"] = ("tid", tid_inputs)
 OPS["lsn.parse"] = ("pg_lsn", lsn_inputs)
 OPS["char.parse"] = ('"char"', char_inputs)
+OPS["like.pair"] = ("like", like_ops)
 
 OPS["cidr.parse"] = ("cidr", inet_inputs)
 
@@ -166,6 +183,10 @@ def run(psql_args, sql):
         return "E INVALID"
     if "22003" in err:
         return "E RANGE"
+    if "22025" in err:
+        return "E INVALID"
+    if "54001" in err:
+        return "E RANGE"
     return "E " + err.strip().replace(" ", "_")[:40]
 
 
@@ -173,12 +194,23 @@ def main():
     args = sys.argv[1:]
     for name, (sqltype, gen) in OPS.items():
         for text in gen():
-            lit = text.replace("'", "''")
+            if sqltype == "like":
+                lit = ""
+            else:
+                lit = text.replace("'", "''")
             sql = "select E'%s'::%s" % (lit.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t"), sqltype)
             if sqltype == "inet":
                 sql = "select a, host(a), text(a), abbrev(a) from (select E'%s'::inet a) t" % lit.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
             elif sqltype == "cidr":
                 sql = "select a, text(a), abbrev(a) from (select E'%s'::cidr a) t" % lit.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+            if sqltype == "like":
+                t, pt = text
+                esc = lambda x: x.replace("\\", "\\\\").replace("'", "''")
+                sql = "select E'%s' like E'%s'" % (esc(t), esc(pt))
+                res = run(args, sql)
+                res = {"t": "1", "f": "0"}.get(res, res)
+                print("%s %s %s => %s" % (name, t.encode().hex() or "-", pt.encode().hex() or "-", res))
+                continue
             res = run(args, sql)
             if res == "":
                 res = "-"

@@ -244,7 +244,7 @@ are the catalog tables psql reads
        pg_lsn and "char" (`ty_small.h`), and text for the C
        collation, with varchar, bpchar and name (`ty_text.h`).
        **Left: date, time and interval, the case functions,
-       like, and the rest.**
+       and the rest.**
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.

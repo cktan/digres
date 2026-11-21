@@ -152,3 +152,38 @@ TEST_CASE("character(n) and name") {
   CHECK(strlen(name) == 63);
   CHECK(strlen(name) % 3 == 0);
 }
+
+// Verify LIKE: wildcards over characters, the escape, and the lazy error.
+// 1. _ is one character: it matches the 4-byte "😀" whole, not a byte.
+// 2. % matches any run, and the pattern may have many of them.
+// 3. A backslash makes % plain.
+// 4. A trailing backslash is an error only if the match gets to it.
+// 5. The escape translation: # becomes a backslash.
+TEST_CASE("LIKE") {
+  // 1. _ is one character: it matches the 4-byte "😀" whole, not a byte.
+  CHECK(1 == ty_text_like("a😀b", 6, "a_b", 3, 1));
+  CHECK(0 == ty_text_like("a😀b", 6, "a__b", 4, 1));
+  CHECK(1 == ty_text_like("a😀b", 6, "a____b", 6, 0)); // as bytes: 4 of them
+
+  // 2. % matches any run, and the pattern may have many of them.
+  CHECK(1 == ty_text_like("abcabc", 6, "%bc%bc", 6, 1));
+  CHECK(0 == ty_text_like("aaaa", 4, "%a%a%a%a%a", 10, 1));
+
+  // 3. A backslash makes % plain.
+  CHECK(1 == ty_text_like("a%c", 3, "a\\%c", 4, 1));
+  CHECK(0 == ty_text_like("abc", 3, "a\\%c", 4, 1));
+
+  // 4. A trailing backslash is an error only if the match gets to it.
+  CHECK(0 == ty_text_like("abc", 3, "x\\", 2, 1));
+  CHECK(-1 == ty_text_like("abc", 3, "a\\", 2, 1));
+  CHECK(std::string(ty_errmsg()) ==
+        "LIKE pattern must not end with escape character");
+
+  // 5. The escape translation: # becomes a backslash.
+  char out[16];
+  size_t n;
+
+  CHECK(0 == ty_text_like_escape("a#%c", 4, "#", 1, 1, out, &n));
+  CHECK(std::string(out, n) == "a\\%c");
+  CHECK(-1 == ty_text_like_escape("a", 1, "ab", 2, 1, out, &n));
+}

@@ -25,6 +25,7 @@
 #include "utils/fmgrprotos.h"
 #include "utils/pg_locale.h"
 #include "varatt.h"
+#include "ty_text.h"
 
 #define LIKE_TRUE						1
 #define LIKE_FALSE						0
@@ -140,6 +141,26 @@ static char SB_lower_char(unsigned char c, pg_locale_t locale) {
 #include "like_match.c"
 
 /* Generic for all cases not requiring inline case-folding */
+/*
+ * Match with ty, which does the LIKE of a deterministic collation: utf8 is 1
+ * for text and 0 for bytea. Its errors are PostgreSQL's.
+ */
+static int like_ty(const char *s, int slen, const char *p, int plen,
+                   int utf8) {
+  int r = ty_text_like(s, slen, p, plen, utf8);
+
+  if (r < 0) {
+    if (ty_errnum() == TY_ERR_RANGE)
+      ereport(ERROR,
+              (errcode(ERRCODE_STATEMENT_TOO_COMPLEX),
+               errmsg("stack depth limit exceeded")));
+    ereport(ERROR,
+            (errcode(ERRCODE_INVALID_ESCAPE_SEQUENCE),
+             errmsg("LIKE pattern must not end with escape character")));
+  }
+  return r;
+}
+
 static inline int GenericMatchText(const char *s, int slen, const char *p,
                                    int plen, Oid collation) {
   pg_locale_t locale;
@@ -157,6 +178,10 @@ static inline int GenericMatchText(const char *s, int slen, const char *p,
   }
 
   locale = pg_newlocale_from_collation(collation);
+
+  /* a deterministic collation: ty matches the bytes (the encoding is UTF8) */
+  if (locale->deterministic)
+    return like_ty(s, slen, p, plen, 1);
 
   if (pg_database_encoding_max_length() == 1)
     return SB_MatchText(s, slen, p, plen, locale);
@@ -210,7 +235,7 @@ static inline int Generic_Text_IC_like(text *str, text *pat, Oid collation) {
     s = VARDATA_ANY(str);
     slen = VARSIZE_ANY_EXHDR(str);
     if (GetDatabaseEncoding() == PG_UTF8)
-      return UTF8_MatchText(s, slen, p, plen, 0);
+      return like_ty(s, slen, p, plen, 1);
     else
       return MB_MatchText(s, slen, p, plen, 0);
   } else {
@@ -310,7 +335,7 @@ Datum bytealike(PG_FUNCTION_ARGS) {
   p = VARDATA_ANY(pat);
   plen = VARSIZE_ANY_EXHDR(pat);
 
-  result = (SB_MatchText(s, slen, p, plen, 0) == LIKE_TRUE);
+  result = (like_ty(s, slen, p, plen, 0) == LIKE_TRUE);
 
   PG_RETURN_BOOL(result);
 }
@@ -327,7 +352,7 @@ Datum byteanlike(PG_FUNCTION_ARGS) {
   p = VARDATA_ANY(pat);
   plen = VARSIZE_ANY_EXHDR(pat);
 
-  result = (SB_MatchText(s, slen, p, plen, 0) != LIKE_TRUE);
+  result = (like_ty(s, slen, p, plen, 0) != LIKE_TRUE);
 
   PG_RETURN_BOOL(result);
 }
@@ -390,11 +415,17 @@ Datum like_escape(PG_FUNCTION_ARGS) {
   text *pat = PG_GETARG_TEXT_PP(0);
   text *esc = PG_GETARG_TEXT_PP(1);
   text *result;
+  size_t outlen;
 
-  if (pg_database_encoding_max_length() == 1)
-    result = SB_do_like_escape(pat, esc);
-  else
-    result = MB_do_like_escape(pat, esc);
+  /* the result is at most twice as long: a backslash is doubled */
+  result = (text *)palloc(VARSIZE_ANY_EXHDR(pat) * 2 + VARHDRSZ);
+  if (ty_text_like_escape(VARDATA_ANY(pat), VARSIZE_ANY_EXHDR(pat),
+                          VARDATA_ANY(esc), VARSIZE_ANY_EXHDR(esc), 1,
+                          VARDATA(result), &outlen))
+    ereport(ERROR, (errcode(ERRCODE_INVALID_ESCAPE_SEQUENCE),
+                    errmsg("invalid escape string"),
+                    errhint("Escape string must be empty or one character.")));
+  SET_VARSIZE(result, VARHDRSZ + outlen);
 
   PG_RETURN_TEXT_P(result);
 }
@@ -406,7 +437,17 @@ Datum like_escape(PG_FUNCTION_ARGS) {
 Datum like_escape_bytea(PG_FUNCTION_ARGS) {
   bytea *pat = PG_GETARG_BYTEA_PP(0);
   bytea *esc = PG_GETARG_BYTEA_PP(1);
-  bytea *result = SB_do_like_escape((text *)pat, (text *)esc);
+  bytea *result;
+  size_t outlen;
 
-  PG_RETURN_BYTEA_P((bytea *)result);
+  result = (bytea *)palloc(VARSIZE_ANY_EXHDR(pat) * 2 + VARHDRSZ);
+  if (ty_text_like_escape(VARDATA_ANY(pat), VARSIZE_ANY_EXHDR(pat),
+                          VARDATA_ANY(esc), VARSIZE_ANY_EXHDR(esc), 0,
+                          VARDATA(result), &outlen))
+    ereport(ERROR, (errcode(ERRCODE_INVALID_ESCAPE_SEQUENCE),
+                    errmsg("invalid escape string"),
+                    errhint("Escape string must be empty or one character.")));
+  SET_VARSIZE(result, VARHDRSZ + outlen);
+
+  PG_RETURN_BYTEA_P(result);
 }

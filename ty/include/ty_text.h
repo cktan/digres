@@ -260,4 +260,27 @@ static inline int ty_name_cmp(const char* a, const char* b) {
     return strncmp(a, b, TY_NAMEDATALEN);
 }
 
+/*
+ * LIKE. Match t against the pattern p: % is any run of characters, _ is one
+ * character, and a backslash makes the next byte plain. 1 for a match, 0 for
+ * none. A pattern that ends in a backslash where the match reaches it is
+ * TY_ERR_INVALID ("LIKE pattern must not end with escape character"), as
+ * in PostgreSQL, which finds it only if it gets there; a pattern with so many
+ * % that the nesting passes 5000 is TY_ERR_RANGE ("stack depth limit
+ * exceeded"). utf8 is 1 for text, where _ and % step over a whole character,
+ * and 0 for bytea, where they step over a byte.
+ */
+int ty_text_like(const char* t, size_t tlen, const char* p, size_t plen,
+                 int utf8);
+
+/*
+ * The pattern of LIKE ... ESCAPE esc, made into the pattern of the default
+ * escape, a backslash: out has 2 * plen bytes, and *outlen is the result's
+ * size. An escape of more than one character is TY_ERR_INVALID ("invalid
+ * escape string"). An empty escape makes every backslash plain. utf8 is as
+ * in ty_text_like: a character is a whole UTF-8 character, or a byte.
+ */
+int ty_text_like_escape(const char* pat, size_t plen, const char* esc,
+                        size_t elen, int utf8, char* out, size_t* outlen);
+
 #endif

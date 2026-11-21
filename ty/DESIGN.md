@@ -556,8 +556,18 @@ trailing spaces, and `ty_name_parse` cuts a name to 63 bytes at a
 character boundary. The typmod text, the error text and the
 binary forms stay in digres.
 
+LIKE is `ty_text_like`, for text (a character is a whole UTF-8
+character) and for bytea (a byte). It keeps PostgreSQL's three
+values, a match, no match here and no match at any start, so that
+the error for a backslash at the end of the pattern comes only if
+the match gets to it, as in PostgreSQL. `ty_text_like_escape`
+makes the pattern of an `ESCAPE` clause. The pattern with `%`
+nests one call for each `%`, and a nesting of 5,000 is an error,
+as the stack limit is in PostgreSQL. `ILIKE` still lowers both
+strings in digres, then calls ty.
+
 The case functions (`lower`, `upper`, `initcap`) depend on the
-collation and stay in digres, with `like`, the regular
+collation and stay in digres, with the regular
 expressions, `format` and the functions on arrays of text.
 
 The tests: the vectors, from a reference of Python strings, whose

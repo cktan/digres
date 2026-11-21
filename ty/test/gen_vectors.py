@@ -414,6 +414,7 @@ def main():
     gen_bits()
     gen_inet()
     gen_text()
+    gen_like()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -2141,6 +2142,69 @@ def gen_text():
         else:
             res = ttok(chr(cp))
         emit("text.chr", (cp,), res)
+
+
+def gen_like():
+    """LIKE and the escape translation, from a reference of Python regular
+    expressions (a pattern with a backslash at its end is in known.txt: the
+    error depends on where the match gets to)."""
+    import re
+    chars = ["a", "b", "é", "日", "😀"]
+    for _ in range(600):
+        toks = []
+        for _ in range(random.randint(0, 6)):
+            k = random.random()
+            if k < 0.35:
+                toks.append(("lit", random.choice(chars)))
+            elif k < 0.6:
+                toks.append(("any", "%"))
+            elif k < 0.8:
+                toks.append(("one", "_"))
+            else:
+                toks.append(("esc", random.choice(chars + ["%", "_", "\\"])))
+        pat = ""
+        rx = ""
+        for kind, v in toks:
+            if kind == "lit":
+                pat += v
+                rx += re.escape(v)
+            elif kind == "any":
+                pat += "%"
+                rx += ".*"
+            elif kind == "one":
+                pat += "_"
+                rx += "."
+            else:
+                pat += "\\" + v
+                rx += re.escape(v)
+        text = "".join(random.choice(chars + chars[:2]) for _ in range(random.randint(0, 8)))
+        emit("text.like", (ttok(text), ttok(pat)), int(re.fullmatch(rx, text, re.DOTALL) is not None))
+    # the escape translation
+    for _ in range(200):
+        pool = ["a", "b", "\\", "#", "é", "%", "_", "#"]
+        pat = "".join(random.choice(pool) for _ in range(random.randint(0, 8)))
+        esc = random.choice(["", "#", "\\", "é", "ab", "x"])
+        if len(esc) > 1:
+            emit("text.like_escape", (ttok(pat), ttok(esc)), ("E", "INVALID"))
+            continue
+        if esc == "":
+            res = pat.replace("\\", "\\\\")
+        elif esc == "\\":
+            res = pat
+        else:
+            res = ""
+            after = False
+            for ch in pat:
+                if ch == esc and not after:
+                    res += "\\"
+                    after = True
+                elif ch == "\\":
+                    res += "\\" if after else "\\\\"
+                    after = False
+                else:
+                    res += ch
+                    after = False
+        emit("text.like_escape", (ttok(pat), ttok(esc)), ttok(res))
 
 
 def gen_ints():

@@ -841,7 +841,7 @@ bool run_text(const vec_t &v) {
 
   if (v.args.size() > 1 && name != "left" && name != "right" &&
       name != "repeat" && name != "chr" && name != "length" &&
-      name != "substr") {
+      name != "substr" && name != "like" && name != "like_escape") {
     b = str(1);
   }
   if (name == "chr") {
@@ -954,6 +954,17 @@ bool run_text(const vec_t &v) {
     ty_text_translate(a.data(), a.size(), b.data(), b.size(), c.data(),
                       c.size(), &out[0], &n);
     CHECK(v.res[0] == tok(out.data(), n));
+  } else if (name == "like") {
+    std::string pat = str(1);
+
+    rc = ty_text_like(a.data(), a.size(), pat.data(), pat.size(), 1);
+    CHECK(std::stoi(v.res[0]) == rc);
+  } else if (name == "like_escape") {
+    std::string pat = a, esc = str(1), out(2 * pat.size() + 1, '\0');
+
+    rc = ty_text_like_escape(pat.data(), pat.size(), esc.data(), esc.size(), 1,
+                             &out[0], &n);
+    check(rc, tok(out.data(), n));
   } else if (name == "ascii") {
     int32_t r = 0;
 
@@ -1084,6 +1095,21 @@ bool run_known(const vec_t &v) {
   }
   if (op == "tid.parse" || op == "lsn.parse" || op == "char.parse") {
     return run_small_text(v);
+  }
+  if (op == "like.pair") {
+    std::vector<uint8_t> tb = bytes_of(v.args[0]), pb = bytes_of(v.args[1]);
+    int rc =
+        ty_text_like(reinterpret_cast<const char *>(tb.data()), tb.size(),
+                     reinterpret_cast<const char *>(pb.data()), pb.size(), 1);
+
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      CHECK(std::stoi(v.res[0]) == rc);
+    }
+    return true;
   }
   if (op != "macaddr.parse" && op != "macaddr8.parse") {
     return false;
