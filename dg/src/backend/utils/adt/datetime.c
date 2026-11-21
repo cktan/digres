@@ -31,6 +31,7 @@
 #include "utils/builtins.h"
 #include "utils/date.h"
 #include "utils/datetime.h"
+#include "ty_datetime.h"
 #include "utils/guc.h"
 #include "utils/tzparser.h"
 #include "utils/control_block.h"
@@ -287,46 +288,12 @@ static thread_local /*LOCAL*/ TzAbbrevCache tzabbrevcache[MAXDATEFIELDS];
  */
 
 int date2j(int year, int month, int day) {
-  int julian;
-  int century;
-
-  if (month > 2) {
-    month += 1;
-    year += 4800;
-  } else {
-    month += 13;
-    year += 4799;
-  }
-
-  century = year / 100;
-  julian = year * 365 - 32167;
-  julian += year / 4 - century + century / 4;
-  julian += 7834 * month / 256 + day;
-
-  return julian;
-} /* date2j() */
+  return ty_date2j(year, month, day);
+}
 
 void j2date(int jd, int *year, int *month, int *day) {
-  unsigned int julian;
-  unsigned int quad;
-  unsigned int extra;
-  int y;
-
-  julian = jd;
-  julian += 32044;
-  quad = julian / 146097;
-  extra = (julian - quad * 146097) * 4 + 3;
-  julian += 60 + quad * 3 + extra / 146097;
-  quad = julian / 1461;
-  julian -= quad * 1461;
-  y = julian * 4 / 1461;
-  julian = ((y != 0) ? ((julian + 305) % 365) : ((julian + 306) % 366)) + 123;
-  y += quad * 4;
-  *year = y - 4800;
-  quad = julian * 2141 / 65536;
-  *day = julian - 7834 * quad / 256;
-  *month = (quad + 10) % MONTHS_PER_YEAR + 1;
-} /* j2date() */
+  ty_j2date(jd, year, month, day);
+}
 
 /*
  * j2day - convert Julian date to day-of-week (0..6 == Sun..Sat)
@@ -336,14 +303,8 @@ void j2date(int jd, int *year, int *month, int *day) {
  * a crock, but will work as long as the computation here is just a modulo.
  */
 int j2day(int date) {
-  date += 1;
-  date %= 7;
-  /* Cope if division truncates towards zero, as it probably does */
-  if (date < 0)
-    date += 7;
-
-  return date;
-} /* j2day() */
+  return ty_j2day(date);
+}
 
 /*
  * GetCurrentDateTime()

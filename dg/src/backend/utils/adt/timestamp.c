@@ -43,6 +43,7 @@
 #include "utils/skipsupport.h"
 #include "utils/sortsupport.h"
 #include "ty_interval.h"
+#include "ty_datetime.h"
 
 /*
  * gcc's -ffast-math switch breaks routines that expect exact results from
@@ -2434,71 +2435,11 @@ Datum timestamp_larger(PG_FUNCTION_ARGS) {
 Datum timestamp_mi(PG_FUNCTION_ARGS) {
   Timestamp dt1 = PG_GETARG_TIMESTAMP(0);
   Timestamp dt2 = PG_GETARG_TIMESTAMP(1);
-  Interval *result;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  result = (Interval *)palloc(sizeof(Interval));
-
-  /*
-   * Handle infinities.
-   *
-   * We treat anything that amounts to "infinity - infinity" as an error,
-   * since the interval type has nothing equivalent to NaN.
-   */
-  if (TIMESTAMP_NOT_FINITE(dt1) || TIMESTAMP_NOT_FINITE(dt2)) {
-    if (TIMESTAMP_IS_NOBEGIN(dt1)) {
-      if (TIMESTAMP_IS_NOBEGIN(dt2))
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("interval out of range")));
-      else
-        INTERVAL_NOBEGIN(result);
-    } else if (TIMESTAMP_IS_NOEND(dt1)) {
-      if (TIMESTAMP_IS_NOEND(dt2))
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("interval out of range")));
-      else
-        INTERVAL_NOEND(result);
-    } else if (TIMESTAMP_IS_NOBEGIN(dt2))
-      INTERVAL_NOEND(result);
-    else /* TIMESTAMP_IS_NOEND(dt2) */
-      INTERVAL_NOBEGIN(result);
-
-    PG_RETURN_INTERVAL_P(result);
-  }
-
-  if (unlikely(pg_sub_s64_overflow(dt1, dt2, &result->time)))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("interval out of range")));
-
-  result->month = 0;
-  result->day = 0;
-
-  /*----------
-   *	This is wrong, but removing it breaks a lot of regression tests.
-   *	For example:
-   *
-   *	test=> SET timezone = 'EST5EDT';
-   *	test=> SELECT
-   *	test-> ('2005-10-30 13:22:00-05'::timestamptz -
-   *	test(>	'2005-10-29 13:22:00-04'::timestamptz);
-   *	?column?
-   *	----------------
-   *	 1 day 01:00:00
-   *	 (1 row)
-   *
-   *	so adding that to the first timestamp gets:
-   *
-   *	 test=> SELECT
-   *	 test-> ('2005-10-29 13:22:00-04'::timestamptz +
-   *	 test(> ('2005-10-30 13:22:00-05'::timestamptz -
-   *	 test(>  '2005-10-29 13:22:00-04'::timestamptz)) at time zone 'EST';
-   *		timezone
-   *	--------------------
-   *	2005-10-30 14:22:00
-   *	(1 row)
-   *----------
-   */
-  result = DatumGetIntervalP(
-      DirectFunctionCall1(interval_justify_hours, IntervalPGetDatum(result)));
+  /* ty handles the infinities, and justifies the hours */
+  if (ty_timestamp_diff(dt1, dt2, (ty_interval_t *)result))
+    interval_raise();
 
   PG_RETURN_INTERVAL_P(result);
 }
@@ -2574,89 +2515,9 @@ Datum timestamp_pl_interval(PG_FUNCTION_ARGS) {
   Interval *span = PG_GETARG_INTERVAL_P(1);
   Timestamp result;
 
-  /*
-   * Handle infinities.
-   *
-   * We treat anything that amounts to "infinity - infinity" as an error,
-   * since the timestamp type has nothing equivalent to NaN.
-   */
-  if (INTERVAL_IS_NOBEGIN(span)) {
-    if (TIMESTAMP_IS_NOEND(timestamp))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-    else
-      TIMESTAMP_NOBEGIN(result);
-  } else if (INTERVAL_IS_NOEND(span)) {
-    if (TIMESTAMP_IS_NOBEGIN(timestamp))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-    else
-      TIMESTAMP_NOEND(result);
-  } else if (TIMESTAMP_NOT_FINITE(timestamp))
-    result = timestamp;
-  else {
-    if (span->month != 0) {
-      struct pg_tm tt, *tm = &tt;
-      fsec_t fsec;
-
-      if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) != 0)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-
-      if (pg_add_s32_overflow(tm->tm_mon, span->month, &tm->tm_mon))
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-      if (tm->tm_mon > MONTHS_PER_YEAR) {
-        tm->tm_year += (tm->tm_mon - 1) / MONTHS_PER_YEAR;
-        tm->tm_mon = ((tm->tm_mon - 1) % MONTHS_PER_YEAR) + 1;
-      } else if (tm->tm_mon < 1) {
-        tm->tm_year += tm->tm_mon / MONTHS_PER_YEAR - 1;
-        tm->tm_mon = tm->tm_mon % MONTHS_PER_YEAR + MONTHS_PER_YEAR;
-      }
-
-      /* adjust for end of month boundary problems... */
-      if (tm->tm_mday > day_tab[isleap(tm->tm_year)][tm->tm_mon - 1])
-        tm->tm_mday = (day_tab[isleap(tm->tm_year)][tm->tm_mon - 1]);
-
-      if (tm2timestamp(tm, fsec, NULL, &timestamp) != 0)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-    }
-
-    if (span->day != 0) {
-      struct pg_tm tt, *tm = &tt;
-      fsec_t fsec;
-      int julian;
-
-      if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) != 0)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-
-      /*
-       * Add days by converting to and from Julian.  We need an overflow
-       * check here since j2date expects a non-negative integer input.
-       */
-      julian = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday);
-      if (pg_add_s32_overflow(julian, span->day, &julian) || julian < 0)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-      j2date(julian, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
-
-      if (tm2timestamp(tm, fsec, NULL, &timestamp) != 0)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-    }
-
-    if (pg_add_s64_overflow(timestamp, span->time, &timestamp))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-
-    if (!IS_VALID_TIMESTAMP(timestamp))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-
-    result = timestamp;
-  }
+  if (ty_timestamp_add_interval(timestamp, TY_IV(span), &result))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
 
   PG_RETURN_TIMESTAMP(result);
 }
@@ -2664,13 +2525,13 @@ Datum timestamp_pl_interval(PG_FUNCTION_ARGS) {
 Datum timestamp_mi_interval(PG_FUNCTION_ARGS) {
   Timestamp timestamp = PG_GETARG_TIMESTAMP(0);
   Interval *span = PG_GETARG_INTERVAL_P(1);
-  Interval tspan;
+  Timestamp result;
 
-  interval_um_internal(span, &tspan);
+  if (ty_timestamp_sub_interval(timestamp, TY_IV(span), &result))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
 
-  return DirectFunctionCall2(timestamp_pl_interval,
-                             TimestampGetDatum(timestamp),
-                             PointerGetDatum(&tspan));
+  PG_RETURN_TIMESTAMP(result);
 }
 
 /* timestamptz_pl_interval_internal()

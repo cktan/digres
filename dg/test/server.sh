@@ -4504,6 +4504,8 @@ done
 # 12. LIKE with a backslash at the end of the pattern, and a bad ESCAPE.
 # 13. money out of range, a division by zero, and bad money text.
 # 14. interval arithmetic out of range, and a division by zero.
+# 15. date, time and timestamp arithmetic out of range, bad make_date and
+#     make_time fields, and infinities that clash.
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4664,6 +4666,20 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'2147483647 months'::interval + '1 month'|interval out of range" \
   "'2147483647 days'::interval * 2|interval out of range" \
   "'infinity'::interval * 0|interval out of range" \
+  "date '2000-01-01' + 2147483647|date out of range" \
+  "date '5874897-12-31' + 1|date out of range" \
+  "'infinity'::date - '2000-01-01'::date|cannot subtract infinite dates" \
+  "make_date(2000, 13, 1)|date field value out of range: 2000-13-01" \
+  "make_date(0, 1, 1)|date field value out of range: 0-01-01" \
+  "make_date(-1, 2, 30)|date field value out of range: 0-02-30" \
+  "make_date(5874899, 1, 1)|date out of range: 5874899-01-01" \
+  "make_time(25, 0, 0)|time field value out of range: 25:00:00" \
+  "make_time(0, 0, 'nan')|time field value out of range: 0:00:NaN" \
+  "time '12:00' + 'infinity'::interval|cannot add infinite interval to time" \
+  "time '12:00' - '-infinity'::interval|cannot subtract infinite interval from time" \
+  "'infinity'::timestamp - 'infinity'::timestamp|interval out of range" \
+  "'294276-12-31'::timestamp + '1 year'::interval|timestamp out of range" \
+  "'infinity'::timestamp + '-infinity'::interval|timestamp out of range" \
   "'\$92233720368547758.08'::money|is out of range for type money"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"

@@ -23,6 +23,7 @@
 #include "ty_decimal.h"
 #include "ty_float.h"
 #include "ty_hash.h"
+#include "ty_datetime.h"
 #include "ty_inet.h"
 #include "ty_interval.h"
 #include "ty_money.h"
@@ -951,6 +952,139 @@ bool run_interval(const vec_t &v) {
   return true;
 }
 
+/* Run one calendar, date, time or timestamp vector. */
+bool run_datetime(const vec_t &v) {
+  const std::string &op = v.op;
+  const bool cal = op.compare(0, 4, "cal.") == 0,
+             date = op.compare(0, 5, "date.") == 0,
+             tim = op.compare(0, 5, "time.") == 0,
+             ts = op.compare(0, 3, "ts.") == 0;
+
+  if (!cal && !date && !tim && !ts) {
+    return false;
+  }
+  const std::string name = op.substr(op.find('.') + 1);
+  int rc = 0;
+  auto i64 = [&](size_t i) { return (int64_t)std::stoll(v.args[i]); };
+  /* a result that is a number, or an error */
+  auto check_num = [&](int rcode, long long got) {
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rcode);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rcode);
+      CHECK(std::stoll(v.res[0]) == got);
+    }
+  };
+  auto tm_token = [](const ty_tm_t &t, int32_t f) {
+    char buf[96];
+
+    snprintf(buf, sizeof buf, "%d:%d:%d:%d:%d:%d:%d", t.year, t.mon, t.mday,
+             t.hour, t.min, t.sec, f);
+    return std::string(buf);
+  };
+
+  INFO(v.line);
+  if (cal) {
+    if (name == "date2j") {
+      CHECK(std::stoll(v.res[0]) ==
+            ty_date2j((int)i64(0), (int)i64(1), (int)i64(2)));
+    } else if (name == "j2date") {
+      int y, m, d;
+
+      ty_j2date((int)i64(0), &y, &m, &d);
+      char buf[64];
+
+      snprintf(buf, sizeof buf, "%d:%d:%d", y, m, d);
+      CHECK(v.res[0] == buf);
+    } else {
+      CHECK(std::stoll(v.res[0]) == ty_j2day((int)i64(0)));
+    }
+    return true;
+  }
+  if (date) {
+    int32_t r = 0;
+
+    if (name == "make") {
+      rc = ty_date_make((int32_t)i64(0), (int32_t)i64(1), (int32_t)i64(2), &r);
+    } else if (name == "add_days") {
+      rc = ty_date_add_days((int32_t)i64(0), (int32_t)i64(1), &r);
+    } else if (name == "sub_days") {
+      rc = ty_date_sub_days((int32_t)i64(0), (int32_t)i64(1), &r);
+    } else {
+      rc = ty_date_diff((int32_t)i64(0), (int32_t)i64(1), &r);
+    }
+    check_num(rc, r);
+    return true;
+  }
+  if (tim) {
+    int64_t r = 0;
+    ty_interval_t iv;
+
+    if (name == "make") {
+      rc = ty_time_make((int32_t)i64(0), (int32_t)i64(1), std::stod(v.args[2]),
+                        &r);
+    } else if (name == "diff") {
+      ty_time_diff(i64(0), i64(1), &iv);
+      CHECK(v.res[0] == iv_token(iv));
+      return true;
+    } else {
+      iv = iv_of(v.args[1]);
+      rc = name == "add_interval" ? ty_time_add_interval(i64(0), &iv, &r)
+                                  : ty_time_sub_interval(i64(0), &iv, &r);
+    }
+    check_num(rc, r);
+    return true;
+  }
+  if (name == "to_tm") {
+    ty_tm_t t;
+    int32_t f = 0;
+
+    rc = ty_timestamp_to_tm(i64(0), &t, &f);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(v.res[0] == tm_token(t, f));
+    }
+  } else if (name == "from_tm") {
+    ty_tm_t t;
+    int32_t f;
+    int64_t r = 0;
+
+    REQUIRE(7 == sscanf(v.args[0].c_str(), "%d:%d:%d:%d:%d:%d:%d", &t.year,
+                        &t.mon, &t.mday, &t.hour, &t.min, &t.sec, &f));
+    rc = ty_tm_to_timestamp(&t, f, &r);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(std::stoll(v.res[0]) == r);
+    }
+  } else if (name == "add_interval" || name == "sub_interval") {
+    ty_interval_t iv = iv_of(v.args[1]);
+    int64_t r = 0;
+
+    rc = name == "add_interval" ? ty_timestamp_add_interval(i64(0), &iv, &r)
+                                : ty_timestamp_sub_interval(i64(0), &iv, &r);
+    check_num(rc, r);
+  } else {
+    ty_interval_t iv;
+
+    rc = ty_timestamp_diff(i64(0), i64(1), &iv);
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(v.res[0] == iv_token(iv));
+    }
+  }
+  return true;
+}
+
 /* Run one text vector: the strings are the hex of UTF-8 bytes. */
 bool run_text(const vec_t &v) {
   const std::string &op = v.op;
@@ -1870,11 +2004,12 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_interval(v) || run_money(v) || run_bpchar(v) ||
-                 run_text(v) || run_inet(v) || run_bits(v) || run_known(v) ||
-                 run_float_text(v) || run_float(v) || run_hash(v) ||
-                 run_bytea(v) || run_int_convert(v) || run64(v) || run128(v) ||
-                 run_i16(v) || run_i32(v) || run_i64(v);
+    bool known = run_datetime(v) || run_interval(v) || run_money(v) ||
+                 run_bpchar(v) || run_text(v) || run_inet(v) || run_bits(v) ||
+                 run_known(v) || run_float_text(v) || run_float(v) ||
+                 run_hash(v) || run_bytea(v) || run_int_convert(v) ||
+                 run64(v) || run128(v) || run_i16(v) || run_i32(v) ||
+                 run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

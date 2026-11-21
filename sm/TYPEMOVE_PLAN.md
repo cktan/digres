@@ -556,6 +556,25 @@ copied from PostgreSQL keeps its copyright notice
      by -1.03%; `justify_interval` +0.57%. The first version
      was +2.97% on the sort: a product of 128 by 64 bits, where
      64 by 64 is enough.
+   - **date, time and timestamp arithmetic moved
+     (2026-11-21), unattended.** `ty_datetime.h`: the Julian
+     day and back, `make_date` and `make_time`, `date + n`,
+     `date - n`, `date - date`, `time + interval`, `time -
+     interval`, `time - time`, a timestamp as broken-down
+     time and back, `timestamp + interval`, `timestamp -
+     interval` and `timestamp - timestamp`. No time zone and
+     no text: those read `DateStyle` and the zone, and stay
+     in digres until they are passed in, as the locale of
+     money is. The tests: about 3,500 vectors from Python
+     integers and a second formulation of the Julian day,
+     `test_datetime.cc`, and
+     `dg/test/select_datetime_ops.sql`, which prints the same
+     as the digres before the move. Measured by callgrind
+     (old, new): date arithmetic +0.16%; `timestamp +
+     interval` +0.27%; `timestamp - timestamp` -1.67%;
+     `make_date`, `make_time` and `time + interval` +0.17%.
+     The first version was +4.26% on the date arithmetic: the
+     calls were not in line.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

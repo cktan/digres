@@ -1,0 +1,163 @@
+/*
+ * Copyright (c) 2026 CK Tan
+ * SPDX-License-Identifier: MIT
+ */
+
+/*
+ * ty_datetime.h -- the calendar and the arithmetic of date, time and
+ * timestamp (without a time zone). The cases and the errors follow
+ * PostgreSQL's datetime.c, date.c and timestamp.c.
+ *
+ * A date is an int32 count of days since 2000-01-01; a time is an int64
+ * count of microseconds since midnight; a timestamp is an int64 count of
+ * microseconds since 2000-01-01 00:00. The smallest and the largest value of
+ * a date and of a timestamp are minus and plus infinity.
+ *
+ * A year in a ty_tm_t is PostgreSQL's: 1 is 1 AD, 0 is 1 BC, -1 is 2 BC.
+ * The text of these types depends on DateStyle and the time zone, and is the
+ * host's.
+ *
+ * A call that can fail returns 0, or -1 with the thread's error set, whose
+ * message is PostgreSQL's: TY_ERR_RANGE for a value out of range, and
+ * TY_ERR_INVALID for a field that is out of its range.
+ */
+#ifndef TY_DATETIME_H
+#define TY_DATETIME_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "ty.h"
+#include "ty_interval.h"
+
+#define TY_POSTGRES_EPOCH_JDATE 2451545 /* the Julian day of 2000-01-01 */
+#define TY_USECS_PER_HOUR INT64_C(3600000000)
+#define TY_USECS_PER_MINUTE INT64_C(60000000)
+#define TY_USECS_PER_SEC INT64_C(1000000)
+
+#define TY_DATE_NOBEGIN INT32_MIN
+#define TY_DATE_NOEND INT32_MAX
+#define TY_TIMESTAMP_NOBEGIN INT64_MIN
+#define TY_TIMESTAMP_NOEND INT64_MAX
+
+/* The smallest and the largest value a timestamp may have, and a date. */
+#define TY_MIN_TIMESTAMP INT64_C(-211813488000000000)
+#define TY_END_TIMESTAMP INT64_C(9223371331200000000)
+#define TY_MIN_DATE (-2451545)
+#define TY_END_DATE (2147483494 - 2451545)
+
+static inline int ty_date_finite(int32_t d) {
+    return d != TY_DATE_NOBEGIN && d != TY_DATE_NOEND;
+}
+static inline int ty_date_valid(int32_t d) {
+    return TY_MIN_DATE <= d && d < TY_END_DATE;
+}
+static inline int ty_timestamp_finite(int64_t t) {
+    return t != TY_TIMESTAMP_NOBEGIN && t != TY_TIMESTAMP_NOEND;
+}
+static inline int ty_timestamp_valid(int64_t t) {
+    return TY_MIN_TIMESTAMP <= t && t < TY_END_TIMESTAMP;
+}
+
+/* Broken-down time: the fields of PostgreSQL's pg_tm that these use. */
+typedef struct ty_tm_t {
+    int32_t year, mon, mday, hour, min, sec;
+} ty_tm_t;
+
+/* The calendar: the Julian day of a date, and back; the weekday (0 Sunday). */
+int ty_date2j(int year, int mon, int mday);
+void ty_j2date(int jd, int* year, int* mon, int* mday);
+int ty_j2day(int jd);
+static inline int ty_isleap(int y) {
+    return (y % 4) == 0 && ((y % 100) != 0 || (y % 400) == 0);
+}
+
+/* The days in a month (1 to 12) of a year. */
+int ty_days_in_month(int year, int mon);
+
+/*
+ * date: a day number from a year, a month and a day, as make_date does:
+ * a negative year is BC, and year 0 is no year. A field out of its range
+ * is TY_ERR_INVALID ("date field value out of range: Y-M-D"); a date that
+ * is out of the range of dates is TY_ERR_RANGE ("date out of range: Y-M-D").
+ */
+int ty_date_make(int32_t year, int32_t mon, int32_t mday, int32_t* out);
+
+/*
+ * date + days and date - days; infinity stays. TY_ERR_RANGE ("date out of
+ * range") otherwise. In line, as a date is used in hot loops; the errors are
+ * recorded out of line.
+ */
+int ty_date_range_error(void);
+int ty_date_infinite_error(void);
+
+static inline int ty_date_add_days(int32_t d, int32_t days, int32_t* out) {
+    int32_t r;
+
+    if (!ty_date_finite(d)) {
+        *out = d;
+        return 0;
+    }
+    if (TY_UNLIKELY(__builtin_add_overflow(d, days, &r) || !ty_date_valid(r))) {
+        return ty_date_range_error();
+    }
+    *out = r;
+    return 0;
+}
+
+static inline int ty_date_sub_days(int32_t d, int32_t days, int32_t* out) {
+    int32_t r;
+
+    if (!ty_date_finite(d)) {
+        *out = d;
+        return 0;
+    }
+    if (TY_UNLIKELY(__builtin_sub_overflow(d, days, &r) || !ty_date_valid(r))) {
+        return ty_date_range_error();
+    }
+    *out = r;
+    return 0;
+}
+
+/* date - date, in days; an infinite date is TY_ERR_RANGE. */
+static inline int ty_date_diff(int32_t a, int32_t b, int32_t* out) {
+    if (TY_UNLIKELY(!ty_date_finite(a) || !ty_date_finite(b))) {
+        return ty_date_infinite_error();
+    }
+    *out = (int32_t)((uint32_t)a - (uint32_t)b);
+    return 0;
+}
+
+/*
+ * time: from hours, minutes and seconds (a float, rounded to a microsecond)
+ * as make_time does; a field out of range is TY_ERR_INVALID. time_make_usec
+ * is the same with the seconds as microseconds.
+ */
+int ty_time_make(int32_t hour, int32_t min, double sec, int64_t* out);
+int ty_time_overflows(int hour, int min, int sec, int32_t fsec);
+
+/* time + interval and time - interval, wrapping at midnight. */
+int ty_time_add_interval(int64_t t, const ty_interval_t* span, int64_t* out);
+int ty_time_sub_interval(int64_t t, const ty_interval_t* span, int64_t* out);
+
+/* time - time, as an interval of microseconds. */
+void ty_time_diff(int64_t a, int64_t b, ty_interval_t* out);
+
+/*
+ * A timestamp as broken-down time: TY_ERR_RANGE if its day is not a
+ * Julian day that fits (fsec is the microseconds of the second); and back,
+ * with the range check of a timestamp.
+ */
+int ty_timestamp_to_tm(int64_t ts, ty_tm_t* tm, int32_t* fsec);
+int ty_tm_to_timestamp(const ty_tm_t* tm, int32_t fsec, int64_t* out);
+
+/* timestamp + interval and - interval: the months first, then the days. */
+int ty_timestamp_add_interval(int64_t ts, const ty_interval_t* span,
+                              int64_t* out);
+int ty_timestamp_sub_interval(int64_t ts, const ty_interval_t* span,
+                              int64_t* out);
+
+/* timestamp - timestamp, as an interval with the hours justified. */
+int ty_timestamp_diff(int64_t a, int64_t b, ty_interval_t* out);
+
+#endif

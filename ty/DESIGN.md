@@ -632,4 +632,35 @@ functions (about 4,300); `test/test_interval.cc`; and
 `dg/test/select_interval_ops.sql`, which prints the same as the
 digres before the move.
 
+## 19. date, time and timestamp
+
+`ty_datetime.h` holds the calendar and the arithmetic of date,
+time and timestamp, without a time zone and without text. A date
+is an `int32` count of days since 2000-01-01, a time an `int64`
+count of microseconds, and a timestamp an `int64` count of
+microseconds since 2000-01-01; the smallest and the largest value
+of a date and of a timestamp are the infinities.
+
+The functions are the Julian day of a date and back (`date2j`,
+`j2date`, `j2day`); `make_date` and `make_time`, with their
+checks and PostgreSQL's messages; `date + n`, `date - n` and
+`date - date`; `time + interval`, `time - interval` and `time -
+time`; a timestamp as year, month, day, hour, minute, second and
+microseconds, and back; `timestamp + interval` and `- interval`
+(the months first, with the day cut to the last day of the month,
+then the days, then the microseconds); and `timestamp -
+timestamp`, which justifies the hours into days.
+
+The text of these types reads `DateStyle` and the time zone
+(`DecodeDateTime`, `EncodeDateTime`), `extract`, `date_trunc`,
+`age`, the casts, the typmods and everything with a time zone
+stay in digres until those settings are passed in, as the locale
+of money is.
+
+The tests: the vectors, from Python integers and a second
+formulation of the Julian day (the Wikipedia formula and
+Richards' inverse, not PostgreSQL's), about 3,500;
+`test/test_datetime.cc`; and `dg/test/select_datetime_ops.sql`,
+which prints the same as the digres before the move.
+
 

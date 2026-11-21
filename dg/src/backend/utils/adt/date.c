@@ -34,6 +34,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
+#include "ty_datetime.h"
 #include "utils/datetime.h"
 #include "utils/numeric.h"
 #include "utils/skipsupport.h"
@@ -216,50 +217,28 @@ Datum date_send(PG_FUNCTION_ARGS) {
 }
 
 /*
+ * Raise the error of a failed ty date or time call: its message is PostgreSQL's,
+ * and the code says which SQLSTATE.
+ */
+static pg_noreturn void datetime_ty_error(void) {
+  ereport(ERROR,
+          (errcode(ty_errnum() == TY_ERR_INVALID
+                       ? ERRCODE_DATETIME_FIELD_OVERFLOW
+                       : ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+           errmsg("%s", ty_errmsg())));
+}
+
+
+/*
  *		make_date			- date constructor
  */
 Datum make_date(PG_FUNCTION_ARGS) {
-  struct pg_tm tm;
   DateADT date;
-  int dterr;
-  bool bc = false;
 
-  tm.tm_year = PG_GETARG_INT32(0);
-  tm.tm_mon = PG_GETARG_INT32(1);
-  tm.tm_mday = PG_GETARG_INT32(2);
-
-  /* Handle negative years as BC */
-  if (tm.tm_year < 0) {
-    int year = tm.tm_year;
-
-    bc = true;
-    if (pg_neg_s32_overflow(year, &year))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_FIELD_OVERFLOW),
-                      errmsg("date field value out of range: %d-%02d-%02d",
-                             tm.tm_year, tm.tm_mon, tm.tm_mday)));
-    tm.tm_year = year;
-  }
-
-  dterr = ValidateDate(DTK_DATE_M, false, false, bc, &tm);
-
-  if (dterr != 0)
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_FIELD_OVERFLOW),
-                    errmsg("date field value out of range: %d-%02d-%02d",
-                           tm.tm_year, tm.tm_mon, tm.tm_mday)));
-
-  /* Prevent overflow in Julian-day routines */
-  if (!IS_VALID_JULIAN(tm.tm_year, tm.tm_mon, tm.tm_mday))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("date out of range: %d-%02d-%02d", tm.tm_year,
-                           tm.tm_mon, tm.tm_mday)));
-
-  date = date2j(tm.tm_year, tm.tm_mon, tm.tm_mday) - POSTGRES_EPOCH_JDATE;
-
-  /* Now check for just-out-of-range dates */
-  if (!IS_VALID_DATE(date))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("date out of range: %d-%02d-%02d", tm.tm_year,
-                           tm.tm_mon, tm.tm_mday)));
+  /* ty checks the fields and the range, with PostgreSQL's messages */
+  if (ty_date_make(PG_GETARG_INT32(0), PG_GETARG_INT32(1), PG_GETARG_INT32(2),
+                   &date))
+    datetime_ty_error();
 
   PG_RETURN_DATEADT(date);
 }
@@ -471,12 +450,12 @@ Datum date_smaller(PG_FUNCTION_ARGS) {
 Datum date_mi(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
+  int32 result;
 
-  if (DATE_NOT_FINITE(dateVal1) || DATE_NOT_FINITE(dateVal2))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("cannot subtract infinite dates")));
+  if (ty_date_diff(dateVal1, dateVal2, &result))
+    datetime_ty_error();
 
-  PG_RETURN_INT32((int32)(dateVal1 - dateVal2));
+  PG_RETURN_INT32(result);
 }
 
 /* Add a number of days to a date, giving a new date.
@@ -487,16 +466,8 @@ Datum date_pli(PG_FUNCTION_ARGS) {
   int32 days = PG_GETARG_INT32(1);
   DateADT result;
 
-  if (DATE_NOT_FINITE(dateVal))
-    PG_RETURN_DATEADT(dateVal); /* can't change infinity */
-
-  result = dateVal + days;
-
-  /* Check for integer overflow and out-of-allowed-range */
-  if ((days >= 0 ? (result < dateVal) : (result > dateVal)) ||
-      !IS_VALID_DATE(result))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("date out of range")));
+  if (ty_date_add_days(dateVal, days, &result))
+    datetime_ty_error();
 
   PG_RETURN_DATEADT(result);
 }
@@ -508,16 +479,8 @@ Datum date_mii(PG_FUNCTION_ARGS) {
   int32 days = PG_GETARG_INT32(1);
   DateADT result;
 
-  if (DATE_NOT_FINITE(dateVal))
-    PG_RETURN_DATEADT(dateVal); /* can't change infinity */
-
-  result = dateVal - days;
-
-  /* Check for integer overflow and out-of-allowed-range */
-  if ((days >= 0 ? (result > dateVal) : (result < dateVal)) ||
-      !IS_VALID_DATE(result))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("date out of range")));
+  if (ty_date_sub_days(dateVal, days, &result))
+    datetime_ty_error();
 
   PG_RETURN_DATEADT(result);
 }
@@ -1382,21 +1345,12 @@ Datum timetypmodout(PG_FUNCTION_ARGS) {
  *		make_time			- time constructor
  */
 Datum make_time(PG_FUNCTION_ARGS) {
-  int tm_hour = PG_GETARG_INT32(0);
-  int tm_min = PG_GETARG_INT32(1);
-  double sec = PG_GETARG_FLOAT8(2);
   TimeADT time;
 
-  /* Check for time overflow */
-  if (float_time_overflows(tm_hour, tm_min, sec))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_FIELD_OVERFLOW),
-                    errmsg("time field value out of range: %d:%02d:%02g",
-                           tm_hour, tm_min, sec)));
-
-  /* This should match tm2time */
-  time =
-      (((tm_hour * MINS_PER_HOUR + tm_min) * SECS_PER_MINUTE) * USECS_PER_SEC) +
-      (int64)rint(sec * USECS_PER_SEC);
+  /* ty checks the fields; the seconds are a float */
+  if (ty_time_make(PG_GETARG_INT32(0), PG_GETARG_INT32(1), PG_GETARG_FLOAT8(2),
+                   &time))
+    datetime_ty_error();
 
   PG_RETURN_TIMEADT(time);
 }
@@ -1766,10 +1720,7 @@ Datum time_mi_time(PG_FUNCTION_ARGS) {
   Interval *result;
 
   result = (Interval *)palloc(sizeof(Interval));
-
-  result->month = 0;
-  result->day = 0;
-  result->time = time1 - time2;
+  ty_time_diff(time1, time2, (ty_interval_t *)result);
 
   PG_RETURN_INTERVAL_P(result);
 }
@@ -1782,14 +1733,8 @@ Datum time_pl_interval(PG_FUNCTION_ARGS) {
   Interval *span = PG_GETARG_INTERVAL_P(1);
   TimeADT result;
 
-  if (INTERVAL_NOT_FINITE(span))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("cannot add infinite interval to time")));
-
-  result = time + span->time;
-  result -= result / USECS_PER_DAY * USECS_PER_DAY;
-  if (result < INT64CONST(0))
-    result += USECS_PER_DAY;
+  if (ty_time_add_interval(time, (const ty_interval_t *)span, &result))
+    datetime_ty_error();
 
   PG_RETURN_TIMEADT(result);
 }
@@ -1802,14 +1747,8 @@ Datum time_mi_interval(PG_FUNCTION_ARGS) {
   Interval *span = PG_GETARG_INTERVAL_P(1);
   TimeADT result;
 
-  if (INTERVAL_NOT_FINITE(span))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("cannot subtract infinite interval from time")));
-
-  result = time - span->time;
-  result -= result / USECS_PER_DAY * USECS_PER_DAY;
-  if (result < INT64CONST(0))
-    result += USECS_PER_DAY;
+  if (ty_time_sub_interval(time, (const ty_interval_t *)span, &result))
+    datetime_ty_error();
 
   PG_RETURN_TIMEADT(result);
 }

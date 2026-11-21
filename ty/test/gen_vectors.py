@@ -417,6 +417,7 @@ def main():
     gen_like()
     gen_money()
     gen_interval()
+    gen_datetime()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -2579,6 +2580,277 @@ def gen_interval():
     for a in vals:
         for seed in (0,):
             pass
+
+
+def cdiv(a, b):
+    """C integer division: toward zero."""
+    q = abs(a) // abs(b)
+    return q if (a >= 0) == (b >= 0) else -q
+
+
+def cmod(a, b):
+    return a - cdiv(a, b) * b
+
+
+def jdn(y, m, d):
+    """The Julian day of a Gregorian date, by the formula of the
+    Wikipedia article (not PostgreSQL's)."""
+    a = (14 - m) // 12
+    yy = y + 4800 - a
+    mm = m + 12 * a - 3
+    return d + (153 * mm + 2) // 5 + 365 * yy + yy // 4 - yy // 100 + yy // 400 - 32045
+
+
+def jdn_inv(j):
+    """The date of a Julian day (Richards' algorithm)."""
+    f = j + 1401 + (((4 * j + 274277) // 146097) * 3) // 4 - 38
+    e = 4 * f + 3
+    g = (e % 1461) // 4
+    h = 5 * g + 2
+    d = (h % 153) // 5 + 1
+    m = ((h // 153 + 2) % 12) + 1
+    y = e // 1461 - 4716 + (12 + 2 - m) // 12
+    return y, m, d
+
+
+EPOCH_J = 2451545
+US_DAY = 86400000000
+MIN_TS, END_TS = -211813488000000000, 9223371331200000000
+
+
+def valid_jul(y, m):
+    return (y > -4713 or (y == -4713 and m >= 11)) and (y < 5874898 or (y == 5874898 and m < 6))
+
+
+def ts_to_tm(ts):
+    days = ts // US_DAY
+    tod = ts % US_DAY
+    jd = days + EPOCH_J
+    if jd < 0 or jd > 2 ** 31 - 1:
+        return None
+    y, m, d = jdn_inv(jd)
+    return (y, m, d, tod // 3600000000, tod // 60000000 % 60, tod // 1000000 % 60, tod % 1000000)
+
+
+def tm_to_ts(t):
+    y, m, d, h, mi, s, f = t
+    if not valid_jul(y, m):
+        return None
+    r = (jdn(y, m, d) - EPOCH_J) * US_DAY + ((h * 60 + mi) * 60 + s) * 1000000 + f
+    if not (I64MIN <= r <= I64MAX) or not (MIN_TS <= r < END_TS):
+        return None
+    return r
+
+
+def dim(y, m):
+    return [31, 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+
+
+def ts_add(ts, iv):
+    mo, dy, tm = iv
+    if iv == iv_nobegin():
+        return None if ts == I64MAX else I64MIN
+    if iv == iv_noend():
+        return None if ts == I64MIN else I64MAX
+    if ts in (I64MIN, I64MAX):
+        return ts
+    if mo != 0:
+        t = ts_to_tm(ts)
+        if t is None:
+            return None
+        y, m, d, h, mi, s, f = t
+        m2 = m + mo
+        if not (I32MIN <= m2 <= I32MAX):
+            return None
+        m = m2
+        if m > 12:
+            y += cdiv(m - 1, 12)
+            m = cmod(m - 1, 12) + 1
+        elif m < 1:
+            y += cdiv(m, 12) - 1
+            m = cmod(m, 12) + 12
+        if d > dim(y, m):
+            d = dim(y, m)
+        ts = tm_to_ts((y, m, d, h, mi, s, f))
+        if ts is None:
+            return None
+    if dy != 0:
+        t = ts_to_tm(ts)
+        if t is None:
+            return None
+        y, m, d, h, mi, s, f = t
+        j = jdn(y, m, d) + dy
+        if not (I32MIN <= j <= I32MAX) or j < 0:
+            return None
+        y, m, d = jdn_inv(j)
+        ts = tm_to_ts((y, m, d, h, mi, s, f))
+        if ts is None:
+            return None
+    ts += tm
+    if not (I64MIN <= ts <= I64MAX) or not (MIN_TS <= ts < END_TS):
+        return None
+    return ts
+
+
+def gen_datetime():
+    """The vectors of the calendar, date, time and timestamp, from Python
+    integers and a second formulation of the Julian day."""
+    # the calendar
+    dates = [(2000, 1, 1), (1970, 1, 1), (1, 1, 1), (0, 12, 31), (0, 1, 1), (-4712, 1, 1), (-4713, 11, 24), (1900, 2, 28),
+             (2000, 2, 29), (2100, 2, 28), (9999, 12, 31), (294276, 12, 31), (5874897, 12, 31), (5874898, 5, 31),
+             (1582, 10, 4), (1582, 10, 15), (4, 2, 29), (100, 3, 1), (400, 2, 29)]
+    for _ in range(200):
+        y = random.choice([random.randint(-4712, 3000), random.randint(1900, 2100), random.randint(3000, 300000), random.randint(1, 9999)])
+        m = random.randint(1, 12)
+        dates.append((y, m, random.randint(1, dim(y, m))))
+    for y, m, d in dates:
+        j = jdn(y, m, d)
+        if j < 0 or j > 2 ** 31 - 1:
+            continue
+        emit("cal.date2j", (y, m, d), j)
+        emit("cal.j2date", (j,), "%d:%d:%d" % (y, m, d))
+        emit("cal.j2day", (j,), (j + 1) % 7)
+    for j in [0, 1, 2451545, 2440588, 2147483494, 2147483000, 1721426, 2299160, 2299161] + [random.randint(0, 2147483494) for _ in range(60)]:
+        y, m, d = jdn_inv(j)
+        emit("cal.j2date", (j,), "%d:%d:%d" % (y, m, d))
+        emit("cal.j2day", (j,), (j + 1) % 7)
+    # date
+    for y, m, d in dates:
+        for yy in (y, -y):
+            if yy == 0 and y != 0:
+                continue
+            bc = yy < 0
+            ya = -yy if bc else yy
+            tyr = -(ya - 1) if bc else ya
+            if ya <= 0 or not (1 <= m <= 12) or d > dim(tyr, m):
+                res = ("E", "INVALID")
+            elif not valid_jul(tyr, m):
+                res = ("E", "RANGE")
+            else:
+                dn = jdn(tyr, m, d) - EPOCH_J
+                res = dn if (-EPOCH_J <= dn < 2147483494 - EPOCH_J) else ("E", "RANGE")
+            emit("date.make", (yy, m, d), res)
+    for yy, m, d in [(2000, 13, 1), (2000, 0, 1), (2000, 1, 0), (2000, 1, 32), (2001, 2, 29), (0, 1, 1), (I32MIN, 1, 1), (-1, 2, 29), (-4, 2, 29), (-5, 2, 29), (5874898, 6, 3), (5874898, 5, 31), (5874899, 1, 1), (-4713, 11, 24), (-4713, 10, 1), (-4714, 1, 1)]:
+        bc = yy < 0
+        if yy == I32MIN:
+            res = ("E", "INVALID")
+        else:
+            ya = -yy if bc else yy
+            tyr = -(ya - 1) if bc else ya
+            if ya <= 0 or not (1 <= m <= 12) or d < 1 or d > 31 or d > dim(tyr, m):
+                res = ("E", "INVALID")
+            elif not valid_jul(tyr, m):
+                res = ("E", "RANGE")
+            else:
+                dn = jdn(tyr, m, d) - EPOCH_J
+                res = dn if (-EPOCH_J <= dn < 2147483494 - EPOCH_J) else ("E", "RANGE")
+        emit("date.make", (yy, m, d), res)
+    dvals = [0, 1, -1, 366, -365, 8000, -2451545, 2147483494 - 2451545 - 1, 2147483494 - 2451545, I32MIN, I32MAX, 2145031948, -2451546]
+    dvals += [random.randint(-2451545, 2145031948) for _ in range(20)]
+    for dn in dvals:
+        for n in (0, 1, -1, 30, 366, I32MAX, I32MIN, 1000000, -1000000):
+            for nm, f in (("add_days", lambda a, b: a + b), ("sub_days", lambda a, b: a - b)):
+                if dn in (I32MIN, I32MAX):
+                    res = dn
+                else:
+                    r = f(dn, n)
+                    res = r if (I32MIN <= r <= I32MAX and -2451545 <= r < 2147483494 - 2451545) else ("E", "RANGE")
+                emit("date." + nm, (dn, n), res)
+        for dm in random.sample(dvals, 3):
+            if dn in (I32MIN, I32MAX) or dm in (I32MIN, I32MAX):
+                res = ("E", "RANGE")
+            else:
+                r = (dn - dm + 2 ** 31) % 2 ** 32 - 2 ** 31
+                res = r
+            emit("date.diff", (dn, dm), res)
+    # time
+    for h, mi, sc in [(0, 0, 0.0), (23, 59, 59.999999), (24, 0, 0.0), (24, 0, 0.000001), (24, 1, 0.0), (0, 60, 0.0), (-1, 0, 0.0), (0, -1, 0.0), (0, 0, 60.0),
+                      (0, 0, 60.000001), (0, 0, -0.5), (12, 30, 15.5), (12, 30, 0.0000004), (12, 30, 0.0000005), (12, 30, float("nan")), (0, 0, 1e300)]:
+        if math_isnan(sc) or h < 0 or h > 24 or mi < 0 or mi >= 60:
+            res = ("E", "INVALID")
+        else:
+            v = round(sc * 1000000.0)
+            if v < 0 or v > 60000000 or ((h * 60 + mi) * 60) * 1000000 + v > US_DAY:
+                res = ("E", "INVALID")
+            else:
+                res = ((h * 60 + mi) * 60) * 1000000 + v
+        emit("time.make", (h, mi, repr(sc)), res)
+    for t in [0, 1, US_DAY - 1, 12 * 3600000000, 86399999999]:
+        for iv in random.sample(iv_values(), 12):
+            if iv_inf(iv):
+                emit("time.add_interval", (t, ivtok(*iv)), ("E", "RANGE"))
+                emit("time.sub_interval", (t, ivtok(*iv)), ("E", "RANGE"))
+                continue
+            for nm, sgn in (("add_interval", 1), ("sub_interval", -1)):
+                r = (t + sgn * iv[2] + 2 ** 63) % 2 ** 64 - 2 ** 63
+                r = r - cdiv(r, US_DAY) * US_DAY
+                if r < 0:
+                    r += US_DAY
+                emit("time." + nm, (t, ivtok(*iv)), r)
+        emit("time.diff", (t, 5), ivtok(0, 0, t - 5))
+    # timestamp
+    tss = [0, 1, -1, US_DAY, -US_DAY, MIN_TS, MIN_TS + 1, END_TS - 1, 86399999999, -86400000001, 725803200000000, 1000000000000000000,
+           -200000000000000000, I64MIN, I64MAX, END_TS, MIN_TS - 1, 3155760000000000, -3155760000000000]
+    tss += [random.randint(MIN_TS, END_TS - 1) for _ in range(20)] + [random.randint(-10 ** 15, 10 ** 15) for _ in range(20)]
+    for ts in tss:
+        if ts in (I64MIN, I64MAX):
+            continue  # infinity is never broken down
+        t = ts_to_tm(ts)
+        emit("ts.to_tm", (ts,), "%d:%d:%d:%d:%d:%d:%d" % t if t else ("E", "RANGE"))
+        if t is not None:
+            r = tm_to_ts(t)
+            emit("ts.from_tm", ("%d:%d:%d:%d:%d:%d:%d" % t,), r if r is not None else ("E", "RANGE"))
+    for t in [(2000, 1, 1, 0, 0, 0, 0), (294276, 12, 31, 23, 59, 59, 999999), (294277, 1, 1, 0, 0, 0, 0), (-4713, 11, 24, 0, 0, 0, 0), (-4713, 11, 23, 23, 59, 59, 0),
+              (5874898, 5, 31, 0, 0, 0, 0), (1, 1, 1, 0, 0, 0, 0), (0, 1, 1, 0, 0, 0, 0)]:
+        r = tm_to_ts(t)
+        emit("ts.from_tm", ("%d:%d:%d:%d:%d:%d:%d" % t,), r if r is not None else ("E", "RANGE"))
+    ivs = iv_values()
+    for ts in random.sample(tss, 25) + [0, MIN_TS, END_TS - 1, 725803200000000, 3155760000000000, I64MIN, I64MAX]:
+        for iv in random.sample(ivs, 12) + [(1, 0, 0), (-1, 0, 0), (12, 0, 0), (0, 1, 0), (1, 1, 1), (0, 0, 86400000000), (13, -40, 5)]:
+            r = ts_add(ts, iv)
+            emit("ts.add_interval", (ts, ivtok(*iv)), r if r is not None else ("E", "RANGE"))
+            # the negation
+            neg = None if iv_inf(iv) and False else iv
+            if iv == iv_nobegin():
+                niv = iv_noend()
+            elif iv == iv_noend():
+                niv = iv_nobegin()
+            else:
+                niv = (-iv[0], -iv[1], -iv[2])
+                if not iv_fit(niv):
+                    niv = None
+            r = None if niv is None else ts_add(ts, niv)
+            emit("ts.sub_interval", (ts, ivtok(*iv)), r if r is not None else ("E", "RANGE"))
+        for ts2 in random.sample(tss, 3):
+            if ts in (I64MIN, I64MAX) or ts2 in (I64MIN, I64MAX):
+                if ts == I64MIN:
+                    res = ("E", "RANGE") if ts2 == I64MIN else ivtok(*iv_nobegin())
+                elif ts == I64MAX:
+                    res = ("E", "RANGE") if ts2 == I64MAX else ivtok(*iv_noend())
+                elif ts2 == I64MIN:
+                    res = ivtok(*iv_noend())
+                else:
+                    res = ivtok(*iv_nobegin())
+            else:
+                dd = ts - ts2
+                if not (I64MIN <= dd <= I64MAX):
+                    res = ("E", "RANGE")
+                else:
+                    q = cdiv(dd, US_DAY)
+                    t2 = dd - q * US_DAY
+                    d2 = q
+                    if d2 > 0 and t2 < 0:
+                        t2 += US_DAY
+                        d2 -= 1
+                    elif d2 < 0 and t2 > 0:
+                        t2 -= US_DAY
+                        d2 += 1
+                    res = ivtok(0, d2, t2) if I32MIN <= d2 <= I32MAX else ("E", "RANGE")
+            emit("ts.diff", (ts, ts2), res)
+
+
+def math_isnan(x):
+    return x != x
 
 
 def gen_ints():
