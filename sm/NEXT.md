@@ -240,9 +240,10 @@ are the catalog tables psql reads
        and integer averages), and sort support. Done after that:
        the floats, with their text, and macaddr and macaddr8
        (`ty_float.h`, `ty_mac.h`), and bit and varbit
-       (`ty_bits.h`), and inet and cidr (`ty_inet.h`).
-       **Left: date, time and interval, text, and the other
-       types with no session state (oid, tid, pg_lsn).**
+       (`ty_bits.h`), inet and cidr (`ty_inet.h`), and tid,
+       pg_lsn and "char" (`ty_small.h`). **Left: date, time
+       and interval, text, and the rest with no session
+       state.**
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.

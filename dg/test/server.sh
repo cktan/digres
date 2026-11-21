@@ -4498,6 +4498,7 @@ done
 #    the string, and a string too long for an integer.
 # 9. Bad inet and cidr text, values of two families in an operation, an
 #    address past the end of its range, and a mask length too long.
+# 10. Bad tid and pg_lsn text, and an integer too big for "char".
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4626,7 +4627,12 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'255.255.255.255'::inet + 1|result is out of range" \
   "'0.0.0.0'::inet - 1|result is out of range" \
   "'::'::inet - '8000::'::inet|result is out of range" \
-  "set_masklen('1.2.3.4'::inet, 33)|invalid mask length: 33"; do
+  "set_masklen('1.2.3.4'::inet, 33)|invalid mask length: 33" \
+  "'(1,2'::tid|invalid input syntax for type tid" \
+  "'(1,65536)'::tid|invalid input syntax for type tid" \
+  "'1'::pg_lsn|invalid input syntax for type pg_lsn" \
+  "'123456789/1'::pg_lsn|invalid input syntax for type pg_lsn" \
+  "200::\"char\"|\"char\" out of range"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"
 done

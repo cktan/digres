@@ -24,6 +24,7 @@
 #include "ty_float.h"
 #include "ty_hash.h"
 #include "ty_inet.h"
+#include "ty_small.h"
 #include "ty_int.h"
 #include "ty_mac.h"
 #include "ty_uuid.h"
@@ -712,6 +713,49 @@ bool run_inet_text(const vec_t &v) {
   return true;
 }
 
+/*
+ * A tid, pg_lsn or "char" text (known.txt): the canonical text PostgreSQL
+ * printed; the text of "char" may be empty, which the file writes as -.
+ */
+bool run_small_text(const vec_t &v) {
+  std::vector<uint8_t> t = bytes_of(v.args[0]);
+  std::string z(reinterpret_cast<const char *>(t.data()), t.size());
+  char buf[32];
+  int rc = 0;
+  std::string got;
+
+  if (v.op == "tid.parse") {
+    ty_tid_t a;
+
+    rc = ty_tid_parse(z.c_str(), &a);
+    if (rc == 0) {
+      ty_tid_format(&a, buf);
+      got = buf;
+    }
+  } else if (v.op == "lsn.parse") {
+    uint64_t a;
+
+    rc = ty_lsn_parse(z.c_str(), &a);
+    if (rc == 0) {
+      ty_lsn_format(a, buf);
+      got = buf;
+    }
+  } else {
+    /* "char" never fails: its text is cut to a byte */
+    ty_char_format(ty_char_parse(z.data(), z.size()), buf);
+    got = buf[0] ? buf : "-";
+  }
+  INFO(v.line);
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    CHECK(errnum_of(v.res[1]) == ty_errnum());
+  } else {
+    REQUIRE(0 == rc);
+    CHECK(v.res[0] == got);
+  }
+  return true;
+}
+
 /* An inet token "family:bits:hex" as a value. */
 ty_inet_t inet_of(const std::string &tok) {
   ty_inet_t a;
@@ -828,6 +872,9 @@ bool run_known(const vec_t &v) {
 
   if (op == "inet.parse" || op == "cidr.parse") {
     return run_inet_text(v);
+  }
+  if (op == "tid.parse" || op == "lsn.parse" || op == "char.parse") {
+    return run_small_text(v);
   }
   if (op != "macaddr.parse" && op != "macaddr8.parse") {
     return false;

@@ -475,6 +475,18 @@ copied from PostgreSQL keeps its copyright notice
      on the text: digres's `sprintf` is PostgreSQL's, and
      glibc's, which ty called, is slower; ty now writes the
      numbers itself.
+   - **tid, pg_lsn and "char" moved (2026-11-21), unattended.**
+     `ty_small.h`: the text in and out and the order of all
+     three, the tid hash, and the range check of the cast to
+     "char". The tests: known answers from the old digres for
+     about 100 texts of each, and `dg/test/select_small.sql`,
+     which prints the same, byte for byte, on the digres before
+     the move. Left in digres: `numeric` arithmetic on pg_lsn,
+     `recv` and `send`, and the other tid functions (the
+     scan functions of the planner).
+     Measured by callgrind (old, new): tid text, sort and
+     `::text` -11.17%; a sort of "char" +0.08%; pg_lsn text in
+     and out -13.11%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

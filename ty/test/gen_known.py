@@ -114,6 +114,40 @@ def inet_inputs():
 
 
 OPS["inet.parse"] = ("inet", inet_inputs)
+def tid_inputs():
+    out = ["(0,1)", "(1,2)", "(4294967295,65535)", "(4294967296,1)", "(-1,1)", "(1,65536)", "(1,2", "1,2)", "(1;2)",
+           " (1,2)", "(1,2) ", "( 1,2)", "(1, 2)", "(a,b)", "", "(,)", "(1,)", "(,1)", "(+1,2)", "(4294967295,0)",
+           "(0,0)", "(2147483648,1)", "(-2147483648,1)", "(-2147483649,1)", "(18446744073709551615,1)",
+           "(18446744073709551616,1)", "(1,2)x", "(1,2))", "((1,2)", "(1,2,3)", "1,2", "(01,002)", "(1,-1)", "(1,+2)",
+           "(0x10,1)", "(1e2,1)", "(1.5,1)", "(1,65535)", "(65535,65535)"]
+    for _ in range(80):
+        out.append("(%d,%d)" % (random.choice([random.getrandbits(32), random.getrandbits(16), random.getrandbits(8), 0]),
+                                random.choice([random.getrandbits(16), random.getrandbits(8), 0, 65535])))
+    return out
+
+
+def lsn_inputs():
+    out = ["0/0", "FFFFFFFF/FFFFFFFF", "1/2", "a/B", "12345678/9ABCDEF0", "123456789/1", "1/123456789", "/1", "1/", "1", "",
+           "1/2/3", " 1/2", "1/2 ", "g/1", "1/g", "0/00000000", "00000000/0", "000000000/0", "ffffffff/0", "0/ffffffff",
+           "1//2", "-1/2", "+1/2", "0x1/2", "1/0x2", "1\\n/2"]
+    for _ in range(80):
+        out.append("%x/%x" % (random.getrandbits(random.choice([8, 16, 32])), random.getrandbits(random.choice([8, 16, 32]))))
+    return out
+
+
+def char_inputs():
+    out = ["a", "", "ab", "\\101", "\\377", "\\400", "\\777", "\\18", "\\", "\\1", "\\0000", "\\000", "\\200",
+           "\\177", "\\176", "A", "z", "~", "\\x41", "\\a", "\\101x", "x\\101", "\u00e9", "\u20ac", "0", "9", "\\060",
+           "\\134", "\\047", "\\042"]
+    for _ in range(40):
+        out.append("\\%03o" % random.randint(0, 511))
+    return out
+
+
+OPS["tid.parse"] = ("tid", tid_inputs)
+OPS["lsn.parse"] = ("pg_lsn", lsn_inputs)
+OPS["char.parse"] = ('"char"', char_inputs)
+
 OPS["cidr.parse"] = ("cidr", inet_inputs)
 
 
@@ -146,6 +180,8 @@ def main():
             elif sqltype == "cidr":
                 sql = "select a, text(a), abbrev(a) from (select E'%s'::cidr a) t" % lit.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
             res = run(args, sql)
+            if res == "":
+                res = "-"
             tok = text.encode().hex() or "-"
             print("%s %s => %s" % (name, tok, res))
 

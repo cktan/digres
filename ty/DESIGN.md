@@ -496,4 +496,31 @@ printed for about 450 inputs, each as an inet and as a cidr; the
 other operations are in `test/vectors.txt`, from a reference of
 Python integers; the hand tests are in `test/test_inet.cc`.
 
+## 15. tid, pg_lsn and "char"
+
+`ty_small.h` holds three types of a few operations each.
+
+A tid is `ty_tid_t`, PostgreSQL's `ItemPointerData`: the block
+number as two 16-bit halves, high first, then the offset. The
+functions are the text in and out, the order (the block, then the
+offset), and the hash of the six bytes. `ty_tid_parse` keeps the
+rule of `tidin` that the block may be a negative number that
+wraps.
+
+A pg_lsn is a `uint64_t`. The functions are the text in and out
+(`X/Y`, one to eight hex digits each side; written in upper
+case). The compares are the native ones of the integer. The sum
+and the difference with a number go through `numeric`, so they
+stay in digres.
+
+A "char" is an `int8_t`. The functions are the text in and out (a
+backslash and three octal digits is a byte; a byte of 0x80 or
+more is written that way), the order, which is of the byte as
+unsigned, and `ty_char_from_int32`. The cast to int4 is of the
+byte as signed.
+
+The text of all three is in `test/known.txt`, what the old digres
+printed for about 100 inputs each. The hand tests are in
+`test/test_small.cc`.
+
 
