@@ -187,8 +187,16 @@ struct sm1::session_t {
     uint64_t wts;
     uint32_t seq;
     bool chained = false; /* a chained key's write (../ROWSTORE.md §4.7) */
+    char cls = 0x00;      /* its key's class: versioned, or a file set's */
   };
   std::vector<undo_t> undo;
+  /*
+   * The paths of the file set files the transaction wrote
+   * (../COLSTORE.md §13), in write order: an abort, or a rollback to
+   * a mark set before one, unlinks it. A commit or a prepare keeps
+   * them, and the file set's key decides from then on.
+   */
+  std::vector<std::string> fs_files;
   size_t undo_bytes = 0; /* what undo holds, keys included */
 
   /*
@@ -207,6 +215,7 @@ struct sm1::session_t {
     uint64_t scan_id = 0;            /* cursors with a larger id came later */
     size_t on_commit = 0;            /* on_commit.size() at the mark */
     size_t loaded_stores = 0;        /* loaded_stores.size() at the mark */
+    size_t fs_files = 0;             /* fs_files.size() at the mark */
   };
   std::vector<mark_t> savepoints;
   /*
@@ -403,14 +412,19 @@ struct view_t {
 /*
  * Write operations, for access_write(). WRITE_INSERT_NEW is an insert
  * of a key no version of was ever written (sm1::insert_new);
- * WRITE_MOVE a delete of a row that moved (sm1::erase_moved).
+ * WRITE_MOVE a delete of a row that moved (sm1::erase_moved);
+ * WRITE_SEAL a delete whose tombstone is sealed (sm1::erase_sealed);
+ * WRITE_INSERT_SEALED an insert of a sealed version
+ * (sm1::insert_sealed).
  */
 enum write_op_t {
   WRITE_INSERT,
   WRITE_INSERT_NEW,
   WRITE_UPDATE,
   WRITE_DELETE,
-  WRITE_MOVE
+  WRITE_MOVE,
+  WRITE_SEAL,
+  WRITE_INSERT_SEALED
 };
 
 /* Fail with NOTRANS unless session has an active transaction. */
@@ -716,6 +730,16 @@ int xct_alloc_xid(sm1::session_t *session);
  * files: its transaction is ending without it (load.cc).
  */
 void load_discard(sm1::session_t *session);
+
+/* File sets (fileset.cc, ../COLSTORE.md §4.5, §13). */
+/* Unlink every file of file set fsid of store storeid in rdb. */
+void fileset_unlink(const rocksdb::DB *rdb, uint64_t storeid, uint64_t fsid);
+/* Remove the directory of every file set of store storeid in rdb. */
+void fileset_drop_store(const rocksdb::DB *rdb, uint64_t storeid);
+/* Unlink the files the transaction wrote after its first n. */
+void fileset_discard(sm1::session_t *session, size_t n);
+/* At open: delete the files no committed or prepared key keeps. */
+void fileset_sweep(db_t *db);
 
 /* Whether the session has a bulk load open into storeid. */
 bool load_open_on(const sm1::session_t *session, uint64_t storeid);

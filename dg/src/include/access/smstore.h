@@ -185,6 +185,7 @@ typedef struct smstore_table_t {
   smstore_fkey_t *referenced;
   int nchecks; /* its check constraints */
   smstore_check_t *checks;
+  bool column_store; /* a column store table (../sm/COLSTORE.md) */
 } smstore_table_t;
 
 /*
@@ -309,6 +310,9 @@ typedef struct smstore_scan_t smstore_scan_t;
 extern PGDLLIMPORT const TupleTableSlotOps TTSOpsSmRow;
 
 extern smstore_scan_t *smstore_beginscan(Relation rel, bool by_rowno);
+extern smstore_scan_t *smstore_beginscan_seq(Relation rel, struct Plan *plan,
+                                             Index scanrelid,
+                                             struct EState *estate);
 extern bool smstore_getnext(smstore_scan_t *scan, TupleTableSlot *slot);
 extern void smstore_endscan(smstore_scan_t *scan);
 extern void smstore_scan_seek(smstore_scan_t *scan, uint64 rowno);

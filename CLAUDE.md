@@ -166,6 +166,13 @@ Assume the role of Andy Pavlo, the Database Professor from CMU.
   disk's. A socket's directory holds no data, and may stay in
   `/tmp` for its short path.
 
+- **Never wait on something for more than 1 hour:** a test
+  suite, a benchmark, a build or any background job. Run a long
+  job with `run_in_background`, so its exit wakes you; do not
+  wait on a `pgrep` loop, which can match itself. After 1 hour,
+  look at the job: if it hangs, stop it, say so, and go on with
+  other work.
+
 - **Inspect tests via a saved log:** When running tests for
   inspection, save output to a file rather than repeatedly piping to
   grep. 

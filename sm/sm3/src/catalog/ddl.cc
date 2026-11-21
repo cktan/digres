@@ -610,7 +610,8 @@ int cat_put_table(session_t *session, uint64_t oid, const table_rec_t &rec) {
   // Only what changed is written: the table's own fields, a
   // column, an index.
   if ((old.name != rec.name || old.storeid != rec.storeid ||
-       old.id_seq != rec.id_seq || old.next_relid != rec.next_relid) &&
+       old.id_seq != rec.id_seq || old.next_relid != rec.next_relid ||
+       old.column_store != rec.column_store) &&
       put_table_fields(session, kv.get(), oid, rec) != 0) {
     return -1;
   }

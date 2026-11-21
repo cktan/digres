@@ -1059,7 +1059,11 @@ int sm_commit_prepared(sm_session_t* session, const char* gid);
 ```
 
 Commits the prepared transaction `gid`. It needs no active
-transaction on `session`, and disturbs none.
+transaction on `session`, and disturbs none. The rows it put into
+a column store table's delta store, and its delete markers, then
+count toward the seal and RG compaction
+([`COLSTORE.md`](COLSTORE.md#104-when-the-seal-runs) §10.4);
+`sm_abort_prepared` drops them.
 
 Errors: `SM_ERR_NOTFOUND`.
 
@@ -1314,6 +1318,47 @@ its primary key's, or with none its `_id`'s
 ([`CLUSTER.md`](CLUSTER.md#5-reading) §5). A
 sequential scan reads this.
 
+### `sm_row_scanopen_columns`
+
+```cpp
+struct sm_col_bound_t {
+    int32_t           attnum;
+    bool              is_null = false;  /* IS NULL */
+    bool              not_null = false; /* any other test */
+    bool              has_lo = false;
+    bool              lo_incl = true;
+    sm_datum_t        lo = 0;
+    bool              has_hi = false;
+    bool              hi_incl = true;
+    sm_datum_t        hi = 0;
+    bool              has_in = false; /* = or IN: in[0..n_in) */
+    const sm_datum_t* in = nullptr;
+    size_t            n_in = 0;
+};
+
+int sm_row_scanopen_columns(sm_tbl_t* tbl, const bool* cols, size_t ncols,
+                            const sm_col_bound_t* bounds, size_t nbounds,
+                            sm_row_scan_t** out);
+```
+
+Opens a cursor over each row of a column store table, as
+`sm_row_scanopen` does ([`COLSTORE.md`](COLSTORE.md#12-scans)
+§12):
+
+- **Of the row groups, it reads only the columns `cols` marks**,
+  `ncols` of them; with `ncols` 0, every column. A column not
+  read is null in a row group's row. The delta store's rows are
+  whole.
+- **It skips each row group whose zonemaps and filters cannot
+  hold a row that meets every bound.** A bound's values are
+  datums of its column's type, from 0, as a row's are. A bound
+  prunes; it does not filter: the caller tests each row.
+
+On any other table it is `sm_row_scanopen`: every column, every
+row.
+
+Errors: `SM_ERR_INVALID` (a bound on no live column).
+
 ### `sm_row_scanopen_idrange`
 
 ```cpp
@@ -1368,6 +1413,15 @@ Moves to the next row. Returns 0 with it, 1 at the end, or -1.
   unread leaves `*ref` zero on 0.
 
 Errors: `SM_ERR_SCANCLOSED`.
+
+### `sm_row_scan_rg`
+
+```cpp
+uint64_t sm_row_scan_rg(const sm_row_scan_t* scan);
+```
+
+The row group of the column store table's row the cursor handed
+out last, 0 for a row of its delta store and of any other table.
 
 ### `sm_row_scan_seek`
 
@@ -1757,6 +1811,7 @@ struct sm_table_def_t {
     std::vector<sm_fkey_def_t>   fkeys;         /* its own */
     std::vector<sm_fkey_ref_t>   referenced_by; /* those that reference it */
     std::vector<sm_check_def_t>  checks;        /* its check constraints */
+    bool column_store = false; /* a column store table (../COLSTORE.md) */
 };
 
 struct sm_column_def_t {
@@ -2569,6 +2624,38 @@ Deletes the row with `_id` `id`, or the row `key` names. `ref`,
 
 Errors: as `sm_tbl_update`.
 
+### `sm_tbl_delete_at`, `sm_tbl_update_at`, `sm_tbl_seal`
+
+```cpp
+int sm_tbl_delete_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id);
+int sm_tbl_update_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id,
+                     const sm_datum_t* values, const bool* isnull, size_t n);
+int sm_tbl_seal(sm_tbl_t* tbl, bool* sealed);
+int sm_seal_wait(sm_session_t* session);
+```
+
+A column store table's row by its name, `(rg_id, id)`:
+`rg_id` is the row group a scan read it from
+(`sm_row_scan_rg`), 0 for the delta store
+([`COLSTORE.md`](COLSTORE.md#9-writes) §9). A row of a row group
+is deleted by its delete marker, under its lock on its `_id`; an
+update reinserts it into the delta store. A row the seal moved is
+followed to its row group. `sm_tbl_seal` seals one row group of
+the delta store's first rows, at READ COMMITTED; `*sealed` says
+whether it did (§10). A commit that puts a row group's rows into
+the delta store queues the table for the seal's job, which seals
+it by itself; `sm_seal_wait` waits until that job is idle, for
+tests (§10.4).
+
+A column store table's row named by its `_id` alone is found too:
+`sm_tbl_read`, `sm_tbl_read_latest`, `sm_tbl_update` and
+`sm_tbl_delete` look in the delta store first, and, where it has
+no version of the row, in the row group that holds it (§8). That
+costs a lookup a row; a name from a scan costs none.
+
+Errors: as `sm_tbl_update`; `SM_ERR_UPDATED` at READ COMMITTED
+for a row updated since, read again by `(0, id)`.
+
 ### `sm_tbl_read`
 
 ```cpp
@@ -3040,11 +3127,16 @@ struct sm_column_spec_t {
 int sm_cat_create_table(sm_session_t* session, uint64_t nspoid,
                         const char* name,
                         const std::vector<sm_column_spec_t>& columns,
-                        uint64_t* oid);
+                        uint64_t* oid, bool column_store = false);
 ```
 
 Creates the table `name` in `nspoid` with these columns: its
-store, its `_id` sequence and its definition. The session's
+store, its `_id` sequence and its definition. With
+`column_store`, a column store table
+([`COLSTORE.md`](COLSTORE.md)): no index, no SERIALIZABLE
+transaction, a varlena value of 2,048 bytes at most, refused past
+it with `SM_ERR_VALUETOOLONG`, and a sequence of its row groups'
+ids. The session's
 transaction sees it at once, and others at commit. An identity
 column owns its sequence from then on.
 
@@ -3075,11 +3167,12 @@ Errors:
 ```cpp
 int sm_cat_create_temp_table(sm_session_t* session, const char* name,
                              const std::vector<sm_column_spec_t>& columns,
-                             uint64_t* oid);
+                             uint64_t* oid, bool column_store = false);
 ```
 
 Creates the temporary table `name` with these columns
-([`TEMPTABLE.md`](TEMPTABLE.md)). It is the session's alone, seen
+([`TEMPTABLE.md`](TEMPTABLE.md)), a column store table if
+`column_store` is true ([`COLSTORE.md`](COLSTORE.md)). It is the session's alone, seen
 by no other, and gone when the session closes. It is in no
 namespace, and is found by name with `SM_NSP_TEMP`. Its rows are
 never logged and take no locks, but follow the session's

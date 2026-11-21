@@ -322,9 +322,17 @@ sm_fkey_def_t api_fkey(const sm3::fkey_rec_t &fk) {
  * filling is building.
  */
 sm_table_def_t api_def(const sm3::session_t *ss, const sm3::table_def_t &d) {
-  sm_table_def_t out{
-      d.oid, d.nspoid, d.name, {}, {}, {}, sm3::cat_table_version(ss, d.oid),
-      {},    {},       {}};
+  sm_table_def_t out{d.oid,
+                     d.nspoid,
+                     d.name,
+                     {},
+                     {},
+                     {},
+                     sm3::cat_table_version(ss, d.oid),
+                     {},
+                     {},
+                     {},
+                     d.column_store};
   for (const sm3::column_def_t &c : d.columns) {
     out.columns.push_back({c.name, c.type->code, c.typmod, c.not_null,
                            c.dropped, c.default_expr.has_value(),
@@ -469,11 +477,18 @@ static int start_builder(sm_env_t *env, std::string_view dbname,
     });
     return -1;
   }
-  return 0;
+  // The seal's job, with sessions of its own as the builder's
+  // (../COLSTORE.md §10.4).
+  return sm3::sealer_attach(cat, [e, name]() -> sm1::session_t * {
+    sm1::session_t *s = nullptr;
+    return sm1::opendb(e, name, s) == 0 ? s : nullptr;
+  });
 }
 
 /* Stop a catalog's builder and btree reaper, which hold sessions on it. */
 static void stop_workers(sm3::catalog_t *cat) {
+  // The sealer first: its jobs open tables, as the builder's do.
+  sm3::sealer_detach(cat);
   sm3::btree_reaper_detach(cat);
   sm3::builder_detach(cat);
 }
@@ -1084,16 +1099,27 @@ int sm_list_prepared(sm_session_t *session, std::vector<sm_prepared_t> &out) {
   });
 }
 
-/* Commit the prepared transaction gid. */
+/*
+ * Commit the prepared transaction gid: through sm3, which hands its
+ * column store counts to the sealer, on a session with a catalog.
+ */
 int sm_commit_prepared(sm_session_t *session, const char *gid) {
   sm1::session_t *s = session_of(session);
-  return guard(session, [&] { return sm1::commit_prepared(s, name_of(gid)); });
+  return guard(session, [&] {
+    return session && session->sm3
+               ? sm3::commit_prepared(session->sm3, name_of(gid))
+               : sm1::commit_prepared(s, name_of(gid));
+  });
 }
 
-/* Abort the prepared transaction gid. */
+/* Abort the prepared transaction gid, as sm_commit_prepared commits. */
 int sm_abort_prepared(sm_session_t *session, const char *gid) {
   sm1::session_t *s = session_of(session);
-  return guard(session, [&] { return sm1::abort_prepared(s, name_of(gid)); });
+  return guard(session, [&] {
+    return session && session->sm3
+               ? sm3::abort_prepared(session->sm3, name_of(gid))
+               : sm1::abort_prepared(s, name_of(gid));
+  });
 }
 
 namespace {
@@ -1259,6 +1285,12 @@ int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, const void **tuple,
 }
 
 /* The next row, in the cursor's pin, which *ref then names. */
+/* The row group of a scan's last row; see sm.h. */
+uint64_t sm_row_scan_rg(const sm_row_scan_t *scan) {
+  return scan ? sm3::tbl_scan_rg(rel_scan_of(const_cast<sm_row_scan_t *>(scan)))
+              : 0;
+}
+
 int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, sm_pin_ref_t *ref) {
   return guard(nullptr, [&] {
     sm3::pin_ref_t r;
@@ -2128,6 +2160,48 @@ int sm_tbl_update(sm_tbl_t *tbl, uint64_t id, const sm_datum_t *values,
 }
 
 /* Delete a row and its index entries. */
+/* Delete a column store table's row by its name; see sm.h. */
+int sm_tbl_delete_at(sm_tbl_t *tbl, uint64_t rg_id, uint64_t id) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl) {
+      return null_arg("sm_tbl_delete_at", "tbl");
+    }
+    return sm3::tbl_delete_at(tbl->table, rg_id, id);
+  });
+}
+
+/* Update a column store table's row by its name; see sm.h. */
+int sm_tbl_update_at(sm_tbl_t *tbl, uint64_t rg_id, uint64_t id,
+                     const sm_datum_t *values, const bool *isnull, size_t n) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (check_row("sm_tbl_update_at", tbl, values, isnull, n) != 0) {
+      return -1;
+    }
+    return sm3::tbl_update_at(tbl->table, rg_id, id, {values, n}, {isnull, n});
+  });
+}
+
+/* Wait for the seal's job to be idle; see sm.h. */
+int sm_seal_wait(sm_session_t *session) {
+  return guard(session, [&] {
+    if (!session) {
+      return null_arg("sm_seal_wait", "session");
+    }
+    sm3::sealer_wait_idle(sm3::session_cat(session->sm3));
+    return 0;
+  });
+}
+
+/* Seal a row group of a column store table; see sm.h. */
+int sm_tbl_seal(sm_tbl_t *tbl, bool *sealed) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl || !sealed) {
+      return null_arg("sm_tbl_seal", "tbl or sealed");
+    }
+    return sm3::tbl_seal(tbl->table, *sealed);
+  });
+}
+
 int sm_tbl_delete(sm_tbl_t *tbl, uint64_t id, sm_pin_ref_t *ref,
                   const void **old, size_t *len) {
   return guard(tbl ? tbl->session : nullptr, [&] {
@@ -2586,6 +2660,79 @@ int sm_row_scanopen(sm_tbl_t *tbl, sm_row_scan_t **out) {
   });
 }
 
+/* Open a cursor over a column store table's columns, pruned by bounds. */
+int sm_row_scanopen_columns(sm_tbl_t *tbl, const bool *cols, size_t ncols,
+                            const sm_col_bound_t *bounds, size_t nbounds,
+                            sm_row_scan_t **out) {
+  return guard(tbl->session, [&] {
+    if (!out || (ncols > 0 && !cols) || (nbounds > 0 && !bounds)) {
+      return null_arg("sm_row_scanopen_columns", !out    ? "out"
+                                                 : !cols ? "cols"
+                                                         : "bounds");
+    }
+    const sm3::table_def_t &def = sm3::tbl_def(tbl->table);
+    sm3::scan_t *scan = nullptr;
+    if (!def.column_store) {
+      if (sm3::tbl_scan_rows(tbl->table, scan) != 0) {
+        return -1;
+      }
+      *out = reinterpret_cast<sm_row_scan_t *>(scan);
+      return 0;
+    }
+    // Each bound's values as key bytes of its column, as the
+    // zonemaps keep their min and max (../COLSTORE.md §6).
+    std::vector<sm3::col_bound_t> bs;
+    for (size_t i = 0; i < nbounds; i++) {
+      const sm_col_bound_t &b = bounds[i];
+      if (b.attnum < 0 || static_cast<size_t>(b.attnum) >= def.columns.size() ||
+          def.columns[b.attnum].dropped || (b.has_in && b.n_in > 0 && !b.in)) {
+        return sm1::seterr(sm1::SM_ERR_INVALID,
+                           "sm_row_scanopen_columns: a bound on no live "
+                           "column, or of no values");
+      }
+      const sm3::column_def_t &c = def.columns[b.attnum];
+      // A bound's key is of its value: a varlena's payload, past its
+      // header, as a CG's keys are (sm2::cg_build).
+      auto key = [&](sm_datum_t d, std::string &k) {
+        std::string_view bytes;
+        if (sm2::datum_bytes(c.type, c.typmod, static_cast<sm2::datum_t>(d),
+                             bytes) != 0) {
+          return -1;
+        }
+        if (c.type->len < 0) {
+          bytes = sm2::varlena_payload(bytes);
+        }
+        return c.type->key_encode(bytes, c.typmod, c.collation, k);
+      };
+      sm3::col_bound_t x{b.attnum, {}};
+      x.bound.is_null = b.is_null;
+      x.bound.not_null = b.not_null;
+      x.bound.has_lo = b.has_lo;
+      x.bound.lo_incl = b.lo_incl;
+      x.bound.has_hi = b.has_hi;
+      x.bound.hi_incl = b.hi_incl;
+      x.bound.has_in = b.has_in;
+      if ((b.has_lo && key(b.lo, x.bound.lo) != 0) ||
+          (b.has_hi && key(b.hi, x.bound.hi) != 0)) {
+        return -1;
+      }
+      for (size_t j = 0; b.has_in && j < b.n_in; j++) {
+        x.bound.in.emplace_back();
+        if (key(b.in[j], x.bound.in.back()) != 0) {
+          return -1;
+        }
+      }
+      bs.push_back(std::move(x));
+    }
+    if (sm3::tbl_scan_columns(tbl->table, std::vector<bool>(cols, cols + ncols),
+                              std::move(bs), 0, UINT64_MAX, scan) != 0) {
+      return -1;
+    }
+    *out = reinterpret_cast<sm_row_scan_t *>(scan);
+    return 0;
+  });
+}
+
 /* Open a cursor over the rows of the table's primary key. */
 int sm_row_scanopen_with_index(sm_tbl_t *tbl, uint64_t index,
                                const sm_bound_t *lo, const sm_bound_t *hi,
@@ -2752,7 +2899,7 @@ int sm_tbl_stats(sm_session_t *session, uint64_t oid,
 int sm_cat_create_table(sm_session_t *session, uint64_t nspoid,
                         const char *name,
                         const std::vector<sm_column_spec_t> &columns,
-                        uint64_t *oid) {
+                        uint64_t *oid, bool column_store) {
   return guard(session, [&] {
     if (!oid) {
       return null_arg("sm_cat_create_table", "oid");
@@ -2769,14 +2916,15 @@ int sm_cat_create_table(sm_session_t *session, uint64_t nspoid,
            c.not_null_name ? c.not_null_name : "", c.generated,
            c.generated_reads});
     }
-    return sm3::create_table(session->sm3, nspoid, name_of(name), cols, *oid);
+    return sm3::create_table(session->sm3, nspoid, name_of(name), cols, *oid,
+                             column_store);
   });
 }
 
 /* Create a temporary table in the session's transaction. */
 int sm_cat_create_temp_table(sm_session_t *session, const char *name,
                              const std::vector<sm_column_spec_t> &columns,
-                             uint64_t *oid) {
+                             uint64_t *oid, bool column_store) {
   return guard(session, [&] {
     if (!oid) {
       return null_arg("sm_cat_create_temp_table", "oid");
@@ -2793,7 +2941,8 @@ int sm_cat_create_temp_table(sm_session_t *session, const char *name,
            c.not_null_name ? c.not_null_name : "", c.generated,
            c.generated_reads});
     }
-    return sm3::create_temp_table(session->sm3, name_of(name), cols, *oid);
+    return sm3::create_temp_table(session->sm3, name_of(name), cols, *oid,
+                                  column_store);
   });
 }
 

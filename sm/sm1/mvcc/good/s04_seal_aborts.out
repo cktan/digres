@@ -1,0 +1,18 @@
+# s04 -- READ COMMITTED: a writer waits for a seal in flight that
+# aborts, and its write goes ahead.
+#
+# S's sealed tombstone dies with S: T1, which waited on it, then
+# writes over the row as if no seal had been tried.
+
+
+== pairing RR/RR == T1=RC S=RC
+@1 S begin -> ok
+@2 S seal R1 -> ok
+@3 T1 begin -> ok
+@4 T1 write R1 1 blocks -> blocked
+@5 S abort -> ok
+@4 T1 write R1 1 blocks -> ok (resumed)
+@6 check last T1 ok -> satisfied
+@7 T1 commit -> ok
+@8 check committed T1 -> satisfied
+@8 check row R1 1 -> satisfied

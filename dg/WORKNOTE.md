@@ -13523,3 +13523,182 @@ A check hook took the new value as a `char **`, to change it with
 - **Left on purpose**: an opener still takes the table as its
   first argument. sm2's `rel_scan` and `rel_scanend` keep their
   names.
+
+## Step 447: a column store table, made WITH (storage = columnar)
+
+- **What it is**: `CREATE TABLE ... WITH (storage = columnar)`
+  makes a column store table of sm's
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md)).
+  `storage = 'row'` is a row store table, as no option is. ROW
+  is a keyword, so the value `row` is quoted. Another value is
+  refused. `check_storage_options()` in `access/sm/smstore.c`
+  reads the option, as it reads `fillfactor`: dg's tables keep
+  no reloptions, so `reloptions.c` does not take it.
+- **Keys taken, not made**: a column store table has no index
+  and no foreign key (COLSTORE §14.1). A PRIMARY KEY, UNIQUE,
+  EXCLUDE, REFERENCES or CREATE INDEX on one is a WARNING, and
+  nothing is made. `smstore_create_index()` and `add_fkey()`
+  return first for such a table. The NOT NULL of a primary key
+  holds, as parse analysis puts it on the columns already.
+- **Loads**: INSERT ... SELECT, CREATE TABLE AS and COPY are
+  bulk loads into row groups, as they are for a row store
+  table. A single INSERT puts its row into the delta store.
+- **Refused for now**: UPDATE, DELETE, a row lock (SELECT ...
+  FOR UPDATE) and a read of a row by its `_id`
+  (`smstore_fetch_row()`). A row of a row group is named by its
+  row group with its `_id`, and the `RowKey` carries the `_id`
+  alone. Without the row group, sm would not find the row, and
+  the statement would change nothing, without an error.
+  `refuse_column_store()` makes it an error instead.
+- **sm's C API**: `sm_table_def_t` says whether a table is a
+  column store table (`column_store`), and
+  `sm_cat_create_temp_table` takes `column_store` too.
+- **Left on purpose**: the row name in the `RowKey`, a scan's
+  columns and bounds, and `ANALYZE` of a column store table.
+  `\d+` shows no `storage` option, as it shows no other.
+
+## Step 448: a column store table's rows are updated and deleted
+
+- **What it was**: step 447 refused UPDATE, DELETE, row locks
+  and reads by `_id` of a column store table. A row of a row
+  group is named by its row group with its `_id`, and the
+  `RowKey` carries the `_id` alone.
+- **What it is**: the `RowKey` still carries the `_id` alone
+  ([`../QUESTION.md`](../QUESTION.md) 3, option C).
+  `scan_rg()` in `access/sm/smstore.c` takes the row group from
+  the scan that read the row, when that scan is still on it, and
+  the write names the row `(rg_id, _id)` with
+  `sm_tbl_update_at` or `sm_tbl_delete_at`. A plain UPDATE ...
+  WHERE or DELETE ... WHERE is so, and costs no lookup. Else, as
+  after a join, a sort or a TID scan, the write names the row by
+  its `_id`, and sm finds its row group
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §8). Reads by `_id`
+  (`smstore_fetch_row()`, `smstore_lock_row()`) are sm's too.
+- **What went with it**: `refuse_column_store()`. A DELETE of a
+  row group's row keeps the row as the scan read it, copied into
+  `kept_copy`, for RETURNING.
+- **Left on purpose**: no system column for the row group, and
+  no change outside `access/sm`. After a write found the row
+  changed (TM_Updated), the retry names it by its `_id`: its
+  newest version is in the delta store. A row read ahead
+  (`ra_rows`, `ra_point`) gives no row group, as the cursor is on
+  past it; a column store table has no index, so none is.
+
+## Step 449: a column store table's scan reads its columns, and prunes
+
+- **What it is**: a sequential scan of a column store table
+  reads, of its row groups, only the columns its plan names,
+  and skips the row groups that the bounds of its quals rule out
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §12).
+  `smstore_beginscan_seq()` in `access/sm/smstore.c` opens it
+  with `sm_row_scanopen_columns`; `nodeSeqscan.c` calls it in
+  place of `smstore_beginscan()`.
+- **The columns**: those of the scan's target list and quals. A
+  whole-row reference reads every column. The planner gives the
+  scan no physical target list (`use_physical_tlist()` in
+  `optimizer/plan/createplan.c`), which would name them all:
+  `RelOptInfo::sm_columnar`, set in `plancat.c` from
+  `RelationData::rd_smcolumnar`, which `relcache.c` sets from
+  `smstore_table_t::column_store`.
+- **The bounds** (`qual_bounds()`): `Var op Const`, `Const op
+  Var`, `Var = ANY (array)`, `IS NULL` and `IS NOT NULL`, by the
+  default btree operator family of the column's type, with both
+  operands of the type and the column's collation. A bound
+  prunes; the qual still tests each row.
+- **Every column for a write**: a scan of a table the statement
+  writes or locks reads every column (`may_read_some()`), as a
+  write takes the old row from the scan on it. A scan that
+  leaves a column unread is `partial`, and `scan_tuple()` never
+  hands its row out as the table's.
+- **Left on purpose**: a `Param` gives no bound, as the scan
+  begins with the plan; the cost model does not see the
+  projection.
+
+## Step 450: SERIALIZABLE on a column store table is not supported
+
+- **What it is**: a SERIALIZABLE transaction that reads or
+  writes a column store table fails with SQLSTATE `0A000`,
+  feature not supported
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §9.1).
+- **How**: sm3 refuses the table with the new error code
+  `SM_ERR_UNSUPPORTED`. `sm_sqlstate()` in `access/sm/smstore.c`
+  maps it to `ERRCODE_FEATURE_NOT_SUPPORTED`. Before, the code
+  was `SM_ERR_INVALID`, which digres reported as `XX000`, an
+  internal error.
+- **Test**: `test/columnar.sql` prints the SQLSTATE.
+
+## Step 451: a foreign key that references a column store table
+
+- **What it is**: a test. A row store table's foreign key that
+  references a column store table fails, as the referenced
+  column has no unique key
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §14.1).
+- **Test**: step 10 of `test/columnar.sql`.
+
+## Step 452: a text bound of a column store scan skips only what cannot match
+
+- **What it is**: a fix in sm, which digres's scans of column store
+  tables reach. A CG's zonemap and filter keys, and a scan's bound
+  keys, were made over a varlena's header and payload, where every
+  other key of sm's is over the payload alone. Keys then sorted by
+  length first, and a digres constant's 4-byte header never met a
+  stored value's 1-byte one: `code = 'c12345'` and `code < 'c10'`
+  skipped row groups that held matches.
+- **How**: `sm2::cg_build` and `sm_row_scanopen_columns` key a
+  varlena's payload ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §6).
+- **Test**: step 5 of `test/columnar.sql`, text bounds against a row
+  store copy.
+
+## Step 453: a decimal bound of a column store scan takes in every row
+
+- **What it is**: a fix. `bound_datum()` in
+  `access/sm/smstore.c` made a decimal bound the column's integer
+  as an assignment rounds it, half up, and failed past the
+  column's precision. So `d < 100.004` on a `numeric(10,2)`
+  column became `d < 100.00`, and skipped the row group whose
+  min is 100.00; `d < 1e20` failed with an overflow.
+- **How**: as an index scan's bound does (`numeric_bound()`): a
+  lower bound or an equality is the column's integer at or below
+  the constant, an upper bound the one at or above it, clamped to
+  the column's precision.
+- **Test**: step 11 of `test/columnar.sql`, against a row store
+  copy.
+
+## Step 454: TABLESAMPLE on a column store table is refused
+
+- **What it is**: `smtable_scan_begin()` in `access/sm/smtable.c`
+  refuses a sample scan of a column store table, with SQLSTATE
+  `0A000`. A sample scan reads rows by rising rowno, and a column
+  store table's scan gives its row groups' rows first, then its
+  delta store's, so `smstore_scan_row()` dropped every row that
+  came after a higher rowno: an updated row, a merged row group's.
+- **Left**: a sample scan of a column store table in rowno order;
+  see `../QUESTION.md`.
+- **Test**: step 12 of `test/columnar.sql`.
+
+## Step 455: a row of a row group written twice in one statement
+
+- **What it is**: a fix in sm, which digres's writes of column
+  store tables reach. A second delete or update of a row of a row
+  group in one statement, as a `DELETE ... USING` whose join
+  matches the row twice makes, met the statement's own delete
+  marker and failed with `SM_ERR_NOTFOUND` or `SM_ERR_UPDATED`.
+  At REPEATABLE READ digres raised a serialization failure where
+  PostgreSQL deletes the row once.
+- **How**: `mark_deleted()` in `sm/sm3/src/table/table.cc`, past a
+  marker there already, takes the marker's lock as a row read, and
+  so fails with `SM_ERR_SELFMODIFIED` for the statement's own
+  marker, which digres skips, as for a row store table.
+- **Test**: step 13 of `test/columnar.sql`, a nested loop that
+  deletes a row twice with its scan on it; `sm3`'s test of it.
+
+## Step 456: a column store table takes a value of 2,048 bytes at most
+
+- **What it is**: a write of a column store table refuses a varlena
+  value of more than 2,048 bytes, its header not counted, with
+  SQLSTATE `54000`, program limit exceeded
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §5.4). A longer value
+  goes into a row store table, which a query joins.
+- **How**: sm3 refuses it with `SM_ERR_VALUETOOLONG`;
+  `sm_sqlstate()` in `access/sm/smstore.c` maps it.
+- **Test**: step 14 of `test/columnar.sql`.

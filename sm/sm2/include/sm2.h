@@ -695,6 +695,16 @@ int rel_insert_at(rel_t* rel, uint64_t id, std::span<const datum_t> datums,
                   std::span<const bool> isnull, std::string* key = nullptr);
 
 /*
+ * rel_insert_at of a keyless row under an _id whose key may hold a
+ * version already: the Column Store's row back in its delta store,
+ * over the seal's tombstone (../COLSTORE.md §9). It reads the key's
+ * newest version, as sm1::insert does, where rel_insert_at's writes
+ * a key never written.
+ */
+int rel_reinsert_at(rel_t* rel, uint64_t id, std::span<const datum_t> datums,
+                    std::span<const bool> isnull);
+
+/*
  * Read the row at key as the transaction sees it: 0 with tuple set,
  * and id if wanted, a keyless row's _id from its key or 0 for a
  * keyed row, 1 if there is none, -1 on error, as sm1::read.
@@ -806,6 +816,17 @@ int rel_update(rel_t* rel, std::string_view key, uint64_t id,
 int rel_delete(rel_t* rel, std::string_view key);
 int rel_delete(rel_t* rel, std::string_view key, sm1::rawpin_t* pin,
                std::string_view& old, bool hold = false);
+
+/*
+ * rel_delete of a row the Column Store's seal moves into a row group
+ * (../COLSTORE.md §10.1): its tombstone sealed (sm1::erase_sealed),
+ * so a writer of the row is judged by the row's own commit. Its
+ * tuple is pinned into pin, as rel_delete's; with hold, its datums
+ * out of line are erased only by rel_release, so the seal reads them
+ * first.
+ */
+int rel_seal(rel_t* rel, std::string_view key, sm1::rawpin_t* pin,
+             std::string_view& old, bool hold = false);
 
 /*
  * Put a row into a bulk load (sm1::load_open) of the rel's store,
@@ -1472,6 +1493,122 @@ void catkv_scanend(catkv_scan_t* scan);
  * OPTFLAGS: "-O3", or "-O3 -DNDEBUG" for digres's release build.
  */
 const char* build_flags();
+
+/*
+ * The Column Store's column group, a CG (../COLSTORE.md §5, §6):
+ * the values of one column of a row group, as one immutable file,
+ * with its statistics and its filter. sm2 builds and reads the
+ * bytes; sm1 stores them (../COLSTORE.md §4.5).
+ */
+
+/*
+ * One value for a CG: a datum's bytes as sm2::datum_bytes gives them,
+ * a varlena's header included, or null.
+ */
+struct cg_value_t {
+    std::string_view datum;
+    bool             isnull = false;
+};
+
+/* The column a CG holds. */
+struct cg_column_t {
+    const type_t*      type;
+    int32_t            typmod;
+    const collation_t* collation; /* text, varchar; nullptr: bytes */
+};
+
+/* Min and max are cut to this many bytes (§6.1). */
+constexpr size_t cg_minmax_max = 32;
+
+/*
+ * A CG's zonemap (../COLSTORE.md §6.1). min and max are key bytes
+ * (type_t::key_encode) of the finite values, cut to cg_minmax_max
+ * bytes; both empty when the CG has no finite value. NaN and the
+ * infinities are in the flags, not in min and max.
+ */
+struct cg_stats_t {
+    uint32_t    rows = 0;
+    uint32_t    nulls = 0;
+    uint32_t    distinct = 0;     /* distinct non-null keys */
+    std::string min, max;
+    bool        min_cut = false;  /* min is a prefix of the true min */
+    bool        max_cut = false;  /* max is a prefix of the true max */
+    bool        has_nan = false;
+    bool        has_pos_inf = false;
+    bool        has_neg_inf = false;
+    bool        sorted = false;   /* non-null keys ascend, row by row */
+    std::string collation_version;
+};
+
+/* Append st's bytes to out, for the RG key (§4.4). */
+void cg_stats_encode(const cg_stats_t& st, std::string& out);
+
+/*
+ * Read a cg_stats_encode's bytes from the front of in, advancing
+ * past them. Returns 0, or -1 with SM_ERR_CORRUPT.
+ */
+int cg_stats_decode(std::string_view& in, cg_stats_t& st);
+
+/* What cg_build makes of one column of a row group. */
+struct cg_built_t {
+    std::string file;      /* the CG file */
+    std::string filter;    /* the filter key's value (§6.3) */
+    cg_stats_t  stats;
+};
+
+/*
+ * Build a CG of values, in row order: encode them, choose the
+ * encoding, compress, and make the statistics and the filter
+ * (../COLSTORE.md §5, §6). Returns 0, or -1 with the error set.
+ */
+int cg_build(const cg_column_t& col, std::span<const cg_value_t> values,
+             cg_built_t& out);
+
+/* A CG file, read and decoded. */
+struct cg_t;
+
+/*
+ * Check and decode a CG file. Returns 0 with the CG in out, or -1
+ * with SM_ERR_CORRUPT for a bad file, its CRC32C included.
+ */
+int cg_open(std::string_view file, cg_t*& out);
+
+/* Free a CG from cg_open; nullptr is a no-op. */
+void cg_close(cg_t* cg);
+
+/* The number of rows of a CG. */
+uint32_t cg_rows(const cg_t* cg);
+
+/*
+ * Row i of a CG: 0 with datum viewing the value, valid until
+ * cg_close; 1 if it is null. Every value is in the CG.
+ */
+int cg_get(const cg_t* cg, uint32_t i, std::string_view& datum);
+
+/*
+ * Bounds on one column, which every matching row meets
+ * (../COLSTORE.md §12): a conjunction. Values are key bytes.
+ */
+struct cg_bound_t {
+    bool                     is_null = false;  /* IS NULL */
+    bool                     not_null = false; /* any other test */
+    bool                     has_lo = false;
+    bool                     lo_incl = true;
+    std::string              lo;
+    bool                     has_hi = false;
+    bool                     hi_incl = true;
+    std::string              hi;
+    bool                     has_in = false;   /* IN, or = */
+    std::vector<std::string> in;
+};
+
+/*
+ * Whether a CG with these statistics and this filter may hold a
+ * row that meets b (../COLSTORE.md §6.2): false means no row can,
+ * and the scan skips it.
+ */
+bool cg_may_match(const cg_column_t& col, const cg_stats_t& st,
+                  std::string_view filter, const cg_bound_t& b);
 
 } // namespace sm2
 

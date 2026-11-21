@@ -407,6 +407,7 @@ out. No caller sees it.
 | `0x01` | `key_class_current` | a chained key's newest version | bytewise |
 | `0x02` | `key_class_old` | `be64(id)`: a chained key's older version | bytewise |
 | `0x04` | `key_class_page` | a page, unversioned | bytewise |
+| `0x05` | `key_class_fileset` | `be64(fsid)`, `~wts` (8B), `~seq` (4B): a file set's key | as class `0x00` |
 
 ROWSTORE.md gives the version layouts of classes `0x00` to
 `0x02`, and BTREEINDEX.md the layout of a page. A page is no
@@ -414,17 +415,22 @@ version: the compaction filter keeps it as it is (GC.md), and a
 bulk load's check that a store is empty and a load's rollback
 leave it out ([`BULKLOAD.md`](BULKLOAD.md)).
 
-Pages sort last. So a chained store's last key below class `0x04`
-is its highest old id, which `chain_next_old()` reads at open.
+Pages sort after the versions. So a chained store's last key
+below class `0x04` is its highest old id, which `chain_next_old()`
+reads at open. A file set's key (class `0x05`,
+[`COLSTORE.md`](COLSTORE.md#45-file-sets) §4.5) sorts after the
+pages, so it stays out of every range sm1 takes for row versions.
+It is versioned as a class `0x00` key is, and `src/fileset.cc`
+writes and reads it.
 
 ### 6.3 The comparator
 
 Store CFs use a custom comparator, `sm.store.v2`:
 
 1. Compare the class bytes.
-2. Within class `0x00`, compare the userkeys (the key less the
-   class and the 12-byte tail) with `memcmp`, shorter first on a
-   tie. Then compare the tails with `memcmp`.
+2. Within class `0x00` or `0x05`, compare the userkeys (the key
+   less the class and the 12-byte tail) with `memcmp`, shorter
+   first on a tie. Then compare the tails with `memcmp`.
 3. Within any other class, compare bytewise.
 
 RocksDB's default bytewise comparator is wrong here. It compares
@@ -1254,7 +1260,7 @@ value:
 | Module | Codes |
 | --- | --- |
 | Database Manager | `SM_ERR_NOTFOUND` (store, database or home); `SM_ERR_EXISTS` (home, database, sequence or gid); `SM_ERR_INUSE`; `SM_ERR_VERSION`; `SM_ERR_CORRUPT` (§9.4, or a malformed record) |
-| Row Store | `SM_ERR_CONFLICT`, `SM_ERR_UPDATED`, `SM_ERR_NOTFOUND` (key), `SM_ERR_DUPKEY`, `SM_ERR_MOVED` |
+| Row Store | `SM_ERR_CONFLICT`, `SM_ERR_UPDATED`, `SM_ERR_NOTFOUND` (key), `SM_ERR_DUPKEY`, `SM_ERR_MOVED`, `SM_ERR_SEALED` |
 | Transaction Manager | `SM_ERR_SERIALIZATION`, `SM_ERR_READONLY`, `SM_ERR_NOSAVEPOINT`, `SM_ERR_UNDOLIMIT`, `SM_ERR_DOOMED`, `SM_ERR_SCANCLOSED`, `SM_ERR_SELFMODIFIED`, `SM_ERR_NOTRANS`, `SM_ERR_INTRANS`, `SM_ERR_PREPARED` |
 | Lock Manager | `SM_ERR_DEADLOCK`, `SM_ERR_BLOCKED`, `SM_ERR_INTERRUPTED` |
 | any | `SM_ERR_INVALID` (a bad argument, or a call the state forbids); `SM_ERR_IO`, `SM_ERR_NOMEM`, `SM_ERR_PERMISSION`, `SM_ERR_DISKFULL`, from a RocksDB status (`set_status_error()`) or `errno` |
@@ -1265,9 +1271,9 @@ already aborted the transaction. The caller must not call
 `sm1::abort`, and retries by beginning a fresh transaction. Under
 `sm1::xctlevel_t::serializable` they are a normal outcome.
 
-`SM_ERR_UPDATED`, `SM_ERR_MOVED`, `SM_ERR_BLOCKED`,
-`SM_ERR_INTERRUPTED`, `SM_ERR_READONLY`, `SM_ERR_SCANCLOSED` and
-`SM_ERR_SELFMODIFIED` do not abort.
+`SM_ERR_UPDATED`, `SM_ERR_MOVED`, `SM_ERR_SEALED`,
+`SM_ERR_BLOCKED`, `SM_ERR_INTERRUPTED`, `SM_ERR_READONLY`,
+`SM_ERR_SCANCLOSED` and `SM_ERR_SELFMODIFIED` do not abort.
 
 `sm1::errnum()` and `sm1::errmsg()` read the code and the message
 of the last error on the calling thread. Two consequences follow:
@@ -1402,6 +1408,7 @@ src/access.cc           read / scan / insert / update / delete, visibility
 src/chain.cc            chained stores: codec, chain_ calls, chain_restore,
                         the GC worker's repair
 src/load.cc             bulk load into an empty store (BULKLOAD.md)
+src/fileset.cc          file sets: files, their keys, unlink, sweep (COLSTORE.md)
 src/pin.cc              raw pins (ROWSTORE.md)
 src/page.cc             pages: pin, write, drop (BUFMGR.md)
 src/bufpool.cc          the buffer pool alone: frames, pins, the clock

@@ -22,7 +22,7 @@ document. Use these and no others in code comments and documents.
 | Buffer Manager | bufmgr | [`BUFMGR.md`](BUFMGR.md) | sm's buffer pool: frames, pins, the clock | `sm1/src/bufpool.cc`, `page.cc` |
 | Garbage Collector | gc | [`GC.md`](GC.md) | the watermark, the compaction filter, the `CF:txn` sweep | `sm1/src/gc.cc` |
 | Row Store | row store | [`ROWSTORE.md`](ROWSTORE.md) | row keys, versions, chains, the read and write paths | `sm1/src/access.cc`, `chain.cc`, `sm2/src/rel/rel.cc` |
-| Column Store | column store | [`COLSTORE.md`](COLSTORE.md) | a design, not built: a table kept column by column in immutable files, for analytics | none |
+| Column Store | column store | [`COLSTORE.md`](COLSTORE.md) | a table kept column by column in immutable files, for analytics: row groups, the seal, RG compaction, pruned scans | `sm1/src/fileset.cc`, `sm2/src/col/cg.cc`, `sm3/src/colstore/` |
 | TOAST | toast | [`TOAST.md`](TOAST.md) | a datum stored out of line | `sm2/src/rel/toast.cc` |
 | LSM Index | lsm index | [`LSMINDEX.md`](LSMINDEX.md) | an index whose entries are sm1 keys | `sm2/src/rel/index.cc` |
 | B-tree Index | btree index | [`BTREEINDEX.md`](BTREEINDEX.md) | an index of its own pages, its in-doubt bit, the btree reaper | `sm2/src/tree/`, `sm3/src/btree_reaper/` |
@@ -271,7 +271,12 @@ tombstone** (`sm1::erase_moved`) records a primary key change:
 a reader sees it as any tombstone, and a writer that meets it
 fails with `SM_ERR_MOVED` ([`DBMGR.md`](DBMGR.md#62-key-classes)
 §6.2, [`LOCKMGR.md`](LOCKMGR.md#17-a-write) §1.7;
-[`ROWSTORE.md`](ROWSTORE.md#25-a-key-change) §2.5).
+[`ROWSTORE.md`](ROWSTORE.md#25-a-key-change) §2.5). A **sealed
+tombstone** (`sm1::erase_sealed`) records a move of sm's own,
+which changed no row: first-committer-wins looks through it to
+the version under it, and a writer that passes fails with
+`SM_ERR_SEALED`
+([`COLSTORE.md`](COLSTORE.md#102-the-sealed-tombstone) §10.2).
 
 **snapshot** — one number, `snapshot_ts`, taken as
 `visible_ts`. A reader sees every version whose commit is at

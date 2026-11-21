@@ -569,6 +569,15 @@ struct db_t {
    */
   hint_queue_t reaps;
   std::multimap<uint64_t, uint64_t> drops; /* commit_ts -> storeid */
+  /*
+   * File sets whose put the compaction filter dropped dead, as
+   * (storeid, fsid), for the worker to unlink their files
+   * (../COLSTORE.md §13). Under fs_dead_mu, which no other lock is
+   * taken under. Not a hint: a version the filter drops is never
+   * met again.
+   */
+  std::mutex fs_dead_mu;
+  std::vector<std::pair<uint64_t, uint64_t>> fs_dead;
   std::thread gc_thread;
   std::mutex gc_run_mu; /* one gc_run_once at a time */
 

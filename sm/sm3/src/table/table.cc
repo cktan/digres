@@ -14,6 +14,7 @@
  */
 
 #include "../catalog/internal.h"
+#include "../colstore/colstore.h"
 #include "pin.h"
 #include "sm0_defer.h"
 #include "sm_sys.h"
@@ -39,6 +40,8 @@ struct sm3::loader_t {
   std::vector<size_t> streams; /* the stream of each index, in order */
   /* A tree's stream of pages, by index; no_pages for any other. */
   std::vector<size_t> pages;
+  /* A column store table's row groups being built (../COLSTORE.md §9.2). */
+  std::unique_ptr<rg_build_t> rg;
 };
 
 namespace {
@@ -65,6 +68,7 @@ struct sm3::table_t {
    */
   std::vector<sm3::index_state_t> states;
   uint64_t states_epoch = 0; /* cat_epoch when states was read */
+  std::string col_row; /* a row group's row read last, by a read with no pin */
 };
 
 namespace sm3 {
@@ -166,6 +170,42 @@ int need_not_null(const sm3::table_t *t, std::span<const bool> isnull) {
       return sm1::seterr(sm1::SM_ERR_NOTNULL,
                          "null value in column " + cols[i].name + " of " +
                              t->def->name + ", which is NOT NULL");
+    }
+  }
+  return 0;
+}
+
+/*
+ * Fail with SM_ERR_VALUETOOLONG if the row of t, a column store
+ * table, has a varlena value of more than col_max_value octets
+ * (../COLSTORE.md §5.4), so every value fits in its CG. A TOAST
+ * pointer names a value of the table's own, checked when written.
+ */
+int need_values_fit(const sm3::table_t *t, std::span<const sm2::datum_t> values,
+                    std::span<const bool> isnull) {
+  if (!t->def->column_store) {
+    return 0;
+  }
+  const std::vector<sm3::column_def_t> &cols = t->def->columns;
+  for (size_t i = 0; i < cols.size() && i < values.size(); i++) {
+    const sm3::column_def_t &c = cols[i];
+    if (c.dropped || c.type->len >= 0 || (i < isnull.size() && isnull[i])) {
+      continue;
+    }
+    std::string_view bytes;
+    if (sm2::datum_bytes(c.type, c.typmod, values[i], bytes) != 0) {
+      return -1;
+    }
+    if (sm2::varlena_is_toast(bytes)) {
+      continue;
+    }
+    size_t n = sm2::varlena_payload(bytes).size();
+    if (n > sm3::col_max_value) {
+      return sm1::seterr(
+          sm1::SM_ERR_VALUETOOLONG,
+          "value of " + std::to_string(n) + " bytes in column " + c.name +
+              " of " + t->def->name + ", a column store table, which takes " +
+              std::to_string(sm3::col_max_value) + " bytes at most");
     }
   }
   return 0;
@@ -544,6 +584,20 @@ void close_rels(table_t *table) {
 }
 
 /*
+ * Refuse a column store table to a SERIALIZABLE transaction
+ * (../COLSTORE.md §9.1): it takes no SIREAD lock, so it cannot be
+ * part of one. Returns 0 or -1.
+ */
+int refuse_serializable(const session_t *session, const table_def_t &def) {
+  if (def.column_store && session->level == sm1::xctlevel_t::serializable) {
+    return sm1::seterr(sm1::SM_ERR_UNSUPPORTED,
+                       "a column store table cannot be used in a "
+                       "SERIALIZABLE transaction");
+  }
+  return 0;
+}
+
+/*
  * Lock the table, waiting for it or not, then open its heap: 0, or 1
  * with nothing taken if the lock would have waited, or -1.
  */
@@ -556,6 +610,9 @@ int open_table(session_t *session, uint64_t oid, sm1::lockmode_t mode,
                 : cat_trylock_table(session, oid, mode, t->def, &fresh);
   if (rc != 0) {
     return rc;
+  }
+  if (refuse_serializable(session, *t->def) != 0) {
+    return -1;
   }
   t->session = session;
   t->writable = covers_write(mode);
@@ -635,6 +692,10 @@ int tbl_reopen(table_t *table, sm1::lockmode_t mode, bool wait) {
                 : cat_trylock_table(session, oid, mode, def, &fresh);
   if (rc != 0) {
     return rc;
+  }
+  // A parked handle comes back in a transaction of any level.
+  if (refuse_serializable(session, *def) != 0) {
+    return -1;
   }
   table->writable = covers_write(mode);
   table->exclusive = mode == sm1::SM_LOCKMODE_EX;
@@ -752,10 +813,17 @@ int id_key(table_t *t, uint64_t id, std::string &key) {
 /* Insert the row, then its entry in every index; see sm3.h. */
 int tbl_insert(table_t *table, std::span<const sm2::datum_t> values,
                std::span<const bool> isnull, uint64_t &id) {
-  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0) {
+  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0 ||
+      insert_row(table, values, isnull, 0, id) != 0) {
     return -1;
   }
-  return insert_row(table, values, isnull, 0, id);
+  // A column store table's delta grows toward its seal (§10.4),
+  // counted at the commit.
+  if (table->def->column_store) {
+    table->session->col_inserts[table->def->oid]++;
+  }
+  return 0;
 }
 
 /*
@@ -807,7 +875,8 @@ int tbl_insert_arbiter(table_t *table, std::span<const sm2::datum_t> values,
                        std::span<const bool> isnull,
                        std::span<const uint64_t> arbiters, uint64_t &id,
                        std::string *tuple) {
-  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0) {
+  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0) {
     return -1;
   }
   const table_def_t &def = *table->def;
@@ -997,6 +1066,15 @@ look:
 }
 
 /*
+ * A column store table's write of a row its delta store does not hold;
+ * defined below, with the reads.
+ */
+static int col_write(sm3::table_t *table, uint64_t id, int rc,
+                     const std::span<const sm2::datum_t> *values,
+                     std::span<const bool> isnull, sm3::pin_ref_t *ref,
+                     std::string_view *old);
+
+/*
  * tbl_update, with ref and old both given or both null: with them,
  * the old row is pinned into ref, and old views it.
  */
@@ -1008,7 +1086,8 @@ static int update_row(table_t *table, uint64_t id, std::string_view key,
   if (old) {
     *old = {};
   }
-  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0) {
+  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0) {
     return -1;
   }
   // The old row is pinned, in a pin of this call's, so the index
@@ -1114,7 +1193,10 @@ int tbl_update(table_t *table, uint64_t id,
   std::string key;
   return 0 != id_key(table, id, key)
              ? -1
-             : update_row(table, id, key, values, isnull, nullptr, nullptr);
+             : col_write(
+                   table, id,
+                   update_row(table, id, key, values, isnull, nullptr, nullptr),
+                   &values, isnull, nullptr, nullptr);
 }
 
 /* As above, pinning the row replaced into ref; see sm3.h. */
@@ -1125,7 +1207,9 @@ int tbl_update(table_t *table, uint64_t id,
   std::string key;
   return 0 != id_key(table, id, key)
              ? -1
-             : update_row(table, id, key, values, isnull, &ref, &old);
+             : col_write(table, id,
+                         update_row(table, id, key, values, isnull, &ref, &old),
+                         &values, isnull, &ref, &old);
 }
 
 /*
@@ -1199,15 +1283,20 @@ static int delete_row(table_t *table, std::string_view key, pin_ref_t *ref,
 /* Delete the row, then its entry in every index; see sm3.h. */
 int tbl_delete(table_t *table, uint64_t id) {
   std::string key;
-  return 0 != id_key(table, id, key) ? -1
-                                     : delete_row(table, key, nullptr, nullptr);
+  return 0 != id_key(table, id, key)
+             ? -1
+             : col_write(table, id, delete_row(table, key, nullptr, nullptr),
+                         nullptr, {}, nullptr, nullptr);
 }
 
 /* As above, pinning the row deleted into ref; see sm3.h. */
 int tbl_delete(table_t *table, uint64_t id, pin_ref_t &ref,
                std::string_view &old) {
   std::string key;
-  return 0 != id_key(table, id, key) ? -1 : delete_row(table, key, &ref, &old);
+  return 0 != id_key(table, id, key)
+             ? -1
+             : col_write(table, id, delete_row(table, key, &ref, &old), nullptr,
+                         {}, &ref, &old);
 }
 
 /* Begin a bulk load into the table; see sm3.h. */
@@ -1219,6 +1308,15 @@ int tbl_load_open(table_t *table, loader_t *&out) {
   uint64_t storeid = table->def->storeid;
   std::unique_ptr<loader_t> l(new loader_t);
   l->table = table;
+  // A column store table's load writes row groups, in a table with
+  // rows too: a new row group conflicts with no key (../COLSTORE.md
+  // §9.2).
+  if (table->def->column_store) {
+    l->rg.reset(new rg_build_t);
+    rg_build_begin(*l->rg, table);
+    out = l.release();
+    return 0;
+  }
   // Only an empty table is loaded from files. Look before
   // locking, so that a load into a table with rows keeps no one
   // out.
@@ -1319,6 +1417,28 @@ static int finish_load(loader_t *l) {
 int tbl_load_add(loader_t *l, std::span<const sm2::datum_t> values,
                  std::span<const bool> isnull, uint64_t &id) {
   table_t *table = l->table;
+  if (l->rg) {
+    if (sm_should_stop()) {
+      return sm1::seterr(sm1::SM_ERR_INTERRUPTED, "load: interrupted");
+    }
+    if (need_not_null(table, isnull) != 0 ||
+        need_values_fit(table, values, isnull) != 0) {
+      return -1;
+    }
+    // The row's _id now, from the table's sequence; it keeps it in
+    // its row group.
+    uint64_t r = 0;
+    if (sm2::rel_reserve(table->rel, r) != 0 ||
+        rg_build_add(*l->rg, r, values, isnull) != 0) {
+      return -1;
+    }
+    if (l->rg->ids.size() >= rg_rows(table->session->cat) &&
+        rg_build_flush(*l->rg) != 0) {
+      return -1;
+    }
+    id = r;
+    return 0;
+  }
   if (l->load == nullptr) {
     return tbl_insert(table, values, isnull, id);
   }
@@ -1328,7 +1448,8 @@ int tbl_load_add(loader_t *l, std::span<const sm2::datum_t> values,
   if (sm_should_stop()) {
     return sm1::seterr(sm1::SM_ERR_INTERRUPTED, "load: interrupted");
   }
-  if (need_not_null(table, isnull) != 0) {
+  if (need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0) {
     return -1;
   }
   uint64_t r = 0;
@@ -1375,6 +1496,17 @@ int tbl_load_add(loader_t *l, std::span<const sm2::datum_t> values,
 /* Finish a bulk load; see sm3.h. */
 int tbl_load_close(loader_t *l) {
   std::unique_ptr<loader_t> own(l);
+  // The rows past the last row group go into the delta store, under
+  // their _ids, for a later seal (../COLSTORE.md §9.2).
+  if (l->rg) {
+    l->table->session->col_inserts[l->table->def->oid] += l->rg->ids.size();
+    return rg_build_to_delta(*l->rg,
+                             [&](uint64_t id, std::span<const sm2::datum_t> v,
+                                 std::span<const bool> n) {
+                               uint64_t got;
+                               return insert_row(l->table, v, n, id, got);
+                             });
+  }
   return l->load == nullptr ? 0 : finish_load(l);
 }
 
@@ -1403,12 +1535,59 @@ int tbl_fetch_cols(table_t *table, const std::vector<int32_t> &atts,
   return 0;
 }
 
+/*
+ * Read a column store table's row with _id id from the row group that
+ * holds it live (../COLSTORE.md §8), as the transaction sees it, or
+ * newest committed with latest, into out: 1 if none does.
+ */
+static int col_read(table_t *table, uint64_t id, bool latest,
+                    std::string &out) {
+  sm1::session_t *s = table->session->sm1;
+  bool was = false;
+  if (latest && sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  col_scan_t *c = nullptr;
+  int rc = col_scan_open(table, {}, {}, id, id, c);
+  if (rc == 0) {
+    uint64_t got;
+    std::string_view tuple;
+    rc = col_scan_next(c, got, tuple);
+    if (rc == 0) {
+      out.assign(tuple);
+    }
+    col_scan_close(c);
+  }
+  if (latest) {
+    sm1::view_latest(s, was);
+  }
+  return rc;
+}
+
+/*
+ * A read of row id whose read of the delta store gave rc: in a column
+ * store table, a row the delta store has no version of is read from
+ * its row group, held in the table until the next such read. rc for
+ * any other table.
+ */
+static int col_reread(table_t *table, uint64_t id, bool latest, int rc,
+                      std::string_view &tuple) {
+  if (rc != 1 || !table->def->column_store) {
+    return rc;
+  }
+  rc = col_read(table, id, latest, table->col_row);
+  tuple = rc == 0 ? std::string_view(table->col_row) : std::string_view();
+  return rc;
+}
+
 /* Read the row with _id id; see sm3.h. */
 int tbl_read(table_t *table, uint64_t id, std::string_view &tuple) {
   std::string key;
   tuple = {};
-  return 0 != id_key(table, id, key) ? -1
-                                     : sm2::rel_read(table->rel, key, tuple);
+  return 0 != id_key(table, id, key)
+             ? -1
+             : col_reread(table, id, false,
+                          sm2::rel_read(table->rel, key, tuple), tuple);
 }
 
 /* Read the newest committed version of the row with _id id. */
@@ -1417,7 +1596,8 @@ int tbl_read_latest(table_t *table, uint64_t id, std::string_view &tuple) {
   tuple = {};
   return 0 != id_key(table, id, key)
              ? -1
-             : sm2::rel_read_latest(table->rel, key, tuple);
+             : col_reread(table, id, true,
+                          sm2::rel_read_latest(table->rel, key, tuple), tuple);
 }
 
 /*
@@ -1445,15 +1625,94 @@ static int read_into(table_t *table, pin_ref_t &ref, std::string_view &tuple,
   return 0;
 }
 
+/* As col_reread, into a pin, pointing ref at it; the pin holds the row. */
+static int col_reread(table_t *table, uint64_t id, bool latest, int rc,
+                      pin_ref_t &ref, std::string_view &tuple) {
+  if (rc != 1 || !table->def->column_store) {
+    return rc;
+  }
+  pin_t *p = pin_reread(ref);
+  if (!p) {
+    p = pin_take(table->session);
+  }
+  rc = col_read(table, id, latest, p->own);
+  if (rc != 0) {
+    pin_put(p);
+    tuple = {};
+    return rc;
+  }
+  tuple = p->own;
+  pin_hold(p, table->def, tuple, ref);
+  return 0;
+}
+
+/*
+ * A write of row id whose write in the delta store gave rc: in a column
+ * store table, a row the delta store has no version of
+ * (SM_ERR_NOTFOUND), or a seal's tombstone of (SM_ERR_SEALED), is
+ * written in its row group (../COLSTORE.md §8). rc for any other table
+ * or error. values is null for a delete.
+ * 1. Find the row group of the row's newest committed copy.
+ * 2. With ref, read the row as it is, before it is written.
+ * 3. Delete it there by its marker; an update puts values into the
+ *    delta store as its new version.
+ * 4. With ref, pin the row read into ref, for old to view.
+ */
+static int col_write(table_t *table, uint64_t id, int rc,
+                     const std::span<const sm2::datum_t> *values,
+                     std::span<const bool> isnull, pin_ref_t *ref,
+                     std::string_view *old) {
+  if (rc == 0 || !table->def->column_store ||
+      (sm1::errnum() != sm1::SM_ERR_NOTFOUND &&
+       sm1::errnum() != sm1::SM_ERR_SEALED)) {
+    return rc;
+  }
+  // 1. Its row group.
+  uint64_t rg_id = 0;
+  int f = col_find_latest(table, id, rg_id);
+  if (f != 0) {
+    return f < 0 ? -1
+                 : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                               "column store: no row " + std::to_string(id));
+  }
+  // 2. The row as it is.
+  std::string was;
+  if (ref) {
+    f = col_read(table, id, true, was);
+    if (f != 0) {
+      return f < 0 ? -1
+                   : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                                 "column store: no row " + std::to_string(id));
+    }
+  }
+  // 3. The write.
+  if ((values ? tbl_update_at(table, rg_id, id, *values, isnull)
+              : tbl_delete_at(table, rg_id, id)) != 0) {
+    return -1;
+  }
+  // 4. The row as it was, pinned.
+  if (ref) {
+    pin_t *p = pin_reread(*ref);
+    if (!p) {
+      p = pin_take(table->session);
+    }
+    p->own = std::move(was);
+    *old = p->own;
+    pin_hold(p, table->def, *old, *ref);
+  }
+  return 0;
+}
+
 /* Read the row with _id id into a pin; see sm3.h. */
 int tbl_read(table_t *table, uint64_t id, pin_ref_t &ref,
              std::string_view &tuple) {
-  return read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
+  int rc = read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
     std::string key;
     return 0 != id_key(table, id, key)
                ? -1
                : sm2::rel_read(table->rel, key, raw, tuple);
   });
+  return col_reread(table, id, false, rc, ref, tuple);
 }
 
 /* Read the row at key into a pin; see sm3.h. */
@@ -1508,12 +1767,13 @@ int tbl_read_keys(table_t *table, const std::string_view *keys, size_t n,
 /* Read the newest committed version of the row into a pin. */
 int tbl_read_latest(table_t *table, uint64_t id, pin_ref_t &ref,
                     std::string_view &tuple) {
-  return read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
+  int rc = read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
     std::string key;
     return 0 != id_key(table, id, key)
                ? -1
                : sm2::rel_read_latest(table->rel, key, raw, tuple);
   });
+  return col_reread(table, id, true, rc, ref, tuple);
 }
 
 /* Whether mode is a shared row mode, S or KS, writing nothing. */
@@ -1540,6 +1800,211 @@ static int lock_row(table_t *table, uint64_t id, sm1::lockmode_t mode,
   // lock of a row its statement read, refused on one changed since.
   return nowait ? sm2::rel_trylock(table->rel, key, mode, true)
                 : sm2::rel_lock(table->rel, key, mode, true);
+}
+
+/*
+ * Delete row id of row group rg_id by its marker (../COLSTORE.md §9):
+ * 1. Take the row's exclusive lock, on its _id, as any write of it
+ *    does: a FOR UPDATE holder is waited for.
+ * 2. Put the marker.
+ * 3. A marker there already that the running statement put: the
+ *    statement changed the row already (SM_ERR_SELFMODIFIED).
+ * 4. Another, at read committed, is a delete since, or an update
+ *    since whose new version is in the delta store.
+ */
+static int mark_deleted(table_t *table, uint64_t rg_id, uint64_t id) {
+  if (need_writable(table) != 0) {
+    return -1;
+  }
+  // 1. The row's lock.
+  std::string key;
+  if (0 != id_key(table, id, key) ||
+      0 != sm2::rel_lock(table->rel, key, sm1::SM_LOCKMODE_EX, false)) {
+    return -1;
+  }
+  // 2. The marker. A moved marker there, RG compaction's, sends the
+  //    write to the row's new row group (../COLSTORE.md §11).
+  sm1::session_t *s = table->session->sm1;
+  for (int follows = 0;; follows++) {
+    if (sm1::insert(s, table->def->storeid, marker_key(rg_id, id), "") == 0) {
+      // Counted at the commit, for RG compaction (§11.1).
+      table->session->col_marks[{table->def->oid, rg_id}]++;
+      return 0;
+    }
+    if (sm1::errnum() != sm1::SM_ERR_SEALED || follows >= 8) {
+      break;
+    }
+    int f = col_find_latest(table, id, rg_id);
+    if (f != 0) {
+      return f < 0 ? -1
+                   : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                                 "column store: the row was deleted");
+    }
+  }
+  if (sm1::errnum() != sm1::SM_ERR_DUPKEY) {
+    return -1;
+  }
+  // 3. The statement's own marker: the marker's lock, taken as a row
+  //    read, fails with SM_ERR_SELFMODIFIED, as a row store's write
+  //    does. It is taken only here, past a marker there already.
+  if (sm1::lock_row(s, table->def->storeid, marker_key(rg_id, id),
+                    sm1::SM_LOCKMODE_EX, true, marker_relid) != 0) {
+    return -1;
+  }
+  // 4. Another's.
+  std::string_view tuple;
+  int r = tbl_read_latest(table, id, tuple);
+  if (r < 0) {
+    return -1;
+  }
+  return r == 0 ? sm1::seterr(sm1::SM_ERR_UPDATED,
+                              "column store: the row was updated since; "
+                              "read it again, in the delta store")
+                : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                              "column store: the row was deleted");
+}
+
+/* Delete a column store table's row (rg_id, id); see sm3.h. */
+int tbl_delete_at(table_t *table, uint64_t rg_id, uint64_t id) {
+  // The delta store's row, or the row group's that holds it.
+  return rg_id == 0 ? tbl_delete(table, id) : mark_deleted(table, rg_id, id);
+}
+
+/* Update a column store table's row (rg_id, id); see sm3.h. */
+int tbl_update_at(table_t *table, uint64_t rg_id, uint64_t id,
+                  std::span<const sm2::datum_t> values,
+                  std::span<const bool> isnull) {
+  // The delta store's row, or the row group's that holds it.
+  if (rg_id == 0) {
+    return tbl_update(table, id, values, isnull);
+  }
+  if (need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0 ||
+      mark_deleted(table, rg_id, id) != 0) {
+    return -1;
+  }
+  // The new version, in the delta store, under the row's _id: over
+  // a seal's tombstone, or where no version was ever written.
+  if (sm2::rel_reinsert_at(table->rel, id, values, isnull) != 0) {
+    return row_failed(table);
+  }
+  // It grows the delta toward its seal, as an insert does (§10.4).
+  table->session->col_inserts[table->def->oid]++;
+  return 0;
+}
+
+/* Seal a row group of a column store table's delta; see sm3.h. */
+int tbl_seal(table_t *table, bool &sealed) {
+  sealed = false;
+  if (!table->def->column_store) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "table: " + table->def->name +
+                                                " is no column store table");
+  }
+  if (need_writable(table) != 0) {
+    return -1;
+  }
+  const table_def_t &def = *table->def;
+  sm1::session_t *s = table->session->sm1;
+  // 1. The delta store's rows, in _id order.
+  std::vector<uint64_t> ids;
+  {
+    sm2::rel_scan_t *sc = nullptr;
+    if (sm2::rel_scan(table->rel, 0, UINT64_MAX, sc) != 0) {
+      return -1;
+    }
+    uint64_t id;
+    std::string_view tuple;
+    int rc;
+    while ((rc = sm2::rel_scannxt(sc, id, tuple)) == 0) {
+      ids.push_back(id);
+    }
+    sm2::rel_scanend(sc);
+    if (rc < 0) {
+      return -1;
+    }
+  }
+  const uint32_t max_rows = rg_rows(table->session->cat);
+  if (ids.size() < max_rows) {
+    return 0;
+  }
+  // 2. A savepoint, so a seal of too few rows leaves nothing.
+  int depth = sm1::savepoint(s);
+  if (depth < 0) {
+    return -1;
+  }
+  auto undo = [&]() {
+    sm2::rel_forget(table->rel);
+    return sm1::rollback(s, depth);
+  };
+  rg_build_t b;
+  rg_build_begin(b, table);
+  sm1::rawpin_t *pin = sm1::rawpin_new();
+  defer { sm1::rawpin_free(pin); };
+  const size_t ncols = def.columns.size();
+  std::vector<sm2::datum_t> d(ncols);
+  std::unique_ptr<bool[]> n(new bool[ncols]);
+  // 3. Each row: locked if free now, else passed over; erased with a
+  //    sealed tombstone; added to the row group.
+  for (uint64_t id : ids) {
+    if (b.ids.size() >= max_rows) {
+      break;
+    }
+    std::string key = sm2::id_key(id);
+    int got = sm2::rel_trylock(table->rel, key, sm1::SM_LOCKMODE_EX, false);
+    if (got < 0) {
+      undo();
+      return -1;
+    }
+    if (got == 1) {
+      continue;
+    }
+    std::string_view old;
+    if (sm2::rel_seal(table->rel, key, pin, old, true) != 0) {
+      // A row changed or gone since the scan is passed over.
+      sm1::errnum_t e = sm1::errnum();
+      if (e == sm1::SM_ERR_UPDATED || e == sm1::SM_ERR_NOTFOUND) {
+        sm1::reseterr();
+        continue;
+      }
+      undo();
+      return -1;
+    }
+    if (sm2::tup_deform(def.desc, old, d, std::span<bool>(n.get(), ncols)) !=
+            0 ||
+        rg_build_add(b, id, d, std::span<const bool>(n.get(), ncols)) != 0) {
+      undo();
+      return -1;
+    }
+  }
+  // 4. Too few: no partial row group (../COLSTORE.md §10.4).
+  if (b.ids.size() < max_rows) {
+    return undo();
+  }
+  // 5. The row group, then the rows' chunks out of line.
+  if (rg_build_flush(b) != 0 || sm2::rel_release(table->rel) != 0) {
+    undo();
+    return -1;
+  }
+  sealed = true;
+  return sm1::forget(s, depth);
+}
+
+/* Compact a column store table's row groups; see sm3.h. */
+int tbl_compact_rgs(table_t *table, std::span<const uint64_t> rgs, bool &done) {
+  done = false;
+  if (!table->def->column_store) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "table: " + table->def->name +
+                                                " is no column store table");
+  }
+  if (need_writable(table) != 0) {
+    return -1;
+  }
+  return col_compact(table, rgs, done);
+}
+
+/* The rg_id of a scan's last row; see sm3.h. */
+uint64_t tbl_scan_rg(const scan_t *scan) {
+  return scan->col ? col_scan_rg(scan->col) : 0;
 }
 
 /* Lock the row with _id id without writing it; see sm3.h. */
@@ -1577,7 +2042,10 @@ int tbl_update(table_t *table, const row_key_t &key,
   uint64_t id;
   return 0 != named(table, key, k, id)
              ? -1
-             : update_row(table, id, k, values, isnull, nullptr, nullptr);
+             : col_write(
+                   table, id,
+                   update_row(table, id, k, values, isnull, nullptr, nullptr),
+                   &values, isnull, nullptr, nullptr);
 }
 
 /* As above, pinning the row replaced into ref; see sm3.h. */
@@ -1590,15 +2058,19 @@ int tbl_update(table_t *table, const row_key_t &key,
   uint64_t id;
   return 0 != named(table, key, k, id)
              ? -1
-             : update_row(table, id, k, values, isnull, &ref, &old);
+             : col_write(table, id,
+                         update_row(table, id, k, values, isnull, &ref, &old),
+                         &values, isnull, &ref, &old);
 }
 
 /* Delete the row key names; see sm3.h. */
 int tbl_delete(table_t *table, const row_key_t &key) {
   std::string k;
   uint64_t id;
-  return 0 != named(table, key, k, id) ? -1
-                                       : delete_row(table, k, nullptr, nullptr);
+  return 0 != named(table, key, k, id)
+             ? -1
+             : col_write(table, id, delete_row(table, k, nullptr, nullptr),
+                         nullptr, {}, nullptr, nullptr);
 }
 
 /* As above, pinning the row deleted into ref; see sm3.h. */
@@ -1607,7 +2079,10 @@ int tbl_delete(table_t *table, const row_key_t &key, pin_ref_t &ref,
   old = {};
   std::string k;
   uint64_t id;
-  return 0 != named(table, key, k, id) ? -1 : delete_row(table, k, &ref, &old);
+  return 0 != named(table, key, k, id)
+             ? -1
+             : col_write(table, id, delete_row(table, k, &ref, &old), nullptr,
+                         {}, &ref, &old);
 }
 
 /* Read the row key names; see sm3.h. */
@@ -1615,20 +2090,23 @@ int tbl_read(table_t *table, const row_key_t &key, std::string_view &tuple) {
   std::string k;
   uint64_t id;
   tuple = {};
-  return 0 != named(table, key, k, id) ? -1
-                                       : sm2::rel_read(table->rel, k, tuple);
+  return 0 != named(table, key, k, id)
+             ? -1
+             : col_reread(table, id, false, sm2::rel_read(table->rel, k, tuple),
+                          tuple);
 }
 
 /* Read the row key names into a pin; see sm3.h. */
 int tbl_read(table_t *table, const row_key_t &key, pin_ref_t &ref,
              std::string_view &tuple) {
-  return read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
+  uint64_t id = 0;
+  int rc = read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
     std::string k;
-    uint64_t id;
     return 0 != named(table, key, k, id)
                ? -1
                : sm2::rel_read(table->rel, k, raw, tuple);
   });
+  return col_reread(table, id, false, rc, ref, tuple);
 }
 
 /* Read the newest committed version of the row key names. */
@@ -1639,19 +2117,21 @@ int tbl_read_latest(table_t *table, const row_key_t &key,
   tuple = {};
   return 0 != named(table, key, k, id)
              ? -1
-             : sm2::rel_read_latest(table->rel, k, tuple);
+             : col_reread(table, id, true,
+                          sm2::rel_read_latest(table->rel, k, tuple), tuple);
 }
 
 /* As above, into a pin; see sm3.h. */
 int tbl_read_latest(table_t *table, const row_key_t &key, pin_ref_t &ref,
                     std::string_view &tuple) {
-  return read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
+  uint64_t id = 0;
+  int rc = read_into(table, ref, tuple, [&](sm1::rawpin_t *raw) {
     std::string k;
-    uint64_t id;
     return 0 != named(table, key, k, id)
                ? -1
                : sm2::rel_read_latest(table->rel, k, raw, tuple);
   });
+  return col_reread(table, id, true, rc, ref, tuple);
 }
 
 /*
@@ -1729,8 +2209,36 @@ static int open_scan(table_t *table, scan_t *&out, F open) {
 
 /* Open a cursor over the rows first..last, with its pin. */
 int tbl_scan(table_t *table, uint64_t first, uint64_t last, scan_t *&out) {
+  return tbl_scan_columns(table, {}, {}, first, last, out);
+}
+
+/* Open a cursor over a column store table's columns; see sm3.h. */
+int tbl_scan_columns(table_t *table, std::vector<bool> cols,
+                     std::vector<col_bound_t> bounds, uint64_t first,
+                     uint64_t last, scan_t *&out) {
+  if (open_scan(table, out, [&](sm2::rel_scan_t *&rel) {
+        return sm2::rel_scan(table->rel, first, last, rel);
+      }) != 0) {
+    return -1;
+  }
+  if (table->def->column_store &&
+      col_scan_open(table, std::move(cols), std::move(bounds), first, last,
+                    out->col) != 0) {
+    tbl_scanend(out);
+    out = nullptr;
+    return -1;
+  }
+  if (table->def->column_store) {
+    out->col_oid = table->def->oid;
+    out->session = table->session;
+  }
+  return 0;
+}
+
+/* Open a cursor over a column store table's delta store; see colstore.h. */
+int tbl_scan_delta(table_t *table, scan_t *&out) {
   return open_scan(table, out, [&](sm2::rel_scan_t *&rel) {
-    return sm2::rel_scan(table->rel, first, last, rel);
+    return sm2::rel_scan(table->rel, 0, UINT64_MAX, rel);
   });
 }
 
@@ -2270,8 +2778,30 @@ int tbl_scannxt(scan_t *scan, uint64_t &id, pin_ref_t &ref,
     tuple = {};
     return sm1::seterr(sm1::SM_ERR_SCANCLOSED, "table: cursor is closed");
   }
-  int rc = scan->entries ? tree_next(scan, id, tuple)
-                         : sm2::rel_scannxt(scan->rel, id, tuple);
+  int rc = 1;
+  // A column store table's row groups, then its delta store's rows.
+  if (scan->col) {
+    rc = col_scan_next(scan->col, id, tuple);
+    if (rc == 1) {
+      col_scan_close(scan->col);
+      scan->col = nullptr;
+    }
+  }
+  if (!scan->col && rc == 1) {
+    rc = scan->entries ? tree_next(scan, id, tuple)
+                       : sm2::rel_scannxt(scan->rel, id, tuple);
+    if (rc == 0 && scan->col_oid != 0) {
+      scan->delta_rows++;
+    }
+  }
+  // A row group's row: its key, as the delta store would name it.
+  if (scan->col_oid != 0) {
+    if (rc == 0 && scan->col) {
+      scan->col_key = sm2::id_key(id);
+    } else {
+      scan->col_key.clear();
+    }
+  }
   // Every ref to the row before goes stale, whatever comes next.
   pin_scan_move(scan->pin, rc == 0 ? tuple : std::string_view());
   // An entry handed out with its row unread names no row.
@@ -2367,6 +2897,9 @@ std::string_view tbl_scan_key(const scan_t *scan) {
     // Before the first row a tree's cursor has no key.
     return 0 == scan->at ? std::string_view() : batch_row(scan, scan->at - 1);
   }
+  if (!scan->col_key.empty()) {
+    return scan->col_key;
+  }
   return sm2::rel_scan_key(scan->rel);
 }
 
@@ -2374,6 +2907,13 @@ std::string_view tbl_scan_key(const scan_t *scan) {
 void tbl_scanend(scan_t *scan) {
   if (!scan) {
     return;
+  }
+  col_scan_close(scan->col);
+  // A delta store a scan found that long is queued for its seal: a
+  // restart loses the inserts' counts (../COLSTORE.md §10.4).
+  if (scan->col_oid != 0 && scan->session &&
+      scan->delta_rows >= rg_rows(scan->session->cat)) {
+    sealer_enqueue(scan->session->cat, scan->col_oid);
   }
   sm2::rel_scanend(scan->rel);
   sm2::idx_scanend(scan->entries);
@@ -2405,8 +2945,20 @@ int tbl_idx_scan(table_t *table, uint64_t index, const sm2::bound_t *lo,
 
 /* The rows' bytes, in files and in memtables; see sm3.h. */
 int tbl_size(table_t *table, uint64_t &disk, uint64_t &mem, bool old) {
-  return sm2::relid_size(table->session->sm1, table->def->storeid, heap_relid,
-                         disk, mem, old);
+  if (sm2::relid_size(table->session->sm1, table->def->storeid, heap_relid,
+                      disk, mem, old) != 0) {
+    return -1;
+  }
+  // A column store table's row groups are in files, outside RocksDB:
+  // their CGs' bytes count as the heap's (../COLSTORE.md §7).
+  if (table->def->column_store) {
+    uint64_t cgs = 0;
+    if (col_bytes(table, cgs) != 0) {
+      return -1;
+    }
+    disk += cgs;
+  }
+  return 0;
 }
 
 /* One index's bytes, in files and in memtables. */
@@ -2799,6 +3351,14 @@ static int copy_rows(table_t *from, table_t *to, const column_conv_t *conv) {
     return -1;
   }
   std::unique_ptr<scan_t, void (*)(scan_t *)> guard(scan, tbl_scanend);
+  // A column store table's rows go into row groups, as a bulk load's
+  // do: whole ones, and the rest into the delta store
+  // (../COLSTORE.md §14).
+  std::unique_ptr<rg_build_t> rg;
+  if (to->def->column_store) {
+    rg.reset(new rg_build_t);
+    rg_build_begin(*rg, to);
+  }
   deformed_t row(def.schema.size());
   uint64_t id;
   std::string_view tuple;
@@ -2813,6 +3373,19 @@ static int copy_rows(table_t *from, table_t *to, const column_conv_t *conv) {
     std::string converted;
     if (conv && convert_value(to, *conv, row, converted) != 0) {
       return -1;
+    }
+    // A rewrite's value, as an ALTER COLUMN TYPE makes it, is held to a
+    // column store table's limit too.
+    if (need_values_fit(to, row.d, {row.null.get(), row.n}) != 0) {
+      return -1;
+    }
+    if (rg) {
+      if (rg_build_add(*rg, id, row.d, {row.null.get(), row.n}) != 0 ||
+          (rg->ids.size() >= rg_rows(to->session->cat) &&
+           rg_build_flush(*rg) != 0)) {
+        return -1;
+      }
+      continue;
     }
     if (insert_row(to, row.d, {row.null.get(), row.n}, id, got) == 0) {
       continue;
@@ -2837,7 +3410,20 @@ static int copy_rows(table_t *from, table_t *to, const column_conv_t *conv) {
     }
     return -1;
   }
-  return rc == 1 ? 0 : -1;
+  if (rc != 1) {
+    return -1;
+  }
+  // The rows past the last row group, for a later seal.
+  if (rg) {
+    to->session->col_inserts[to->def->oid] += rg->ids.size();
+    return rg_build_to_delta(*rg,
+                             [&](uint64_t id, std::span<const sm2::datum_t> v,
+                                 std::span<const bool> n) {
+                               uint64_t got;
+                               return insert_row(to, v, n, id, got);
+                             });
+  }
+  return 0;
 }
 
 /* Rewrite the table into a new store, keyed as rec says; see internal.h. */

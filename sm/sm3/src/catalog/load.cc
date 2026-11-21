@@ -10,6 +10,7 @@
  * out a row itself.
  */
 
+#include "../colstore/colstore.h"
 #include "internal.h"
 #include "sm0_log.h"
 
@@ -132,6 +133,7 @@ int build_table(const collation_lookup_t &lookup, uint64_t oid,
   t->name = rec.name;
   t->storeid = rec.storeid;
   t->id_seq = rec.id_seq;
+  t->column_store = rec.column_store;
   // Named once here, not at every open of the table.
   t->toast_seq = toast_seq_name(oid);
   t->next_relid = rec.next_relid;
@@ -488,6 +490,15 @@ int cat_set_toast(catalog_t *cat, bool on) {
     return sm1::seterr(sm1::SM_ERR_INVALID, "toast: no catalog");
   }
   cat->toast = on;
+  return 0;
+}
+
+/* Set the rows of a row group, for tests; see sm3.h. */
+int cat_set_rg_rows(catalog_t *cat, uint32_t rows) {
+  if (!cat || rows == 0 || rows > rg_max_rows) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "rg rows: out of range");
+  }
+  cat->rg_rows = rows;
   return 0;
 }
 

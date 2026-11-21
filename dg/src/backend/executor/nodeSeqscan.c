@@ -66,7 +66,9 @@ static TupleTableSlot *SeqNext(SeqScanState *node) {
       ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
                       errmsg("a table scan runs forwards only")));
     if (node->sm_scan == NULL)
-      node->sm_scan = smstore_beginscan(node->ss.ss_currentRelation, false);
+      node->sm_scan = smstore_beginscan_seq(
+          node->ss.ss_currentRelation, node->ss.ps.plan,
+          ((SeqScan *)node->ss.ps.plan)->scan.scanrelid, estate);
     return smstore_getnext(node->sm_scan, slot) ? slot : NULL;
   }
 
@@ -229,7 +231,9 @@ SeqScanState *ExecInitSeqScan(SeqScan *node, EState *estate, int eflags) {
    */
   if (RelationIsSm(scanstate->ss.ss_currentRelation) &&
       !(eflags & EXEC_FLAG_EXPLAIN_ONLY))
-    scanstate->sm_scan = smstore_beginscan(scanstate->ss.ss_currentRelation, false);
+    scanstate->sm_scan =
+        smstore_beginscan_seq(scanstate->ss.ss_currentRelation,
+                              &node->scan.plan, node->scan.scanrelid, estate);
 
   /*
    * Initialize result type and projection.

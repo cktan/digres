@@ -1,0 +1,31 @@
+# s09 -- READ COMMITTED: a seal that meets a writer in flight waits
+# for it; the writer's commit gives the seal `updated`, its abort lets
+# the seal go on.
+#
+# The Column Store's seal tries each row's lock first and passes over
+# a busy row (COLSTORE.md §10.1); this is sm1's rule under that, for
+# a seal that does not try first. T1 updates R1 and holds it; S's
+# sealed erase of R1 blocks on T1. T1 commits: S's erase gets
+# `updated`, as any READ COMMITTED write over a newer commit does, and
+# writes nothing: the seal passes the row over, and R1 keeps T1's
+# value. R2 is the same with T1's abort: S seals the seeded version.
+
+
+== pairing RR/RR == T1=RC S=RC
+@1 T1 begin -> ok
+@2 T1 write R1 1 -> ok
+@3 S begin -> ok
+@4 S seal R1 blocks -> blocked
+@5 T1 commit -> ok
+@4 S seal R1 blocks -> updated (resumed)
+@6 check last S updated -> satisfied
+@7 T1 begin -> ok
+@8 T1 write R2 2 -> ok
+@9 S seal R2 blocks -> blocked
+@10 T1 abort -> ok
+@9 S seal R2 blocks -> ok (resumed)
+@11 check last S ok -> satisfied
+@12 S commit -> ok
+@13 check committed S -> satisfied
+@13 check row R1 1 -> satisfied
+@13 check row R2 - -> satisfied

@@ -102,14 +102,15 @@ int next_id(sm2::rel_t *rel, uint64_t &id) {
  * and goes in with no check that it is absent (sm1::insert_new); a
  * keyed row's is checked, as its key is its primary key's.
  */
-int write_new(sm2::rel_t *rel, std::string_view key, std::string_view tuple) {
+int write_new(sm2::rel_t *rel, std::string_view key, std::string_view tuple,
+              bool written = false) {
   std::string k = row_key(rel->relid, key);
   if (rel->chained) {
-    return rel->key.empty()
+    return rel->key.empty() && !written
                ? sm1::chain_insert_new(rel->session, rel->storeid, k, tuple)
                : sm1::chain_insert(rel->session, rel->storeid, k, tuple);
   }
-  return rel->key.empty()
+  return rel->key.empty() && !written
              ? sm1::insert_new(rel->session, rel->storeid, k, tuple)
              : sm1::insert(rel->session, rel->storeid, k, tuple);
 }
@@ -475,7 +476,7 @@ int key_of(sm2::rel_t *rel, uint64_t id, std::span<const sm2::datum_t> d,
  */
 int insert_row(sm2::rel_t *rel, std::span<const sm2::datum_t> datums,
                std::span<const bool> isnull, uint64_t &id, std::string &key,
-               uint64_t reserved = 0) {
+               uint64_t reserved = 0, bool written = false) {
   ready_t row;
   if (make_ready(rel, datums, isnull, false, row) != 0) {
     return -1;
@@ -495,7 +496,8 @@ int insert_row(sm2::rel_t *rel, std::span<const sm2::datum_t> datums,
     }
     k = sm2::id_key(r);
   }
-  if (write_new(rel, k, row.tuple) != 0 || write_moved(rel, row) != 0) {
+  if (write_new(rel, k, row.tuple, written) != 0 ||
+      write_moved(rel, row) != 0) {
     return -1;
   }
   id = r;
@@ -815,6 +817,17 @@ int rel_insert_at(rel_t *rel, uint64_t id, std::span<const datum_t> datums,
   return 0;
 }
 
+/* Insert a row under an _id its key may hold versions of; see sm2.h. */
+int rel_reinsert_at(rel_t *rel, uint64_t id, std::span<const datum_t> datums,
+                    std::span<const bool> isnull) {
+  if (id == 0 || !rel->key.empty()) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "rel: no keyless _id given");
+  }
+  uint64_t r;
+  std::string k;
+  return insert_row(rel, datums, isnull, r, k, id, true);
+}
+
 /* Read the row at key: 0, 1 if absent, or -1. */
 int rel_read(rel_t *rel, std::string_view key, std::string_view &tuple,
              uint64_t *id) {
@@ -1015,6 +1028,23 @@ static int delete_row(rel_t *rel, std::string_view key, sm1::rawpin_t *pin,
     *old = was;
   }
   return rc;
+}
+
+/* Delete the row at key with a sealed tombstone, pinning it; see sm2.h. */
+int rel_seal(rel_t *rel, std::string_view key, sm1::rawpin_t *pin,
+             std::string_view &old, bool hold) {
+  old = {};
+  std::string k = row_key(rel->relid, key);
+  std::string_view was;
+  int rc =
+      rel->chained
+          ? sm1::chain_erase_sealed(rel->session, rel->storeid, k, pin, was)
+          : sm1::erase_sealed(rel->session, rel->storeid, k, pin, was);
+  if (rc != 0 || (rel->toasts && 0 != settle_old(rel, was, {}, hold))) {
+    return -1;
+  }
+  old = was;
+  return 0;
 }
 
 /* Delete the row at key. */

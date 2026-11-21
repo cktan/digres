@@ -429,7 +429,7 @@ under "What is recorded".
 | --- | --- |
 | meta | format version `int4` |
 | name | kind `int2`, oid `int8`, table oid `int8` or null |
-| table | namespace `int8`, name `text`, storeid `int8`, `_id` sequence `text`, next index relid `int2` |
+| table | namespace `int8`, name `text`, storeid `int8`, `_id` sequence `text`, next index relid `int2`, column store `bool` (null in a value written before it: a row store table; [`COLSTORE.md`](COLSTORE.md)) |
 | column | name `text`, type code `int2`, typmod `int4`, not null `bool`, dropped `bool`, missing value `bytea` or null, collation oid `int8` or null, default `bytea` or null: the host's expression, opaque, kept and never run; identity kind `int2` (`a` or `d`) or null, identity sequence `int8` or null, update default `bytea` or null: the host's expression for what an UPDATE that does not assign the column writes, opaque, kept and never run ([`../dg/ONUPDATE.md`](../dg/ONUPDATE.md)); NOT NULL constraint oid `int8` or null, and its name `text` or null, both set for a NOT NULL column ([`NOTNULL.md`](NOTNULL.md)); generated kind `int2` (`s` or `v`) or null, and the columns its expression reads `bytea` or null: each a 0-based place, 4 bytes in the host's byte order, both set for a generated column, whose default is its expression ([`GENERATED.md`](GENERATED.md)) |
 | index | oid `int8`, name `text`, relid `int2`, unique `bool`, nkey `int4`, ninclude `int4`, three retired and null, eval `bytea` or null, nread `int4` or null, primary `bool` or null, constraint `bool` or null, tree `bool` or null: true, or null for false |
 | index state | state `int2`, error `int2` or null, reason `text` or null, the key of a row that holds a duplicated key, `bytea` or null |

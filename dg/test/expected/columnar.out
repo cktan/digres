@@ -1,0 +1,418 @@
+-- Verify a column store table, made WITH (storage = columnar): its keys
+-- and indexes taken with a warning and not made, its rows loaded,
+-- inserted, read, updated and deleted.
+-- 1. Make one, with a primary key, a unique key and a foreign key:
+--    each is a warning, and the primary key's NOT NULL holds.
+-- 2. CREATE INDEX is a warning too.
+-- 3. INSERT ... SELECT loads 25,000 rows into row groups; one INSERT
+--    puts a row into the delta store; scans read every row.
+-- 4. UPDATE, DELETE ... RETURNING and SELECT ... FOR UPDATE of rows of
+--    a row group, by the scan's name of the row; a DELETE by _id, a
+--    TID scan's, which sm finds the row group of; an UPDATE in a
+--    REPEATABLE READ transaction.
+-- 5. Scans with bounds, by each kind of qual a bound is made from,
+--    give what the same scans of a row store copy give; a scan of
+--    some columns gives them; an UPDATE writes every column, as
+--    its scan reads them all.
+-- 6. ADD COLUMN with a default, DROP COLUMN, ALTER COLUMN TYPE, a
+--    rewrite, and TRUNCATE.
+-- 7. CREATE TABLE AS and COPY load one too.
+-- 8. A SERIALIZABLE transaction cannot read it: a feature not
+--    supported, SQLSTATE 0A000.
+-- 9. storage = 'row' is a row store table ('row' quoted, as ROW is a
+--    keyword); another value is refused.
+-- 10. A row store table's foreign key that references a column store
+--     table fails, as the referenced column has no unique key.
+-- 12. TABLESAMPLE is refused: a feature not supported.
+-- 14. A value of 2,048 bytes is taken; of 2,049, refused: a program
+--     limit exceeded, SQLSTATE 54000.
+-- 13. A DELETE ... USING whose join matches a row of a row group twice,
+--     the scan on the row each time, deletes it once, at REPEATABLE
+--     READ too, as PostgreSQL does.
+-- 11. Bounds on a numeric(10,2) column, of constants at a finer scale
+--     or past its precision, give what a row store copy gives: two
+--     row groups, d 0.00 to 99.99 and 100.00 to 199.99, and the
+--     delta store.
+\set ON_ERROR_STOP off
+create temp table columnar_ref (id int primary key);
+create temp table columnar_t (
+  id int primary key,
+  code text unique,
+  ref int references columnar_ref (id),
+  amount int)
+  with (storage = columnar);
+psql:test/columnar.sql:43: WARNING:  column store table "columnar_t" has no primary key: it is not made
+psql:test/columnar.sql:43: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
+psql:test/columnar.sql:43: WARNING:  column store table "columnar_t" has no foreign key: it is not made
+insert into columnar_t values (null, 'x', null, 1);
+psql:test/columnar.sql:44: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
+DETAIL:  Failing row contains (null, x, null, 1).
+create index columnar_t_amount on columnar_t (amount);
+psql:test/columnar.sql:45: WARNING:  column store table "columnar_t" has no index: it is not made
+insert into columnar_t
+  select g, 'c' || g, null, g % 10 from generate_series(1, 25000) g;
+insert into columnar_t values (0, 'zero', 7, 0);
+select count(*), sum(amount), min(id), max(id) from columnar_t;
+ count |  sum   | min |  max  
+-------+--------+-----+-------
+ 25001 | 112500 |   0 | 25000
+(1 row)
+
+select amount, count(*) from columnar_t group by amount order by amount;
+ amount | count 
+--------+-------
+      0 |  2501
+      1 |  2500
+      2 |  2500
+      3 |  2500
+      4 |  2500
+      5 |  2500
+      6 |  2500
+      7 |  2500
+      8 |  2500
+      9 |  2500
+(10 rows)
+
+select * from columnar_t where id = 0;
+ id | code | ref | amount 
+----+------+-----+--------
+  0 | zero |   7 |      0
+(1 row)
+
+select code from columnar_t where id between 12000 and 12002 order by id;
+  code  
+--------
+ c12000
+ c12001
+ c12002
+(3 rows)
+
+update columnar_t set amount = 100 where id = 1;
+update columnar_t set amount = 200 where id = 0;
+select id, amount from columnar_t where id in (0, 1) order by id;
+ id | amount 
+----+--------
+  0 |    200
+  1 |    100
+(2 rows)
+
+delete from columnar_t where id between 2 and 4 returning id, code;
+ id | code 
+----+------
+  2 | c2
+  3 | c3
+  4 | c4
+(3 rows)
+
+select id, code from columnar_t where id = 5 for update;
+ id | code 
+----+------
+  5 | c5
+(1 row)
+
+select _id as columnar_victim from columnar_t where id = 6 \gset
+delete from columnar_t where _id = :columnar_victim returning id;
+ id 
+----
+  6
+(1 row)
+
+begin isolation level repeatable read;
+update columnar_t set amount = amount + 1 where id = 7;
+commit;
+select count(*), sum(amount) from columnar_t;
+ count |  sum   
+-------+--------
+ 24997 | 112785
+(1 row)
+
+select id, amount from columnar_t where id between 1 and 7 order by id;
+ id | amount 
+----+--------
+  1 |    100
+  5 |      5
+  7 |      8
+(3 rows)
+
+create temp table columnar_rs as select * from columnar_t;
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where id >= 15000
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where id >= 15000;
+    t     | count |  sum  |  min   |  max   
+----------+-------+-------+--------+--------
+ columnar | 10001 | 45000 | c15000 | c25000
+ row      | 10001 | 45000 | c15000 | c25000
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where 15000 > id and amount <= 3
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where 15000 > id and amount <= 3;
+    t     | count | sum  | min |  max  
+----------+-------+------+-----+-------
+ columnar |  5996 | 8994 | c10 | c9993
+ row      |  5996 | 8994 | c10 | c9993
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where id in (3, 12000, 24000, 0)
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where id in (3, 12000, 24000, 0);
+    t     | count | sum |  min   | max  
+----------+-------+-----+--------+------
+ columnar |     3 | 200 | c12000 | zero
+ row      |     3 | 200 | c12000 | zero
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code = 'c12345' or code = 'zero'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code = 'c12345' or code = 'zero';
+    t     | count | sum |  min   | max  
+----------+-------+-----+--------+------
+ columnar |     2 | 205 | c12345 | zero
+ row      |     2 | 205 | c12345 | zero
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code = 'c12345'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code = 'c12345';
+    t     | count | sum |  min   |  max   
+----------+-------+-----+--------+--------
+ columnar |     1 |   5 | c12345 | c12345
+ row      |     1 |   5 | c12345 | c12345
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code > 'c24990'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code > 'c24990';
+    t     | count |  sum  |  min   | max  
+----------+-------+-------+--------+------
+ columnar |  8340 | 37750 | c24991 | zero
+ row      |  8340 | 37750 | c24991 | zero
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code < 'c10'
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code < 'c10';
+    t     | count | sum | min | max 
+----------+-------+-----+-----+-----
+ columnar |     1 | 100 | c1  | c1
+ row      |     1 | 100 | c1  | c1
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where code in ('c5', 'zero')
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where code in ('c5', 'zero');
+    t     | count | sum | min | max  
+----------+-------+-----+-----+------
+ columnar |     2 | 205 | c5  | zero
+ row      |     2 | 205 | c5  | zero
+(2 rows)
+
+select 'columnar' as t, count(*), sum(amount), min(code), max(code)
+  from columnar_t where ref is null and id between 9990 and 10010
+union all select 'row', count(*), sum(amount), min(code), max(code)
+  from columnar_rs where ref is null and id between 9990 and 10010;
+    t     | count | sum |  min   |  max  
+----------+-------+-----+--------+-------
+ columnar |    21 |  90 | c10000 | c9999
+ row      |    21 |  90 | c10000 | c9999
+(2 rows)
+
+select 'columnar' as t, count(*) from columnar_t where ref is not null
+union all select 'row', count(*) from columnar_rs where ref is not null;
+    t     | count 
+----------+-------
+ columnar |     1
+ row      |     1
+(2 rows)
+
+explain (verbose, costs off)
+  select sum(amount) from columnar_t where id > 100;
+              QUERY PLAN               
+---------------------------------------
+ Aggregate
+   Output: sum(amount)
+   ->  Seq Scan on pg_temp.columnar_t
+         Output: amount
+         Filter: (columnar_t.id > 100)
+(5 rows)
+
+select code from columnar_t where id = 12345;
+  code  
+--------
+ c12345
+(1 row)
+
+update columnar_t set amount = amount + 0 where id = 12345
+  returning id, code, amount;
+  id   |  code  | amount 
+-------+--------+--------
+ 12345 | c12345 |      5
+(1 row)
+
+select * from columnar_t where id = 12345;
+  id   |  code  | ref | amount 
+-------+--------+-----+--------
+ 12345 | c12345 |     |      5
+(1 row)
+
+drop table columnar_rs;
+alter table columnar_t add column z int default 42;
+select count(*), sum(z) from columnar_t;
+ count |   sum   
+-------+---------
+ 24997 | 1049874
+(1 row)
+
+alter table columnar_t drop column code;
+alter table columnar_t alter column amount type bigint;
+select count(*), sum(amount), sum(z) from columnar_t;
+ count |  sum   |   sum   
+-------+--------+---------
+ 24997 | 112785 | 1049874
+(1 row)
+
+select * from columnar_t where id = 7;
+ id | ref | amount | z  
+----+-----+--------+----
+  7 |     |      8 | 42
+(1 row)
+
+truncate columnar_t;
+select count(*) from columnar_t;
+ count 
+-------
+     0
+(1 row)
+
+create temp table columnar_ctas with (storage = columnar) as
+  select g as id, g % 3 as k from generate_series(1, 12000) g;
+copy columnar_ctas from stdin;
+select count(*), sum(k) from columnar_ctas;
+ count |  sum  
+-------+-------
+ 12002 | 12010
+(1 row)
+
+select * from columnar_ctas where k = 5 order by id;
+  id   | k 
+-------+---
+ 12001 | 5
+ 12002 | 5
+(2 rows)
+
+drop table columnar_ctas;
+begin isolation level serializable;
+select count(*) from columnar_t;
+psql:test/columnar.sql:129: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
+LINE 1: select count(*) from columnar_t;
+                             ^
+\echo :SQLSTATE
+0A000
+rollback;
+create temp table columnar_row (a int) with (storage = 'row');
+insert into columnar_row values (1);
+select * from columnar_row;
+ a 
+---
+ 1
+(1 row)
+
+create temp table columnar_bad (a int) with (storage = banana);
+psql:test/columnar.sql:135: ERROR:  invalid value for option "storage": banana
+HINT:  Valid values are "row" and "columnar".
+create temp table columnar_child (r int references columnar_t (id));
+psql:test/columnar.sql:136: ERROR:  there is no unique constraint matching given keys for referenced table "columnar_t"
+create temp table columnar_n (d numeric(10,2)) with (storage = columnar);
+insert into columnar_n select g / 100.0 from generate_series(0, 24999) g;
+create temp table columnar_nr as select * from columnar_n;
+select 'columnar' as t, count(*), min(d), max(d) from columnar_n
+  where d < 100.004
+union all select 'row', count(*), min(d), max(d) from columnar_nr
+  where d < 100.004;
+    t     | count | min  |  max   
+----------+-------+------+--------
+ columnar | 10001 | 0.00 | 100.00
+ row      | 10001 | 0.00 | 100.00
+(2 rows)
+
+select 'columnar' as t, count(*), min(d), max(d) from columnar_n
+  where d > 99.985
+union all select 'row', count(*), min(d), max(d) from columnar_nr
+  where d > 99.985;
+    t     | count |  min  |  max   
+----------+-------+-------+--------
+ columnar | 15001 | 99.99 | 249.99
+ row      | 15001 | 99.99 | 249.99
+(2 rows)
+
+select 'columnar' as t, count(*) from columnar_n where d = 100.000
+union all select 'row', count(*) from columnar_nr where d = 100.000;
+    t     | count 
+----------+-------
+ columnar |     1
+ row      |     1
+(2 rows)
+
+select 'columnar' as t, count(*) from columnar_n where d < 1e20
+union all select 'row', count(*) from columnar_nr where d < 1e20;
+    t     | count 
+----------+-------
+ columnar | 25000
+ row      | 25000
+(2 rows)
+
+drop table columnar_nr;
+drop table columnar_n;
+select count(*) from columnar_t tablesample bernoulli (100);
+psql:test/columnar.sql:154: ERROR:  TABLESAMPLE is not supported on column store table "columnar_t"
+\echo :SQLSTATE
+0A000
+create temp table columnar_dup (id int, v int) with (storage = columnar);
+insert into columnar_dup select g, g from generate_series(1, 20000) g;
+explain (costs off) delete from columnar_dup using (values (1), (2)) d (x)
+  where columnar_dup.id = 100;
+                 QUERY PLAN                  
+---------------------------------------------
+ Delete on columnar_dup
+   ->  Nested Loop
+         ->  Seq Scan on columnar_dup
+               Filter: (id = 100)
+         ->  Materialize
+               ->  Values Scan on "*VALUES*"
+(6 rows)
+
+begin isolation level repeatable read;
+delete from columnar_dup using (values (1), (2)) d (x)
+  where columnar_dup.id = 100;
+select count(*) from columnar_dup where id = 100;
+ count 
+-------
+     0
+(1 row)
+
+rollback;
+drop table columnar_dup;
+create temp table columnar_len (s text) with (storage = columnar);
+insert into columnar_len values (repeat('x', 2048));
+insert into columnar_len values (repeat('x', 2049));
+psql:test/columnar.sql:168: ERROR:  could not insert a row: value of 2049 bytes in column s of columnar_len, a column store table, which takes 2048 bytes at most
+\echo :SQLSTATE
+54000
+select octet_length(s) from columnar_len;
+ octet_length 
+--------------
+         2048
+(1 row)
+
+drop table columnar_len;
+drop table columnar_row;
+drop table columnar_t;
+drop table columnar_ref;

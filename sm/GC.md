@@ -454,6 +454,31 @@ it closes, so it is opened for a short pass.
 dropped store's frames age out. No frame can be mistaken for
 another store's, as a storeid is never reused (BUFMGR.md).
 
+**File sets.** `db_drop_store_cf()` also removes the store's
+directory of file sets, `colstore/<storeid>`, outside `store_mu`
+([`COLSTORE.md`](COLSTORE.md#45-file-sets) §4.5). A crash between
+the drop and the removal leaves a directory with no store, which
+the sweep at the next open removes.
+
+### 6.1 The files of a file set
+
+A file set's key (class `0x05`) is judged by the filter as a class
+`0x00` key is. Its files go at one of two points:
+
+1. **Its put is dead.** The filter drops the version, and queues
+   `(storeid, fsid)` on `db_t::fs_dead`, under `fs_dead_mu`. The
+   queue is not a hint: a version the filter drops is never met
+   again. The worker unlinks the files.
+2. **Its erase is at or below the watermark.** The filter queues
+   the tombstone for the purge, as any tombstone. `purge_one()`
+   deletes the key's versions, then unlinks the files.
+
+An abort or a rollback to a savepoint unlinks the files its
+transaction wrote, from the transaction's list, at once. The
+queues are volatile: the sweep at open
+(`fileset_sweep()`, after recovery) deletes every file whose
+fsid has no version committed and live, or prepared.
+
 ---
 
 ## 7. The GC worker

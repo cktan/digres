@@ -267,6 +267,12 @@ struct table_rec_t {
   std::vector<fkey_rec_t> fkeys;
   std::vector<check_rec_t> checks;
   std::vector<fkey_ref_t> referenced_by;
+  /*
+   * A column store table (../COLSTORE.md): its rows in row groups of
+   * column files, and a delta store; no index, no key. Its row groups'
+   * ids come from the sequence sm3.rg.<oid>.
+   */
+  bool column_store = false;
 };
 
 /* A column of a loaded table. */
@@ -343,6 +349,7 @@ struct table_def_t {
      */
     std::vector<int32_t>          key_columns;
     table_rec_t                   rec;     /* the record it was built from */
+    bool                          column_store = false; /* rec's */
 };
 
 /*
@@ -501,6 +508,16 @@ int abort(session_t* s);
  * to outlive the session to be published at commit_prepared.
  */
 int prepare(session_t* s, std::string_view gid);
+
+/*
+ * Commit, or abort, the prepared transaction gid, as
+ * sm1::commit_prepared and sm1::abort_prepared do. A commit hands
+ * the transaction's counts of a column store table's delta rows and
+ * delete markers to the sealer (../COLSTORE.md §10.4); an abort drops
+ * them. After a restart there are none: a scan catches the rows.
+ */
+int commit_prepared(session_t* s, std::string_view gid);
+int abort_prepared(session_t* s, std::string_view gid);
 
 /* The table with oid, or nullptr, as s's transaction sees it. */
 std::shared_ptr<const table_def_t> cat_get_table(const session_t* s,
@@ -807,7 +824,8 @@ int cat_list_sequences(session_t* s, uint64_t nspoid,
  * commits.
  */
 int create_table(session_t* session, uint64_t nspoid, std::string_view name,
-                 std::span<const column_spec_t> columns, uint64_t& oid);
+                 std::span<const column_spec_t> columns, uint64_t& oid,
+                 bool column_store = false);
 
 /*
  * Create a temporary table named name (TEMPTABLE.md §4), as
@@ -821,7 +839,8 @@ int create_table(session_t* session, uint64_t nspoid, std::string_view name,
  * temporary.
  */
 int create_temp_table(session_t* session, std::string_view name,
-                      std::span<const column_spec_t> columns, uint64_t& oid);
+                      std::span<const column_spec_t> columns, uint64_t& oid,
+                      bool column_store = false);
 
 /*
  * The rest of the DDL, each in session's transaction and, as
@@ -1160,6 +1179,15 @@ int cat_set_evaluator(catalog_t* cat, index_eval_fn eval);
  * again over tables it wrote with it on.
  */
 int cat_set_toast(catalog_t* cat, bool on);
+
+/*
+ * Give the column store tables of the catalog row groups of rows
+ * rows, fewer than the 10k they have (../COLSTORE.md §7), so that a
+ * seal, an RG compaction and a merge come sooner: for tests. Once,
+ * before any session uses the catalog. 0, or -1 with SM_ERR_INVALID
+ * for rows 0 or past 10k.
+ */
+int cat_set_rg_rows(catalog_t* cat, uint32_t rows);
 
 /*
  * Drop the index oid of the table: its name, its place in the
@@ -1631,10 +1659,58 @@ int tbl_update(table_t* table, uint64_t id,
  * Delete the row with _id id, and its entry in every index. The form
  * with ref hands back the image deleted, pinned into ref, as
  * tbl_update's does.
+ *
+ * In a column store table, a write or a read by _id, of the calls
+ * above and below, of a row the delta store has no version of is
+ * of the row group that holds the row (../COLSTORE.md §8): found by
+ * a lookup, at the newest committed state for a write.
  */
 int tbl_delete(table_t* table, uint64_t id);
 int tbl_delete(table_t* table, uint64_t id, pin_ref_t& ref,
                std::string_view& old);
+
+/*
+ * The row of a column store table named (rg_id, id) (../COLSTORE.md
+ * §8): rg_id is the row group it was read from, 0 for the delta
+ * store; tbl_scan_rg gives it for a scan's last row.
+ *
+ * tbl_delete_at with rg_id 0 is tbl_delete. With a row group's, it
+ * takes the row's exclusive lock, on its _id, then puts the row's
+ * delete marker. tbl_update_at deletes so, then inserts values
+ * into the delta store under the same _id. Above read committed, a
+ * marker or a new version of the row committed since the snapshot
+ * fails with SM_ERR_CONFLICT. At read committed, a row deleted since
+ * fails with SM_ERR_NOTFOUND, and a row updated since, which lives
+ * on in the delta store, with SM_ERR_UPDATED: the caller reads it
+ * with tbl_read_latest, under the lock now held, and names it
+ * (0, id).
+ */
+int tbl_delete_at(table_t* table, uint64_t rg_id, uint64_t id);
+
+/*
+ * Seal a row group of a column store table's delta store
+ * (../COLSTORE.md §10.1), in the caller's transaction, which runs at
+ * READ COMMITTED: its first rows, each locked if it is free now and
+ * passed over if not, erased with a sealed tombstone, and written as
+ * a new row group of rg_max_rows rows. With fewer rows to take, none
+ * is sealed: sealed is false, and nothing is left written.
+ */
+int tbl_seal(table_t* table, bool& sealed);
+
+/*
+ * Compact row groups rgs of a column store table into new ones
+ * (../COLSTORE.md §11), in the caller's transaction, at READ
+ * COMMITTED: their live rows, each marked moved in its old row group,
+ * into new row groups of at most rg_max_rows rows, and the old row
+ * groups gone. A row with a writer in flight or prepared gives up:
+ * done is false, and nothing is left written. A writer of a moved
+ * row follows it to its new row group.
+ */
+int tbl_compact_rgs(table_t* table, std::span<const uint64_t> rgs,
+                    bool& done);
+int tbl_update_at(table_t* table, uint64_t rg_id, uint64_t id,
+                  std::span<const sm2::datum_t> values,
+                  std::span<const bool> isnull);
 
 /*
  * A BULK LOAD into an open table (BULKLOAD.md §5, §13): many rows
@@ -1859,6 +1935,27 @@ int tbl_scannxt(scan_t* scan, uint64_t& id, std::string_view& tuple);
  */
 int tbl_scan_rows(table_t* table, scan_t*& out);
 
+/* A bound of a scan on one column (../COLSTORE.md §12): attnum's. */
+struct col_bound_t {
+    int32_t         attnum;
+    sm2::cg_bound_t bound;
+};
+
+/*
+ * tbl_scan of first..last, of a column store table: of its row
+ * groups, only the columns cols reads, every one if cols is empty,
+ * and only the row groups whose zonemaps and filters may hold a row
+ * that meets every bound (../COLSTORE.md §12). A bound prunes; it
+ * does not filter: the caller tests each row. A column not read is
+ * null in the rows of the row groups. On any other table, tbl_scan.
+ */
+int tbl_scan_columns(table_t* table, std::vector<bool> cols,
+                     std::vector<col_bound_t> bounds, uint64_t first,
+                     uint64_t last, scan_t*& out);
+
+/* The rg_id of the row a scan handed out last; 0 for the delta's. */
+uint64_t tbl_scan_rg(const scan_t* scan);
+
 /*
  * Open a cursor over the rows of index, the table's primary key or
  * a tree, between lo and hi as tbl_idx_scan takes them, in key order:
@@ -1902,6 +1999,20 @@ int btree_reaper_attach(catalog_t* cat, std::function<sm1::session_t*()> open,
  * the catalog closes, as an open index holds it.
  */
 void btree_reaper_detach(catalog_t* cat);
+
+/*
+ * The seal's job (../COLSTORE.md §10.4): a worker thread of cat's,
+ * which opens sm1 sessions with open, and seals the column store
+ * tables queued to it, a row group at a time. A table is queued when
+ * the inserts into its delta store reach a row group's rows, and
+ * when a scan reads that many of its delta store's rows.
+ * sealer_detach stops and joins the worker; sealer_wait_idle waits
+ * until it has nothing to do, for tests. Attached once: a second
+ * attach is a no-op.
+ */
+int sealer_attach(catalog_t* cat, std::function<sm1::session_t*()> open);
+void sealer_detach(catalog_t* cat);
+void sealer_wait_idle(const catalog_t* cat);
 
 /*
  * One pass of the reapers, on the calling thread: the btree reaper's,

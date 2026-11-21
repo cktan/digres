@@ -34,8 +34,8 @@ public:
     if (a.empty() || b.empty() || a[0] != b[0]) {
       return a.compare(b);
     }
-    // Current and old keys are bytewise.
-    if (a[0] != key_class_versioned) {
+    // Current, old and page keys are bytewise.
+    if (!has_version_tail(a[0])) {
       return a.compare(b);
     }
     // Split off each key's userkey.
@@ -84,7 +84,7 @@ public:
 
   /* A version key less its tail; any other key whole. */
   rocksdb::Slice Transform(const rocksdb::Slice &key) const override {
-    if (key[0] != key_class_versioned) {
+    if (!has_version_tail(key[0])) {
       return key;
     }
     return rocksdb::Slice(key.data(), key.size() - version_tail_size);
@@ -92,19 +92,20 @@ public:
 
   /* Every version key carries its class and a full tail. */
   bool InDomain(const rocksdb::Slice &key) const override {
-    return !key.empty() && (key[0] != key_class_versioned ||
-                            key.size() >= 1 + version_tail_size);
+    return !key.empty() &&
+           (!has_version_tail(key[0]) || key.size() >= 1 + version_tail_size);
   }
 };
 
 } // namespace
 
 /* Build class | userkey | ~wts | ~seq. */
-std::string version_key(rocksdb::Slice userkey, uint64_t wts, uint32_t seq) {
+std::string version_key(rocksdb::Slice userkey, uint64_t wts, uint32_t seq,
+                        char cls) {
   std::string k;
   // Reserve room for the class, the userkey and the 12-byte tail.
   k.reserve(1 + userkey.size() + version_tail_size);
-  k.push_back(key_class_versioned);
+  k.push_back(cls);
   // Copy the userkey.
   k.append(userkey.data(), userkey.size());
   // Complement wts, so newer versions sort first.
@@ -115,11 +116,11 @@ std::string version_key(rocksdb::Slice userkey, uint64_t wts, uint32_t seq) {
 }
 
 /* Build class | userkey, then twelve fill bytes: a scan bound. */
-std::string version_bound(rocksdb::Slice userkey, char fill) {
+std::string version_bound(rocksdb::Slice userkey, char fill, char cls) {
   std::string k;
   // Reserve room for the class, the userkey and the 12-byte tail.
   k.reserve(1 + userkey.size() + version_tail_size);
-  k.push_back(key_class_versioned);
+  k.push_back(cls);
   // Copy the userkey.
   k.append(userkey.data(), userkey.size());
   // Fill the tail: all 00 sorts first, all FF last.

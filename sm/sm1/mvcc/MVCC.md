@@ -170,7 +170,7 @@ make scenarios                # just the scripts, with diffs
 make accept                   # take the current transcripts as
                               #   expected -- a deliberate act,
                               #   never run by make test
-build/driver mvcc/in/c02_write_skew_point_reads.t
+build/mvcc_driver mvcc/in/c02_write_skew_point_reads.t
 ```
 
 Comments in a script are echoed into the transcript, so the
@@ -525,6 +525,27 @@ show a slot still meets what conflicts with it.
 | h05 | `T1: IS(1)` ‖ `T2: X(2)` ‖ `T1: X(2)` ‖ `T2: X(1)` | T2 DEADLOCK, the younger; T1's X(2) granted | `in/h05_deadlock_through_a_slot.t` |
 | h06 | `T1: IX(1)` ‖ `T2: IX(1)` ‖ `T3: S(1)` | IX and IX at once; T3 BLOCK → OK once both commit | `in/h06_writers_share_a_table.t` |
 
+## 7e. Family S — moves of sm's own
+
+A move that sm makes on its own, which changes no row: the
+Column Store's seal of a row into a row group, and RG
+compaction's moved marker
+([`../../COLSTORE.md`](../../COLSTORE.md) §10.2, §11). The
+version it writes is sealed: first-committer-wins judges a write
+by the committed version under it, and a write that passes gets
+`sealed`, so the caller follows the row.
+
+| # | Schedule | Outcome | File |
+|---|---|---|---|
+| s01 | `T1(RR): r(R1)` ‖ `S: seal(R1) c` ‖ `T1: w(R1)`, `d(R1)`, `i(R1)` | SEALED, SEALED, then the insert OK; T1 commits | `in/s01_sealed_row_unchanged.t` |
+| s02 | `T1(RR): r(R1)` ‖ `T2: w(R1) c` ‖ `S: seal(R1) c` ‖ `T1: w(R1)` | CONFLICT: T2's commit under the seal decides | `in/s02_sealed_after_change.t` |
+| s03 | `S: seal(R1)` ‖ `T1(RC): w(R1)` ‖ `S: c` | BLOCK → SEALED; a delete SEALED | `in/s03_rc_waits_for_seal.t` |
+| s04 | `S: seal(R1)` ‖ `T1(RC): w(R1)` ‖ `S: a` | BLOCK → OK | `in/s04_seal_aborts.t` |
+| s05 | `T1(RR)` begins ‖ `S: seal(R1) c` ‖ `T2(RR)` begins, both read and scan | T1 sees R1, T2 does not | `in/s05_readers_around_seal.t` |
+| s06 | `T1(RR): r(R1)` ‖ `S: sealput(R1) c` ‖ `T1: i(R1)`, `w(R1)`, `d(R1)` | SEALED each; a later reader sees the marker | `in/s06_moved_marker.t` |
+| s07 | s01 with a plain delete in place of the seal | CONFLICT | `in/s07_plain_erase_conflicts.t` |
+| s08 | `T1(RR): r(R1)` ‖ `S: seal(R1) c` ‖ `T1: X(R1)`; then `T2: w(R2) c` ‖ `S: seal(R2) c` ‖ `T1: X(R2)` | X(R1) OK; X(R2) CONFLICT | `in/s08_lock_over_seal.t` |
+
 ## 8. What sm does not detect, by design
 
 At REPEATABLE READ, sm **does not** detect, and must not
@@ -573,9 +594,9 @@ c24, c30, c31 — plus the shapes that must not fail.
 **It is not a model check.** Each scenario is one schedule,
 chosen because it is the one that distinguishes the levels.
 Interleavings other than the ones written here are not
-explored, and the thirty-six blocking scenarios (b09 to b11,
-b16, b17, b19 to b28, b30 to b36, f01 to f06, f08, f11 and
-h01 to h06) and four stress scenarios (e02, e03, e06, e07)
+explored, and the thirty-eight blocking scenarios (b09 to b11,
+b16, b17, b19 to b28, b30 to b36, f01 to f06, f08, f11, h01 to
+h06, s03 and s04) and four stress scenarios (e02, e03, e06, e07)
 are the only places where real concurrency, rather than a
 scripted order, is involved. They are also where it belongs:
 `test/test_lock.cc` and `test/test_savepoint.cc` used to

@@ -73,8 +73,8 @@ public:
     }
     bool changed = false;
     if (judge(level, key, value, new_value, &changed)) {
-      return !key.empty() && key[0] == key_class_versioned ? Decision::kPurge
-                                                           : Decision::kRemove;
+      return !key.empty() && has_version_tail(key[0]) ? Decision::kPurge
+                                                      : Decision::kRemove;
     }
     return changed ? Decision::kChangeValue : Decision::kKeep;
   }
@@ -95,7 +95,7 @@ private:
     }
     // A chained key's versions have rules of their own (../ROWSTORE.md
     // ../GC.md §4.2).
-    if (!key.empty() && key[0] != key_class_versioned) {
+    if (!key.empty() && !has_version_tail(key[0])) {
       return filter_chained(key, value, key[0] == key_class_old, new_value,
                             value_changed);
     }
@@ -116,6 +116,14 @@ private:
       // Branch on the writer's fate.
       switch (xct_status(m_db, v.xid, &commit_ts)) {
       case XCT_DEAD:
+        // A file set's dead put: its files are no one's
+        // (../COLSTORE.md §13).
+        if (key[0] == key_class_fileset && !(v.flags & version_tombstone) &&
+            v.userkey.size() == 8) {
+          std::lock_guard<std::mutex> g(m_db->fs_dead_mu);
+          m_db->fs_dead.emplace_back(m_storeid,
+                                     sm0::get_be64(v.userkey.data()));
+        }
         return true; // aborted or crashed
       case XCT_IN_FLIGHT:
         return false; // no commit_ts to stamp
@@ -135,11 +143,14 @@ private:
     // Committed at or below the watermark: every live
     // snapshot sees the newest such version of the key, so
     // any older one is garbage.
-    if (m_have_newest && v.userkey == rocksdb::Slice(m_newest_key)) {
+    // The class is part of the key: a file set's userkey and a row's
+    // may have the same bytes.
+    rocksdb::Slice classed(key.data(), 1 + v.userkey.size());
+    if (m_have_newest && classed == rocksdb::Slice(m_newest_key)) {
       return true;
     }
     // This is the key's newest version at or below the watermark.
-    m_newest_key.assign(v.userkey.data(), v.userkey.size());
+    m_newest_key.assign(classed.data(), classed.size());
     // Later versions of this key are older, and garbage.
     m_have_newest = true;
     // A tombstone is queued for purging, not dropped here.
@@ -372,8 +383,9 @@ void purge_one(db_t *db, uint64_t storeid, rocksdb::Slice tombstone) {
   if (!st.cf) {
     return; // the store's CF is already gone
   }
-  // End the range just past the key's oldest version.
-  std::string end = version_bound(version_userkey(tombstone), '\xff');
+  // End the range just past the key's oldest version, in its class.
+  std::string end =
+      version_bound(version_userkey(tombstone), '\xff', tombstone[0]);
   rocksdb::Slice upper(end);
   rocksdb::ReadOptions ro;
   ro.iterate_upper_bound = &upper;
@@ -395,6 +407,11 @@ void purge_one(db_t *db, uint64_t storeid, rocksdb::Slice tombstone) {
   if (s.ok()) {
     rocksdb::Slice userkey = version_userkey(tombstone);
     count_write(st, std::string_view(userkey.data(), userkey.size()), bytes);
+    // An erased file set's files go with its versions: no snapshot
+    // sees them (../COLSTORE.md §13).
+    if (tombstone[0] == key_class_fileset && userkey.size() == 8) {
+      fileset_unlink(st.rdb, storeid, sm0::get_be64(userkey.data()));
+    }
     return;
   }
   // On failure the tombstone stays; the next compaction that
@@ -709,6 +726,19 @@ void gc_run_once(db_t *db) {
     }
     // Remove them from the queue.
     db->drops.erase(db->drops.begin(), end);
+  }
+
+  // Unlink the files of the file sets whose put died.
+  std::vector<std::pair<uint64_t, uint64_t>> fs_dead;
+  {
+    std::lock_guard<std::mutex> g(db->fs_dead_mu);
+    fs_dead.swap(db->fs_dead);
+  }
+  for (const auto &[storeid, fsid] : fs_dead) {
+    store_t st = db_store(db, storeid);
+    if (st.cf) {
+      fileset_unlink(st.rdb, storeid, fsid);
+    }
   }
 
   // Take every queued repair and purge, outside gc_mu: a queue has its

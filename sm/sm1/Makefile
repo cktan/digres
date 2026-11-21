@@ -74,7 +74,7 @@ BENCH_OBJ := $(BUILD)/bench/locktab_bench.o
 LIB       := $(BUILD)/libsm1.a
 TEST_BIN  := $(BUILD)/test_sm1
 MVCC_BIN  := $(BUILD)/mvcc_tests
-DRIVER    := $(BUILD)/driver
+DRIVER    := $(BUILD)/mvcc_driver
 
 # Where an example puts its home directory when make runs it.
 EX_HOME := $(BUILD)/example-home

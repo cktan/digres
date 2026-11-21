@@ -105,6 +105,16 @@ static TableScanDesc smtable_scan_begin(Relation rel, Snapshot snapshot,
     ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
                     errmsg("a scan of table \"%s\" takes no scan keys",
                            RelationGetRelationName(rel))));
+  /*
+   * A sample scan reads rows by rising rowno, and a column store table's
+   * scan gives its row groups' rows first, then its delta store's
+   * (../../../../../sm/COLSTORE.md §12): rows would be lost.
+   */
+  if ((flags & SO_TYPE_SAMPLESCAN) && rel->rd_smcolumnar)
+    ereport(ERROR,
+            (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+             errmsg("TABLESAMPLE is not supported on column store table \"%s\"",
+                    RelationGetRelationName(rel))));
   scan = (smtable_scan_t *)palloc0(sizeof(smtable_scan_t));
   scan->base.rs_rd = rel;
   scan->base.rs_snapshot = snapshot;

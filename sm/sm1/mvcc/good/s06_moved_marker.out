@@ -1,0 +1,29 @@
+# s06 -- a moved marker, a live sealed version: every write over
+# it gets `sealed`, and a reader sees it as any version.
+#
+# S puts a moved marker at R1, a key with no version, as RG
+# compaction marks a row it moves to a new row group
+# (COLSTORE.md §11). T1's snapshot is older than the marker, and
+# nothing under it committed: no conflict, and every write, an
+# insert too, gets `sealed`. T2, after it, reads the marker.
+
+
+== pairing RR/RR == T1=RR T2=RR S=RC
+@1 T1 begin -> ok
+@2 T1 read R1 -> -
+@3 S begin -> ok
+@4 S sealput R1 m -> ok
+@5 S commit -> ok
+@6 T1 insert R1 1 -> sealed
+@6 check last T1 sealed -> satisfied
+@7 T1 write R1 1 -> sealed
+@7 check last T1 sealed -> satisfied
+@8 T1 delete R1 -> sealed
+@8 check last T1 sealed -> satisfied
+@9 T1 commit -> ok
+@10 T2 begin -> ok
+@11 T2 read R1 -> m
+@11 check last T2 m -> satisfied
+@12 T2 commit -> ok
+@13 check committed S T1 T2 -> satisfied
+@13 check row R1 m -> satisfied

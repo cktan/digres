@@ -1002,6 +1002,9 @@ typedef struct RelOptInfo
 	/* consider partitionwise join paths? (if partitioned rel) */
 	bool		consider_partitionwise_join;
 
+	/* a column store table of sm's: its scan projects (createplan.c) */
+	bool		sm_columnar;
+
 	/*
 	 * inheritance links, if this is an otherrel (otherwise NULL):
 	 */

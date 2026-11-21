@@ -14,7 +14,9 @@
  * size.
  */
 
+#include "../colstore/colstore.h"
 #include "analyze.h"
+#include "sm0_defer.h"
 
 #include <algorithm>
 #include <cmath>
@@ -336,6 +338,139 @@ std::vector<uint64_t> floyd(uint64_t n, uint64_t k, std::mt19937_64 &rng) {
   return v;
 }
 
+namespace {
+
+/* The most row groups a sample of a column store table reads. */
+constexpr uint64_t sample_rgs = 100;
+
+/*
+ * Sample a column store table for want rows (../COLSTORE.md §12.1):
+ * many row groups, few rows from each, as a row group's rows were
+ * inserted together and are alike. The row count is exact.
+ * 1. List the row groups the transaction sees, and count each one's
+ *    live rows: its rows less its delete markers. No file is read.
+ * 2. Read the delta store whole, into a reservoir of want rows. The
+ *    sealer keeps it at about a row group's rows.
+ * 3. Split want between the row groups and the delta store, by their
+ *    live rows.
+ * 4. Choose up to sample_rgs row groups by Floyd's algorithm. Read
+ *    each, and keep a reservoir of the row groups' share, in
+ *    proportion to its live rows.
+ * 5. Keep the delta store's share of its reservoir, at random.
+ * 6. Sort the rows by _id, as a row store table's sample is.
+ */
+int sample_columnar(sm3::table_t *table, uint64_t want, std::mt19937_64 &rng,
+                    sm3::sample_t &out) {
+  const sm3::table_def_t &def = sm3::tbl_def(table);
+  if (sm3::tbl_id_limit(table, out.rowno_limit) != 0) {
+    return -1;
+  }
+  // 1. The row groups, and their live rows.
+  std::vector<std::pair<uint64_t, std::string>> rgs;
+  if (sm1::fileset_list(sm3::tbl_session(table)->sm1, def.storeid, rgs) != 0) {
+    return -1;
+  }
+  std::vector<sm3::rg_meta_t> metas(rgs.size());
+  std::vector<uint64_t> live(rgs.size());
+  uint64_t rg_live = 0;
+  for (size_t i = 0; i < rgs.size(); i++) {
+    std::set<uint64_t> dead;
+    if (sm3::rg_meta_decode(rgs[i].second, metas[i]) != 0 ||
+        sm3::col_markers(table, rgs[i].first, dead) != 0) {
+      return -1;
+    }
+    live[i] = metas[i].rows - std::min<uint64_t>(dead.size(), metas[i].rows);
+    rg_live += live[i];
+  }
+  // 2. The delta store, whole.
+  sm3::sample_t delta;
+  reservoir_t dres{delta, want, rng};
+  sm3::scan_t *c = nullptr;
+  if (sm3::tbl_scan_delta(table, c) != 0) {
+    return -1;
+  }
+  std::unique_ptr<sm3::scan_t, decltype(&sm3::tbl_scanend)> guard(
+      c, &sm3::tbl_scanend);
+  uint64_t id = 0;
+  std::string_view t;
+  int rc;
+  while ((rc = sm3::tbl_scannxt(c, id, t)) == 0) {
+    dres.offer(id, {}, t);
+  }
+  if (rc < 0) {
+    return -1;
+  }
+  guard.reset();
+  // 3. The split of want.
+  const uint64_t total = rg_live + delta.rows_read;
+  const uint64_t want_delta = total > 0 ? want * delta.rows_read / total : 0;
+  const uint64_t want_rg = want - want_delta;
+  // 4. The row groups chosen, and a reservoir of each.
+  uint64_t bytes = 0;
+  std::vector<uint64_t> pick =
+      sm3::floyd(rgs.size(), std::min<uint64_t>(sample_rgs, rgs.size()), rng);
+  uint64_t pick_live = 0;
+  for (uint64_t i : pick) {
+    pick_live += live[i];
+  }
+  const size_t ncols = def.columns.size();
+  std::vector<sm2::datum_t> values(ncols);
+  std::unique_ptr<bool[]> isnull(new bool[ncols]);
+  std::string tuple;
+  for (uint64_t i : pick) {
+    if (live[i] == 0) {
+      continue;
+    }
+    sm3::sample_t one;
+    reservoir_t res{one, (want_rg * live[i] + pick_live - 1) / pick_live, rng};
+    sm3::rg_read_t r;
+    defer { sm3::rg_read_close(r); };
+    if (sm3::rg_read_open(table, rgs[i].first, std::move(metas[i]), {}, r) !=
+        0) {
+      return -1;
+    }
+    while ((rc = sm3::rg_read_next(table, r, id, values,
+                                   std::span<bool>(isnull.get(), ncols))) ==
+           0) {
+      if (sm2::tup_encode(def.desc, values,
+                          std::span<const bool>(isnull.get(), ncols),
+                          tuple) != 0) {
+        return -1;
+      }
+      res.offer(id, {}, tuple);
+    }
+    if (rc < 0) {
+      return -1;
+    }
+    out.runs++;
+    out.rows_read += one.rows_read;
+    bytes += res.bytes;
+    for (sm3::sample_row_t &row : one.rows) {
+      out.rows.push_back(std::move(row));
+    }
+  }
+  // 5. The delta store's share.
+  std::shuffle(delta.rows.begin(), delta.rows.end(), rng);
+  delta.rows.resize(std::min<uint64_t>(delta.rows.size(), want_delta));
+  for (sm3::sample_row_t &row : delta.rows) {
+    out.rows.push_back(std::move(row));
+  }
+  out.rows_read += delta.rows_read;
+  bytes += dres.bytes;
+  // 6. The counts, and _id order.
+  out.live_rows = static_cast<double>(total);
+  out.whole = out.rows.size() == total;
+  out.avg_row_bytes =
+      out.rows_read > 0 ? static_cast<int32_t>(bytes / out.rows_read) : 0;
+  std::sort(out.rows.begin(), out.rows.end(),
+            [](const sm3::sample_row_t &x, const sm3::sample_row_t &y) {
+              return x.id < y.id;
+            });
+  return 0;
+}
+
+} // namespace
+
 /* Sample a table; see analyze.h. */
 int sample_table(table_t *table, int32_t target, std::mt19937_64 &rng,
                  sample_t &out) {
@@ -346,6 +481,9 @@ int sample_table(table_t *table, int32_t target, std::mt19937_64 &rng,
   }
   const uint64_t want = rows_per_target * static_cast<uint64_t>(target);
   const table_def_t &def = tbl_def(table);
+  if (def.column_store) {
+    return sample_columnar(table, want, rng, out);
+  }
   // A table with a primary key has no _ids (../ROWSTORE.md §2.2).
   if (std::any_of(def.indexes.begin(), def.indexes.end(),
                   [](const index_def_t &x) { return x.primary; })) {

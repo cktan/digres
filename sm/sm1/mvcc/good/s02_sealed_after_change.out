@@ -1,0 +1,22 @@
+# s02 -- REPEATABLE READ: a row changed after the writer's
+# snapshot, then sealed, is a conflict.
+#
+# T2 updates R1 and commits after T1 began; S then seals it. The
+# seal is transparent, so first-committer-wins judges T1's write
+# by T2's commit under the sealed tombstone: `conflict`, and T1
+# is aborted, as if no seal had come between.
+
+
+== pairing RR/RR == T1=RR T2=RC S=RC
+@1 T1 begin -> ok
+@2 T1 read R1 -> 0
+@3 T2 begin -> ok
+@4 T2 write R1 1 -> ok
+@5 T2 commit -> ok
+@6 S begin -> ok
+@7 S seal R1 -> ok
+@8 S commit -> ok
+@9 T1 write R1 2 -> conflict
+@9 check last T1 conflict -> satisfied
+@10 check committed T2 S -> satisfied
+@10 check row R1 - -> satisfied

@@ -752,6 +752,13 @@ static bool use_physical_tlist(PlannerInfo *root, Path *path, int flags) {
     return false;
 
   /*
+   * A column store table's scan reads only the columns its tlist names
+   * (smstore_beginscan_seq()): all of them would be read for a physical one.
+   */
+  if (rel->sm_columnar)
+    return false;
+
+  /*
    * Also, don't do it to a CustomPath; the premise that we're extracting
    * columns from a simple physical tuple is unlikely to hold for those.
    * (When it does make sense, the custom path creator can set up the path's

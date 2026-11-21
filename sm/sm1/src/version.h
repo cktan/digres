@@ -38,6 +38,17 @@ constexpr char key_class_versioned = 0x00; /* userkey | ~wts | ~seq */
 constexpr char key_class_current = 0x01;   /* a chained key's newest */
 constexpr char key_class_old = 0x02;       /* be64(id): an older one */
 constexpr char key_class_page = 0x04;      /* a page, unversioned */
+/*
+ * A file set's key, versioned as class 0x00's: be64(fsid) | ~wts |
+ * ~seq (../COLSTORE.md §4.5). Past the pages, as every key below
+ * 0x04 is taken for a row version.
+ */
+constexpr char key_class_fileset = 0x05;
+
+/* Whether keys of class c end in a version tail: ~wts | ~seq. */
+inline bool has_version_tail(char c) {
+  return c == key_class_versioned || c == key_class_fileset;
+}
 
 /* Value flags. */
 constexpr uint8_t version_tombstone = 0x01; /* this version is a delete */
@@ -47,6 +58,15 @@ constexpr uint8_t version_moved =
     0x04; /* a tombstone of a row that moved to another key */
 /* A chained update that kept its row's key (../LOCKMGR.md §1.13). */
 constexpr uint8_t version_key_kept = 0x08;
+/*
+ * A version that a move of sm's own wrote, which changed no row
+ * (../COLSTORE.md §10.2, §11): a sealed tombstone, or a live
+ * version, a moved marker. A write and a row lock judge
+ * first-committer-wins by the version under it. 0x10 and 0x20 are
+ * an OLD entry's flags, and a CURR version keeps its flags when it
+ * moves to OLD, so this flag is apart from them.
+ */
+constexpr uint8_t version_sealed = 0x40;
 
 /* A version key or value, decoded. Slices borrow the input. */
 struct version_t {
@@ -60,10 +80,12 @@ struct version_t {
 };
 
 /* Build class | userkey | ~wts | ~seq. */
-std::string version_key(rocksdb::Slice userkey, uint64_t wts, uint32_t seq);
+std::string version_key(rocksdb::Slice userkey, uint64_t wts, uint32_t seq,
+                        char cls = key_class_versioned);
 
 /* Build class | userkey, then a tail of twelve copies of fill. */
-std::string version_bound(rocksdb::Slice userkey, char fill);
+std::string version_bound(rocksdb::Slice userkey, char fill,
+                          char cls = key_class_versioned);
 
 /* The userkey part of a version key: past the class, before the tail. */
 rocksdb::Slice version_userkey(rocksdb::Slice key);

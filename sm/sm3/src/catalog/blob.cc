@@ -241,7 +241,7 @@ const std::vector<attribute_t> &schema_of(sm3::part_t part) {
       /* name */ {att(type_int2), att(type_int8), att(type_int8)},
       /* table */
       {att(type_int8), att(type_text), att(type_int8), att(type_text),
-       att(type_int2)},
+       att(type_int2), att(type_bool)},
       /* column */
       {att(type_text), att(type_int2), att(type_int4), att(type_bool),
        att(type_bool), att(type_bytea), att(type_int8), att(type_bytea),
@@ -388,12 +388,13 @@ int decode_name(std::string_view value, name_rec_t &rec) {
 /* A table's value: its own fields. */
 int encode_table(const table_rec_t &rec, std::string &blob) {
   blob.clear();
-  writer_t t(5);
+  writer_t t(6);
   t.i8(0, rec.nspoid);
   t.bytes(1, rec.name);
   t.i8(2, rec.storeid);
   t.bytes(3, rec.id_seq);
   t.i2(4, static_cast<int16_t>(rec.next_relid));
+  t.b(5, rec.column_store);
   return t.append(part_desc(part_t::table), blob);
 }
 
@@ -409,6 +410,8 @@ int decode_table(std::string_view blob, table_rec_t &rec) {
   rec.storeid = t.i8(2);
   rec.id_seq = t.bytes(3);
   rec.next_relid = static_cast<uint16_t>(t.i2(4));
+  // A value written before the field reads it null: a row store.
+  rec.column_store = t.opt_b(5).value_or(false);
   if (!t.ok) {
     return corrupt("a table part cut short");
   }

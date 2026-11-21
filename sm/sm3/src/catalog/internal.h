@@ -147,6 +147,21 @@ struct sm3::catalog_t {
   /* The host's evaluator of partial and expression indexes; set once. */
   index_eval_fn eval;
   bool toast = false; /* the host reads TOAST pointers (cat_set_toast) */
+  /* The rows of a row group; 0 is rg_max_rows (cat_set_rg_rows). */
+  uint32_t rg_rows = 0;
+
+  /*
+   * The delta rows and delete markers of each prepared transaction,
+   * by its gid, counted toward the seal and RG compaction at its
+   * COMMIT PREPARED (../../COLSTORE.md §10.4). In memory: a restart
+   * loses them, and a scan catches what they miss.
+   */
+  struct prepared_counts_t {
+    std::unordered_map<uint64_t, uint64_t> inserts;
+    std::map<std::pair<uint64_t, uint64_t>, uint64_t> marks;
+  };
+  std::mutex prepared_mu;
+  std::unordered_map<std::string, prepared_counts_t> prepared_counts;
 
   /* Close every collation the catalog holds. */
   ~catalog_t() {
@@ -242,6 +257,18 @@ struct sm3::session_t {
    * sweep of orphan sequences after its commit (../SEQUENCE.md §3.5).
    */
   std::vector<uint64_t> drop_nsps;
+  /*
+   * The rows the transaction put into each column store table's delta
+   * store, by table oid, for the seal's counts at its commit
+   * (../COLSTORE.md §10.4).
+   */
+  std::unordered_map<uint64_t, uint64_t> col_inserts;
+  /*
+   * The delete markers the transaction put on each row group, by
+   * (table oid, rg_id), for RG compaction's counts at its commit
+   * (../COLSTORE.md §11.1).
+   */
+  std::map<std::pair<uint64_t, uint64_t>, uint64_t> col_marks;
   bool in_txn = false;      /* between begin and commit or abort */
   uint64_t snap_seq = 0;    /* cat->seq, noted before the snapshot */
   bool stmt_pinned = false; /* stmt_begin was called: statement snapshots */
@@ -457,6 +484,11 @@ index_state_t cat_index_state(const session_t *s, uint64_t index_oid);
 /* The sm1 sequence the table oid draws its TOAST ids from. */
 inline std::string toast_seq_name(uint64_t oid) {
   return "sm3.toast." + std::to_string(oid);
+}
+
+/* The sm1 sequence a column store table draws its row groups' ids from. */
+inline std::string rg_seq_name(uint64_t oid) {
+  return "sm3.rg." + std::to_string(oid);
 }
 
 void overlay_name(session_t *s, uint64_t nspoid, std::string_view name,

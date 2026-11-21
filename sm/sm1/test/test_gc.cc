@@ -810,3 +810,75 @@ TEST_CASE("a sweep that frees nothing backs off until CF:txn grows") {
   CHECK(f.db()->read_epoch.load() == e1 + 1);
   REQUIRE(sm1::commit(r) == 0);
 }
+
+TEST_CASE("a moved marker keeps its sealed flag when compaction stamps it") {
+  // Verify GC stamps a sealed version without losing the flag, so a
+  // later write still meets the move (../COLSTORE.md §11).
+  // 1. Commit a moved marker at "m" with sm1::insert_sealed.
+  // 2. Compact: the marker is stamped, and still sealed.
+  // 3. An insert, an update and a delete of "m" fail with
+  //    SM_ERR_SEALED; a reader sees the marker's value.
+  gc_fixture_t f;
+  sm1::session_t *s = f.s();
+  // 1. The marker.
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm1::insert_sealed(s, g_store, "m", "rg9") == 0);
+  REQUIRE(sm1::commit(s) == 0);
+  // 2. Stamped, still sealed.
+  f.compact(g_store);
+  bool seen = false;
+  for (const raw_t &v : f.raw(g_store)) {
+    if (v.key == "m") {
+      seen = true;
+      CHECK((v.flags & version_stamped) != 0);
+      CHECK((v.flags & version_sealed) != 0);
+    }
+  }
+  CHECK(seen);
+  // 3. Every write meets the move; a read sees the value.
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(sm1::insert(s, g_store, "m", "x") == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_SEALED);
+  CHECK(sm1::update(s, g_store, "m", "x") == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_SEALED);
+  CHECK(sm1::erase(s, g_store, "m") == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_SEALED);
+  CHECK(get(s, g_store, "m") == "rg9");
+  REQUIRE(sm1::commit(s) == 0);
+}
+
+TEST_CASE("a row lock judges a sealed tombstone by the version under it") {
+  // Verify a REPEATABLE READ row lock over a seal of an unchanged row
+  // is no conflict, and over a seal of a changed row is one
+  // (../COLSTORE.md §10.2).
+  // 1. Commit "a" and "b"; R begins, its snapshot older than what
+  //    follows.
+  // 2. Seal "a"; update "b", then seal it.
+  // 3. R locks "a": granted. R locks "b": SM_ERR_CONFLICT.
+  gc_fixture_t f;
+  sm1::session_t *w = f.open();
+  sm1::session_t *r = f.open();
+  // 1. The rows, and the reader.
+  commit_put(w, "a", "1");
+  commit_put(w, "b", "1");
+  REQUIRE(sm1::begin(r, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(get(r, g_store, "a") == "1");
+  // 2. The seals, one over a change.
+  sm1::rawpin_t *pin = sm1::rawpin_new();
+  std::string_view old;
+  REQUIRE(sm1::begin(w, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm1::erase_sealed(w, g_store, "a", pin, old) == 0);
+  CHECK(old == "1");
+  REQUIRE(sm1::commit(w) == 0);
+  commit_set(w, "b", "2");
+  REQUIRE(sm1::begin(w, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm1::erase_sealed(w, g_store, "b", pin, old) == 0);
+  REQUIRE(sm1::commit(w) == 0);
+  sm1::rawpin_free(pin);
+  // 3. The locks.
+  CHECK(sm1::lock_row(r, g_store, "a", sm1::SM_LOCKMODE_EX) == 0);
+  CHECK(sm1::lock_row(r, g_store, "b", sm1::SM_LOCKMODE_EX) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_CONFLICT);
+  sm1::closedb(w);
+  sm1::closedb(r);
+}

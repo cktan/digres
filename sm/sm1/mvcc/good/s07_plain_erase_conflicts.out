@@ -1,0 +1,18 @@
+# s07 -- REPEATABLE READ: a plain erase in a seal's place is a
+# conflict.
+#
+# The schedule of s01, with S's erase a plain one: T1's update
+# meets a tombstone committed after its snapshot, and
+# first-committer-wins aborts T1. Only the seal's flag spares it.
+
+
+== pairing RR/RR == T1=RR S=RC
+@1 T1 begin -> ok
+@2 T1 read R1 -> 0
+@3 S begin -> ok
+@4 S delete R1 -> ok
+@5 S commit -> ok
+@6 T1 write R1 1 -> conflict
+@6 check last T1 conflict -> satisfied
+@7 check committed S -> satisfied
+@7 check row R1 - -> satisfied

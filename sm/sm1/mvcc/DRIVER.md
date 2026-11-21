@@ -1,6 +1,6 @@
 # The scenario driver
 
-`build/driver` runs one scenario script and prints a
+`build/mvcc_driver` runs one scenario script and prints a
 transcript of what the engine did. The scripts live in `in/`,
 the transcript each must produce lives in `good/`, and a run
 writes `out/`, which is transient. `make test` runs every
@@ -67,7 +67,7 @@ four pairings is reported as four.
 A malformed script names the line it died on:
 
 ```
-$ build/driver mvcc/in/broken.t
+$ build/mvcc_driver mvcc/in/broken.t
 mvcc/in/broken.t:7: unknown verb: frobnicate
 ```
 
@@ -91,7 +91,7 @@ behaviour: read the diff first.
 
 1. Write `in/<id>_<name>.t`, opening with a comment that says
    what the scenario proves.
-2. Run `build/driver in/<id>_<name>.t` and read the
+2. Run `build/mvcc_driver in/<id>_<name>.t` and read the
    transcript. It is the scenario's behaviour: check it
    against what the design claims before believing it.
 3. `make accept` to record it, then commit the script and its
@@ -179,6 +179,8 @@ can be read at a glance. Several steps may share a time.
 | `insert` | `<row> <value>` | `ok`, or an error name |
 | `delete` | `<row>` | `ok`, or an error name |
 | `move` | `<row>` | `ok`, or an error name: a delete whose tombstone is a move's (`sm1::erase_moved`), as a primary key change erases the old key |
+| `seal` | `<row>` | `ok`, or an error name: a delete whose tombstone is sealed (`sm1::erase_sealed`), as the Column Store's seal moves a row ([`../../COLSTORE.md`](../../COLSTORE.md) §10.2) |
+| `sealput` | `<row> <value>` | `ok`, or an error name: an insert of a live sealed version, a moved marker (`sm1::insert_sealed`, [`../../COLSTORE.md`](../../COLSTORE.md) §11) |
 | `update-where` | `<lo> <hi> <old> <new>` | SQL's `UPDATE ... SET v = new WHERE v = old` over rows `lo..hi`: a scan, then a write of each row holding `old`; prints the rows written, `{R1, R2}` |
 | `commit` | — | `ok`, or an error name |
 | `commit?` | — | `recorded`: the outcome is kept but not printed |
@@ -203,7 +205,7 @@ can be read at a glance. Several steps may share a time.
 Error names are symbolic, never numbers or messages:
 `conflict`, `serialization`, `dupkey`, `notfound`, `notrans`,
 `deadlock`, `prepared`, `invalid`, `updated`, `readonly`,
-`moved`, `selfmodified`.
+`moved`, `selfmodified`, `sealed`.
 
 **`commit?`** is for a commit whose outcome may differ from
 run to run -- at S+S either side of a write skew may be the

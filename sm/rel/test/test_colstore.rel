@@ -1,0 +1,240 @@
+# test_colstore.rel -- a column store table through sm.h
+# (../../COLSTORE.md): its row groups, made by a load and by the
+# seal, read by a scan, its rows deleted by name, across a restart.
+#
+# 1. A load of 25,000 rows into a column store table: a scan gives
+#    every row, after a restart too.
+# 2. A SERIALIZABLE transaction cannot read it, and it takes no
+#    index; the other levels read it.
+# 3. A row of a row group is deleted by its name (rg_id, _id); an
+#    aborted delete leaves it.
+# 4. 12,000 rows inserted one at a time: the commit queues the
+#    table, and the seal's job seals a row group of them; a seal by
+#    hand finds too few rows left; a scan gives every row.
+# 5. Rows of a row group updated and deleted by _id alone, as
+#    digres names a row it has not just scanned: sm finds the row
+#    group, the update's new version is in the delta store, and the
+#    delete hands back the row as it was.
+# 6. A scan of some columns, pruned by bounds: a bound skips the row
+#    groups whose zonemaps cannot hold a match, and the delta store
+#    is read whole; a column not read is nil in a row group's rows.
+# 7. 9,999 rows inserted into tr and one row of its row group
+#    updated by _id: the update's new version counts toward the
+#    seal too, making a row group's worth, and the seal follows.
+# 8. Two loads of a row group each into tp, prepared, across a
+#    restart: no snapshot sees their rows before COMMIT PREPARED;
+#    the committed one's row group is read, the aborted one's not.
+# 9. Bounds on a text column through sm.h: of two row groups, b "aa"
+#    and b "zz", b < 'b' and b IN ('zz') each read one.
+# 10. 10,000 rows inserted one at a time and prepared: COMMIT PREPARED
+#     counts them toward the seal, which seals them.
+
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
+(rm-rf test-dir)
+(env-init test-dir)
+(env-attach test-dir)
+
+(db-create "csdb")
+(db-open "csdb")
+
+# The message of the error expr raises, or "no error".
+(defmacro err-of [expr]
+  ~(try (do ,expr "no error") ([e] (string e))))
+
+# Whether the error expr raises says what.
+(defn says [msg what]
+  (truthy? (string/find what msg)))
+
+(begin :rc)
+    (table-create ev
+      (columns
+        (a :int4 :not-null)
+        (b :text))
+      :column-store)
+(commit)
+
+# 1. A load, and a scan, after a restart too.
+(def rows (map (fn [i] [i (string "n" (% i 7))]) (range 25000)))
+(begin :rc)
+    (def ids (load ev rows))
+(commit)
+(begin :rr)
+    (assert-eq (scan-count ev) 25000 "every row loaded")
+(commit)
+
+(db-close)
+(env-detach :force true)
+(env-attach test-dir)
+(db-open "csdb")
+
+(begin :rr)
+    (assert-eq (scan-count ev) 25000 "every row after a restart")
+(commit)
+
+# 2. SERIALIZABLE is refused; so is an index.
+(begin :ser)
+    (assert-eq (says (err-of (scan-count ev)) "ERR_UNSUPPORTED") true
+               "SERIALIZABLE cannot read a column store table")
+(abort)
+(begin :rc)
+    (assert-eq (says (err-of (index-create ev_a (table ev) (key (a :asc))))
+                     "ERR_INVALID")
+               true "a column store table takes no index")
+(abort)
+
+# 3. A row of a row group, deleted by name; an aborted delete.
+(def id7 (get ids 7))
+(def id8 (get ids 8))
+(begin :rc)
+    (def rg7 (rg-of ev id7))
+    (assert-eq (> rg7 0) true "a loaded row is in a row group")
+    (delete-at ev rg7 id7)
+(commit)
+(begin :rr)
+    (assert-eq (scan-count ev) 24999 "the deleted row is gone")
+    (assert-nil (rg-of ev id7) "no row has its _id")
+(commit)
+(begin :rc)
+    (delete-at ev (rg-of ev id8) id8)
+(abort)
+(begin :rr)
+    (assert-eq (scan-count ev) 24999 "an aborted delete leaves the row")
+(commit)
+
+# 4. The seal.
+(begin :rc)
+    (table-create tr
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (var last 0)
+    (for i 0 12000
+      (set last (insert tr [i "x"])))
+(commit)
+(seal-wait)
+(begin :rc)
+    (assert-eq (seal tr) false "2,000 rows are too few to seal")
+(commit)
+(begin :rr)
+    (assert-eq (scan-count tr) 12000 "every row once, sealed or not")
+    (assert-eq (> (rg-of tr 1) 0) true "the first row is in a row group")
+    (assert-eq (rg-of tr last) 0 "the last row is in the delta store")
+(commit)
+
+# 5. By _id alone.
+(def id9 (get ids 9))
+(def id10 (get ids 10))
+(begin :rc)
+    (update ev id9 [9 "nine"])
+    (def old (delete ev id10))
+    (assert-eq (get old 0) 10 "the delete hands back the row deleted")
+(commit)
+(begin :rr)
+    (assert-eq (scan-count ev) 24998 "the deleted row is gone")
+    (assert-eq (rg-of ev id9) 0 "the updated row is in the delta store")
+    (assert-nil (rg-of ev id10) "no row has the deleted _id")
+(commit)
+
+# 6. Columns and bounds. Row group 1 holds a 0..9,999, 9,997 of them
+# live; row group 2 a 10,000..19,999; the delta store 5,001 rows.
+(defn nil-b [rows] (length (filter (fn [r] (nil? (get (get r 1) 1))) rows)))
+(begin :rr)
+    (assert-eq (length (scan-columns ev [] [[:a :>= 15000]])) 15001
+               "a >= 15000 skips row group 1")
+    (assert-eq (length (scan-columns ev [] [[:a :< 5000]])) 14998
+               "a < 5000 skips row group 2")
+    (assert-eq (length (scan-columns ev [] [[:a :null]])) 5001
+               "a IS NULL skips every row group: a holds no null")
+    (assert-eq (length (scan-columns ev [] [[:a :in [3 12000]]])) 24998
+               "an IN of both row groups' values skips neither")
+    (def some (scan-columns ev [:a] []))
+    (assert-eq (length some) 24998 "every row, of some columns")
+    (assert-eq (nil-b some) 19997 "b is not read in the row groups' rows")
+    (assert-eq (nil-b (scan-columns ev [] [])) 0 "every column, with none named")
+(commit)
+
+# 7. An update counts toward the seal. tr's row group holds _id 1
+# to 10,000; its delta store 2,000 rows, counted already. No scan
+# comes between, as a scan of 10k delta rows queues a seal itself.
+(begin :rc)
+    (def tr-rg (rg-of tr 1))
+    (for i 0 9999
+      (insert tr [i "y"]))
+    (update tr 1 [1 "u"])
+(commit)
+(seal-wait)
+(begin :rr)
+    (def now (rg-of tr 1))
+    (assert-eq (and (> now 0) (not= now tr-rg)) true
+               "the updated row is sealed into a new row group")
+    (assert-eq (scan-count tr) 21999 "every row once")
+(commit)
+
+# 8. Prepared loads across a restart.
+(begin :rc)
+    (table-create tp
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (load tp (map (fn [i] [i "p1"]) (range 10000)))
+(prepare "cs_p1")
+(session-open "s2" "csdb")
+(session-use "s2")
+(begin :rc)
+    (load tp (map (fn [i] [i "p2"]) (range 10000)))
+(prepare "cs_p2")
+(session-use "default")
+(db-close)
+(env-detach :force true)
+(env-attach test-dir)
+(db-open "csdb")
+(begin :rr)
+    (assert-eq (scan-count tp) 0 "prepared loads are not seen")
+(commit)
+(commit-prepared "cs_p1")
+(abort-prepared "cs_p2")
+(begin :rr)
+    (assert-eq (scan-count tp) 10000 "the committed load's row group")
+    (assert-eq (> (rg-of tp 1) 0) true "its rows are in a row group")
+(commit)
+
+# 9. Text bounds.
+(begin :rc)
+    (table-create tt
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (load tt (map (fn [i] [i (if (< i 10000) "aa" "zz")]) (range 20000)))
+(commit)
+(begin :rr)
+    (assert-eq (length (scan-columns tt [] [[:b :< "b"]])) 10000
+               "b < 'b' reads the first row group")
+    (assert-eq (length (scan-columns tt [] [[:b :in ["zz"]]])) 10000
+               "b IN ('zz') reads the second")
+(commit)
+
+# 10. A prepared transaction's inserts count at COMMIT PREPARED. No
+# scan comes between, as a scan of 10k delta rows queues a seal.
+(begin :rc)
+    (table-create tq
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (for i 0 10000
+      (insert tq [i "q"]))
+(prepare "cs_q1")
+(commit-prepared "cs_q1")
+(seal-wait)
+(begin :rr)
+    (assert-eq (> (rg-of tq 1) 0) true
+               "COMMIT PREPARED's rows are sealed")
+(commit)
+
+(db-close)
+(env-detach :force true)
+(rm-rf test-dir)
+(print "test_colstore.rel: PASSED")

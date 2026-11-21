@@ -74,6 +74,7 @@ without a PostgreSQL source tree.
 | B-tree Index | [`../BTREEINDEX.md`](../BTREEINDEX.md) | the row check, the unique check, `VACUUM` and the btree reaper of a tree | `table/table.cc`, `btree_reaper/` |
 | Index Builder | [`../INDEXBUILD.md`](../INDEXBUILD.md) | fills an index on a table that has rows, while its readers and writers go on | `builder/`, `table/table.cc` |
 | Row Store | [`../ROWSTORE.md`](../ROWSTORE.md) | the row calls, and rows read as pins | `table/` |
+| Column Store | [`../COLSTORE.md`](../COLSTORE.md) | a column store table's row groups: built by a bulk load and the seal, read by a scan, rows deleted by markers, rewritten and merged by RG compaction on the sealer | `colstore/`, `table/` |
 | TOAST | [`../TOAST.md`](../TOAST.md) | values fetched for indexes | `table/table.cc` |
 | Statistics | [`../STATISTICS.md`](../STATISTICS.md) | what the planner needs: a sample, PostgreSQL's estimators, `STATS` entries | `analyze/`, `catalog/ddl.cc` |
 

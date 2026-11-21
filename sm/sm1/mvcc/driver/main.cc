@@ -33,14 +33,15 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--chained") == 0) {
       chained = true;
     } else if (argv[i][0] == '-') {
-      fprintf(stderr, "usage: driver [--block-ms N] [--chained] script.t\n");
+      fprintf(stderr,
+              "usage: mvcc_driver [--block-ms N] [--chained] script.t\n");
       return 2;
     } else {
       path = argv[i];
     }
   }
   if (!path) {
-    fprintf(stderr, "usage: driver [--block-ms N] [--chained] script.t\n");
+    fprintf(stderr, "usage: mvcc_driver [--block-ms N] [--chained] script.t\n");
     return 2;
   }
 

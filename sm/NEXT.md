@@ -475,6 +475,48 @@ Owed, and blocking nothing above:
   ([`../dg/GUCPLAN.md`](../dg/GUCPLAN.md) §5) must be set by
   `InitializeOneGUCOption()` before anything frees it.
 
+- **A write after `TRUNCATE` can meet a dropped column family.**
+  pgregress's `generated_virtual` failed once in the full dg
+  suite at `-j 4` (2026-11-20, debug build, `wip-colstore-34`):
+  after `TRUNCATE gtest1`, `INSERT INTO gtest1` failed with
+  "write version: Invalid argument: Invalid column family
+  specified in write batch", and so did later writes of `gtest1`
+  and `gtest3`. Run alone six times, it passed each time. The
+  write went to a store whose column family was gone: a stale
+  store handle, or table handle, after the old store's drop at
+  `TRUNCATE`'s commit (`truncate_table()` in
+  `sm3/src/ddl/ddl.cc`, `db_drop_store_cf()` in
+  `sm1/src/db.cc`), is the likely cause; not confirmed. The
+  diff is kept in
+  `../bench/build/evidence/generated_virtual-2026-11-20.diff`.
+  Next: a test that truncates and writes a table from one
+  session while others drop stores.
+- **The Column Store's parts not built**
+  ([`COLSTORE.md`](COLSTORE.md)). Each is owed; none blocks the
+  table's use:
+  - **A scan hands out sm2 tuples**, so a row of more than
+    64 KB, more than 31 values near the 2,048-byte limit, fails
+    in a scan. Datums handed out with no tuple remove the limit
+    (§5.4, §12).
+  - **A lookup by `_id` reads each RG it may be in**: every
+    marker into a set, and the `_id` CG row by row; a read of the
+    row reads every CG of its RG. It is to read the `_id`
+    filter, find `n` by a binary search, and read one marker
+    (§8).
+  - **A bulk load draws each `_id` from the sequence one at a
+    time**, as sm1 has no draw of a batch (§9.2).
+  - **Nothing reads the `sorted` bit or the distinct count**, and
+    a predicate is not evaluated on dictionary codes (§5.2,
+    §6.1). Each waits for the columnar executor.
+  - **The commit's trigger of RG compaction is 2,000 markers**,
+    a fifth of a full RG, whatever the RG's rows; a scan
+    catches a small RG (§11.1).
+  - **Tests not written yet:**
+    - rel: the sweep after a crash, which rel cannot make;
+    - digres: an RR update while a seal runs (`server.sh`); an
+      `ANALYZE`, as `run.sh`'s tables are temporary, and sm
+      does not analyze those.
+
 ---
 
 ## 3. Not blocking
@@ -555,6 +597,43 @@ Owed, and blocking nothing above:
   delete nothing. Designed, and not to be built for now: we
   lean towards the capped undo list, for the reasons at the
   top of that file.
+- **Replace `PG_TRY`, `PG_CATCH`, `PG_FINALLY`, `PG_END_TRY`
+  and `PG_RE_THROW` with C++ constructs** in dg. The macros, in
+  `../dg/src/include/utils/elog.h`, are a `try` and a
+  `catch (const pg_error_t &)` already, and they save and
+  restore `PG_exception_handled` and `error_context_stack`.
+  There are 45 `PG_TRY` blocks in 28 files of `../dg/src`. Each
+  becomes:
+  - a `try`, and a `catch (const pg_error_t &)` for `PG_CATCH`;
+  - a guard object whose destructor restores the two globals,
+    in place of the macros' saved copies;
+  - a scope guard for `PG_FINALLY`, which runs on every exit;
+  - `throw;` for `PG_RE_THROW()` in a catch.
+
+  Then a `return`, `break` or `continue` out of the block is
+  safe, and the rule against it in
+  [`../dg/CODE.md`](../dg/CODE.md#2-c-compiled-as-c) §2 goes.
+  To decide: whether the macros stay for PostgreSQL code ported
+  later from `REL_18_STABLE`, or go.
+- **Decide what `char(n)`, `bpchar`, is in digres.** It is
+  PostgreSQL's: padded with spaces to `n`, and compared without
+  its trailing spaces. sm's key of a `bpchar` leaves those
+  spaces out, so a key can be much shorter than its value: a
+  `char(2000)` value `'a'` has a key of 3 bytes. That broke the
+  Column Store's filter of long values, which are gone now
+  ([`COLSTORE.md`](COLSTORE.md#54-the-longest-value) §5.4). The
+  choices:
+  - **Keep it as PostgreSQL's**, as it is now.
+  - **Store it unpadded**: strip the trailing spaces on a write,
+    and pad again on output. Comparisons give what they give
+    now; `length()`, a cast to `text`, and other places that
+    see the padding must give PostgreSQL's results too.
+  - **Make it `varchar(n)`**, as Snowflake and DuckDB do: the
+    simplest, and visibly not PostgreSQL's (`'a '::char(3)`,
+    padded output, pgregress).
+
+  Lean: keep it, unless it costs again; then store it unpadded,
+  which keeps PostgreSQL's results.
 
 ---
 

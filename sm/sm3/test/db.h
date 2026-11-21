@@ -58,6 +58,9 @@ public:
   /* The home's environment, for a call that opens its own session. */
   sm1::env_t *env() { return m_env; }
 
+  /* The home's directory, for a test that looks at its files. */
+  const std::string &path() const { return m_path; }
+
   /* Close every session and reattach the home, as a restart does. */
   void restart() {
     REQUIRE(sm1::detach(m_env, 1) == 0);

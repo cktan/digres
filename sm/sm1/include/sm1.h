@@ -1270,6 +1270,31 @@ int erase_moved(session_t* session, uint64_t storeid,
                 std::string_view key, rawpin_t* pin, std::string_view& old);
 
 /*
+ * sm1::erase of a row that a move of sm's own takes elsewhere,
+ * changing nothing in it (../COLSTORE.md §10.2): its tombstone is
+ * sealed. A reader sees it as any tombstone. A write or a row lock
+ * that meets it as the key's newest committed version judges
+ * first-committer-wins by the committed version under it, not by
+ * the move. An sm1::update or sm1::erase that passes then fails
+ * with SM_ERR_SEALED, and so does sm1::read_latest; an insert goes
+ * in over it. The row erased is pinned into pin, as sm1::erase's.
+ */
+int erase_sealed(session_t* session, uint64_t storeid,
+                 std::string_view key, rawpin_t* pin, std::string_view& old);
+
+/*
+ * sm1::insert of a live version that a move of sm's own writes, a
+ * moved marker (../COLSTORE.md §11): sealed, as sm1::erase_sealed's
+ * tombstone is. A reader sees it as any version. A write or a row
+ * lock that meets it as the key's newest committed version judges
+ * first-committer-wins by the version under it; every write that
+ * passes, an insert too, then fails with SM_ERR_SEALED, and so does
+ * sm1::read_latest.
+ */
+int insert_sealed(session_t* session, uint64_t storeid,
+                  std::string_view key, std::string_view data);
+
+/*
  * Read one key.
  *
  * Returns 0 if the key exists, and data then views the value.
@@ -1505,6 +1530,13 @@ int chain_erase(session_t* session, uint64_t storeid,
 int chain_erase_moved(session_t* session, uint64_t storeid,
                       std::string_view key, rawpin_t* pin,
                       std::string_view& old);
+/* sm1::erase_sealed, of a chained key. */
+int chain_erase_sealed(session_t* session, uint64_t storeid,
+                       std::string_view key, rawpin_t* pin,
+                       std::string_view& old);
+/* sm1::insert_sealed, of a chained key. */
+int chain_insert_sealed(session_t* session, uint64_t storeid,
+                        std::string_view key, std::string_view data);
 /* sm1::read, of a chained key; with pin, the row read into it. */
 int chain_read(session_t* session, uint64_t storeid,
                std::string_view key, rawpin_t* pin,
@@ -1835,6 +1867,72 @@ int ssi_read_range(session_t* session, uint64_t storeid, const char* lo,
  * Errors: SM_ERR_NOTRANS, SM_ERR_PREPARED.
  */
 int ssi_write_key(session_t* session, uint64_t storeid, std::string_view key);
+
+/*
+ * File sets (../COLSTORE.md §4.5): groups of immutable files, named
+ * by a versioned key of a store, fsid. A file set's files are
+ * written with sm1::fileset_write before its key is put with
+ * sm1::fileset_put, in one transaction; the key's versions decide
+ * which snapshots see the files. sm1 unlinks the files of an abort
+ * or a rollback to a savepoint, deletes them in GC once no snapshot
+ * sees the key, and sweeps them at open. An fsid is used once: the
+ * caller draws it from a sequence.
+ */
+
+/*
+ * Write one file, name, of file set fsid in storeid, and make it
+ * durable: the file and its directory fsynced. A file is written
+ * once: an existing one is SM_ERR_IO. name is letters, digits, '.'
+ * and '_'.
+ *
+ * Errors: SM_ERR_NOTFOUND (store), SM_ERR_INVALID (name),
+ * SM_ERR_IO, SM_ERR_DISKFULL, SM_ERR_NOTRANS, SM_ERR_PREPARED.
+ */
+int fileset_write(session_t* session, uint64_t storeid, uint64_t fsid,
+                  std::string_view name, std::string_view bytes);
+
+/*
+ * Read length bytes from offset of file name of file set fsid, into
+ * out; UINT64_MAX reads to the end. A file a visible key names that
+ * is missing or short is SM_ERR_CORRUPT.
+ *
+ * Errors: SM_ERR_NOTFOUND (store), SM_ERR_CORRUPT, SM_ERR_IO,
+ * SM_ERR_INVALID, SM_ERR_NOTRANS, SM_ERR_PREPARED.
+ */
+int fileset_read(session_t* session, uint64_t storeid, uint64_t fsid,
+                 std::string_view name, uint64_t offset, uint64_t length,
+                 std::string& out);
+
+/*
+ * Put the key of file set fsid, with payload, once its files are
+ * written. fsid is new: nothing is read.
+ *
+ * Errors: SM_ERR_NOTFOUND (store), SM_ERR_INVALID, SM_ERR_NOTRANS,
+ * SM_ERR_PREPARED, SM_ERR_READONLY.
+ */
+int fileset_put(session_t* session, uint64_t storeid, uint64_t fsid,
+                std::string_view payload);
+
+/*
+ * Erase the key of file set fsid. A writer of it in flight is
+ * waited for; above read committed, a commit of it after the
+ * snapshot is SM_ERR_CONFLICT. The files go once no snapshot sees
+ * the key.
+ *
+ * Errors: SM_ERR_NOTFOUND (store or file set), SM_ERR_CONFLICT,
+ * SM_ERR_DEADLOCK, SM_ERR_NOTRANS, SM_ERR_PREPARED, SM_ERR_READONLY.
+ */
+int fileset_erase(session_t* session, uint64_t storeid, uint64_t fsid);
+
+/*
+ * Every file set of storeid the transaction sees, in fsid order, as
+ * (fsid, payload), into out.
+ *
+ * Errors: SM_ERR_NOTFOUND (store), SM_ERR_CORRUPT, SM_ERR_NOTRANS,
+ * SM_ERR_PREPARED.
+ */
+int fileset_list(session_t* session, uint64_t storeid,
+                 std::vector<std::pair<uint64_t, std::string>>& out);
 
 /*
  * Pages (../BTREEINDEX.md §2): keys of a store the level above lays out

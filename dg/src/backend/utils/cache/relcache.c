@@ -1518,6 +1518,7 @@ static Relation RelationBuildSmDesc(Oid targetRelId, bool insertIt) {
   relation = AllocateRelationDesc(&form);
   RelationGetRelid(relation) = targetRelId;
   relation->rd_smversion = desc->version;
+  relation->rd_smcolumnar = desc->column_store;
   relation->rd_refcnt = 0;
   relation->rd_isnailed = false;
   relation->rd_createSubid = InvalidSubTransactionId;

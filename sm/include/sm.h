@@ -635,6 +635,41 @@ struct sm_tbl_t;
 int sm_row_scanopen(sm_tbl_t* tbl, sm_row_scan_t** out);
 
 /*
+ * A bound on one column of a scan of a column store table
+ * (../COLSTORE.md section 12): the rows' values of column attnum,
+ * from 0, meet it. Each value is a datum of the column's type. A
+ * bound prunes row groups; it does not filter rows.
+ */
+struct sm_col_bound_t {
+    int32_t           attnum;
+    bool              is_null = false;  /* IS NULL */
+    bool              not_null = false; /* any other test */
+    bool              has_lo = false;
+    bool              lo_incl = true;
+    sm_datum_t        lo = 0;
+    bool              has_hi = false;
+    bool              hi_incl = true;
+    sm_datum_t        hi = 0;
+    bool              has_in = false; /* = or IN: in[0..n_in) */
+    const sm_datum_t* in = nullptr;
+    size_t            n_in = 0;
+};
+
+/*
+ * Open a cursor over every row of a column store table, as
+ * sm_row_scanopen does, reading of its row groups only the columns
+ * that cols marks, ncols of them (every one with ncols 0), and only
+ * the row groups that may hold a row meeting every bound. A column
+ * not read is null in a row group's row, and a row meeting no bound
+ * may come: the caller tests each row. On any other table,
+ * sm_row_scanopen: every column, every row. A bound on no live
+ * column is SM_ERR_INVALID.
+ */
+int sm_row_scanopen_columns(sm_tbl_t* tbl, const bool* cols, size_t ncols,
+                            const sm_col_bound_t* bounds, size_t nbounds,
+                            sm_row_scan_t** out);
+
+/*
  * Open a cursor over the rows with _id first..last, both included, of
  * a table without a primary key; SM_ERR_INVALID in one with.
  */
@@ -672,6 +707,13 @@ int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, const void** tuple,
  * alone.
  */
 int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, sm_pin_ref_t* ref);
+
+/*
+ * The row group of a column store table's row that sm_row_scannxt
+ * handed out last, 0 for a row of its delta store, and of any other
+ * table.
+ */
+uint64_t sm_row_scan_rg(const sm_row_scan_t* scan);
 
 /* Move a cursor by _id, of a keyless table, forward to _id id. */
 int sm_row_scan_seek(sm_row_scan_t* scan, uint64_t id);
@@ -973,6 +1015,7 @@ struct sm_table_def_t {
     std::vector<sm_fkey_def_t>   fkeys;         /* its own */
     std::vector<sm_fkey_ref_t>   referenced_by; /* those that reference it */
     std::vector<sm_check_def_t>  checks;        /* its check constraints */
+    bool column_store = false; /* a column store table (../COLSTORE.md) */
 };
 
 /*
@@ -1545,6 +1588,31 @@ int sm_tbl_delete(sm_tbl_t* tbl, uint64_t id, sm_pin_ref_t* ref = nullptr,
                   const void** old = nullptr, size_t* len = nullptr);
 
 /*
+ * A column store table's row by its name (rg_id, id), rg_id the row
+ * group sm_row_scan_rg gave, 0 for the delta store
+ * (../COLSTORE.md §8, §9): sm3's tbl_delete_at and tbl_update_at.
+ * At read committed, a row updated since fails with SM_ERR_UPDATED;
+ * the caller reads it again by (0, id).
+ */
+int sm_tbl_delete_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id);
+int sm_tbl_update_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id,
+                     const sm_datum_t* values, const bool* isnull, size_t n);
+
+/*
+ * Seal a row group of a column store table's delta store, in the
+ * session's transaction, at read committed (../COLSTORE.md §10):
+ * *sealed says whether one was.
+ */
+int sm_tbl_seal(sm_tbl_t* tbl, bool* sealed);
+
+/*
+ * Wait until the seal's job of the session's database has nothing
+ * to do: the tables a commit queued are sealed (../COLSTORE.md
+ * §10.4). For tests.
+ */
+int sm_seal_wait(sm_session_t* session);
+
+/*
  * Read the row with _id id: 0 with its tuple, 1 if none, or -1. The
  * tuple is valid only until the next call on this session.
  */
@@ -1838,7 +1906,7 @@ int sm_tbl_stats(sm_session_t* session, uint64_t oid,
 int sm_cat_create_table(sm_session_t* session, uint64_t nspoid,
                         const char* name,
                         const std::vector<sm_column_spec_t>& columns,
-                        uint64_t* oid);
+                        uint64_t* oid, bool column_store = false);
 
 /*
  * Create the temporary table name with these columns
@@ -1854,7 +1922,7 @@ int sm_cat_create_table(sm_session_t* session, uint64_t nspoid,
  */
 int sm_cat_create_temp_table(sm_session_t* session, const char* name,
                              const std::vector<sm_column_spec_t>& columns,
-                             uint64_t* oid);
+                             uint64_t* oid, bool column_store = false);
 
 /*
  * Drop the table oid: its store, rows, indexes and sequence. One a

@@ -279,6 +279,8 @@ static thread_local /*LOCAL*/ Oid kept_oid = InvalidOid;
  */
 static thread_local /*LOCAL*/ Oid load_oid = InvalidOid;
 static thread_local /*LOCAL*/ std::string kept_key;
+/* A column store table's row deleted from a row group, kept_tuple's copy. */
+static thread_local /*LOCAL*/ std::string kept_copy;
 static thread_local /*LOCAL*/ const char *kept_tuple = NULL;
 static thread_local /*LOCAL*/ Size kept_len = 0;
 static thread_local /*LOCAL*/ sm_pin_ref_t kept_ref = {};
@@ -356,6 +358,10 @@ static int sm_sqlstate(void) {
     return ERRCODE_IN_FAILED_SQL_TRANSACTION;
   case SM_ERR_MOVED:
     return ERRCODE_T_R_SERIALIZATION_FAILURE;
+  case SM_ERR_UNSUPPORTED:
+    return ERRCODE_FEATURE_NOT_SUPPORTED;
+  case SM_ERR_VALUETOOLONG:
+    return ERRCODE_PROGRAM_LIMIT_EXCEEDED;
   default:
     return sm_retryable() == 1 ? ERRCODE_T_R_SERIALIZATION_FAILURE
                                : ERRCODE_INTERNAL_ERROR;
@@ -1716,8 +1722,9 @@ static void name_not_nulls(const CreateStmt *stmt, const char *relname,
  * their values checked as PostgreSQL checks them, and kept nowhere.  Any
  * other storage parameter is refused.
  */
-static void check_storage_options(List *options) {
+static bool check_storage_options(List *options) {
   List *fill = NIL;
+  bool columnar = false;
   ListCell *l;
 
   foreach (l, options) {
@@ -1727,7 +1734,22 @@ static void check_storage_options(List *options) {
     if (opt->defnamespace == NULL && strcmp(opt->defname, "fillfactor") == 0)
       fill = lappend(fill, opt);
     else if (opt->defnamespace == NULL &&
-             strcmp(opt->defname, "autovacuum_enabled") == 0) {
+             strcmp(opt->defname, "storage") == 0) {
+      /* row, the default, or columnar (../../../../../sm/COLSTORE.md). */
+      const char *value = NULL != opt->arg ? defGetString(opt) : "";
+
+      if (0 == pg_strcasecmp(value, "columnar"))
+        columnar = true;
+      else if (0 == pg_strcasecmp(value, "row"))
+        columnar = false;
+      else
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("invalid value for option \"storage\": %s", value),
+                 errhint("Valid values are \"row\" and "
+                         "\"columnar\".")));
+    } else if (opt->defnamespace == NULL &&
+               strcmp(opt->defname, "autovacuum_enabled") == 0) {
       /* A bare name means true, as transformRelOptions() takes it. */
       const char *value = opt->arg != NULL ? defGetString(opt) : "true";
 
@@ -1741,14 +1763,16 @@ static void check_storage_options(List *options) {
                errmsg("storage parameter \"%s%s%s\" is not supported",
                       opt->defnamespace != NULL ? opt->defnamespace : "",
                       opt->defnamespace != NULL ? "." : "", opt->defname),
-               errdetail("CREATE TABLE takes only fillfactor and "
-                         "autovacuum_enabled, and ignores them.")));
+               errdetail("CREATE TABLE takes only storage, fillfactor "
+                         "and autovacuum_enabled, and ignores the last "
+                         "two.")));
   }
   /* PostgreSQL's own check of fillfactor: its range, and given once. */
   if (fill != NIL)
     (void)heap_reloptions(
         RELKIND_RELATION,
         transformRelOptions((Datum)0, fill, NULL, NULL, false, false), true);
+  return columnar;
 }
 
 /*
@@ -1764,8 +1788,11 @@ static bool only_checks(List *constraints) {
   return true;
 }
 
-/* Refuse what a CREATE TABLE asks that sm's tables do not have yet. */
-static void check_create_table(const CreateStmt *stmt) {
+/*
+ * Refuse what a CREATE TABLE asks that sm's tables do not have yet; whether
+ * it asks for a column store table.
+ */
+static bool check_create_table(const CreateStmt *stmt) {
   if (stmt->inhRelations != NIL || stmt->partbound != NULL ||
       stmt->partspec != NULL || stmt->ofTypename != NULL ||
       !only_checks(stmt->constraints) || stmt->tablespacename != NULL ||
@@ -1774,7 +1801,7 @@ static void check_create_table(const CreateStmt *stmt) {
     ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
                     errmsg("CREATE TABLE supports only columns, NOT NULL, "
                            "PRIMARY KEY, UNIQUE and TEMPORARY yet")));
-  check_storage_options(stmt->options);
+  return check_storage_options(stmt->options);
 }
 
 /*
@@ -2225,7 +2252,7 @@ ObjectAddress smstore_create_table(CreateStmt *stmt) {
   ObjectAddress address;
   ListCell *l;
 
-  check_create_table(stmt);
+  bool columnar = check_create_table(stmt);
   nspoid = RangeVarGetCreationNamespace(stmt->relation);
   check_system_namespace(stmt->relation->relname, nspoid);
   /* A table in pg_temp is temporary, and a temporary one is in no other. */
@@ -2297,9 +2324,9 @@ ObjectAddress smstore_create_table(CreateStmt *stmt) {
   /* A temporary table is the session's alone, in no namespace of sm's. */
   if (waiting([&] {
         return temp ? sm_cat_create_temp_table(s, stmt->relation->relname,
-                                               columns, &oid)
+                                               columns, &oid, columnar)
                     : sm_cat_create_table(s, nspoid, stmt->relation->relname,
-                                          columns, &oid);
+                                          columns, &oid, columnar);
       }) != 0) {
     if (sm_errnum() == SM_ERR_DUPKEY)
       ereport(ERROR, (errcode(ERRCODE_DUPLICATE_TABLE),
@@ -2613,6 +2640,13 @@ static sm_tbl_t *open_table(Oid oid, sm_lockmode_t mode) {
   return tbl;
 }
 
+/* Whether relid is a column store table (../../../../../sm/COLSTORE.md). */
+static bool is_column_store(Oid relid) {
+  sm_tbl_t *tbl = open_table(relid, SM_LOCKMODE_IS);
+
+  return NULL != tbl && sm_tbl_def(tbl)->column_store;
+}
+
 /*
  * As open_table, but never waiting for the lock: NULL with *blocked true if
  * another transaction holds it in a mode that conflicts, NULL with *blocked
@@ -2762,6 +2796,7 @@ smstore_table_t *smstore_table_desc(Oid oid) {
   desc = (smstore_table_t *)palloc(sizeof(smstore_table_t));
   desc->oid = oid;
   desc->version = def->version;
+  desc->column_store = def->column_store;
   desc->nspoid =
       def->nspoid == SM_NSP_TEMP ? PG_TEMP_NAMESPACE : (Oid)def->nspoid;
   desc->name = pstrdup(def->name.c_str());
@@ -3343,6 +3378,11 @@ struct smstore_scan_t {
    */
   bool entries_only;
   bool ra_point;
+  /*
+   * A column store table's scan that reads some of its columns: its rows
+   * are not the table's, and no fetch takes them (scan_tuple()).
+   */
+  bool partial;
   bool ra_done;
   int ra_n;
   int ra_at;
@@ -3583,6 +3623,254 @@ smstore_scan_t *smstore_beginscan(Relation rel, bool by_rowno) {
   scan->relid = RelationGetRelid(rel);
   if ((by_rowno ? sm_row_scanopen_idrange(tbl, 0, UINT64_MAX, &scan->cursor)
                 : sm_row_scanopen(tbl, &scan->cursor)) != 0)
+    sm_error("scan a table");
+  open_scans.push_back(scan);
+  return scan;
+}
+
+/*
+ * Whether a scan of rel, the range table's scanrelid, may read some of its
+ * columns: not if the statement writes it or locks its rows, as a write
+ * then fetches the whole row the scan is on.
+ */
+static bool may_read_some(Index scanrelid, EState *estate) {
+  PlannedStmt *stmt = estate->es_plannedstmt;
+  ListCell *l;
+
+  if (NULL == stmt || NULL != estate->es_epq_active ||
+      list_member_int(stmt->resultRelations, (int)scanrelid))
+    return false;
+  foreach (l, stmt->rowMarks)
+    if (lfirst_node(PlanRowMark, l)->rti == scanrelid)
+      return false;
+  return true;
+}
+
+/*
+ * A datum of rel's column att as sm takes it, for a bound: a decimal the
+ * column's integer at or below it, or with upper at or above it, within
+ * the column's precision (numeric_bound()), so the bound takes in every
+ * row the qual would; a varlena read whole.
+ */
+static sm_datum_t bound_datum(Form_pg_attribute att, Datum d, bool upper) {
+  if (is_decimal(att->atttypid))
+    return numeric_bound(d, att->atttypid, att->atttypid, att->atttypmod, upper,
+                         (uint8 *)palloc(16));
+  if (-1 == att->attlen)
+    return (sm_datum_t)PG_DETOAST_DATUM_PACKED(d);
+  return (sm_datum_t)d;
+}
+
+/*
+ * The column of rel, from 1, that a qual's operand expr is, varno's Var of
+ * a live column; 0 if it is none.
+ */
+static AttrNumber bound_column(Relation rel, Node *expr, Index varno) {
+  if (NULL == expr || !IsA(expr, Var))
+    return 0;
+  Var *var = (Var *)expr;
+
+  if (var->varno != (int)varno || var->varattno <= 0 ||
+      var->varattno > RelationGetNumberOfAttributes(rel) ||
+      TupleDescAttr(RelationGetDescr(rel), var->varattno - 1)->attisdropped)
+    return 0;
+  return var->varattno;
+}
+
+/*
+ * The btree strategy of opno on column att, by the default btree operator
+ * family of its type, with both operands of its type and the column's
+ * collation; 0 if it has none.
+ */
+static int bound_strategy(Form_pg_attribute att, Oid opno, Oid collid) {
+  Oid opclass = GetDefaultOpClass(att->atttypid, BTREE_AM_OID);
+  int strategy;
+  Oid lefttype, righttype;
+
+  if (!OidIsValid(opclass) || collid != att->attcollation)
+    return 0;
+  Oid family = get_opclass_family(opclass);
+
+  if (!op_in_opfamily(opno, family))
+    return 0;
+  get_op_opfamily_properties(opno, family, false, &strategy, &lefttype,
+                             &righttype);
+  if (lefttype != att->atttypid || righttype != att->atttypid)
+    return 0;
+  return strategy;
+}
+
+/*
+ * The bounds a column store table's scan prunes its row groups by, from
+ * its quals (../sm/COLSTORE.md section 12): each qual of one live column of
+ * rel, varno's, against a constant, by the btree operator of the column's
+ * type and collation -- <, <=, =, >= or > -- or = ANY of an array, IS NULL
+ * or IS NOT NULL.  A qual of another shape gives none.  A bound prunes; the
+ * qual still tests each row.  The datums are palloc'd, or the plan's.
+ */
+static std::vector<sm_col_bound_t> qual_bounds(Relation rel, List *qual,
+                                               Index varno) {
+  std::vector<sm_col_bound_t> out;
+  TupleDesc desc = RelationGetDescr(rel);
+  ListCell *l;
+
+  foreach (l, qual) {
+    Node *q = (Node *)lfirst(l);
+    sm_col_bound_t b = {};
+
+    if (IsA(q, NullTest)) {
+      NullTest *t = (NullTest *)q;
+      AttrNumber att =
+          t->argisrow ? 0 : bound_column(rel, (Node *)t->arg, varno);
+
+      if (0 == att)
+        continue;
+      b.attnum = att - 1;
+      b.is_null = IS_NULL == t->nulltesttype;
+      b.not_null = !b.is_null;
+      out.push_back(b);
+    } else if (IsA(q, OpExpr) && 2 == list_length(((OpExpr *)q)->args)) {
+      OpExpr *op = (OpExpr *)q;
+      Node *left = (Node *)linitial(op->args);
+      Node *right = (Node *)lsecond(op->args);
+      bool flipped = false;
+      AttrNumber att = bound_column(rel, left, varno);
+
+      /* Const op Var: as Var op Const, the strategy turned around. */
+      if (0 == att) {
+        att = bound_column(rel, right, varno);
+        std::swap(left, right);
+        flipped = true;
+      }
+      if (0 == att || !IsA(right, Const) || ((Const *)right)->constisnull)
+        continue;
+      Form_pg_attribute form = TupleDescAttr(desc, att - 1);
+      int s = bound_strategy(form, op->opno, op->inputcollid);
+      sm_datum_t v = 0;
+
+      if (0 == s)
+        continue;
+      if (flipped)
+        s = BTLessStrategyNumber == s           ? BTGreaterStrategyNumber
+            : BTLessEqualStrategyNumber == s    ? BTGreaterEqualStrategyNumber
+            : BTGreaterStrategyNumber == s      ? BTLessStrategyNumber
+            : BTGreaterEqualStrategyNumber == s ? BTLessEqualStrategyNumber
+                                                : s;
+      v = bound_datum(form, ((Const *)right)->constvalue,
+                      BTLessStrategyNumber == s ||
+                          BTLessEqualStrategyNumber == s);
+      b.attnum = att - 1;
+      b.not_null = true;
+      if (BTEqualStrategyNumber == s) {
+        sm_datum_t *in = (sm_datum_t *)palloc(sizeof(sm_datum_t));
+
+        in[0] = v;
+        b.has_in = true;
+        b.in = in;
+        b.n_in = 1;
+      } else if (BTLessStrategyNumber == s || BTLessEqualStrategyNumber == s) {
+        b.has_hi = true;
+        b.hi_incl = BTLessEqualStrategyNumber == s;
+        b.hi = v;
+      } else {
+        b.has_lo = true;
+        b.lo_incl = BTGreaterEqualStrategyNumber == s;
+        b.lo = v;
+      }
+      out.push_back(b);
+    } else if (IsA(q, ScalarArrayOpExpr)) {
+      ScalarArrayOpExpr *op = (ScalarArrayOpExpr *)q;
+      AttrNumber att =
+          2 == list_length(op->args)
+              ? bound_column(rel, (Node *)linitial(op->args), varno)
+              : 0;
+      Node *arr = 0 != att ? (Node *)lsecond(op->args) : NULL;
+
+      if (0 == att || !op->useOr || !IsA(arr, Const) ||
+          ((Const *)arr)->constisnull)
+        continue;
+      Form_pg_attribute form = TupleDescAttr(desc, att - 1);
+
+      if (BTEqualStrategyNumber !=
+          bound_strategy(form, op->opno, op->inputcollid))
+        continue;
+      ArrayType *a = DatumGetArrayTypeP(((Const *)arr)->constvalue);
+      int16 elmlen;
+      bool elmbyval;
+      char elmalign;
+      Datum *elems;
+      bool *nulls;
+      int n, k = 0;
+
+      if (ARR_ELEMTYPE(a) != form->atttypid)
+        continue;
+      get_typlenbyvalalign(form->atttypid, &elmlen, &elmbyval, &elmalign);
+      deconstruct_array(a, form->atttypid, elmlen, elmbyval, elmalign, &elems,
+                        &nulls, &n);
+      sm_datum_t *in = (sm_datum_t *)palloc((n + 1) * sizeof(sm_datum_t));
+
+      /* A null element matches no row. */
+      for (int i = 0; i < n; i++)
+        if (!nulls[i])
+          in[k++] = bound_datum(form, elems[i], false);
+      b.attnum = att - 1;
+      b.not_null = true;
+      b.has_in = true;
+      b.in = in;
+      b.n_in = k;
+      out.push_back(b);
+    }
+  }
+  return out;
+}
+
+/*
+ * Begin a sequential scan of rel, a table in sm, by plan, its scan of the
+ * range table's scanrelid.  A column store table's reads of its row groups
+ * only the columns the plan names, unless the statement writes or locks
+ * its rows (may_read_some()), and only the row groups the bounds of its
+ * quals may match (qual_bounds()).  Any other table's is
+ * smstore_beginscan()'s.
+ */
+smstore_scan_t *smstore_beginscan_seq(Relation rel, Plan *plan, Index scanrelid,
+                                      EState *estate) {
+  if (!rel->rd_smcolumnar)
+    return smstore_beginscan(rel, false);
+  sm_tbl_t *tbl = open_table(RelationGetRelid(rel), SM_LOCKMODE_IS);
+  int natts = RelationGetNumberOfAttributes(rel);
+  std::unique_ptr<bool[]> cols(new bool[natts]());
+  bool some = may_read_some(scanrelid, estate);
+
+  if (tbl == NULL)
+    ereport(ERROR, (errcode(ERRCODE_UNDEFINED_TABLE),
+                    errmsg("relation \"%s\" does not exist",
+                           RelationGetRelationName(rel))));
+  /* The columns the plan reads; the whole row, all of them. */
+  if (some) {
+    Bitmapset *attrs = NULL;
+    int x = -1;
+
+    pull_varattnos((Node *)plan->targetlist, scanrelid, &attrs);
+    pull_varattnos((Node *)plan->qual, scanrelid, &attrs);
+    while ((x = bms_next_member(attrs, x)) >= 0) {
+      AttrNumber att = x + FirstLowInvalidHeapAttributeNumber;
+
+      if (InvalidAttrNumber == att)
+        some = false;
+      else if (att > 0 && att <= natts)
+        cols[att - 1] = true;
+    }
+  }
+  std::vector<sm_col_bound_t> bounds = qual_bounds(rel, plan->qual, scanrelid);
+  smstore_scan_t *scan = (smstore_scan_t *)palloc0(sizeof(smstore_scan_t));
+
+  scan->tbl = tbl;
+  scan->relid = RelationGetRelid(rel);
+  /* Partial only if a column goes unread. */
+  scan->partial = some && std::find(cols.get(), cols.get() + natts, false) !=
+                              cols.get() + natts;
+  if (sm_row_scanopen_columns(tbl, cols.get(), some ? natts : 0, bounds.data(),
+                              bounds.size(), &scan->cursor) != 0)
     sm_error("scan a table");
   open_scans.push_back(scan);
   return scan;
@@ -5705,6 +5993,15 @@ static void add_fkey(Oid relid, const char *relname, Constraint *con) {
   int numfks = 0, numpks = 0, numdelset = 0;
   ListCell *l;
 
+  /* A column store table has no foreign key (§14.1): taken, not made. */
+  if (is_column_store(relid)) {
+    ereport(WARNING,
+            (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+             errmsg("column store table \"%s\" has no foreign key: it is "
+                    "not made",
+                    relname)));
+    return;
+  }
   if (con->fk_with_period || con->pk_with_period)
     ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
                     errmsg("a foreign key using PERIOD is not supported")));
@@ -8147,6 +8444,23 @@ ObjectAddress smstore_create_index(Oid relid, IndexStmt *stmt) {
   std::string eval;
 
   check_owner(relid, stmt->relation->relname, false);
+  /*
+   * A column store table has no index (../../../../../sm/COLSTORE.md
+   * §14.1): a PRIMARY KEY, UNIQUE, EXCLUDE or CREATE INDEX is taken, and
+   * not made. A primary key's NOT NULL is the table's already.
+   */
+  if (is_column_store(relid)) {
+    const char *what = stmt->primary                 ? "primary key"
+                       : NIL != stmt->excludeOpNames ? "exclusion constraint"
+                       : stmt->isconstraint          ? "unique constraint"
+                                                     : "index";
+
+    ereport(WARNING,
+            (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+             errmsg("column store table \"%s\" has no %s: it is not made",
+                    stmt->relation->relname, what)));
+    return InvalidObjectAddress;
+  }
   check_create_index(stmt);
   rel = relation_open(relid, NoLock);
   /* The INCLUDE columns name the index too, as DefineIndex() has it. */
@@ -9656,7 +9970,7 @@ static smstore_scan_t *scan_at(Oid oid, const std::string &key) {
  * pin has let it go.
  */
 static bool scan_tuple(smstore_scan_t *scan, const void **tuple, size_t *len) {
-  return scan != NULL && scan->cur_pinned &&
+  return scan != NULL && !scan->partial && scan->cur_pinned &&
          sm_pin_tuple(scan->cursor != NULL ? scan->row_ref : scan->ref, tuple,
                       len) == 0;
 }
@@ -9747,6 +10061,28 @@ static TM_Result write_result(Relation rel, const std::string &key, int rc,
 }
 
 /*
+ * The row group of tbl's row at key, encoded, if tbl is a column store
+ * table and the scan in *scan is on that row, read from a row group: a write
+ * names the row by it, and sm looks for none (../../../../../sm/COLSTORE.md
+ * §8).  0 otherwise, and sm finds the row by its _id.  0 too after a write
+ * found the row changed, as its newest version is elsewhere.
+ */
+static uint64 scan_rg(sm_tbl_t *tbl, Relation rel, const std::string &key,
+                      smstore_scan_t **scan) {
+  Oid oid = RelationGetRelid(rel);
+
+  *scan = NULL;
+  if (!sm_tbl_def(tbl)->column_store || (kept_oid == oid && kept_key == key))
+    return 0;
+  *scan = scan_at(oid, key);
+  /* A row read ahead is not the cursor's last: its row group is not said. */
+  return NULL != *scan && NULL != (*scan)->cursor && !(*scan)->ra_rows &&
+                 !(*scan)->ra_point
+             ? sm_row_scan_rg((*scan)->cursor)
+             : 0;
+}
+
+/*
  * Replace the row of rel key names with the slot's: sm writes every index
  * of the table with it.
  */
@@ -9795,8 +10131,13 @@ TM_Result smstore_update(Relation rel, const RowKey *key, TupleTableSlot *slot,
   const sm_datum_t *row =
       row_to_sm(tbl, slot->tts_tupleDescriptor, slot->tts_values,
                 slot->tts_isnull, slot->tts_nvalid, have_old ? &old : NULL);
+  smstore_scan_t *scan;
+  uint64 rg = scan_rg(tbl, rel, bytes, &scan);
   int rc = waiting([&] {
-    return sm_tbl_update(tbl, sk, row, slot->tts_isnull, slot->tts_nvalid);
+    return 0 != rg ? sm_tbl_update_at(tbl, rg, key_rowno(rel, key), row,
+                                      slot->tts_isnull, slot->tts_nvalid)
+                   : sm_tbl_update(tbl, sk, row, slot->tts_isnull,
+                                   slot->tts_nvalid);
   });
 
   sm_unpin(&ref);
@@ -9815,7 +10156,26 @@ TM_Result smstore_delete(Relation rel, const RowKey *key,
   std::string bytes = key_bytes(tbl, sk);
   const void *old;
   size_t len;
+  smstore_scan_t *scan;
+  uint64 rg = scan_rg(tbl, rel, bytes, &scan);
 
+  /*
+   * A row group's row, the scan on it: deleted by its name, and kept as the
+   * scan read it, copied, as the scan's pin lasts until its cursor moves.
+   */
+  if (0 != rg && scan_tuple(scan, &old, &len)) {
+    std::string was((const char *)old, len);
+    int rc =
+        waiting([&] { return sm_tbl_delete_at(tbl, rg, key_rowno(rel, key)); });
+
+    if (0 == rc) {
+      sm_unpin(&kept_ref);
+      kept_copy = std::move(was);
+      keep_row(RelationGetRelid(rel), bytes, kept_copy.data(),
+               kept_copy.size());
+    }
+    return write_result(rel, bytes, rc, NULL, tmfd, "delete a row");
+  }
   /* The row deleted, pinned in kept_ref, which lets go of the last. */
   int rc =
       waiting([&] { return sm_tbl_delete(tbl, sk, &kept_ref, &old, &len); });

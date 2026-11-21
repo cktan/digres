@@ -385,6 +385,8 @@ key   = class   (1B, 0x00)
 value = flags   (1B)   bit0 = tombstone (this version is a delete)
                        bit1 = commit_ts is stamped in this header
                        bit2 = a move's tombstone (sm1::erase_moved)
+                       bit6 = a move of sm's own (sm1::erase_sealed,
+                              sm1::insert_sealed; ../COLSTORE.md §10.2)
       | xid     (8B)   the writer, while unstamped
         commit_ts (8B) in its place once stamped
       | payload (variable, absent for a tombstone)

@@ -16,6 +16,7 @@ error codes, besides the C++ standard library and POSIX.
 | `std::format` into a fixed buffer, allocating nothing | `include/sm0_format.h` | `src/format.cc` |
 | defer blocks and scope guards | `include/sm0_defer.h` | — |
 | fixed-width big-endian integers | `include/sm0_codec.h` | — |
+| CRC32C, the Column Store's checksum ([`../COLSTORE.md`](../COLSTORE.md) §5.3) | `include/sm0_crc.h` | `src/crc.cc` |
 | a list of fixed blocks, cut back to a mark, its entries never moving: `blist_t` | `include/sm0_blist.h` | — |
 | a memory area, bytes cut into pieces and freed at once: `arena_t` | `include/sm0_arena.h` | `src/arena.cc` |
 | a sort of records by key, in memory and in runs on files: `sort_t` ([`../SORT.md`](../SORT.md)) | `include/sm0_sort.h` | `src/sort.cc` |

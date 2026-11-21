@@ -24,9 +24,14 @@
  * deformed. It is on one of its session's lists: free, held by a
  * read or a write, or a cursor's.
  */
+namespace sm3 {
+struct col_scan_t;
+}
+
 struct sm3::pin_t {
-  sm1::rawpin_t *raw = nullptr;           /* a read's row; made with the pin */
-  std::string_view row;                   /* the row's bytes; empty when free */
+  sm1::rawpin_t *raw = nullptr; /* a read's row; made with the pin */
+  std::string_view row;         /* the row's bytes; empty when free */
+  std::string own;              /* a row group's row, which no raw pin holds */
   std::shared_ptr<const table_def_t> def; /* the row's layout */
   sm2::tup_reader_t reader;     /* how far it is deformed; begun lazily */
   uint64_t gen = 1;             /* increased on each release */
@@ -89,6 +94,18 @@ struct sm3::scan_t {
   bool closed = false; /* its transaction ended; never reopened */
   /* tbl_scan_cols's by-reference datums. */
   std::vector<std::optional<std::string>> datums;
+  /*
+   * A column store table's row groups, read before its delta store's
+   * rows (../COLSTORE.md §12); nullptr once they are done, and for
+   * any other table.
+   */
+  col_scan_t *col = nullptr;
+  /* A column store table's delta rows read, for its seal's queue. */
+  uint64_t delta_rows = 0;
+  /* That table's oid, for its seal's queue; 0 for any other table. */
+  uint64_t col_oid = 0;
+  /* The key of the last row, if a row group's: the delta cursor has none. */
+  std::string col_key;
   /*
    * raws[0] is the cursor's pin's own; the batch's others go back to
    * the session's pool, emptied, so their iterators and blocks go now.
