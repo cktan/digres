@@ -74,19 +74,6 @@
 
 enum path_delim { PATH_NONE, PATH_OPEN, PATH_CLOSED };
 
-/*
- * The functions that call ty pass the address of a scalar and have no array
- * on their stack: a stack canary protects nothing in them, and costs a few
- * instructions in each call.
- */
-#define GEO_NO_CANARY __attribute__((no_stack_protector))
-
-/* The structs have the layout of ty's: a call passes them through these. */
-#define TYP(p) ((ty_point_t *)(p))
-#define TYL(p) ((ty_line_t *)(p))
-#define TYS(p) ((ty_lseg_t *)(p))
-#define TYB(p) ((ty_box_t *)(p))
-
 /* Routines for points */
 static inline void point_construct(Point *result, float8 x, float8 y);
 static inline void point_add_point(Point *result, Point *pt1, Point *pt2);
@@ -98,12 +85,24 @@ static inline float8 point_dt(Point *pt1, Point *pt2);
 static inline float8 point_sl(Point *pt1, Point *pt2);
 static int point_inside(Point *p, int npts, Point *plist);
 
+/* Routines for lines */
+static inline void line_construct(LINE *result, Point *pt, float8 m);
+static inline float8 line_sl(LINE *line);
+static inline float8 line_invsl(LINE *line);
+static bool line_interpt_line(Point *result, LINE *l1, LINE *l2);
+static bool line_contain_point(LINE *line, Point *point);
+static float8 line_closept_point(Point *result, LINE *line, Point *point);
+
 /* Routines for line segments */
 static inline void statlseg_construct(LSEG *lseg, Point *pt1, Point *pt2);
+static inline float8 lseg_sl(LSEG *lseg);
+static inline float8 lseg_invsl(LSEG *lseg);
+static bool lseg_interpt_line(Point *result, LSEG *lseg, LINE *line);
 static bool lseg_interpt_lseg(Point *result, LSEG *l1, LSEG *l2);
 static int lseg_crossing(float8 x, float8 y, float8 prev_x, float8 prev_y);
 static bool lseg_contain_point(LSEG *lseg, Point *pt);
 static float8 lseg_closept_point(Point *result, LSEG *lseg, Point *pt);
+static float8 lseg_closept_line(Point *result, LSEG *lseg, LINE *line);
 static float8 lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg);
 
 /* Routines for boxes */
@@ -113,7 +112,12 @@ static bool box_ov(BOX *box1, BOX *box2);
 static float8 box_ar(BOX *box);
 static float8 box_ht(BOX *box);
 static float8 box_wd(BOX *box);
+static bool box_contain_point(BOX *box, Point *point);
 static bool box_contain_box(BOX *contains_box, BOX *contained_box);
+static bool box_contain_lseg(BOX *box, LSEG *lseg);
+static bool box_interpt_lseg(Point *result, BOX *box, LSEG *lseg);
+static float8 box_closept_point(Point *result, BOX *box, Point *pt);
+static float8 box_closept_lseg(Point *result, BOX *box, LSEG *lseg);
 
 /* Routines for circles */
 static float8 circle_ar(CIRCLE *circle);
@@ -773,11 +777,11 @@ Datum box_intersect(PG_FUNCTION_ARGS) {
  *				returns a line segment which happens to be the
  *				  positive-slope diagonal of "box".
  */
-GEO_NO_CANARY Datum box_diagonal(PG_FUNCTION_ARGS) {
+Datum box_diagonal(PG_FUNCTION_ARGS) {
   BOX *box = PG_GETARG_BOX_P(0);
   LSEG *result = (LSEG *)palloc(sizeof(LSEG));
 
-  ty_box_diagonal(TYB(box), TYS(result));
+  statlseg_construct(result, &box->high, &box->low);
 
   PG_RETURN_LSEG_P(result);
 }
@@ -828,7 +832,7 @@ Datum line_in(PG_FUNCTION_ARGS) {
   if (*s == LDELIM_L) {
     if (!line_decode(s + 1, str, line, escontext))
       PG_RETURN_NULL();
-    if (!ty_line_valid(TYL(line)))
+    if (FPzero(line->A) && FPzero(line->B))
       ereturn(
           escontext, (Datum)0,
           (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
@@ -848,8 +852,7 @@ Datum line_in(PG_FUNCTION_ARGS) {
      * errors.  Eventually we should allow those to be soft, but the
      * notational pain seems to outweigh the value for now.
      */
-    if (ty_line_from_lseg(TYS(&lseg), TYL(line)))
-      float_raise_ty();
+    line_construct(line, &lseg.p[0], lseg_sl(&lseg));
   }
 
   PG_RETURN_LINE_P(line);
@@ -879,7 +882,7 @@ Datum line_recv(PG_FUNCTION_ARGS) {
   line->B = pq_getmsgfloat8(buf);
   line->C = pq_getmsgfloat8(buf);
 
-  if (!ty_line_valid(TYL(line)))
+  if (FPzero(line->A) && FPzero(line->B))
     ereport(
         ERROR,
         (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
@@ -907,21 +910,46 @@ Datum line_send(PG_FUNCTION_ARGS) {
  *		Internal form:	Ax+By+C=0
  *---------------------------------------------------------*/
 
+/*
+ * Fill already-allocated LINE struct from the point and the slope
+ */
+static inline void line_construct(LINE *result, Point *pt, float8 m) {
+  if (isinf(m)) {
+    /* vertical - use "x = C" */
+    result->A = -1.0;
+    result->B = 0.0;
+    result->C = pt->x;
+  } else if (m == 0) {
+    /* horizontal - use "y = C" */
+    result->A = 0.0;
+    result->B = -1.0;
+    result->C = pt->y;
+  } else {
+    /* use "mx - y + yinter = 0" */
+    result->A = m;
+    result->B = -1.0;
+    result->C = float8_mi(pt->y, float8_mul(m, pt->x));
+    /* on some platforms, the preceding expression tends to produce -0 */
+    if (result->C == 0.0)
+      result->C = 0.0;
+  }
+}
 
 /* line_construct_pp()
  * two points
  */
-GEO_NO_CANARY Datum line_construct_pp(PG_FUNCTION_ARGS) {
+Datum line_construct_pp(PG_FUNCTION_ARGS) {
   Point *pt1 = PG_GETARG_POINT_P(0);
   Point *pt2 = PG_GETARG_POINT_P(1);
   LINE *result = (LINE *)palloc(sizeof(LINE));
 
-  if (ty_line_from_points(TYP(pt1), TYP(pt2), TYL(result))) {
-    if (ty_errnum() == TY_ERR_INVALID)
-      ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                      errmsg("%s", ty_errmsg())));
-    float_raise_ty();
-  }
+  if (point_eq_point(pt1, pt2))
+    ereport(
+        ERROR,
+        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+         errmsg("invalid line specification: must be two distinct points")));
+
+  line_construct(result, pt1, point_sl(pt1, pt2));
 
   PG_RETURN_LINE_P(result);
 }
@@ -930,96 +958,189 @@ GEO_NO_CANARY Datum line_construct_pp(PG_FUNCTION_ARGS) {
  *	Relative position routines.
  *---------------------------------------------------------*/
 
-GEO_NO_CANARY Datum line_intersect(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  int r;
+Datum line_intersect(PG_FUNCTION_ARGS) {
+  LINE *l1 = PG_GETARG_LINE_P(0);
+  LINE *l2 = PG_GETARG_LINE_P(1);
 
-  if (ty_line_intersect(TYL(a0), TYL(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(line_interpt_line(NULL, l1, l2));
 }
 
-GEO_NO_CANARY Datum line_parallel(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  int r;
+Datum line_parallel(PG_FUNCTION_ARGS) {
+  LINE *l1 = PG_GETARG_LINE_P(0);
+  LINE *l2 = PG_GETARG_LINE_P(1);
 
-  if (ty_line_parallel(TYL(a0), TYL(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(!line_interpt_line(NULL, l1, l2));
 }
 
-GEO_NO_CANARY Datum line_perp(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  int r;
+Datum line_perp(PG_FUNCTION_ARGS) {
+  LINE *l1 = PG_GETARG_LINE_P(0);
+  LINE *l2 = PG_GETARG_LINE_P(1);
 
-  if (ty_line_perp(TYL(a0), TYL(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  if (FPzero(l1->A))
+    PG_RETURN_BOOL(FPzero(l2->B));
+  if (FPzero(l2->A))
+    PG_RETURN_BOOL(FPzero(l1->B));
+  if (FPzero(l1->B))
+    PG_RETURN_BOOL(FPzero(l2->A));
+  if (FPzero(l2->B))
+    PG_RETURN_BOOL(FPzero(l1->A));
+
+  PG_RETURN_BOOL(FPeq(
+      float8_div(float8_mul(l1->A, l2->A), float8_mul(l1->B, l2->B)), -1.0));
 }
 
-GEO_NO_CANARY Datum line_vertical(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
+Datum line_vertical(PG_FUNCTION_ARGS) {
+  LINE *line = PG_GETARG_LINE_P(0);
 
-  PG_RETURN_BOOL(ty_line_vertical(TYL(a0)));
+  PG_RETURN_BOOL(FPzero(line->B));
 }
 
-GEO_NO_CANARY Datum line_horizontal(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
+Datum line_horizontal(PG_FUNCTION_ARGS) {
+  LINE *line = PG_GETARG_LINE_P(0);
 
-  PG_RETURN_BOOL(ty_line_horizontal(TYL(a0)));
+  PG_RETURN_BOOL(FPzero(line->A));
 }
 
 /*
  * Check whether the two lines are the same
  */
-GEO_NO_CANARY Datum line_eq(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  int r;
+Datum line_eq(PG_FUNCTION_ARGS) {
+  LINE *l1 = PG_GETARG_LINE_P(0);
+  LINE *l2 = PG_GETARG_LINE_P(1);
+  float8 ratio;
 
-  if (ty_line_eq(TYL(a0), TYL(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  /* If any NaNs are involved, insist on exact equality */
+  if (unlikely(isnan(l1->A) || isnan(l1->B) || isnan(l1->C) || isnan(l2->A) ||
+               isnan(l2->B) || isnan(l2->C))) {
+    PG_RETURN_BOOL(float8_eq(l1->A, l2->A) && float8_eq(l1->B, l2->B) &&
+                   float8_eq(l1->C, l2->C));
+  }
+
+  /* Otherwise, lines whose parameters are proportional are the same */
+  if (!FPzero(l2->A))
+    ratio = float8_div(l1->A, l2->A);
+  else if (!FPzero(l2->B))
+    ratio = float8_div(l1->B, l2->B);
+  else if (!FPzero(l2->C))
+    ratio = float8_div(l1->C, l2->C);
+  else
+    ratio = 1.0;
+
+  PG_RETURN_BOOL(FPeq(l1->A, float8_mul(ratio, l2->A)) &&
+                 FPeq(l1->B, float8_mul(ratio, l2->B)) &&
+                 FPeq(l1->C, float8_mul(ratio, l2->C)));
 }
 
 /*----------------------------------------------------------
  *	Line arithmetic routines.
  *---------------------------------------------------------*/
 
+/*
+ * Return slope of the line
+ */
+static inline float8 line_sl(LINE *line) {
+  if (FPzero(line->A))
+    return 0.0;
+  if (FPzero(line->B))
+    return get_float8_infinity();
+  return float8_div(line->A, -line->B);
+}
 
+/*
+ * Return inverse slope of the line
+ */
+static inline float8 line_invsl(LINE *line) {
+  if (FPzero(line->A))
+    return get_float8_infinity();
+  if (FPzero(line->B))
+    return 0.0;
+  return float8_div(line->B, line->A);
+}
 
 /* line_distance()
  * Distance between two lines.
  */
-GEO_NO_CANARY Datum line_distance(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  float8 r;
+Datum line_distance(PG_FUNCTION_ARGS) {
+  LINE *l1 = PG_GETARG_LINE_P(0);
+  LINE *l2 = PG_GETARG_LINE_P(1);
+  float8 ratio;
 
-  if (ty_line_distance(TYL(a0), TYL(a1), &r))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(r);
+  if (line_interpt_line(NULL, l1, l2)) /* intersecting? */
+    PG_RETURN_FLOAT8(0.0);
+
+  if (!FPzero(l1->A) && !isnan(l1->A) && !FPzero(l2->A) && !isnan(l2->A))
+    ratio = float8_div(l1->A, l2->A);
+  else if (!FPzero(l1->B) && !isnan(l1->B) && !FPzero(l2->B) && !isnan(l2->B))
+    ratio = float8_div(l1->B, l2->B);
+  else
+    ratio = 1.0;
+
+  PG_RETURN_FLOAT8(float8_div(fabs(float8_mi(l1->C, float8_mul(ratio, l2->C))),
+                              HYPOT(l1->A, l1->B)));
 }
 
 /* line_interpt()
  * Point where two lines l1, l2 intersect (if any)
  */
-GEO_NO_CANARY Datum line_interpt(PG_FUNCTION_ARGS) {
+Datum line_interpt(PG_FUNCTION_ARGS) {
   LINE *l1 = PG_GETARG_LINE_P(0);
   LINE *l2 = PG_GETARG_LINE_P(1);
-  Point *result = (Point *)palloc(sizeof(Point));
-  int hit;
+  Point *result;
 
-  if (ty_line_interpt(TYL(l1), TYL(l2), TYP(result), &hit))
-    float_raise_ty();
-  if (!hit)
+  result = (Point *)palloc(sizeof(Point));
+
+  if (!line_interpt_line(result, l1, l2))
     PG_RETURN_NULL();
   PG_RETURN_POINT_P(result);
 }
 
+/*
+ * Internal version of line_interpt
+ *
+ * Return whether two lines intersect. If *result is not NULL, it is set to
+ * the intersection point.
+ *
+ * NOTE: If the lines are identical then we will find they are parallel
+ * and report "no intersection".  This is a little weird, but since
+ * there's no *unique* intersection, maybe it's appropriate behavior.
+ *
+ * If the lines have NaN constants, we will return true, and the intersection
+ * point would have NaN coordinates.  We shouldn't return false in this case
+ * because that would mean the lines are parallel.
+ */
+static bool line_interpt_line(Point *result, LINE *l1, LINE *l2) {
+  float8 x, y;
+
+  if (!FPzero(l1->B)) {
+    if (FPeq(l2->A, float8_mul(l1->A, float8_div(l2->B, l1->B))))
+      return false;
+
+    x = float8_div(
+        float8_mi(float8_mul(l1->B, l2->C), float8_mul(l2->B, l1->C)),
+        float8_mi(float8_mul(l1->A, l2->B), float8_mul(l2->A, l1->B)));
+    y = float8_div(-float8_pl(float8_mul(l1->A, x), l1->C), l1->B);
+  } else if (!FPzero(l2->B)) {
+    if (FPeq(l1->A, float8_mul(l2->A, float8_div(l1->B, l2->B))))
+      return false;
+
+    x = float8_div(
+        float8_mi(float8_mul(l2->B, l1->C), float8_mul(l1->B, l2->C)),
+        float8_mi(float8_mul(l2->A, l1->B), float8_mul(l1->A, l2->B)));
+    y = float8_div(-float8_pl(float8_mul(l2->A, x), l2->C), l2->B);
+  } else
+    return false;
+
+  /* On some platforms, the preceding expressions tend to produce -0. */
+  if (x == 0.0)
+    x = 0.0;
+  if (y == 0.0)
+    y = 0.0;
+
+  if (result != NULL)
+    point_construct(result, x, y);
+
+  return true;
+}
 
 /***********************************************************************
  **
@@ -1687,18 +1808,30 @@ Datum lseg_construct(PG_FUNCTION_ARGS) {
 
 /* like lseg_construct, but assume space already allocated */
 static inline void statlseg_construct(LSEG *lseg, Point *pt1, Point *pt2) {
-  ty_lseg_construct(TYS(lseg), TYP(pt1), TYP(pt2));
+  lseg->p[0].x = pt1->x;
+  lseg->p[0].y = pt1->y;
+  lseg->p[1].x = pt2->x;
+  lseg->p[1].y = pt2->y;
 }
 
+/*
+ * Return slope of the line segment
+ */
+static inline float8 lseg_sl(LSEG *lseg) {
+  return point_sl(&lseg->p[0], &lseg->p[1]);
+}
 
+/*
+ * Return inverse slope of the line segment
+ */
+static inline float8 lseg_invsl(LSEG *lseg) {
+  return point_invsl(&lseg->p[0], &lseg->p[1]);
+}
 
-GEO_NO_CANARY Datum lseg_length(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  float8 r;
+Datum lseg_length(PG_FUNCTION_ARGS) {
+  LSEG *lseg = PG_GETARG_LSEG_P(0);
 
-  if (ty_lseg_length(TYS(a0), &r))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(r);
+  PG_RETURN_FLOAT8(point_dt(&lseg->p[0], &lseg->p[1]));
 }
 
 /*----------------------------------------------------------
@@ -1709,103 +1842,88 @@ GEO_NO_CANARY Datum lseg_length(PG_FUNCTION_ARGS) {
  **  find intersection of the two lines, and see if it falls on
  **  both segments.
  */
-GEO_NO_CANARY Datum lseg_intersect(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  int r;
+Datum lseg_intersect(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_intersect(TYS(a0), TYS(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(lseg_interpt_lseg(NULL, l1, l2));
 }
 
-GEO_NO_CANARY Datum lseg_parallel(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  int r;
+Datum lseg_parallel(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_parallel(TYS(a0), TYS(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(FPeq(lseg_sl(l1), lseg_sl(l2)));
 }
 
 /*
  * Determine if two line segments are perpendicular.
  */
-GEO_NO_CANARY Datum lseg_perp(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  int r;
+Datum lseg_perp(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_perp(TYS(a0), TYS(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(FPeq(lseg_sl(l1), lseg_invsl(l2)));
 }
 
-GEO_NO_CANARY Datum lseg_vertical(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
+Datum lseg_vertical(PG_FUNCTION_ARGS) {
+  LSEG *lseg = PG_GETARG_LSEG_P(0);
 
-  PG_RETURN_BOOL(ty_lseg_vertical(TYS(a0)));
+  PG_RETURN_BOOL(FPeq(lseg->p[0].x, lseg->p[1].x));
 }
 
-GEO_NO_CANARY Datum lseg_horizontal(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
+Datum lseg_horizontal(PG_FUNCTION_ARGS) {
+  LSEG *lseg = PG_GETARG_LSEG_P(0);
 
-  PG_RETURN_BOOL(ty_lseg_horizontal(TYS(a0)));
+  PG_RETURN_BOOL(FPeq(lseg->p[0].y, lseg->p[1].y));
 }
 
-GEO_NO_CANARY Datum lseg_eq(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
+Datum lseg_eq(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  PG_RETURN_BOOL(ty_lseg_eq(TYS(a0), TYS(a1)));
+  PG_RETURN_BOOL(point_eq_point(&l1->p[0], &l2->p[0]) &&
+                 point_eq_point(&l1->p[1], &l2->p[1]));
 }
 
-GEO_NO_CANARY Datum lseg_ne(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
+Datum lseg_ne(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  PG_RETURN_BOOL(!ty_lseg_eq(TYS(a0), TYS(a1)));
+  PG_RETURN_BOOL(!point_eq_point(&l1->p[0], &l2->p[0]) ||
+                 !point_eq_point(&l1->p[1], &l2->p[1]));
 }
 
-GEO_NO_CANARY Datum lseg_lt(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  int r;
+Datum lseg_lt(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_lt(TYS(a0), TYS(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(
+      FPlt(point_dt(&l1->p[0], &l1->p[1]), point_dt(&l2->p[0], &l2->p[1])));
 }
 
-GEO_NO_CANARY Datum lseg_le(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  int r;
+Datum lseg_le(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_le(TYS(a0), TYS(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(
+      FPle(point_dt(&l1->p[0], &l1->p[1]), point_dt(&l2->p[0], &l2->p[1])));
 }
 
-GEO_NO_CANARY Datum lseg_gt(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  int r;
+Datum lseg_gt(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_gt(TYS(a0), TYS(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(
+      FPgt(point_dt(&l1->p[0], &l1->p[1]), point_dt(&l2->p[0], &l2->p[1])));
 }
 
-GEO_NO_CANARY Datum lseg_ge(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  int r;
+Datum lseg_ge(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_ge(TYS(a0), TYS(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(
+      FPge(point_dt(&l1->p[0], &l1->p[1]), point_dt(&l2->p[0], &l2->p[1])));
 }
 
 /*----------------------------------------------------------
@@ -1817,22 +1935,21 @@ GEO_NO_CANARY Datum lseg_ge(PG_FUNCTION_ARGS) {
  *		point will be from one of the endpoints to the other
  *		segment.
  */
-GEO_NO_CANARY Datum lseg_distance(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  float8 d;
+Datum lseg_distance(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_lseg_distance(TYS(a0), TYS(a1), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(lseg_closept_lseg(NULL, l1, l2));
 }
 
-GEO_NO_CANARY Datum lseg_center(PG_FUNCTION_ARGS) {
+Datum lseg_center(PG_FUNCTION_ARGS) {
   LSEG *lseg = PG_GETARG_LSEG_P(0);
-  Point *result = (Point *)palloc(sizeof(Point));
+  Point *result;
 
-  if (ty_lseg_center(TYS(lseg), TYP(result)))
-    float_raise_ty();
+  result = (Point *)palloc(sizeof(Point));
+
+  result->x = float8_div(float8_pl(lseg->p[0].x, lseg->p[1].x), 2.0);
+  result->y = float8_div(float8_pl(lseg->p[0].y, lseg->p[1].y), 2.0);
 
   PG_RETURN_POINT_P(result);
 }
@@ -1845,22 +1962,34 @@ GEO_NO_CANARY Datum lseg_center(PG_FUNCTION_ARGS) {
  * like it.  See lseg_interpt_line() for the other half of it.
  */
 static bool lseg_interpt_lseg(Point *result, LSEG *l1, LSEG *l2) {
-  int hit;
+  Point interpt;
+  LINE tmp;
 
-  if (ty_lseg_interpt(TYS(l1), TYS(l2), TYP(result), &hit))
-    float_raise_ty();
-  return hit;
+  line_construct(&tmp, &l2->p[0], lseg_sl(l2));
+  if (!lseg_interpt_line(&interpt, l1, &tmp))
+    return false;
+
+  /*
+   * If the line intersection point isn't within l2, there is no valid
+   * segment intersection point at all.
+   */
+  if (!lseg_contain_point(l2, &interpt))
+    return false;
+
+  if (result != NULL)
+    *result = interpt;
+
+  return true;
 }
 
-GEO_NO_CANARY Datum lseg_interpt(PG_FUNCTION_ARGS) {
+Datum lseg_interpt(PG_FUNCTION_ARGS) {
   LSEG *l1 = PG_GETARG_LSEG_P(0);
   LSEG *l2 = PG_GETARG_LSEG_P(1);
-  Point *result = (Point *)palloc(sizeof(Point));
-  int hit;
+  Point *result;
 
-  if (ty_lseg_interpt(TYS(l1), TYS(l2), TYP(result), &hit))
-    float_raise_ty();
-  if (!hit)
+  result = (Point *)palloc(sizeof(Point));
+
+  if (!lseg_interpt_lseg(result, l1, l2))
     PG_RETURN_NULL();
   PG_RETURN_POINT_P(result);
 }
@@ -1880,53 +2009,41 @@ GEO_NO_CANARY Datum lseg_interpt(PG_FUNCTION_ARGS) {
 /*
  * Distance from a point to a line
  */
-GEO_NO_CANARY Datum dist_pl(PG_FUNCTION_ARGS) {
-  Point *a0 = PG_GETARG_POINT_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  float8 d;
+Datum dist_pl(PG_FUNCTION_ARGS) {
+  Point *pt = PG_GETARG_POINT_P(0);
+  LINE *line = PG_GETARG_LINE_P(1);
 
-  if (ty_point_line_distance(TYP(a0), TYL(a1), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(line_closept_point(NULL, line, pt));
 }
 
 /*
  * Distance from a line to a point
  */
-GEO_NO_CANARY Datum dist_lp(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
-  Point *a1 = PG_GETARG_POINT_P(1);
-  float8 d;
+Datum dist_lp(PG_FUNCTION_ARGS) {
+  LINE *line = PG_GETARG_LINE_P(0);
+  Point *pt = PG_GETARG_POINT_P(1);
 
-  if (ty_point_line_distance(TYP(a1), TYL(a0), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(line_closept_point(NULL, line, pt));
 }
 
 /*
  * Distance from a point to a lseg
  */
-GEO_NO_CANARY Datum dist_ps(PG_FUNCTION_ARGS) {
-  Point *a0 = PG_GETARG_POINT_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  float8 d;
+Datum dist_ps(PG_FUNCTION_ARGS) {
+  Point *pt = PG_GETARG_POINT_P(0);
+  LSEG *lseg = PG_GETARG_LSEG_P(1);
 
-  if (ty_point_lseg_distance(TYP(a0), TYS(a1), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(lseg_closept_point(NULL, lseg, pt));
 }
 
 /*
  * Distance from a lseg to a point
  */
-GEO_NO_CANARY Datum dist_sp(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  Point *a1 = PG_GETARG_POINT_P(1);
-  float8 d;
+Datum dist_sp(PG_FUNCTION_ARGS) {
+  LSEG *lseg = PG_GETARG_LSEG_P(0);
+  Point *pt = PG_GETARG_POINT_P(1);
 
-  if (ty_point_lseg_distance(TYP(a1), TYS(a0), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(lseg_closept_point(NULL, lseg, pt));
 }
 
 static float8 dist_ppath_internal(Point *pt, PATH *path) {
@@ -1987,79 +2104,61 @@ Datum dist_pathp(PG_FUNCTION_ARGS) {
 /*
  * Distance from a point to a box
  */
-GEO_NO_CANARY Datum dist_pb(PG_FUNCTION_ARGS) {
-  Point *a0 = PG_GETARG_POINT_P(0);
-  BOX *a1 = PG_GETARG_BOX_P(1);
-  float8 d;
+Datum dist_pb(PG_FUNCTION_ARGS) {
+  Point *pt = PG_GETARG_POINT_P(0);
+  BOX *box = PG_GETARG_BOX_P(1);
 
-  if (ty_point_box_distance(TYP(a0), TYB(a1), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(box_closept_point(NULL, box, pt));
 }
 
 /*
  * Distance from a box to a point
  */
-GEO_NO_CANARY Datum dist_bp(PG_FUNCTION_ARGS) {
-  BOX *a0 = PG_GETARG_BOX_P(0);
-  Point *a1 = PG_GETARG_POINT_P(1);
-  float8 d;
+Datum dist_bp(PG_FUNCTION_ARGS) {
+  BOX *box = PG_GETARG_BOX_P(0);
+  Point *pt = PG_GETARG_POINT_P(1);
 
-  if (ty_point_box_distance(TYP(a1), TYB(a0), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(box_closept_point(NULL, box, pt));
 }
 
 /*
  * Distance from a lseg to a line
  */
-GEO_NO_CANARY Datum dist_sl(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  float8 d;
+Datum dist_sl(PG_FUNCTION_ARGS) {
+  LSEG *lseg = PG_GETARG_LSEG_P(0);
+  LINE *line = PG_GETARG_LINE_P(1);
 
-  if (ty_lseg_line_distance(TYS(a0), TYL(a1), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(lseg_closept_line(NULL, lseg, line));
 }
 
 /*
  * Distance from a line to a lseg
  */
-GEO_NO_CANARY Datum dist_ls(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  float8 d;
+Datum dist_ls(PG_FUNCTION_ARGS) {
+  LINE *line = PG_GETARG_LINE_P(0);
+  LSEG *lseg = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_line_distance(TYS(a1), TYL(a0), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(lseg_closept_line(NULL, lseg, line));
 }
 
 /*
  * Distance from a lseg to a box
  */
-GEO_NO_CANARY Datum dist_sb(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  BOX *a1 = PG_GETARG_BOX_P(1);
-  float8 d;
+Datum dist_sb(PG_FUNCTION_ARGS) {
+  LSEG *lseg = PG_GETARG_LSEG_P(0);
+  BOX *box = PG_GETARG_BOX_P(1);
 
-  if (ty_lseg_box_distance(TYS(a0), TYB(a1), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(box_closept_lseg(NULL, box, lseg));
 }
 
 /*
  * Distance from a box to a lseg
  */
-GEO_NO_CANARY Datum dist_bs(PG_FUNCTION_ARGS) {
-  BOX *a0 = PG_GETARG_BOX_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  float8 d;
+Datum dist_bs(PG_FUNCTION_ARGS) {
+  BOX *box = PG_GETARG_BOX_P(0);
+  LSEG *lseg = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_box_distance(TYS(a1), TYB(a0), NULL, &d))
-    float_raise_ty();
-  PG_RETURN_FLOAT8(d);
+  PG_RETURN_FLOAT8(box_closept_lseg(NULL, box, lseg));
 }
 
 static float8 dist_cpoly_internal(CIRCLE *circle, POLYGON *poly) {
@@ -2148,23 +2247,89 @@ static float8 dist_ppoly_internal(Point *pt, POLYGON *poly) {
  *between lines and boxes, since there are typically two.
  *-------------------------------------------------------------------*/
 
+/*
+ * Return whether the line segment intersect with the line. If *result is not
+ * NULL, it is set to the intersection point.
+ */
+static bool lseg_interpt_line(Point *result, LSEG *lseg, LINE *line) {
+  Point interpt;
+  LINE tmp;
+
+  /*
+   * First, we promote the line segment to a line, because we know how to
+   * find the intersection point of two lines.  If they don't have an
+   * intersection point, we are done.
+   */
+  line_construct(&tmp, &lseg->p[0], lseg_sl(lseg));
+  if (!line_interpt_line(&interpt, &tmp, line))
+    return false;
+
+  /*
+   * Then, we check whether the intersection point is actually on the line
+   * segment.
+   */
+  if (!lseg_contain_point(lseg, &interpt))
+    return false;
+  if (result != NULL) {
+    /*
+     * If there is an intersection, then check explicitly for matching
+     * endpoints since there may be rounding effects with annoying LSB
+     * residue.
+     */
+    if (point_eq_point(&lseg->p[0], &interpt))
+      *result = lseg->p[0];
+    else if (point_eq_point(&lseg->p[1], &interpt))
+      *result = lseg->p[1];
+    else
+      *result = interpt;
+  }
+
+  return true;
+}
 
 /*---------------------------------------------------------------------
  *		close_
  *				Point of closest proximity between objects.
  *-------------------------------------------------------------------*/
 
+/*
+ * If *result is not NULL, it is set to the intersection point of a
+ * perpendicular of the line through the point.  Returns the distance
+ * of those two points.
+ */
+static float8 line_closept_point(Point *result, LINE *line, Point *point) {
+  Point closept;
+  LINE tmp;
 
-GEO_NO_CANARY Datum close_pl(PG_FUNCTION_ARGS) {
-  Point *a0 = PG_GETARG_POINT_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  Point *result = (Point *)palloc(sizeof(Point));
-  int hit;
+  /*
+   * We drop a perpendicular to find the intersection point.  Ordinarily we
+   * should always find it, but that can fail in the presence of NaN
+   * coordinates, and perhaps even from simple roundoff issues.
+   */
+  line_construct(&tmp, point, line_invsl(line));
+  if (!line_interpt_line(&closept, &tmp, line)) {
+    if (result != NULL)
+      *result = *point;
 
-  if (ty_point_line_close(TYP(a0), TYL(a1), TYP(result), &hit))
-    float_raise_ty();
-  if (!hit)
+    return get_float8_nan();
+  }
+
+  if (result != NULL)
+    *result = closept;
+
+  return point_dt(&closept, point);
+}
+
+Datum close_pl(PG_FUNCTION_ARGS) {
+  Point *pt = PG_GETARG_POINT_P(0);
+  LINE *line = PG_GETARG_LINE_P(1);
+  Point *result;
+
+  result = (Point *)palloc(sizeof(Point));
+
+  if (isnan(line_closept_point(result, line, pt)))
     PG_RETURN_NULL();
+
   PG_RETURN_POINT_P(result);
 }
 
@@ -2175,23 +2340,32 @@ GEO_NO_CANARY Datum close_pl(PG_FUNCTION_ARGS) {
  * to the point.  Returns the distance of the two points.
  */
 static float8 lseg_closept_point(Point *result, LSEG *lseg, Point *pt) {
-  float8 d;
+  Point closept;
+  LINE tmp;
 
-  if (ty_point_lseg_distance(TYP(pt), TYS(lseg), TYP(result), &d))
-    float_raise_ty();
-  return d;
+  /*
+   * To find the closest point, we draw a perpendicular line from the point
+   * to the line segment.
+   */
+  line_construct(&tmp, pt, point_invsl(&lseg->p[0], &lseg->p[1]));
+  lseg_closept_line(&closept, lseg, &tmp);
+
+  if (result != NULL)
+    *result = closept;
+
+  return point_dt(&closept, pt);
 }
 
-GEO_NO_CANARY Datum close_ps(PG_FUNCTION_ARGS) {
-  Point *a0 = PG_GETARG_POINT_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  Point *result = (Point *)palloc(sizeof(Point));
-  int hit;
+Datum close_ps(PG_FUNCTION_ARGS) {
+  Point *pt = PG_GETARG_POINT_P(0);
+  LSEG *lseg = PG_GETARG_LSEG_P(1);
+  Point *result;
 
-  if (ty_point_lseg_close(TYP(a0), TYS(a1), TYP(result), &hit))
-    float_raise_ty();
-  if (!hit)
+  result = (Point *)palloc(sizeof(Point));
+
+  if (isnan(lseg_closept_point(result, lseg, pt)))
     PG_RETURN_NULL();
+
   PG_RETURN_POINT_P(result);
 }
 
@@ -2199,65 +2373,233 @@ GEO_NO_CANARY Datum close_ps(PG_FUNCTION_ARGS) {
  * Closest point on line segment to line segment
  */
 static float8 lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg) {
-  float8 d;
+  Point point;
+  float8 dist, d;
 
-  if (ty_lseg_lseg_distance(TYS(on_lseg), TYS(to_lseg), TYP(result), &d))
-    float_raise_ty();
-  return d;
+  /* First, we handle the case when the line segments are intersecting. */
+  if (lseg_interpt_lseg(result, on_lseg, to_lseg))
+    return 0.0;
+
+  /*
+   * Then, we find the closest points from the endpoints of the second line
+   * segment, and keep the closest one.
+   */
+  dist = lseg_closept_point(result, on_lseg, &to_lseg->p[0]);
+  d = lseg_closept_point(&point, on_lseg, &to_lseg->p[1]);
+  if (float8_lt(d, dist)) {
+    dist = d;
+    if (result != NULL)
+      *result = point;
+  }
+
+  /* The closest point can still be one of the endpoints, so we test them. */
+  d = lseg_closept_point(NULL, to_lseg, &on_lseg->p[0]);
+  if (float8_lt(d, dist)) {
+    dist = d;
+    if (result != NULL)
+      *result = on_lseg->p[0];
+  }
+  d = lseg_closept_point(NULL, to_lseg, &on_lseg->p[1]);
+  if (float8_lt(d, dist)) {
+    dist = d;
+    if (result != NULL)
+      *result = on_lseg->p[1];
+  }
+
+  return dist;
 }
 
-GEO_NO_CANARY Datum close_lseg(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  Point *result = (Point *)palloc(sizeof(Point));
-  int hit;
+Datum close_lseg(PG_FUNCTION_ARGS) {
+  LSEG *l1 = PG_GETARG_LSEG_P(0);
+  LSEG *l2 = PG_GETARG_LSEG_P(1);
+  Point *result;
 
-  if (ty_lseg_lseg_close(TYS(a0), TYS(a1), TYP(result), &hit))
-    float_raise_ty();
-  if (!hit)
+  if (lseg_sl(l1) == lseg_sl(l2))
     PG_RETURN_NULL();
+
+  result = (Point *)palloc(sizeof(Point));
+
+  if (isnan(lseg_closept_lseg(result, l2, l1)))
+    PG_RETURN_NULL();
+
   PG_RETURN_POINT_P(result);
 }
 
+/*
+ * Closest point on or in box to specified point.
+ *
+ * If *result is not NULL, set it to the closest point on the box to the
+ * given point, and return the distance of the two points.
+ */
+static float8 box_closept_point(Point *result, BOX *box, Point *pt) {
+  float8 dist, d;
+  Point point, closept;
+  LSEG lseg;
 
-GEO_NO_CANARY Datum close_pb(PG_FUNCTION_ARGS) {
-  Point *a0 = PG_GETARG_POINT_P(0);
-  BOX *a1 = PG_GETARG_BOX_P(1);
-  Point *result = (Point *)palloc(sizeof(Point));
-  int hit;
+  if (box_contain_point(box, pt)) {
+    if (result != NULL)
+      *result = *pt;
 
-  if (ty_point_box_close(TYP(a0), TYB(a1), TYP(result), &hit))
-    float_raise_ty();
-  if (!hit)
+    return 0.0;
+  }
+
+  /* pairwise check lseg distances */
+  point.x = box->low.x;
+  point.y = box->high.y;
+  statlseg_construct(&lseg, &box->low, &point);
+  dist = lseg_closept_point(result, &lseg, pt);
+
+  statlseg_construct(&lseg, &box->high, &point);
+  d = lseg_closept_point(&closept, &lseg, pt);
+  if (float8_lt(d, dist)) {
+    dist = d;
+    if (result != NULL)
+      *result = closept;
+  }
+
+  point.x = box->high.x;
+  point.y = box->low.y;
+  statlseg_construct(&lseg, &box->low, &point);
+  d = lseg_closept_point(&closept, &lseg, pt);
+  if (float8_lt(d, dist)) {
+    dist = d;
+    if (result != NULL)
+      *result = closept;
+  }
+
+  statlseg_construct(&lseg, &box->high, &point);
+  d = lseg_closept_point(&closept, &lseg, pt);
+  if (float8_lt(d, dist)) {
+    dist = d;
+    if (result != NULL)
+      *result = closept;
+  }
+
+  return dist;
+}
+
+Datum close_pb(PG_FUNCTION_ARGS) {
+  Point *pt = PG_GETARG_POINT_P(0);
+  BOX *box = PG_GETARG_BOX_P(1);
+  Point *result;
+
+  result = (Point *)palloc(sizeof(Point));
+
+  if (isnan(box_closept_point(result, box, pt)))
     PG_RETURN_NULL();
+
   PG_RETURN_POINT_P(result);
 }
 
+/*
+ * Closest point on line segment to line.
+ *
+ * Return the distance between the line and the closest point of the line
+ * segment to the line.  If *result is not NULL, set it to that point.
+ *
+ * NOTE: When the lines are parallel, endpoints of one of the line segment
+ * are FPeq(), in presence of NaN or Infinite coordinates, or perhaps =
+ * even because of simple roundoff issues, there may not be a single closest
+ * point.  We are likely to set the result to the second endpoint in these
+ * cases.
+ */
+static float8 lseg_closept_line(Point *result, LSEG *lseg, LINE *line) {
+  float8 dist1, dist2;
 
-GEO_NO_CANARY Datum close_ls(PG_FUNCTION_ARGS) {
-  LINE *a0 = PG_GETARG_LINE_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  Point *result = (Point *)palloc(sizeof(Point));
-  int hit;
+  if (lseg_interpt_line(result, lseg, line))
+    return 0.0;
 
-  if (ty_lseg_line_close(TYL(a0), TYS(a1), TYP(result), &hit))
-    float_raise_ty();
-  if (!hit)
+  dist1 = line_closept_point(NULL, line, &lseg->p[0]);
+  dist2 = line_closept_point(NULL, line, &lseg->p[1]);
+
+  if (dist1 < dist2) {
+    if (result != NULL)
+      *result = lseg->p[0];
+
+    return dist1;
+  } else {
+    if (result != NULL)
+      *result = lseg->p[1];
+
+    return dist2;
+  }
+}
+
+Datum close_ls(PG_FUNCTION_ARGS) {
+  LINE *line = PG_GETARG_LINE_P(0);
+  LSEG *lseg = PG_GETARG_LSEG_P(1);
+  Point *result;
+
+  if (lseg_sl(lseg) == line_sl(line))
     PG_RETURN_NULL();
+
+  result = (Point *)palloc(sizeof(Point));
+
+  if (isnan(lseg_closept_line(result, lseg, line)))
+    PG_RETURN_NULL();
+
   PG_RETURN_POINT_P(result);
 }
 
+/*
+ * Closest point on or in box to line segment.
+ *
+ * Returns the distance between the closest point on or in the box to
+ * the line segment.  If *result is not NULL, it is set to that point.
+ */
+static float8 box_closept_lseg(Point *result, BOX *box, LSEG *lseg) {
+  float8 dist, d;
+  Point point, closept;
+  LSEG bseg;
 
-GEO_NO_CANARY Datum close_sb(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  BOX *a1 = PG_GETARG_BOX_P(1);
-  Point *result = (Point *)palloc(sizeof(Point));
-  int hit;
+  if (box_interpt_lseg(result, box, lseg))
+    return 0.0;
 
-  if (ty_lseg_box_close(TYS(a0), TYB(a1), TYP(result), &hit))
-    float_raise_ty();
-  if (!hit)
+  /* pairwise check lseg distances */
+  point.x = box->low.x;
+  point.y = box->high.y;
+  statlseg_construct(&bseg, &box->low, &point);
+  dist = lseg_closept_lseg(result, &bseg, lseg);
+
+  statlseg_construct(&bseg, &box->high, &point);
+  d = lseg_closept_lseg(&closept, &bseg, lseg);
+  if (float8_lt(d, dist)) {
+    dist = d;
+    if (result != NULL)
+      *result = closept;
+  }
+
+  point.x = box->high.x;
+  point.y = box->low.y;
+  statlseg_construct(&bseg, &box->low, &point);
+  d = lseg_closept_lseg(&closept, &bseg, lseg);
+  if (float8_lt(d, dist)) {
+    dist = d;
+    if (result != NULL)
+      *result = closept;
+  }
+
+  statlseg_construct(&bseg, &box->high, &point);
+  d = lseg_closept_lseg(&closept, &bseg, lseg);
+  if (float8_lt(d, dist)) {
+    dist = d;
+    if (result != NULL)
+      *result = closept;
+  }
+
+  return dist;
+}
+
+Datum close_sb(PG_FUNCTION_ARGS) {
+  LSEG *lseg = PG_GETARG_LSEG_P(0);
+  BOX *box = PG_GETARG_BOX_P(1);
+  Point *result;
+
+  result = (Point *)palloc(sizeof(Point));
+
+  if (isnan(box_closept_lseg(result, box, lseg)))
     PG_RETURN_NULL();
+
   PG_RETURN_POINT_P(result);
 }
 
@@ -2267,15 +2609,20 @@ GEO_NO_CANARY Datum close_sb(PG_FUNCTION_ARGS) {
  *another.
  *-------------------------------------------------------------------*/
 
+/*
+ *		Does the point satisfy the equation?
+ */
+static bool line_contain_point(LINE *line, Point *point) {
+  return FPzero(float8_pl(
+      float8_pl(float8_mul(line->A, point->x), float8_mul(line->B, point->y)),
+      line->C));
+}
 
-GEO_NO_CANARY Datum on_pl(PG_FUNCTION_ARGS) {
-  Point *a0 = PG_GETARG_POINT_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  int r;
+Datum on_pl(PG_FUNCTION_ARGS) {
+  Point *pt = PG_GETARG_POINT_P(0);
+  LINE *line = PG_GETARG_LINE_P(1);
 
-  if (ty_line_contain_point(TYL(a1), TYP(a0), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(line_contain_point(line, pt));
 }
 
 /*
@@ -2283,36 +2630,37 @@ GEO_NO_CANARY Datum on_pl(PG_FUNCTION_ARGS) {
  * This algorithm seems to behave nicely even with lsb residues - tgl 1997-07-09
  */
 static bool lseg_contain_point(LSEG *lseg, Point *pt) {
-  int r;
-
-  if (ty_lseg_contain_point(TYS(lseg), TYP(pt), &r))
-    float_raise_ty();
-  return r;
+  return FPeq(point_dt(pt, &lseg->p[0]) + point_dt(pt, &lseg->p[1]),
+              point_dt(&lseg->p[0], &lseg->p[1]));
 }
 
-GEO_NO_CANARY Datum on_ps(PG_FUNCTION_ARGS) {
-  Point *a0 = PG_GETARG_POINT_P(0);
-  LSEG *a1 = PG_GETARG_LSEG_P(1);
-  int r;
+Datum on_ps(PG_FUNCTION_ARGS) {
+  Point *pt = PG_GETARG_POINT_P(0);
+  LSEG *lseg = PG_GETARG_LSEG_P(1);
 
-  if (ty_lseg_contain_point(TYS(a1), TYP(a0), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(lseg_contain_point(lseg, pt));
 }
 
-
-GEO_NO_CANARY Datum on_pb(PG_FUNCTION_ARGS) {
-  Point *a0 = PG_GETARG_POINT_P(0);
-  BOX *a1 = PG_GETARG_BOX_P(1);
-
-  PG_RETURN_BOOL(ty_box_contain_point(TYB(a1), TYP(a0)));
+/*
+ * Check whether the point is in the box or on its border
+ */
+static bool box_contain_point(BOX *box, Point *point) {
+  return box->high.x >= point->x && box->low.x <= point->x &&
+         box->high.y >= point->y && box->low.y <= point->y;
 }
 
-GEO_NO_CANARY Datum box_contain_pt(PG_FUNCTION_ARGS) {
-  BOX *a0 = PG_GETARG_BOX_P(0);
-  Point *a1 = PG_GETARG_POINT_P(1);
+Datum on_pb(PG_FUNCTION_ARGS) {
+  Point *pt = PG_GETARG_POINT_P(0);
+  BOX *box = PG_GETARG_BOX_P(1);
 
-  PG_RETURN_BOOL(ty_box_contain_point(TYB(a0), TYP(a1)));
+  PG_RETURN_BOOL(box_contain_point(box, pt));
+}
+
+Datum box_contain_pt(PG_FUNCTION_ARGS) {
+  BOX *box = PG_GETARG_BOX_P(0);
+  Point *pt = PG_GETARG_POINT_P(1);
+
+  PG_RETURN_BOOL(box_contain_point(box, pt));
 }
 
 /* on_ppath -
@@ -2353,22 +2701,29 @@ Datum on_ppath(PG_FUNCTION_ARGS) {
  *
  * It is, if both of its points are on the line or close enough.
  */
-GEO_NO_CANARY Datum on_sl(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  LINE *a1 = PG_GETARG_LINE_P(1);
-  int r;
+Datum on_sl(PG_FUNCTION_ARGS) {
+  LSEG *lseg = PG_GETARG_LSEG_P(0);
+  LINE *line = PG_GETARG_LINE_P(1);
 
-  if (ty_lseg_on_line(TYS(a0), TYL(a1), &r))
-    float_raise_ty();
-  PG_RETURN_BOOL(r);
+  PG_RETURN_BOOL(line_contain_point(line, &lseg->p[0]) &&
+                 line_contain_point(line, &lseg->p[1]));
 }
 
+/*
+ * Check whether the line segment is in the box or on its border
+ *
+ * It is, if both of its points are in the box or on its border.
+ */
+static bool box_contain_lseg(BOX *box, LSEG *lseg) {
+  return box_contain_point(box, &lseg->p[0]) &&
+         box_contain_point(box, &lseg->p[1]);
+}
 
-GEO_NO_CANARY Datum on_sb(PG_FUNCTION_ARGS) {
-  LSEG *a0 = PG_GETARG_LSEG_P(0);
-  BOX *a1 = PG_GETARG_BOX_P(1);
+Datum on_sb(PG_FUNCTION_ARGS) {
+  LSEG *lseg = PG_GETARG_LSEG_P(0);
+  BOX *box = PG_GETARG_BOX_P(1);
 
-  PG_RETURN_BOOL(ty_box_contain_lseg(TYB(a1), TYS(a0)));
+  PG_RETURN_BOOL(box_contain_lseg(box, lseg));
 }
 
 /*---------------------------------------------------------------------
@@ -2376,41 +2731,119 @@ GEO_NO_CANARY Datum on_sb(PG_FUNCTION_ARGS) {
  *				Whether one object intersects another.
  *-------------------------------------------------------------------*/
 
-GEO_NO_CANARY Datum inter_sl(PG_FUNCTION_ARGS) {
+Datum inter_sl(PG_FUNCTION_ARGS) {
   LSEG *lseg = PG_GETARG_LSEG_P(0);
   LINE *line = PG_GETARG_LINE_P(1);
-  int hit;
 
-  if (ty_lseg_interpt_line(TYS(lseg), TYL(line), NULL, &hit))
-    float_raise_ty();
-
-  PG_RETURN_BOOL(hit);
+  PG_RETURN_BOOL(lseg_interpt_line(NULL, lseg, line));
 }
 
+/*
+ * Do line segment and box intersect?
+ *
+ * Segment completely inside box counts as intersection.
+ * If you want only segments crossing box boundaries,
+ *	try converting box to path first.
+ *
+ * This function also sets the *result to the closest point on the line
+ * segment to the center of the box when they overlap and the result is
+ * not NULL.  It is somewhat arbitrary, but maybe the best we can do as
+ * there are typically two points they intersect.
+ *
+ * Optimize for non-intersection by checking for box intersection first.
+ * - thomas 1998-01-30
+ */
+static bool box_interpt_lseg(Point *result, BOX *box, LSEG *lseg) {
+  BOX lbox;
+  LSEG bseg;
+  Point point;
 
-GEO_NO_CANARY Datum inter_sb(PG_FUNCTION_ARGS) {
+  lbox.low.x = float8_min(lseg->p[0].x, lseg->p[1].x);
+  lbox.low.y = float8_min(lseg->p[0].y, lseg->p[1].y);
+  lbox.high.x = float8_max(lseg->p[0].x, lseg->p[1].x);
+  lbox.high.y = float8_max(lseg->p[0].y, lseg->p[1].y);
+
+  /* nothing close to overlap? then not going to intersect */
+  if (!box_ov(&lbox, box))
+    return false;
+
+  if (result != NULL) {
+    box_cn(&point, box);
+    lseg_closept_point(result, lseg, &point);
+  }
+
+  /* an endpoint of segment is inside box? then clearly intersects */
+  if (box_contain_point(box, &lseg->p[0]) ||
+      box_contain_point(box, &lseg->p[1]))
+    return true;
+
+  /* pairwise check lseg intersections */
+  point.x = box->low.x;
+  point.y = box->high.y;
+  statlseg_construct(&bseg, &box->low, &point);
+  if (lseg_interpt_lseg(NULL, &bseg, lseg))
+    return true;
+
+  statlseg_construct(&bseg, &box->high, &point);
+  if (lseg_interpt_lseg(NULL, &bseg, lseg))
+    return true;
+
+  point.x = box->high.x;
+  point.y = box->low.y;
+  statlseg_construct(&bseg, &box->low, &point);
+  if (lseg_interpt_lseg(NULL, &bseg, lseg))
+    return true;
+
+  statlseg_construct(&bseg, &box->high, &point);
+  if (lseg_interpt_lseg(NULL, &bseg, lseg))
+    return true;
+
+  /* if we dropped through, no two segs intersected */
+  return false;
+}
+
+Datum inter_sb(PG_FUNCTION_ARGS) {
   LSEG *lseg = PG_GETARG_LSEG_P(0);
   BOX *box = PG_GETARG_BOX_P(1);
-  int hit;
 
-  if (ty_box_interpt_lseg(TYB(box), TYS(lseg), NULL, &hit))
-    float_raise_ty();
-
-  PG_RETURN_BOOL(hit);
+  PG_RETURN_BOOL(box_interpt_lseg(NULL, box, lseg));
 }
 
 /* inter_lb()
  * Do line and box intersect?
  */
-GEO_NO_CANARY Datum inter_lb(PG_FUNCTION_ARGS) {
+Datum inter_lb(PG_FUNCTION_ARGS) {
   LINE *line = PG_GETARG_LINE_P(0);
   BOX *box = PG_GETARG_BOX_P(1);
-  int hit;
+  LSEG bseg;
+  Point p1, p2;
 
-  if (ty_box_interpt_line(TYB(box), TYL(line), &hit))
-    float_raise_ty();
+  /* pairwise check lseg intersections */
+  p1.x = box->low.x;
+  p1.y = box->low.y;
+  p2.x = box->low.x;
+  p2.y = box->high.y;
+  statlseg_construct(&bseg, &p1, &p2);
+  if (lseg_interpt_line(NULL, &bseg, line))
+    PG_RETURN_BOOL(true);
+  p1.x = box->high.x;
+  p1.y = box->high.y;
+  statlseg_construct(&bseg, &p1, &p2);
+  if (lseg_interpt_line(NULL, &bseg, line))
+    PG_RETURN_BOOL(true);
+  p2.x = box->high.x;
+  p2.y = box->low.y;
+  statlseg_construct(&bseg, &p1, &p2);
+  if (lseg_interpt_line(NULL, &bseg, line))
+    PG_RETURN_BOOL(true);
+  p1.x = box->low.x;
+  p1.y = box->low.y;
+  statlseg_construct(&bseg, &p1, &p2);
+  if (lseg_interpt_line(NULL, &bseg, line))
+    PG_RETURN_BOOL(true);
 
-  PG_RETURN_BOOL(hit);
+  /* if we dropped through, no intersection */
+  PG_RETURN_BOOL(false);
 }
 
 /*------------------------------------------------------------------

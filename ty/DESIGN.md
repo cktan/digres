@@ -753,10 +753,10 @@ the intersection, the distance of the centers, `+`, `-`, `*` and
 that of `ty_float.h`, so an overflow, an underflow and a division
 by zero come back as ty's errors.
 
-The text, the binary forms, and the types `path`, `polygon` and
-`circle`, with the functions between types, stay in digres: they
-call these functions for the points and boxes they hold. The types
-`line` and `lseg` are in section 21.
+The text, the binary forms, and the types `lseg`, `line`, `path`,
+`polygon` and `circle`, with the functions between types, stay in
+digres: they call these functions for the points and boxes they
+hold.
 
 The tests: the vectors (about 13,500), from the rules of the
 fuzzy compares and of PostgreSQL's float arithmetic in Python
@@ -764,52 +764,4 @@ floats, with NaN, infinities, ties at `EPSILON` and values near
 overflow; `dg/test/select_geo_ops.sql`, which prints the same as
 the digres before the move.
 
-## 21. line and lseg
 
-`ty_geo.h` also holds the operations of `line` (the equation
-`A*x + B*y + C = 0`) and `lseg` (a line segment of two points),
-and of both with `point` and `box`. The structs have PostgreSQL's
-layout. The code is `src/geo_lseg.cc`, written again from the
-cases of PostgreSQL's `geo_ops.c`, with the float steps of
-`ty_float.h`: an overflow, an underflow and a division by zero
-come back as ty's errors.
-
-The functions for a line are the construction from a point and a
-slope, from two points (the error `TY_ERR_INVALID` if they are the
-same point) and from a segment, the slope, the tests of direction
-(vertical, horizontal, parallel, perpendicular, the same), the
-distance of two lines and the point where they meet. For a
-segment they are the length, the center, the slopes, the same,
-the order by length, the tests of direction, the distance and the
-meeting point.
-
-Between types they are the distance, the closest point, "on"
-and "intersect" for these pairs: point and line, point and
-lseg, point and box, lseg and line, lseg and box, and line and
-box. A call with a result point takes a pointer that may be NULL.
-A "hit" flag says whether there is a result: 0 is the SQL
-NULL, or false.
-
-The distance, the hypotenuse, the slopes and the construction of
-a line are in line in `ty_geo.h`, and `src/geo_lseg.cc` makes the
-float steps and these `always_inline`. A function of this file
-calls them many times, and the compiler stops inlining past a
-growth limit: without the attribute, the statements cost 8% to
-17% more than the code of PostgreSQL did. The internal functions
-return 1 for a hit, 0 for none and -1 for an error, and so need
-no out parameter for the hit.
-
-An order of evaluation that PostgreSQL's C code leaves open is
-the left to the right. A float step that fails in one operand
-and not in the other is the only case where this shows.
-
-The text and the binary forms of line and lseg stay in digres,
-with the memory contexts and the error texts of the input.
-
-The tests: about 13,700 known answers in `known.txt`, from the
-digres before the move (every pair of a pool of values with NaN,
-infinities, values near overflow and near zero), and
-`dg/test/select_geo_lseg_ops.sql`, which prints the same as the
-digres before the move. The floats are exact to the last bit:
-build the tests with `DEBUG=1`, as a fused multiply-add in an
-optimized build changes the last bit of a hypotenuse.

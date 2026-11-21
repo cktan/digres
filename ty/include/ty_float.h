@@ -46,17 +46,8 @@
 #include "ty.h"
 #include "ty_int.h"
 
-/*
- * A translation unit with very many calls of these can name this as the
- * attribute that forces them in line: the compiler stops inlining once the unit
- * has grown by a limit, however small they are.
- */
-#ifndef TY_FLOAT_INLINE
-#define TY_FLOAT_INLINE
-#endif
-
 #define TY_FLOAT_OPS(N, T, ZERO)                                              \
-    static inline TY_FLOAT_INLINE int ty_float##N##_add(T a, T b, T* r) {               \
+    static inline int ty_float##N##_add(T a, T b, T* r) {                     \
         T v = a + b;                                                          \
         if (TY_UNLIKELY(__builtin_isinf(v) && !__builtin_isinf(a) &&          \
                         !__builtin_isinf(b))) {                               \
@@ -65,7 +56,7 @@
         *r = v;                                                               \
         return 0;                                                             \
     }                                                                         \
-    static inline TY_FLOAT_INLINE int ty_float##N##_sub(T a, T b, T* r) {               \
+    static inline int ty_float##N##_sub(T a, T b, T* r) {                     \
         T v = a - b;                                                          \
         if (TY_UNLIKELY(__builtin_isinf(v) && !__builtin_isinf(a) &&          \
                         !__builtin_isinf(b))) {                               \
@@ -74,7 +65,7 @@
         *r = v;                                                               \
         return 0;                                                             \
     }                                                                         \
-    static inline TY_FLOAT_INLINE int ty_float##N##_mul(T a, T b, T* r) {               \
+    static inline int ty_float##N##_mul(T a, T b, T* r) {                     \
         T v = a * b;                                                          \
         if (TY_UNLIKELY(__builtin_isinf(v) && !__builtin_isinf(a) &&          \
                         !__builtin_isinf(b))) {                               \
@@ -86,7 +77,7 @@
         *r = v;                                                               \
         return 0;                                                             \
     }                                                                         \
-    static inline TY_FLOAT_INLINE int ty_float##N##_div(T a, T b, T* r) {               \
+    static inline int ty_float##N##_div(T a, T b, T* r) {                     \
         T v;                                                                  \
         if (TY_UNLIKELY(b == ZERO && !__builtin_isnan(a))) {                  \
             return ty_err_divzero();                                          \

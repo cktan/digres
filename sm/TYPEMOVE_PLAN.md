@@ -598,50 +598,6 @@ copied from PostgreSQL keeps its copyright notice
      operators +0.58%; point arithmetic -0.22%. The first
      version was +1.2% to +1.3% on the box and arithmetic
      statements: the functions were not in line.
-   - **line and lseg moved (2026-11-21).** `ty_geo.h` and
-     `src/geo_lseg.cc`. For `line` and `lseg`: the construction,
-     the slopes, the tests of direction, the same, the order by
-     length, the distance, the center and the meeting point. For
-     a pair of types: the distance, the closest point (`##`),
-     "on" and "intersect" of point and line, point and lseg,
-     point and box, lseg and line, lseg and box, and line and
-     box. The text, the binary forms and the types `path`,
-     `polygon` and `circle` stay in digres, and call these
-     functions. The tests: 13,672 known answers from the old
-     digres (every pair of a pool of values with NaN, infinity,
-     values near overflow and near zero; the errors by their
-     kind), and `dg/test/select_geo_lseg_ops.sql`, which prints
-     the same as the digres before the move. The known answers
-     come from a build with `DEBUG=1`: an optimized build on
-     aarch64 fuses a multiply and an add, which changes the
-     last bit of a hypotenuse, and the tests of ty are exact.
-     Measured by callgrind on `generate_series` (old, new):
-     lseg distance -1.79%; lseg intersect -1.43%; point to line
-     +0.59%; lseg length and order +0.37%; point to box -2.39%;
-     point on lseg or line -1.22%; lseg with box and line
-     -0.21%. The point and box statements of the earlier move:
-     -0.20%, +0.68% and -0.23%. The first version
-     was +8% to +17%. Three causes, in order of their size:
-     the distance, the slopes and the construction of a line
-     were calls (the old code had them in line); the compiler
-     stopped inlining the float steps in a file with so many
-     of them, so the file names them `always_inline`; and a
-     function of dg that passed the address of a scalar to ty
-     had a stack canary, so those entry points have
-     `no_stack_protector` (nothing on their stack can be
-     overrun).
-   - **The conversions of date, timestamp, time and interval,
-     and the earlier arithmetic, measured again on tables
-     (2026-11-21).** `max()` over the values, instructions a
-     statement over 100,000 rows, old and new:
-     `timestamp + interval` -0.05%; `interval * float8`
-     +0.13%; `timestamp - interval` -1.09%; `interval + interval`
-     +0.06%; `timestamp - timestamp` -2.01%; `date + int`
-     -0.05%; `date - date` +0.21%; `date + interval` +0.07%;
-     `time + interval` +0.16%; date to timestamp -0.06%;
-     timestamp to date -0.04%; timestamp to time -4.27%;
-     time to interval 0.00%. Interval to time was +1.14%, a
-     call; it is in line in the header now (+0.16%).
    - **The text out of date, time, timestamp, timestamptz and
      interval moved (2026-11-21).** The settings are passed in:
      the date style, the date order and the interval style (a

@@ -25,19 +25,6 @@
 
 #define TY_GEO_EPSILON 1.0E-06
 
-/* A translation unit that needs these small functions in line names this. */
-#ifndef TY_GEO_INLINE
-#define TY_GEO_INLINE
-#endif
-
-/* Run a float operation, and return -1 from the caller if it fails. */
-#define TY_GEO_TRY(call)       \
-    do {                       \
-        if ((call) != 0) {     \
-            return -1;         \
-        }                      \
-    } while (0)
-
 typedef struct ty_point_t {
     double x, y;
 } ty_point_t;
@@ -84,92 +71,13 @@ static inline int ty_point_horiz(const ty_point_t* a, const ty_point_t* b) {
     return ty_fp_eq(a->y, b->y);
 }
 
-/*
- * The hypotenuse, without overflow unless the result overflows. It is in
- * line: the distance of two points is in the loops of the operations of
- * lseg and line.
- * 1. An infinity gives infinity, a NaN gives NaN.
- * 2. With x the larger of the absolute values, x * sqrt(1 + (y/x)^2) cannot
- *    overflow unless the result does.
- */
-static inline TY_GEO_INLINE int ty_hypot(double x, double y, double* r) {
-    double yx, result;
+/* The hypotenuse, without overflow unless the result overflows. */
+int ty_hypot(double x, double y, double* r);
 
-    if (TY_UNLIKELY(isinf(x) || isinf(y))) {
-        *r = INFINITY;
-        return 0;
-    }
-    if (TY_UNLIKELY(isnan(x) || isnan(y))) {
-        *r = NAN;
-        return 0;
-    }
-    x = fabs(x);
-    y = fabs(y);
-    if (x < y) {
-        double t = x;
-
-        x = y;
-        y = t;
-    }
-    if (y == 0.0) {
-        *r = x;
-        return 0;
-    }
-    yx = y / x;
-    result = x * sqrt(1.0 + (yx * yx));
-    if (TY_UNLIKELY(isinf(result))) {
-        return ty_err_range();
-    }
-    if (TY_UNLIKELY(result == 0.0)) {
-        return ty_err_underflow();
-    }
-    *r = result;
-    return 0;
-}
-
-/*
- * The distance of two points, and the slopes (infinity for vertical). They
- * are in line, as they are called in loops by the operations of lseg and line.
- */
-static inline TY_GEO_INLINE int ty_point_distance(const ty_point_t* a, const ty_point_t* b, double* r) {
-    double dx, dy;
-
-    TY_GEO_TRY(ty_float64_sub(a->x, b->x, &dx));
-    TY_GEO_TRY(ty_float64_sub(a->y, b->y, &dy));
-    return ty_hypot(dx, dy, r);
-}
-
-static inline TY_GEO_INLINE int ty_point_slope(const ty_point_t* a, const ty_point_t* b, double* r) {
-    double dy, dx;
-
-    if (ty_fp_eq(a->x, b->x)) {
-        *r = INFINITY;
-        return 0;
-    }
-    if (ty_fp_eq(a->y, b->y)) {
-        *r = 0.0;
-        return 0;
-    }
-    TY_GEO_TRY(ty_float64_sub(a->y, b->y, &dy));
-    TY_GEO_TRY(ty_float64_sub(a->x, b->x, &dx));
-    return ty_float64_div(dy, dx, r);
-}
-
-static inline TY_GEO_INLINE int ty_point_invslope(const ty_point_t* a, const ty_point_t* b, double* r) {
-    double dx, dy;
-
-    if (ty_fp_eq(a->x, b->x)) {
-        *r = 0.0;
-        return 0;
-    }
-    if (ty_fp_eq(a->y, b->y)) {
-        *r = INFINITY;
-        return 0;
-    }
-    TY_GEO_TRY(ty_float64_sub(a->x, b->x, &dx));
-    TY_GEO_TRY(ty_float64_sub(b->y, a->y, &dy));
-    return ty_float64_div(dx, dy, r);
-}
+/* The distance of two points, and the slopes (infinity for vertical). */
+int ty_point_distance(const ty_point_t* a, const ty_point_t* b, double* r);
+int ty_point_slope(const ty_point_t* a, const ty_point_t* b, double* r);
+int ty_point_invslope(const ty_point_t* a, const ty_point_t* b, double* r);
 
 /* Sum, difference, product and quotient of two points, as complex numbers. */
 
@@ -237,6 +145,13 @@ int ty_box_eq(const ty_box_t* a, const ty_box_t* b, int* r);
 int ty_box_le(const ty_box_t* a, const ty_box_t* b, int* r);
 int ty_box_ge(const ty_box_t* a, const ty_box_t* b, int* r);
 
+/* Run a float operation, and return -1 from the caller if it fails. */
+#define TY_GEO_TRY(call)       \
+    do {                       \
+        if ((call) != 0) {     \
+            return -1;         \
+        }                      \
+    } while (0)
 
 /* The functions below are in line: they are used in loops over many values. */
 
@@ -353,169 +268,5 @@ static inline int ty_box_center(const ty_box_t* a, ty_point_t* r) {
 static inline int ty_box_same(const ty_box_t* a, const ty_box_t* b) {
   return ty_point_eq(&a->high, &b->high) && ty_point_eq(&a->low, &b->low);
 }
-
-/*
- * line and lseg. A line is A*x + B*y + C = 0 (A and B not both zero). A
- * line segment has two end points. A call that can fail returns 0, or -1 with
- * the thread's error set. A "hit" says whether there is a result: 1 when
- * there is one, 0 when there is none (the SQL operator then gives NULL or
- * false).
- */
-typedef struct ty_line_t {
-    double a, b, c;
-} ty_line_t;
-
-typedef struct ty_lseg_t {
-    ty_point_t p[2];
-} ty_lseg_t;
-
-/* A line with A and B both zero is not a line (the text and recv of a line). */
-static inline int ty_line_valid(const ty_line_t* l) {
-    return !(ty_fp_zero(l->a) && ty_fp_zero(l->b));
-}
-
-/* The line through a point with the slope m (infinity for vertical). */
-static inline TY_GEO_INLINE int ty_line_construct(ty_line_t* r, const ty_point_t* pt, double m) {
-    ty_line_t t;
-
-    if (isinf(m)) {
-        /* Vertical: x = C. */
-        t.a = -1.0;
-        t.b = 0.0;
-        t.c = pt->x;
-    } else if (m == 0) {
-        /* Horizontal: y = C. */
-        t.a = 0.0;
-        t.b = -1.0;
-        t.c = pt->y;
-    } else {
-        /* m*x - y + intercept = 0. */
-        double mx;
-
-        t.a = m;
-        t.b = -1.0;
-        TY_GEO_TRY(ty_float64_mul(m, pt->x, &mx));
-        TY_GEO_TRY(ty_float64_sub(pt->y, mx, &t.c));
-        /* The subtraction can give -0. */
-        if (t.c == 0.0) {
-            t.c = 0.0;
-        }
-    }
-    *r = t;
-    return 0;
-}
-
-/* The line through two points: TY_ERR_INVALID if they are the same point. */
-int ty_line_from_points(const ty_point_t* a, const ty_point_t* b, ty_line_t* r);
-
-/* The line the segment is on (the points are not tested to be distinct). */
-int ty_line_from_lseg(const ty_lseg_t* s, ty_line_t* r);
-
-/* The slope of a line, and of its perpendicular. */
-int ty_line_slope(const ty_line_t* l, double* r);
-int ty_line_invslope(const ty_line_t* l, double* r);
-
-/* The lines are not parallel; are parallel; are perpendicular; are the same. */
-int ty_line_intersect(const ty_line_t* a, const ty_line_t* b, int* r);
-int ty_line_parallel(const ty_line_t* a, const ty_line_t* b, int* r);
-int ty_line_perp(const ty_line_t* a, const ty_line_t* b, int* r);
-int ty_line_eq(const ty_line_t* a, const ty_line_t* b, int* r);
-
-static inline int ty_line_vertical(const ty_line_t* l) { return ty_fp_zero(l->b); }
-static inline int ty_line_horizontal(const ty_line_t* l) { return ty_fp_zero(l->a); }
-
-/* The distance of two lines. */
-int ty_line_distance(const ty_line_t* a, const ty_line_t* b, double* r);
-
-/* The point where two lines meet: hit is 0 if they do not. */
-int ty_line_interpt(const ty_line_t* a, const ty_line_t* b, ty_point_t* r, int* hit);
-
-/* The point is on the line. */
-int ty_line_contain_point(const ty_line_t* l, const ty_point_t* p, int* r);
-
-/* The segment from two points. */
-static inline void ty_lseg_construct(ty_lseg_t* r, const ty_point_t* a, const ty_point_t* b) {
-    r->p[0] = *a;
-    r->p[1] = *b;
-}
-
-/* The slope of a segment, and of its perpendicular; its length; its center. */
-int ty_lseg_slope(const ty_lseg_t* s, double* r);
-int ty_lseg_invslope(const ty_lseg_t* s, double* r);
-int ty_lseg_length(const ty_lseg_t* s, double* r);
-int ty_lseg_center(const ty_lseg_t* s, ty_point_t* r);
-
-/* The segments meet; are parallel; are perpendicular. */
-int ty_lseg_intersect(const ty_lseg_t* a, const ty_lseg_t* b, int* r);
-int ty_lseg_parallel(const ty_lseg_t* a, const ty_lseg_t* b, int* r);
-int ty_lseg_perp(const ty_lseg_t* a, const ty_lseg_t* b, int* r);
-
-static inline int ty_lseg_vertical(const ty_lseg_t* s) {
-    return ty_fp_eq(s->p[0].x, s->p[1].x);
-}
-static inline int ty_lseg_horizontal(const ty_lseg_t* s) {
-    return ty_fp_eq(s->p[0].y, s->p[1].y);
-}
-static inline int ty_lseg_eq(const ty_lseg_t* a, const ty_lseg_t* b) {
-    return ty_point_eq(&a->p[0], &b->p[0]) && ty_point_eq(&a->p[1], &b->p[1]);
-}
-
-/* The order of segments is the order of their lengths, by the fuzzy compares. */
-int ty_lseg_lt(const ty_lseg_t* a, const ty_lseg_t* b, int* r);
-int ty_lseg_le(const ty_lseg_t* a, const ty_lseg_t* b, int* r);
-int ty_lseg_gt(const ty_lseg_t* a, const ty_lseg_t* b, int* r);
-int ty_lseg_ge(const ty_lseg_t* a, const ty_lseg_t* b, int* r);
-
-/* The point where two segments meet, if they do. */
-int ty_lseg_interpt(const ty_lseg_t* a, const ty_lseg_t* b, ty_point_t* r, int* hit);
-
-/* Both end points of the segment are on the line. */
-int ty_lseg_on_line(const ty_lseg_t* s, const ty_line_t* l, int* r);
-
-/* The segment meets the line; r (may be NULL) is the point. */
-int ty_lseg_interpt_line(const ty_lseg_t* s, const ty_line_t* l, ty_point_t* r, int* hit);
-
-/* The point is on the segment. */
-int ty_lseg_contain_point(const ty_lseg_t* s, const ty_point_t* p, int* r);
-
-/* The point is in the box or on its border (a plain compare, not fuzzy). */
-static inline int ty_box_contain_point(const ty_box_t* b, const ty_point_t* p) {
-    return b->high.x >= p->x && b->low.x <= p->x && b->high.y >= p->y && b->low.y <= p->y;
-}
-
-/* The segment is in the box or on its border. */
-static inline int ty_box_contain_lseg(const ty_box_t* b, const ty_lseg_t* s) {
-    return ty_box_contain_point(b, &s->p[0]) && ty_box_contain_point(b, &s->p[1]);
-}
-
-/* The diagonal of a box, high corner first. */
-static inline void ty_box_diagonal(const ty_box_t* b, ty_lseg_t* r) {
-    ty_lseg_construct(r, &b->high, &b->low);
-}
-
-/* The segment meets the box; r (may be NULL) is the point nearest its center. */
-int ty_box_interpt_lseg(const ty_box_t* b, const ty_lseg_t* s, ty_point_t* r, int* hit);
-
-/* The line meets the box. */
-int ty_box_interpt_line(const ty_box_t* b, const ty_line_t* l, int* hit);
-
-/*
- * The distance between two things and, in r (may be NULL), the point of the
- * first on it that is the nearest. A distance may be NaN. The "close"
- * functions are the SQL operator "##": hit is 0 where it gives NULL.
- */
-int ty_point_line_distance(const ty_point_t* p, const ty_line_t* l, ty_point_t* r, double* d);
-int ty_point_lseg_distance(const ty_point_t* p, const ty_lseg_t* s, ty_point_t* r, double* d);
-int ty_point_box_distance(const ty_point_t* p, const ty_box_t* b, ty_point_t* r, double* d);
-int ty_lseg_lseg_distance(const ty_lseg_t* on, const ty_lseg_t* to, ty_point_t* r, double* d);
-int ty_lseg_line_distance(const ty_lseg_t* s, const ty_line_t* l, ty_point_t* r, double* d);
-int ty_lseg_box_distance(const ty_lseg_t* s, const ty_box_t* b, ty_point_t* r, double* d);
-
-int ty_point_line_close(const ty_point_t* p, const ty_line_t* l, ty_point_t* r, int* hit);
-int ty_point_lseg_close(const ty_point_t* p, const ty_lseg_t* s, ty_point_t* r, int* hit);
-int ty_point_box_close(const ty_point_t* p, const ty_box_t* b, ty_point_t* r, int* hit);
-int ty_lseg_lseg_close(const ty_lseg_t* a, const ty_lseg_t* b, ty_point_t* r, int* hit);
-int ty_lseg_line_close(const ty_line_t* l, const ty_lseg_t* s, ty_point_t* r, int* hit);
-int ty_lseg_box_close(const ty_lseg_t* s, const ty_box_t* b, ty_point_t* r, int* hit);
 
 #endif

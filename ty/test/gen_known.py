@@ -430,84 +430,6 @@ def main_part(args):
         print("part.%s %s %s => %s" % (kind, u.encode().hex(), v, res))
 
 
-GEO_POOL = {
-    "P": ["(0,0)", "(1,1)", "(1,2)", "(-3,4)", "(2.5,-1.5)", "(10,10)", "(0,5)", "(5,0)", "(1e-7,0)", "(NaN,1)",
-          "(1,NaN)", "(Infinity,0)", "(-Infinity,2)", "(1e308,1e308)", "(1e-300,1e-300)", "(3,3)", "(0.5,0.5)", "(2,2)"],
-    "L": ["{1,2,3}", "{1,-1,0}", "{0,1,-2}", "{1,0,-3}", "{2,4,6}", "{-2,1,0}", "{1,1,1}", "{1,-1,5}", "{0,1,0}",
-          "{1,0,0}", "{NaN,1,0}", "{1,NaN,1}", "{1,1,NaN}", "{Infinity,1,0}", "{1e308,1,1}", "{1e-7,1,1}", "{3,4,5}",
-          "{-1,0,2}", "{1,-1,-1e308}", "{1e-300,1,1}"],
-    "S": ["[(0,0),(1,1)]", "[(0,0),(2,0)]", "[(0,0),(0,2)]", "[(1,0),(0,1)]", "[(0,1),(2,3)]", "[(1,1),(1,1)]",
-          "[(-1,-1),(3,3)]", "[(2,2),(4,4)]", "[(0,3),(3,0)]", "[(0,0),(3,4)]", "[(1,2),(3,4)]", "[(NaN,0),(1,1)]",
-          "[(0,0),(Infinity,1)]", "[(1e308,0),(-1e308,0)]", "[(0,0),(1e-300,1e-300)]", "[(5,5),(6,5)]", "[(2,-1),(2,5)]",
-          "[(0,0),(1e-7,1)]"],
-    "B": ["(1,1),(0,0)", "(2,2),(1,1)", "(4,4),(-1,-1)", "(10,10),(5,5)", "(3,2),(0,0)", "(NaN,NaN),(NaN,NaN)",
-          "(Infinity,Infinity),(0,0)", "(1e308,1e308),(-1e308,-1e308)", "(0,0),(0,0)", "(1,3),(1,3)", "(2,1),(1,0)",
-          "(3,3),(2,2)"],
-}
-GEO_TYPE = {"P": "point", "L": "line", "S": "lseg", "B": "box"}
-
-# name: (kinds, template). {0} and {1} are the arguments.
-GEO_OPS = {
-    "line_intersect": ("LL", "{0} ?# {1}"), "line_parallel": ("LL", "{0} ?|| {1}"),
-    "line_perp": ("LL", "{0} ?-| {1}"), "line_vertical": ("L", "?| {0}"), "line_horizontal": ("L", "?- {0}"),
-    "line_eq": ("LL", "{0} = {1}"), "line_distance": ("LL", "{0} <-> {1}"), "line_interpt": ("LL", "{0} # {1}"),
-    "line_construct_pp": ("PP", "line({0}, {1})"),
-    "lseg_length": ("S", "@-@ {0}"), "lseg_intersect": ("SS", "{0} ?# {1}"), "lseg_parallel": ("SS", "{0} ?|| {1}"),
-    "lseg_perp": ("SS", "{0} ?-| {1}"), "lseg_vertical": ("S", "?| {0}"), "lseg_horizontal": ("S", "?- {0}"),
-    "lseg_eq": ("SS", "{0} = {1}"), "lseg_ne": ("SS", "{0} <> {1}"), "lseg_lt": ("SS", "{0} < {1}"),
-    "lseg_le": ("SS", "{0} <= {1}"), "lseg_gt": ("SS", "{0} > {1}"), "lseg_ge": ("SS", "{0} >= {1}"),
-    "lseg_distance": ("SS", "{0} <-> {1}"), "lseg_center": ("S", "@@ {0}"), "lseg_interpt": ("SS", "{0} # {1}"),
-    "box_diagonal": ("B", "diagonal({0})"),
-    "dist_pl": ("PL", "{0} <-> {1}"), "dist_lp": ("LP", "{0} <-> {1}"), "dist_ps": ("PS", "{0} <-> {1}"),
-    "dist_sp": ("SP", "{0} <-> {1}"), "dist_pb": ("PB", "{0} <-> {1}"), "dist_bp": ("BP", "{0} <-> {1}"),
-    "dist_sl": ("SL", "{0} <-> {1}"), "dist_ls": ("LS", "{0} <-> {1}"), "dist_sb": ("SB", "{0} <-> {1}"),
-    "dist_bs": ("BS", "{0} <-> {1}"),
-    "close_pl": ("PL", "{0} ## {1}"), "close_ps": ("PS", "{0} ## {1}"), "close_lseg": ("SS", "{0} ## {1}"),
-    "close_pb": ("PB", "{0} ## {1}"), "close_ls": ("LS", "{0} ## {1}"), "close_sb": ("SB", "{0} ## {1}"),
-    "on_pl": ("PL", "{0} <@ {1}"), "on_ps": ("PS", "{0} <@ {1}"), "on_pb": ("PB", "{0} <@ {1}"),
-    "on_sl": ("SL", "{0} <@ {1}"), "on_sb": ("SB", "{0} <@ {1}"), "box_contain_pt": ("BP", "{0} @> {1}"),
-    "inter_sl": ("SL", "{0} ?# {1}"), "inter_sb": ("SB", "{0} ?# {1}"), "inter_lb": ("LB", "{0} ?# {1}"),
-}
-
-
-def main_geo(args):
-    """Known answers of line and lseg operators: one psql for many
-    statements, a marker before each, the error's SQLSTATE after it."""
-    jobs = []
-    for name, (kinds, tmpl) in GEO_OPS.items():
-        pools = [GEO_POOL[k] for k in kinds]
-        combos = [[a] for a in pools[0]] if len(pools) == 1 else [[a, b] for a in pools[0] for b in pools[1]]
-        for c in combos:
-            lits = ["%s '%s'" % (GEO_TYPE[k], v) for k, v in zip(kinds, c)]
-            jobs.append((name, c, "select (%s)::text" % tmpl.format(*lits)))
-    for lo in range(0, len(jobs), 400):
-        chunk = jobs[lo:lo + 400]
-        script = "set extra_float_digits = 1;\n"
-        for i, (_, _, q) in enumerate(chunk):
-            script += "select 'Q%d';\n%s;\n" % (i, q)
-        r = subprocess.run(["psql", "-X", "-A", "-t", "-q", "-v", "VERBOSITY=sqlstate"] + args,
-                           input=script, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        parts = {}
-        cur = None
-        for ln in r.stdout.split("\n"):
-            if ln.startswith("Q") and ln[1:].isdigit():
-                cur = int(ln[1:])
-                parts[cur] = []
-            elif cur is not None:
-                parts[cur].append(ln)
-        for i, (name, c, q) in enumerate(chunk):
-            rows = parts[i]
-            while rows and rows[-1] == "" and len(rows) > 1:
-                rows.pop()
-            txt = "\n".join(rows)
-            if txt.startswith("ERROR:"):
-                code = txt.split()[-1]
-                res = "E RANGE" if code == "22003" else "E DIVZERO" if code == "22012" else "E INVALID" if code == "22023" else "E ?" + code
-            else:
-                res = txt.encode().hex() or "-"
-            print("geo.%s %s => %s" % (name, "|".join(c).encode().hex(), res))
-
-
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--part":
         sys.argv.pop(1)
@@ -520,10 +442,6 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--interval":
         sys.argv.pop(1)
         main_interval(sys.argv[1:])
-        return
-    if len(sys.argv) > 1 and sys.argv[1] == "--geo":
-        sys.argv.pop(1)
-        main_geo(sys.argv[1:])
         return
     if len(sys.argv) > 1 and sys.argv[1] == "--datetime":
         sys.argv.pop(1)
