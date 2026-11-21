@@ -3029,111 +3029,12 @@ Datum interval_sum(PG_FUNCTION_ARGS) {
 Datum timestamp_age(PG_FUNCTION_ARGS) {
   Timestamp dt1 = PG_GETARG_TIMESTAMP(0);
   Timestamp dt2 = PG_GETARG_TIMESTAMP(1);
-  Interval *result;
-  fsec_t fsec1, fsec2;
-  struct pg_itm tt, *tm = &tt;
-  struct pg_tm tt1, *tm1 = &tt1;
-  struct pg_tm tt2, *tm2 = &tt2;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  result = (Interval *)palloc(sizeof(Interval));
-
-  /*
-   * Handle infinities.
-   *
-   * We treat anything that amounts to "infinity - infinity" as an error,
-   * since the interval type has nothing equivalent to NaN.
-   */
-  if (TIMESTAMP_IS_NOBEGIN(dt1)) {
-    if (TIMESTAMP_IS_NOBEGIN(dt2))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-    else
-      INTERVAL_NOBEGIN(result);
-  } else if (TIMESTAMP_IS_NOEND(dt1)) {
-    if (TIMESTAMP_IS_NOEND(dt2))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-    else
-      INTERVAL_NOEND(result);
-  } else if (TIMESTAMP_IS_NOBEGIN(dt2))
-    INTERVAL_NOEND(result);
-  else if (TIMESTAMP_IS_NOEND(dt2))
-    INTERVAL_NOBEGIN(result);
-  else if (timestamp2tm(dt1, NULL, tm1, &fsec1, NULL, NULL) == 0 &&
-           timestamp2tm(dt2, NULL, tm2, &fsec2, NULL, NULL) == 0) {
-    /* form the symbolic difference */
-    tm->tm_usec = fsec1 - fsec2;
-    tm->tm_sec = tm1->tm_sec - tm2->tm_sec;
-    tm->tm_min = tm1->tm_min - tm2->tm_min;
-    tm->tm_hour = tm1->tm_hour - tm2->tm_hour;
-    tm->tm_mday = tm1->tm_mday - tm2->tm_mday;
-    tm->tm_mon = tm1->tm_mon - tm2->tm_mon;
-    tm->tm_year = tm1->tm_year - tm2->tm_year;
-
-    /* flip sign if necessary... */
-    if (dt1 < dt2) {
-      tm->tm_usec = -tm->tm_usec;
-      tm->tm_sec = -tm->tm_sec;
-      tm->tm_min = -tm->tm_min;
-      tm->tm_hour = -tm->tm_hour;
-      tm->tm_mday = -tm->tm_mday;
-      tm->tm_mon = -tm->tm_mon;
-      tm->tm_year = -tm->tm_year;
-    }
-
-    /* propagate any negative fields into the next higher field */
-    while (tm->tm_usec < 0) {
-      tm->tm_usec += USECS_PER_SEC;
-      tm->tm_sec--;
-    }
-
-    while (tm->tm_sec < 0) {
-      tm->tm_sec += SECS_PER_MINUTE;
-      tm->tm_min--;
-    }
-
-    while (tm->tm_min < 0) {
-      tm->tm_min += MINS_PER_HOUR;
-      tm->tm_hour--;
-    }
-
-    while (tm->tm_hour < 0) {
-      tm->tm_hour += HOURS_PER_DAY;
-      tm->tm_mday--;
-    }
-
-    while (tm->tm_mday < 0) {
-      if (dt1 < dt2) {
-        tm->tm_mday += day_tab[isleap(tm1->tm_year)][tm1->tm_mon - 1];
-        tm->tm_mon--;
-      } else {
-        tm->tm_mday += day_tab[isleap(tm2->tm_year)][tm2->tm_mon - 1];
-        tm->tm_mon--;
-      }
-    }
-
-    while (tm->tm_mon < 0) {
-      tm->tm_mon += MONTHS_PER_YEAR;
-      tm->tm_year--;
-    }
-
-    /* recover sign if necessary... */
-    if (dt1 < dt2) {
-      tm->tm_usec = -tm->tm_usec;
-      tm->tm_sec = -tm->tm_sec;
-      tm->tm_min = -tm->tm_min;
-      tm->tm_hour = -tm->tm_hour;
-      tm->tm_mday = -tm->tm_mday;
-      tm->tm_mon = -tm->tm_mon;
-      tm->tm_year = -tm->tm_year;
-    }
-
-    if (itm2interval(tm, result) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-  } else
+  /* ty subtracts the fields, with the borrows, and handles the infinities */
+  if (ty_timestamp_age(dt1, dt2, (ty_interval_t *)result))
     ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("timestamp out of range")));
+                    errmsg("%s", ty_errmsg())));
 
   PG_RETURN_INTERVAL_P(result);
 }
@@ -3273,55 +3174,13 @@ Datum timestamp_bin(PG_FUNCTION_ARGS) {
   Interval *stride = PG_GETARG_INTERVAL_P(0);
   Timestamp timestamp = PG_GETARG_TIMESTAMP(1);
   Timestamp origin = PG_GETARG_TIMESTAMP(2);
-  Timestamp result, stride_usecs, tm_diff, tm_modulo, tm_delta;
+  Timestamp result;
 
-  if (TIMESTAMP_NOT_FINITE(timestamp))
-    PG_RETURN_TIMESTAMP(timestamp);
-
-  if (TIMESTAMP_NOT_FINITE(origin))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("origin out of range")));
-
-  if (INTERVAL_NOT_FINITE(stride))
-    ereport(ERROR,
-            (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-             errmsg("timestamps cannot be binned into infinite intervals")));
-
-  if (stride->month != 0)
-    ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                    errmsg("timestamps cannot be binned into intervals "
-                           "containing months or years")));
-
-  if (unlikely(
-          pg_mul_s64_overflow(stride->day, USECS_PER_DAY, &stride_usecs)) ||
-      unlikely(pg_add_s64_overflow(stride_usecs, stride->time, &stride_usecs)))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("interval out of range")));
-
-  if (stride_usecs <= 0)
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("stride must be greater than zero")));
-
-  if (unlikely(pg_sub_s64_overflow(timestamp, origin, &tm_diff)))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("interval out of range")));
-
-  /* These calculations cannot overflow */
-  tm_modulo = tm_diff % stride_usecs;
-  tm_delta = tm_diff - tm_modulo;
-  result = origin + tm_delta;
-
-  /*
-   * We want to round towards -infinity, not 0, when tm_diff is negative and
-   * not a multiple of stride_usecs.  This adjustment *can* cause overflow,
-   * since the result might now be out of the range origin .. timestamp.
-   */
-  if (tm_modulo < 0) {
-    if (unlikely(pg_sub_s64_overflow(result, stride_usecs, &result)) ||
-        !IS_VALID_TIMESTAMP(result))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-  }
+  if (ty_timestamp_bin((ty_interval_t *)stride, timestamp, origin, &result))
+    ereport(ERROR, (errcode(ty_errnum() == TY_ERR_INVALID
+                                ? ERRCODE_FEATURE_NOT_SUPPORTED
+                                : ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
 
   PG_RETURN_TIMESTAMP(result);
 }
@@ -3335,138 +3194,25 @@ Datum timestamp_trunc(PG_FUNCTION_ARGS) {
   Timestamp result;
   int type, val;
   char *lowunits;
-  fsec_t fsec;
-  struct pg_tm tt, *tm = &tt;
 
   lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
                                           VARSIZE_ANY_EXHDR(units), false);
 
-  type = DecodeUnits(0, lowunits, &val);
+  type = ty_datetime_unit(lowunits, &val);
 
-  if (type == UNITS) {
-    if (TIMESTAMP_NOT_FINITE(timestamp)) {
-      /*
-       * Errors thrown here for invalid units should exactly match those
-       * below, else there will be unexpected discrepancies between
-       * finite- and infinite-input cases.
-       */
-      switch (val) {
-      case DTK_WEEK:
-      case DTK_MILLENNIUM:
-      case DTK_CENTURY:
-      case DTK_DECADE:
-      case DTK_YEAR:
-      case DTK_QUARTER:
-      case DTK_MONTH:
-      case DTK_DAY:
-      case DTK_HOUR:
-      case DTK_MINUTE:
-      case DTK_SECOND:
-      case DTK_MILLISEC:
-      case DTK_MICROSEC:
-        PG_RETURN_TIMESTAMP(timestamp);
-        break;
-      default:
-        ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                        errmsg("unit \"%s\" not supported for type %s",
-                               lowunits, format_type_be(TIMESTAMPOID))));
-        result = 0;
-      }
-    }
-
-    if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-
-    switch (val) {
-    case DTK_WEEK: {
-      int woy;
-
-      woy = date2isoweek(tm->tm_year, tm->tm_mon, tm->tm_mday);
-
-      /*
-       * If it is week 52/53 and the month is January, then the
-       * week must belong to the previous year. Also, some
-       * December dates belong to the next year.
-       */
-      if (woy >= 52 && tm->tm_mon == 1)
-        --tm->tm_year;
-      if (woy <= 1 && tm->tm_mon == MONTHS_PER_YEAR)
-        ++tm->tm_year;
-      isoweek2date(woy, &(tm->tm_year), &(tm->tm_mon), &(tm->tm_mday));
-      tm->tm_hour = 0;
-      tm->tm_min = 0;
-      tm->tm_sec = 0;
-      fsec = 0;
-      break;
-    }
-    case DTK_MILLENNIUM:
-      /* see comments in timestamptz_trunc */
-      if (tm->tm_year > 0)
-        tm->tm_year = ((tm->tm_year + 999) / 1000) * 1000 - 999;
-      else
-        tm->tm_year = -((999 - (tm->tm_year - 1)) / 1000) * 1000 + 1;
-      /* FALL THRU */
-    case DTK_CENTURY:
-      /* see comments in timestamptz_trunc */
-      if (tm->tm_year > 0)
-        tm->tm_year = ((tm->tm_year + 99) / 100) * 100 - 99;
-      else
-        tm->tm_year = -((99 - (tm->tm_year - 1)) / 100) * 100 + 1;
-      /* FALL THRU */
-    case DTK_DECADE:
-      /* see comments in timestamptz_trunc */
-      if (val != DTK_MILLENNIUM && val != DTK_CENTURY) {
-        if (tm->tm_year > 0)
-          tm->tm_year = (tm->tm_year / 10) * 10;
-        else
-          tm->tm_year = -((8 - (tm->tm_year - 1)) / 10) * 10;
-      }
-      /* FALL THRU */
-    case DTK_YEAR:
-      tm->tm_mon = 1;
-      /* FALL THRU */
-    case DTK_QUARTER:
-      tm->tm_mon = (3 * ((tm->tm_mon - 1) / 3)) + 1;
-      /* FALL THRU */
-    case DTK_MONTH:
-      tm->tm_mday = 1;
-      /* FALL THRU */
-    case DTK_DAY:
-      tm->tm_hour = 0;
-      /* FALL THRU */
-    case DTK_HOUR:
-      tm->tm_min = 0;
-      /* FALL THRU */
-    case DTK_MINUTE:
-      tm->tm_sec = 0;
-      /* FALL THRU */
-    case DTK_SECOND:
-      fsec = 0;
-      break;
-
-    case DTK_MILLISEC:
-      fsec = (fsec / 1000) * 1000;
-      break;
-
-    case DTK_MICROSEC:
-      break;
-
-    default:
-      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                      errmsg("unit \"%s\" not supported for type %s", lowunits,
-                             format_type_be(TIMESTAMPOID))));
-      result = 0;
-    }
-
-    if (tm2timestamp(tm, fsec, NULL, &result) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-  } else {
+  if (!type)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unit \"%s\" not recognized for type %s", lowunits,
                            format_type_be(TIMESTAMPOID))));
-    result = 0;
+
+  /* ty cuts the timestamp at the unit */
+  if (ty_timestamp_trunc(val, timestamp, &result)) {
+    if (ty_errnum() == TY_ERR_INVALID)
+      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                      errmsg("unit \"%s\" not supported for type %s",
+                             lowunits, format_type_be(TIMESTAMPOID))));
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("timestamp out of range")));
   }
 
   PG_RETURN_TIMESTAMP(result);
@@ -3854,17 +3600,7 @@ Datum interval_trunc(PG_FUNCTION_ARGS) {
  *	work with the soft-error handling that its callers do is likely more
  *	trouble than it's worth.
  */
-int isoweek2j(int year, int week) {
-  int day0, day4;
-
-  /* fourth day of current year */
-  day4 = date2j(year, 1, 4);
-
-  /* day0 == offset to first day of week (Monday) */
-  day0 = j2day(day4 - 1);
-
-  return ((week - 1) * 7) + (day4 - day0);
-}
+int isoweek2j(int year, int week) { return ty_isoweek2j(year, week); }
 
 /* isoweek2date()
  * Convert ISO week of year number to date.
@@ -3872,7 +3608,7 @@ int isoweek2j(int year, int week) {
  * karel 2000/08/07
  */
 void isoweek2date(int woy, int *year, int *mon, int *mday) {
-  j2date(isoweek2j(*year, woy), year, mon, mday);
+  ty_isoweek2date(woy, year, mon, mday);
 }
 
 /* isoweekdate2date()
@@ -3899,46 +3635,7 @@ void isoweekdate2date(int isoweek, int wday, int *year, int *mon, int *mday) {
  *	Returns ISO week number of year.
  */
 int date2isoweek(int year, int mon, int mday) {
-  float8 result;
-  int day0, day4, dayn;
-
-  /* current day */
-  dayn = date2j(year, mon, mday);
-
-  /* fourth day of current year */
-  day4 = date2j(year, 1, 4);
-
-  /* day0 == offset to first day of week (Monday) */
-  day0 = j2day(day4 - 1);
-
-  /*
-   * We need the first week containing a Thursday, otherwise this day falls
-   * into the previous year for purposes of counting weeks
-   */
-  if (dayn < day4 - day0) {
-    day4 = date2j(year - 1, 1, 4);
-
-    /* day0 == offset to first day of week (Monday) */
-    day0 = j2day(day4 - 1);
-  }
-
-  result = (dayn - (day4 - day0)) / 7 + 1;
-
-  /*
-   * Sometimes the last few days in a year will fall into the first week of
-   * the next year, so check for this.
-   */
-  if (result >= 52) {
-    day4 = date2j(year + 1, 1, 4);
-
-    /* day0 == offset to first day of week (Monday) */
-    day0 = j2day(day4 - 1);
-
-    if (dayn >= day4 - day0)
-      result = (dayn - (day4 - day0)) / 7 + 1;
-  }
-
-  return (int)result;
+  return ty_date2isoweek(year, mon, mday);
 }
 
 /* date2isoyear()
@@ -3947,48 +3644,7 @@ int date2isoweek(int year, int mon, int mday) {
  *	Note: zero or negative results follow the year-zero-exists convention.
  */
 int date2isoyear(int year, int mon, int mday) {
-  float8 result;
-  int day0, day4, dayn;
-
-  /* current day */
-  dayn = date2j(year, mon, mday);
-
-  /* fourth day of current year */
-  day4 = date2j(year, 1, 4);
-
-  /* day0 == offset to first day of week (Monday) */
-  day0 = j2day(day4 - 1);
-
-  /*
-   * We need the first week containing a Thursday, otherwise this day falls
-   * into the previous year for purposes of counting weeks
-   */
-  if (dayn < day4 - day0) {
-    day4 = date2j(year - 1, 1, 4);
-
-    /* day0 == offset to first day of week (Monday) */
-    day0 = j2day(day4 - 1);
-
-    year--;
-  }
-
-  result = (dayn - (day4 - day0)) / 7 + 1;
-
-  /*
-   * Sometimes the last few days in a year will fall into the first week of
-   * the next year, so check for this.
-   */
-  if (result >= 52) {
-    day4 = date2j(year + 1, 1, 4);
-
-    /* day0 == offset to first day of week (Monday) */
-    day0 = j2day(day4 - 1);
-
-    if (dayn >= day4 - day0)
-      year++;
-  }
-
-  return year;
+  return ty_date2isoyear(year, mon, mday);
 }
 
 /* date2isoyearday()
@@ -3997,8 +3653,7 @@ int date2isoyear(int year, int mon, int mday) {
  *	Possible return values are 1 through 371 (364 in non-leap years).
  */
 int date2isoyearday(int year, int mon, int mday) {
-  return date2j(year, mon, mday) - isoweek2j(date2isoyear(year, mon, mday), 1) +
-         1;
+  return ty_date2isoyearday(year, mon, mday);
 }
 
 /*

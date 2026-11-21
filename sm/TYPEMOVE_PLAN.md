@@ -630,6 +630,11 @@ copied from PostgreSQL keeps its copyright notice
      `dg/test/select_typmod_ops.sql`, which prints the same as
      the digres before the move; the cost of the casts is
      +0.24%.
+   - **date_trunc, age and date_bin of timestamp, and the ISO
+     week functions moved (2026-11-21).** The tests: 3,122
+     known answers from the old digres (`known.txt`), and
+     `dg/test/select_trunc_ops.sql`, which prints the same as
+     the digres before the move. Cost: +0.25% to +0.27%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

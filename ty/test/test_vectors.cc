@@ -994,7 +994,7 @@ bool run_datetime(const vec_t &v) {
   const std::string name = op.substr(op.find('.') + 1);
 
   /* the text of these types is in known.txt, run by run_known */
-  if (name == "out") {
+  if (name == "out" || name == "trunc" || name == "age" || name == "bin") {
     return false;
   }
   int rc = 0;
@@ -1544,6 +1544,94 @@ bool run_datetime_text(const vec_t &v) {
   return true;
 }
 
+/* The text of a timestamp result, ISO; or infinity. */
+std::string ts_text(int64_t t) {
+  if (t == TY_TIMESTAMP_NOEND) {
+    return "infinity";
+  }
+  if (t == TY_TIMESTAMP_NOBEGIN) {
+    return "-infinity";
+  }
+  ty_tm_t tm;
+  int32_t fsec;
+  char out[TY_DATETIME_TEXT_MAX];
+
+  REQUIRE(0 == ty_timestamp_to_tm(t, &tm, &fsec));
+  ty_timestamp_format(&tm, fsec, 0, 0, nullptr, -1, TY_DATES_ISO,
+                      TY_DATEORDER_YMD, out);
+  return out;
+}
+
+/* The text of an interval result, postgres style; or infinity. */
+std::string iv_text(const ty_interval_t &iv) {
+  if (ty_interval_is_noend(&iv)) {
+    return "infinity";
+  }
+  if (ty_interval_is_nobegin(&iv)) {
+    return "-infinity";
+  }
+  ty_itm_t itm;
+  char out[TY_DATETIME_TEXT_MAX];
+
+  ty_interval_to_itm(&iv, &itm);
+  ty_interval_format(&itm, TY_INTSTYLE_POSTGRES, out);
+  return out;
+}
+
+/*
+ * date_trunc, age and date_bin of timestamps (known.txt): what the old digres
+ * printed, or the kind of the error.
+ */
+bool run_ts_known(const vec_t &v) {
+  const std::string &op = v.op;
+  int64_t r = 0;
+  ty_interval_t iv;
+  int rc = 0;
+  bool unknown = false;
+
+  INFO(v.line);
+  if (op == "ts.trunc") {
+    std::vector<uint8_t> ub = bytes_of(v.args[0]);
+    std::string unit(reinterpret_cast<const char *>(ub.data()), ub.size());
+    int code = 0;
+
+    for (char &c : unit) {
+      c = (char)tolower((unsigned char)c);
+    }
+    if (!ty_datetime_unit(unit.c_str(), &code)) {
+      unknown = true;
+    } else {
+      rc = ty_timestamp_trunc(code, std::stoll(v.args[1]), &r);
+    }
+  } else if (op == "ts.age") {
+    rc = ty_timestamp_age(std::stoll(v.args[0]), std::stoll(v.args[1]), &iv);
+  } else {
+    long long m, d, t;
+
+    REQUIRE(3 == sscanf(v.args[0].c_str(), "%lld:%lld:%lld", &m, &d, &t));
+    ty_interval_t stride = {t, (int32_t)d, (int32_t)m};
+
+    rc = ty_timestamp_bin(&stride, std::stoll(v.args[1]), std::stoll(v.args[2]),
+                          &r);
+  }
+  if (v.res[0] == "E") {
+    if (v.res[1] == "UNKNOWN") {
+      CHECK(unknown);
+    } else {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    }
+    return true;
+  }
+  REQUIRE(!unknown);
+  REQUIRE(0 == rc);
+  std::string text = op == "ts.age" ? iv_text(iv) : ts_text(r);
+
+  CHECK(v.res[0] ==
+        token_of(reinterpret_cast<const uint8_t *>(text.data()), text.size()));
+  return true;
+}
+
 /* An inet token "family:bits:hex" as a value. */
 ty_inet_t inet_of(const std::string &tok) {
   ty_inet_t a;
@@ -1681,6 +1769,9 @@ bool run_known(const vec_t &v) {
       CHECK(v.res[0] == std::string(out));
     }
     return true;
+  }
+  if (op == "ts.trunc" || op == "ts.age" || op == "ts.bin") {
+    return run_ts_known(v);
   }
   if (op == "iv.parse") {
     std::vector<uint8_t> tb = bytes_of(v.args[1]);

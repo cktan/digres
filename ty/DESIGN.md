@@ -686,6 +686,12 @@ is.
 timestamp and a time to the precision of `timestamp(p)` and
 `time(p)`.
 
+`ty_timestamp_trunc` is `date_trunc`, `ty_timestamp_bin` is
+`date_bin`, and `ty_timestamp_age` is `age` of two timestamps.
+The ISO week functions are `ty_date2isoweek`, `ty_date2isoyear`,
+`ty_date2isoyearday`, `ty_isoweek2j` and `ty_isoweek2date`.
+`ty_datetime_unit` tells if a word is a unit, and gives its code.
+
 The tests: the vectors, from Python integers and a second
 formulation of the Julian day (the Wikipedia formula and
 Richards' inverse, not PostgreSQL's), about 3,500;

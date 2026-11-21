@@ -161,6 +161,48 @@ int ty_timestamp_sub_interval(int64_t ts, const ty_interval_t* span,
 int ty_timestamp_diff(int64_t a, int64_t b, ty_interval_t* out);
 
 /*
+ * The ISO 8601 week of a date: the week number, the year the week is in, the
+ * day of that year, and the Julian day of the first day of a week of a year.
+ */
+int ty_date2isoweek(int year, int mon, int mday);
+int ty_date2isoyear(int year, int mon, int mday);
+int ty_date2isoyearday(int year, int mon, int mday);
+int ty_isoweek2j(int year, int week);
+void ty_isoweek2date(int woy, int* year, int* mon, int* mday);
+
+/*
+ * A unit of time as a word of the host's SQL: 1 and the unit's code
+ * (the DTK_ values of PostgreSQL: week 22, month 23, quarter 24, year 25,
+ * decade 26, century 27, millennium 28, millisecond 29, microsecond 30,
+ * second 18, minute 19, hour 20, day 21) if the lower-case word is one,
+ * 0 if it is not.
+ */
+int ty_datetime_unit(const char* lowtoken, int* code);
+
+/*
+ * date_trunc of a timestamp: the timestamp cut at a unit (see above). An
+ * infinite timestamp is returned as it is for a unit it can be cut at; a
+ * code that is no unit of a timestamp (dow, epoch, ...) is TY_ERR_INVALID
+ * ("unit not supported"). A result out of range is TY_ERR_RANGE.
+ */
+int ty_timestamp_trunc(int code, int64_t ts, int64_t* out);
+
+/*
+ * date_bin: the start of the bin of timestamp, of stride, from origin. The
+ * errors are TY_ERR_RANGE with PostgreSQL's message, and for a stride with
+ * months, TY_ERR_INVALID ("timestamps cannot be binned into intervals
+ * containing months or years").
+ */
+int ty_timestamp_bin(const ty_interval_t* stride, int64_t ts, int64_t origin,
+                     int64_t* out);
+
+/*
+ * age(a, b) of two timestamps: the years, months, days and time from b to a,
+ * the borrow of a month taking the days of the month of the earlier one.
+ */
+int ty_timestamp_age(int64_t a, int64_t b, ty_interval_t* out);
+
+/*
  * Make a timestamp fit its precision (0 to 6; -1 or 6 leaves it): rounded to
  * the microsecond digits, away from zero for a half. A precision outside 0 to
  * 6 is TY_ERR_INVALID ("timestamp(%d) precision must be between 0 and 6").

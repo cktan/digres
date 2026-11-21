@@ -323,7 +323,59 @@ def main_interval(args):
             print("iv.parse %d %s => %s" % (sty, t.encode().hex() or "-", res))
 
 
+def main_trunc(args):
+    random.seed(20261124)
+    tss = [0, 1, -1, 86400000000, -86400000000, -211813488000000000, -211813488000000000 + 1, 9223371331200000000 - 1, 86399999999,
+           725803200000000, 1000000000000000000, -200000000000000000, 3155760000000000, -3155760000000000, 500, 1500000, 10000, 120000,
+           -2208988800000000, -62135596800000000 - 86400000000, 31622400000000, 63113904000000000, 7 * 86400000000, 1234567890123456]
+    tss += [random.randint(-211813488000000000, 9223371331200000000 - 1) for _ in range(25)] + [random.randint(-10 ** 15, 10 ** 15) for _ in range(40)]
+    units = ["microseconds", "microsecond", "milliseconds", "millisecond", "second", "seconds", "minute", "hour", "day", "days", "week", "month", "months", "quarter",
+             "year", "years", "decade", "century", "millennium", "dow", "doy", "epoch", "julian", "timezone", "foo", "", "ms", "us", "isoyear", "isodow"]
+    sets = ["set datestyle = 'ISO, YMD';\n", "set intervalstyle = 'postgres';\n"]
+    lit = lambda t: "(timestamp '2000-01-01' + interval '%d microseconds')" % t
+    qs, keys = [], []
+    for u in units:
+        for t in tss:
+            qs.append("select date_trunc('%s', %s)::text" % (u, lit(t)))
+            keys.append(("ts.trunc", u, t))
+    for t in ("infinity", "-infinity"):
+        for u in units[:14]:
+            qs.append("select date_trunc('%s', '%s'::timestamp)::text" % (u, t))
+            keys.append(("ts.trunc", u, 9223372036854775807 if t == "infinity" else -9223372036854775808))
+    for a_ in tss[:40]:
+        for b_ in random.sample(tss, 4):
+            qs.append("select age(%s, %s)::text" % (lit(a_), lit(b_)))
+            keys.append(("ts.age", a_, b_))
+    strides = [(0, 1, 0), (0, 0, 3600000000), (0, 0, 900000000), (0, 7, 0), (0, 0, 1), (0, 0, 1000000), (0, 15, 43200000000), (0, 0, 0), (0, -1, 0), (1, 0, 0), (0, 0, 7)]
+    origins = [0, 86400000000 * 3 + 5, -31622400000000, 725803200000000]
+    for st in strides:
+        for t in random.sample(tss, 8):
+            for o in origins[:3]:
+                qs.append("select date_bin(make_interval(0, %d, 0, %d, 0, 0, 0) + interval '%d microseconds', %s, %s)::text" % (st[0], st[1], st[2], lit(t), lit(o)))
+                keys.append(("ts.bin", "%d:%d:%d" % st, t, o))
+    # one psql, with a statement per query; errors go to stderr in order: use a marker for each
+    out = []
+    for q, k in zip(qs, keys):
+        script = "".join(sets) + q + ";\n"
+        r = subprocess.run(["psql", "-X", "-A", "-t", "-q", "-v", "VERBOSITY=sqlstate"] + args, input=script, capture_output=True, text=True)
+        if r.returncode == 0 and "ERROR" not in r.stderr:
+            res = r.stdout.strip().encode().hex() or "-"
+        else:
+            e = r.stderr
+            res = "E INVALID" if "0A000" in e else "E UNKNOWN" if "22023" in e else "E RANGE" if "22008" in e else "E FEATURE" if "0A000" in e else "E ?" + e.strip().replace(" ", "_")[:30]
+        if k[0] == "ts.trunc":
+            print("ts.trunc %s %d => %s" % (k[1].encode().hex() or "-", k[2], res))
+        elif k[0] == "ts.age":
+            print("ts.age %d %d => %s" % (k[1], k[2], res))
+        else:
+            print("ts.bin %s %d %d => %s" % (k[1], k[2], k[3], res))
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--trunc":
+        sys.argv.pop(1)
+        main_trunc(sys.argv[1:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--interval":
         sys.argv.pop(1)
         main_interval(sys.argv[1:])

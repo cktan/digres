@@ -459,3 +459,336 @@ int ty_timestamp_adjust_typmod(int64_t *ts, int32_t typmod) {
   }
   return 0;
 }
+
+/* The Julian day of the Monday of the first ISO week of a year. */
+int ty_isoweek2j(int year, int week) {
+  int day4 = ty_date2j(year, 1, 4);
+  int day0 = ty_j2day(day4 - 1);
+
+  return ((week - 1) * 7) + (day4 - day0);
+}
+
+/* The date of the Monday of a week of a year (year is given and set). */
+void ty_isoweek2date(int woy, int *year, int *mon, int *mday) {
+  ty_j2date(ty_isoweek2j(*year, woy), year, mon, mday);
+}
+
+/* The ISO week of a date. */
+int ty_date2isoweek(int year, int mon, int mday) {
+  double result;
+  int day0, day4, dayn;
+
+  dayn = ty_date2j(year, mon, mday);
+  day4 = ty_date2j(year, 1, 4);
+  day0 = ty_j2day(day4 - 1);
+  /* the first week has a Thursday, or the day is in the last year's */
+  if (dayn < day4 - day0) {
+    day4 = ty_date2j(year - 1, 1, 4);
+    day0 = ty_j2day(day4 - 1);
+  }
+  result = (dayn - (day4 - day0)) / 7 + 1;
+  /* the last days of a year may be in the first week of the next */
+  if (result >= 52) {
+    day4 = ty_date2j(year + 1, 1, 4);
+    day0 = ty_j2day(day4 - 1);
+    if (dayn >= day4 - day0) {
+      result = (dayn - (day4 - day0)) / 7 + 1;
+    }
+  }
+  return (int)result;
+}
+
+/* The year of the ISO week of a date. */
+int ty_date2isoyear(int year, int mon, int mday) {
+  double result;
+  int day0, day4, dayn;
+
+  dayn = ty_date2j(year, mon, mday);
+  day4 = ty_date2j(year, 1, 4);
+  day0 = ty_j2day(day4 - 1);
+  if (dayn < day4 - day0) {
+    day4 = ty_date2j(year - 1, 1, 4);
+    day0 = ty_j2day(day4 - 1);
+    year--;
+  }
+  result = (dayn - (day4 - day0)) / 7 + 1;
+  if (result >= 52) {
+    day4 = ty_date2j(year + 1, 1, 4);
+    day0 = ty_j2day(day4 - 1);
+    if (dayn >= day4 - day0) {
+      year++;
+    }
+  }
+  return year;
+}
+
+/* The day of the ISO year of a date. */
+int ty_date2isoyearday(int year, int mon, int mday) {
+  return ty_date2j(year, mon, mday) -
+         ty_isoweek2j(ty_date2isoyear(year, mon, mday), 1) + 1;
+}
+
+/*
+ * date_trunc: break the timestamp down, cut the fields at the unit by falling
+ * through the cases from the largest, and put it together again.
+ */
+int ty_timestamp_trunc(int code, int64_t timestamp, int64_t *out) {
+  enum {
+    WEEK = 22,
+    MONTH = 23,
+    QUARTER = 24,
+    YEAR = 25,
+    DECADE = 26,
+    CENTURY = 27,
+    MILLENNIUM = 28,
+    MILLISEC = 29,
+    MICROSEC = 30,
+    SECOND = 18,
+    MINUTE = 19,
+    HOUR = 20,
+    DAY = 21
+  };
+  ty_tm_t tm;
+  int32_t fsec;
+
+  if (!ty_timestamp_finite(timestamp)) {
+    switch (code) {
+    case WEEK:
+    case MILLENNIUM:
+    case CENTURY:
+    case DECADE:
+    case YEAR:
+    case QUARTER:
+    case MONTH:
+    case DAY:
+    case HOUR:
+    case MINUTE:
+    case SECOND:
+    case MILLISEC:
+    case MICROSEC:
+      *out = timestamp;
+      return 0;
+    default:
+      return ty_internal::set_error(TY_ERR_INVALID, "unit not supported");
+    }
+  }
+  if (ty_timestamp_to_tm(timestamp, &tm, &fsec) != 0) {
+    return ts_range();
+  }
+  switch (code) {
+  case WEEK: {
+    int woy = ty_date2isoweek(tm.year, tm.mon, tm.mday);
+
+    /* week 52 or 53 of January is of the year before, week 1 of December of the
+     * next */
+    if (woy >= 52 && tm.mon == 1) {
+      --tm.year;
+    }
+    if (woy <= 1 && tm.mon == 12) {
+      ++tm.year;
+    }
+    int y = tm.year, m, d;
+
+    ty_isoweek2date(woy, &y, &m, &d);
+    tm.year = y;
+    tm.mon = m;
+    tm.mday = d;
+    tm.hour = tm.min = tm.sec = 0;
+    fsec = 0;
+    break;
+  }
+  case MILLENNIUM:
+  case CENTURY:
+  case DECADE:
+  case YEAR:
+  case QUARTER:
+  case MONTH:
+  case DAY:
+  case HOUR:
+  case MINUTE:
+  case SECOND:
+    /* each case cuts its field, and goes on to the smaller ones */
+    if (code == MILLENNIUM) {
+      tm.year = tm.year > 0 ? ((tm.year + 999) / 1000) * 1000 - 999
+                            : -((999 - (tm.year - 1)) / 1000) * 1000 + 1;
+    }
+    if (code == MILLENNIUM || code == CENTURY) {
+      tm.year = tm.year > 0 ? ((tm.year + 99) / 100) * 100 - 99
+                            : -((99 - (tm.year - 1)) / 100) * 100 + 1;
+    }
+    if (code == DECADE) {
+      tm.year =
+          tm.year > 0 ? (tm.year / 10) * 10 : -((8 - (tm.year - 1)) / 10) * 10;
+    }
+    if (code == MILLENNIUM || code == CENTURY || code == DECADE ||
+        code == YEAR) {
+      tm.mon = 1;
+    }
+    if (code == MILLENNIUM || code == CENTURY || code == DECADE ||
+        code == YEAR || code == QUARTER) {
+      tm.mon = (3 * ((tm.mon - 1) / 3)) + 1;
+    }
+    if (code == MILLENNIUM || code == CENTURY || code == DECADE ||
+        code == YEAR || code == QUARTER || code == MONTH) {
+      tm.mday = 1;
+    }
+    if (code != HOUR && code != MINUTE && code != SECOND) {
+      tm.hour = 0;
+    }
+    if (code != MINUTE && code != SECOND) {
+      tm.min = 0;
+    }
+    if (code != SECOND) {
+      tm.sec = 0;
+    }
+    fsec = 0;
+    break;
+  case MILLISEC:
+    fsec = (fsec / 1000) * 1000;
+    break;
+  case MICROSEC:
+    break;
+  default:
+    return ty_internal::set_error(TY_ERR_INVALID, "unit not supported");
+  }
+  if (ty_tm_to_timestamp(&tm, fsec, out) != 0) {
+    return ts_range();
+  }
+  return 0;
+}
+
+/* date_bin. */
+int ty_timestamp_bin(const ty_interval_t *stride, int64_t timestamp,
+                     int64_t origin, int64_t *out) {
+  int64_t stride_usecs, tm_diff, tm_modulo, tm_delta, result;
+
+  if (!ty_timestamp_finite(timestamp)) {
+    *out = timestamp;
+    return 0;
+  }
+  if (!ty_timestamp_finite(origin)) {
+    return ty_internal::set_error(TY_ERR_RANGE, "origin out of range");
+  }
+  if (ty_interval_not_finite(stride)) {
+    return ty_internal::set_error(
+        TY_ERR_RANGE, "timestamps cannot be binned into infinite intervals");
+  }
+  if (stride->month != 0) {
+    return ty_internal::set_error(TY_ERR_INVALID,
+                                  "timestamps cannot be binned into intervals "
+                                  "containing months or years");
+  }
+  if (__builtin_mul_overflow((int64_t)stride->day, TY_USECS_PER_HOUR * 24,
+                             &stride_usecs) ||
+      __builtin_add_overflow(stride_usecs, stride->time, &stride_usecs)) {
+    return iv_range();
+  }
+  if (stride_usecs <= 0) {
+    return ty_internal::set_error(TY_ERR_RANGE,
+                                  "stride must be greater than zero");
+  }
+  if (__builtin_sub_overflow(timestamp, origin, &tm_diff)) {
+    return iv_range();
+  }
+  tm_modulo = tm_diff % stride_usecs;
+  tm_delta = tm_diff - tm_modulo;
+  result = origin + tm_delta;
+  /* round toward minus infinity: this can overflow */
+  if (tm_modulo < 0) {
+    if (__builtin_sub_overflow(result, stride_usecs, &result) ||
+        !ty_timestamp_valid(result)) {
+      return ts_range();
+    }
+  }
+  *out = result;
+  return 0;
+}
+
+/*
+ * age: the fields of the two timestamps subtracted, then the borrows made
+ * from the smallest to the largest; the larger is first, and the sign put
+ * back at the end.
+ */
+int ty_timestamp_age(int64_t dt1, int64_t dt2, ty_interval_t *result) {
+  ty_tm_t tm1, tm2;
+  int32_t fsec1, fsec2;
+
+  if (!ty_timestamp_finite(dt1) || !ty_timestamp_finite(dt2)) {
+    return ty_timestamp_diff(dt1, dt2, result);
+  }
+  if (ty_timestamp_to_tm(dt1, &tm1, &fsec1) != 0 ||
+      ty_timestamp_to_tm(dt2, &tm2, &fsec2) != 0) {
+    return ts_range();
+  }
+  int64_t usec = fsec1 - fsec2, hour = tm1.hour - tm2.hour;
+  int sec = tm1.sec - tm2.sec, min = tm1.min - tm2.min;
+  int mday = tm1.mday - tm2.mday, mon = tm1.mon - tm2.mon,
+      year = tm1.year - tm2.year;
+  bool neg = dt1 < dt2;
+
+  if (neg) {
+    usec = -usec;
+    sec = -sec;
+    min = -min;
+    hour = -hour;
+    mday = -mday;
+    mon = -mon;
+    year = -year;
+  }
+  while (usec < 0) {
+    usec += TY_USECS_PER_SEC;
+    sec--;
+  }
+  while (sec < 0) {
+    sec += 60;
+    min--;
+  }
+  while (min < 0) {
+    min += 60;
+    hour--;
+  }
+  while (hour < 0) {
+    hour += 24;
+    mday--;
+  }
+  while (mday < 0) {
+    if (neg) {
+      mday += ty_days_in_month(tm1.year, tm1.mon);
+    } else {
+      mday += ty_days_in_month(tm2.year, tm2.mon);
+    }
+    mon--;
+  }
+  while (mon < 0) {
+    mon += 12;
+    year--;
+  }
+  if (neg) {
+    usec = -usec;
+    sec = -sec;
+    min = -min;
+    hour = -hour;
+    mday = -mday;
+    mon = -mon;
+    year = -year;
+  }
+  /* itm2interval: the months of the years must fit, and the time too */
+  int64_t months = (int64_t)year * 12 + mon, time;
+
+  if (months > INT32_MAX || months < INT32_MIN) {
+    return iv_range();
+  }
+  if (__builtin_mul_overflow(hour, TY_USECS_PER_HOUR, &time) ||
+      __builtin_add_overflow(time, (int64_t)min * TY_USECS_PER_MINUTE, &time) ||
+      __builtin_add_overflow(time, (int64_t)sec * TY_USECS_PER_SEC, &time) ||
+      __builtin_add_overflow(time, usec, &time)) {
+    return iv_range();
+  }
+  result->month = (int32_t)months;
+  result->day = mday;
+  result->time = time;
+  if (ty_interval_not_finite(result)) {
+    return iv_range();
+  }
+  return 0;
+}

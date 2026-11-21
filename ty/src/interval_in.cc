@@ -1701,3 +1701,14 @@ int ty_interval_parse(const char *str, int range, int intervalstyle,
   *dterr = 0;
   return 0;
 }
+
+/* The code of a unit word, if it is one: see ty_datetime.h. */
+int ty_datetime_unit(const char *lowtoken, int *code) {
+  int val = 0;
+
+  if (DecodeUnits(0, lowtoken, &val) != UNITS) {
+    return 0;
+  }
+  *code = val;
+  return 1;
+}
