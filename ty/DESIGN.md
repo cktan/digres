@@ -692,6 +692,14 @@ The ISO week functions are `ty_date2isoweek`, `ty_date2isoyear`,
 `ty_date2isoyearday`, `ty_isoweek2j` and `ty_isoweek2date`.
 `ty_datetime_unit` tells if a word is a unit, and gives its code.
 
+`ty_timetz_t` is time with time zone. `ty_timetz_cmp` orders by
+the time in UTC, then by the zone. `ty_timetz_hash` xors the hash
+of the time with the hash of the zone. `ty_time_in_range` and
+`ty_timetz_in_range` are the RANGE offsets of a window frame; the
+timetz one compares in 128 bits, because a sum may be far from a
+time of day. The text of timetz and its typmod are still in
+digres.
+
 The tests: the vectors, from Python integers and a second
 formulation of the Julian day (the Wikipedia formula and
 Richards' inverse, not PostgreSQL's), about 3,500;

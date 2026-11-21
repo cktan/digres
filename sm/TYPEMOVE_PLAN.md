@@ -635,6 +635,16 @@ copied from PostgreSQL keeps its copyright notice
      known answers from the old digres (`known.txt`), and
      `dg/test/select_trunc_ops.sql`, which prints the same as
      the digres before the move. Cost: +0.25% to +0.27%.
+   - **timetz: order, hash, interval arithmetic and RANGE
+     offsets moved (2026-11-21).** `ty_timetz_cmp`,
+     `ty_timetz_hash`, `ty_time_in_range`, `ty_timetz_in_range`;
+     `ty_time_add_interval` and `ty_time_sub_interval` are
+     inline now. The tests: about 1,500 vectors from a Python
+     port, and `dg/test/select_timetz_ops.sql`, which prints
+     the same as the digres before the move. timetz cannot be
+     stored, hashed or used as a window order in digres yet,
+     so those paths have ty tests only. Cost: +0.75% on
+     `max` of a timetz sum.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

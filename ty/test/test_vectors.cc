@@ -981,6 +981,69 @@ bool run_interval(const vec_t &v) {
 }
 
 /* Run one calendar, date, time or timestamp vector. */
+/* A timetz token "time:zone". */
+ty_timetz_t timetz_of(const std::string &t) {
+  long long tm;
+  int zn;
+
+  REQUIRE(2 == sscanf(t.c_str(), "%lld:%d", &tm, &zn));
+  return {tm, zn};
+}
+
+/* The order, the hash and the RANGE offsets of timetz, and of time. */
+bool run_timetz(const vec_t &v) {
+  const std::string &op = v.op;
+  int r = 0;
+  int rc = 0;
+
+  if (op == "timetz.cmp") {
+    ty_timetz_t a = timetz_of(v.args[0]), b = timetz_of(v.args[1]);
+
+    INFO(v.line);
+    CHECK(std::stoi(v.res[0]) == ty_timetz_cmp(&a, &b));
+    return true;
+  }
+  if (op == "timetz.hashx") {
+    ty_timetz_t a = timetz_of(v.args[0]);
+    uint64_t seed = std::stoull(v.args[1]);
+    uint64_t got = ty_timetz_hash(&a, seed);
+
+    INFO(v.line);
+    CHECK(std::stoull(v.res[0]) == got);
+    if (seed == 0) {
+      CHECK((uint32_t)got == (ty_hash_u32_std((uint32_t)a.zone) ^
+                              (uint32_t)ty_int64_hash(a.time, 0)));
+    }
+    return true;
+  }
+  if (op != "timetz.inrange" && op != "time.inrange") {
+    return false;
+  }
+  long long m, d, t;
+
+  REQUIRE(3 == sscanf(v.args[2].c_str(), "%lld:%lld:%lld", &m, &d, &t));
+  ty_interval_t off = {t, (int32_t)d, (int32_t)m};
+  int sub = std::stoi(v.args[3]), less = std::stoi(v.args[4]);
+
+  if (op == "timetz.inrange") {
+    ty_timetz_t a = timetz_of(v.args[0]), b = timetz_of(v.args[1]);
+
+    rc = ty_timetz_in_range(&a, &b, &off, sub, less, &r);
+  } else {
+    rc = ty_time_in_range(std::stoll(v.args[0]), std::stoll(v.args[1]), &off,
+                          sub, less, &r);
+  }
+  INFO(v.line);
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    CHECK(errnum_of(v.res[1]) == ty_errnum());
+  } else {
+    CHECK(0 == rc);
+    CHECK(std::stoi(v.res[0]) == r);
+  }
+  return true;
+}
+
 bool run_datetime(const vec_t &v) {
   const std::string &op = v.op;
   const bool cal = op.compare(0, 4, "cal.") == 0,
@@ -2422,12 +2485,12 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_geo(v) || run_datetime(v) || run_interval(v) ||
-                 run_money(v) || run_bpchar(v) || run_text(v) || run_inet(v) ||
-                 run_bits(v) || run_known(v) || run_float_text(v) ||
-                 run_float(v) || run_hash(v) || run_bytea(v) ||
-                 run_int_convert(v) || run64(v) || run128(v) || run_i16(v) ||
-                 run_i32(v) || run_i64(v);
+    bool known = run_geo(v) || run_timetz(v) || run_datetime(v) ||
+                 run_interval(v) || run_money(v) || run_bpchar(v) ||
+                 run_text(v) || run_inet(v) || run_bits(v) || run_known(v) ||
+                 run_float_text(v) || run_float(v) || run_hash(v) ||
+                 run_bytea(v) || run_int_convert(v) || run64(v) || run128(v) ||
+                 run_i16(v) || run_i32(v) || run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

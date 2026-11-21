@@ -7,6 +7,8 @@
  * datetime.cc -- the calendar and the arithmetic of date, time and timestamp.
  */
 #include "ty_datetime.h"
+#include "ty_hash.h"
+#include "ty_int.h"
 
 #include <limits.h>
 #include <math.h>
@@ -211,38 +213,13 @@ int ty_time_make(int32_t hour, int32_t min, double sec, int64_t *out) {
   return 0;
 }
 
-namespace {
+namespace {} // namespace
 
-/* t reduced to within a day, as PostgreSQL does it. */
-int64_t wrap_day(int64_t t) {
-  t -= t / (TY_USECS_PER_HOUR * 24) * (TY_USECS_PER_HOUR * 24);
-  if (t < 0) {
-    t += TY_USECS_PER_HOUR * 24;
-  }
-  return t;
-}
-
-} // namespace
-
-/* time + interval: only the microseconds count; an infinite one is an error. */
-int ty_time_add_interval(int64_t t, const ty_interval_t *span, int64_t *out) {
-  if (ty_interval_not_finite(span)) {
-    return ty_internal::set_error(TY_ERR_RANGE,
-                                  "cannot add infinite interval to time");
-  }
-  /* the sum wraps in two's complement, as PostgreSQL's does */
-  *out = wrap_day((int64_t)((uint64_t)t + (uint64_t)span->time));
-  return 0;
-}
-
-/* time - interval. */
-int ty_time_sub_interval(int64_t t, const ty_interval_t *span, int64_t *out) {
-  if (ty_interval_not_finite(span)) {
-    return ty_internal::set_error(
-        TY_ERR_RANGE, "cannot subtract infinite interval from time");
-  }
-  *out = wrap_day((int64_t)((uint64_t)t - (uint64_t)span->time));
-  return 0;
+/* The error of time + or - an infinite interval. */
+int ty_time_interval_error(int sub) {
+  return ty_internal::set_error(
+      TY_ERR_RANGE, sub ? "cannot subtract infinite interval from time"
+                        : "cannot add infinite interval to time");
 }
 
 /* time - time. */
@@ -790,5 +767,45 @@ int ty_timestamp_age(int64_t dt1, int64_t dt2, ty_interval_t *result) {
   if (ty_interval_not_finite(result)) {
     return iv_range();
   }
+  return 0;
+}
+
+/* The hash of a timetz: the time and the zone hashed, folded by xor. */
+uint64_t ty_timetz_hash(const ty_timetz_t *a, uint64_t seed) {
+  return ty_int64_hash(a->time, seed) ^ ty_hash_u32((uint32_t)a->zone, seed);
+}
+
+/* RANGE offsets of a time. */
+int ty_time_in_range(int64_t val, int64_t base, const ty_interval_t *offset,
+                     int sub, int less, int *r) {
+  return ty_int_in_range(val, base, offset->time, sub, less, r);
+}
+
+/* RANGE offsets of a timetz: the sum has the zone of base. */
+int ty_timetz_in_range(const ty_timetz_t *val, const ty_timetz_t *base,
+                       const ty_interval_t *offset, int sub, int less, int *r) {
+  ty_timetz_t sum;
+
+  if (offset->time < 0) {
+    return ty_internal::set_error(TY_ERR_INVALID,
+                                  "invalid preceding or following size");
+  }
+  if (sub) {
+    sum.time = base->time - offset->time; /* cannot overflow */
+  } else if (__builtin_add_overflow(base->time, offset->time, &sum.time)) {
+    *r = less;
+    return 0;
+  }
+  sum.zone = base->zone;
+  /*
+   * The order of ty_timetz_cmp, in 128 bits: the sum may be as far from a time
+   * of day as an int64 allows, and then 64 bits would wrap.
+   */
+  __int128 t1 = (__int128)val->time + (__int128)val->zone * 1000000;
+  __int128 t2 = (__int128)sum.time + (__int128)sum.zone * 1000000;
+  int c = t1 != t2 ? (t1 > t2 ? 1 : -1)
+                   : (val->zone > sum.zone) - (val->zone < sum.zone);
+
+  *r = less ? c <= 0 : c >= 0;
   return 0;
 }

@@ -4676,6 +4676,8 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "date_bin('0 seconds'::interval, timestamp '2024-01-01', timestamp '2001-01-01')|stride must be greater than zero" \
   "date_bin('1 day'::interval, timestamp '2024-01-01', timestamp 'infinity')|origin out of range" \
   "date_bin('infinity'::interval, timestamp '2024-01-01', timestamp '2001-01-01')|timestamps cannot be binned into infinite intervals" \
+  "timetz '12:00+01' + 'infinity'::interval|cannot add infinite interval to time" \
+  "timetz '12:00+01' - '-infinity'::interval|cannot subtract infinite interval from time" \
   "make_interval(0, 0, 0, 0, 0, 0, 'nan')|interval out of range" \
   "make_interval(2147483647, 0, 0, 0, 0, 0, 0)|interval out of range" \
   "make_interval(0, 0, 2147483647, 0, 0, 0, 0)|interval out of range" \

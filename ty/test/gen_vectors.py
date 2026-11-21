@@ -420,6 +420,7 @@ def main():
     gen_datetime()
     gen_geo()
     gen_typmod()
+    gen_timetz()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -3135,6 +3136,47 @@ def gen_geo():
         geo_emit("bx.div", (a, c), lambda: bx_tok(g_bx_construct(g_pt_div(b1[0], pt), g_pt_div(b1[1], pt))))
         for nm, fn in (("lt", fp_lt), ("gt", fp_gt), ("eq", fp_eq), ("le", fp_le), ("ge", fp_ge)):
             geo_emit("bx." + nm, (a, b), lambda fn=fn: int(fn(g_bx_ar(b1), g_bx_ar(b2))))
+
+
+def gen_timetz():
+    """timetz: the order, the hash, and RANGE offsets of time and timetz."""
+    times = [0, 1, 43200000000, 86399999999, 86400000000, 3600000000, 45296789012, 500000]
+    zones = [0, 3600, -3600, 43200, -43200, 59 * 3600 + 3540, -(59 * 3600 + 3540), 18000, 1]
+    seeds = [0, 1, 2 ** 32, 123456789012345, 2 ** 64 - 1]
+    for _ in range(300):
+        a = (random.choice(times + [random.randint(0, 86400000000)]), random.choice(zones))
+        b = (random.choice(times + [random.randint(0, 86400000000)]), random.choice(zones))
+        ta, tb = a[0] + a[1] * 1000000, b[0] + b[1] * 1000000
+        c = (ta > tb) - (ta < tb) or (a[1] > b[1]) - (a[1] < b[1])
+        emit("timetz.cmp", ("%d:%d" % a, "%d:%d" % b), c)
+    for a in [(t, z) for t in times for z in zones[:5]]:
+        for sd in seeds[:3]:
+            h = pg_hash_int(a[0], sd) ^ pg_hash_u32(a[1], sd)
+            emit("timetz.hashx", ("%d:%d" % a, sd), h)
+    offs = [(0, 0, 0), (0, 0, 1), (0, 5, 3600000000), (1, 1, 86400000000), (0, 0, -1), (0, 0, I64MAX), (0, 0, I64MIN), (0, 0, 43200000000)]
+    for _ in range(300):
+        a = (random.choice(times), random.choice(zones))
+        b = (random.choice(times), random.choice(zones))
+        o = random.choice(offs)
+        sub, less = random.randint(0, 1), random.randint(0, 1)
+        args = ("%d:%d" % a, "%d:%d" % b, "%d:%d:%d" % o, sub, less)
+        if o[2] < 0:
+            emit("timetz.inrange", args, ("E", "INVALID"))
+            emit("time.inrange", (a[0], b[0], "%d:%d:%d" % o, sub, less), ("E", "INVALID"))
+            continue
+        if sub:
+            sm = b[0] - o[2]
+        else:
+            sm = b[0] + o[2]
+        if not sub and sm > I64MAX:
+            emit("timetz.inrange", args, int(bool(less)))
+            emit("time.inrange", (a[0], b[0], "%d:%d:%d" % o, sub, less), int(bool(less)))
+            continue
+        ta = a[0] + a[1] * 1000000
+        ts = sm + b[1] * 1000000
+        c = (ta > ts) - (ta < ts) or (a[1] > b[1]) - (a[1] < b[1])
+        emit("timetz.inrange", args, int(c <= 0 if less else c >= 0))
+        emit("time.inrange", (a[0], b[0], "%d:%d:%d" % o, sub, less), int(a[0] <= sm if less else a[0] >= sm))
 
 
 def gen_typmod():

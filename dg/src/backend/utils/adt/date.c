@@ -1741,39 +1741,15 @@ Datum time_mi_interval(PG_FUNCTION_ARGS) {
  * in_range support function for time.
  */
 Datum in_range_time_interval(PG_FUNCTION_ARGS) {
-  TimeADT val = PG_GETARG_TIMEADT(0);
-  TimeADT base = PG_GETARG_TIMEADT(1);
-  Interval *offset = PG_GETARG_INTERVAL_P(2);
-  bool sub = PG_GETARG_BOOL(3);
-  bool less = PG_GETARG_BOOL(4);
-  TimeADT sum;
+  int r;
 
-  /*
-   * Like time_pl_interval/time_mi_interval, we disregard the month and day
-   * fields of the offset.  So our test for negative should too.  This also
-   * catches -infinity, so we only need worry about +infinity below.
-   */
-  if (offset->time < 0)
+  if (ty_time_in_range(PG_GETARG_TIMEADT(0), PG_GETARG_TIMEADT(1),
+                       (const ty_interval_t *)PG_GETARG_INTERVAL_P(2),
+                       PG_GETARG_BOOL(3), PG_GETARG_BOOL(4), &r))
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
              errmsg("invalid preceding or following size in window function")));
-
-  /*
-   * We can't use time_pl_interval/time_mi_interval here, because their
-   * wraparound behavior would give wrong (or at least undesirable) answers.
-   * Fortunately the equivalent non-wrapping behavior is trivial, except
-   * that adding an infinite (or very large) interval might cause integer
-   * overflow.  Subtraction cannot overflow here.
-   */
-  if (sub)
-    sum = base - offset->time;
-  else if (pg_add_s64_overflow(base, offset->time, &sum))
-    PG_RETURN_BOOL(less);
-
-  if (less)
-    PG_RETURN_BOOL(val <= sum);
-  else
-    PG_RETURN_BOOL(val >= sum);
+  PG_RETURN_BOOL(r);
 }
 
 /* time_part() and extract_time()
@@ -2041,27 +2017,7 @@ Datum timetz_scale(PG_FUNCTION_ARGS) {
 }
 
 static int timetz_cmp_internal(TimeTzADT *time1, TimeTzADT *time2) {
-  TimeOffset t1, t2;
-
-  /* Primary sort is by true (GMT-equivalent) time */
-  t1 = time1->time + (time1->zone * USECS_PER_SEC);
-  t2 = time2->time + (time2->zone * USECS_PER_SEC);
-
-  if (t1 > t2)
-    return 1;
-  if (t1 < t2)
-    return -1;
-
-  /*
-   * If same GMT time, sort by timezone; we only want to say that two
-   * timetz's are equal if both the time and zone parts are equal.
-   */
-  if (time1->zone > time2->zone)
-    return 1;
-  if (time1->zone < time2->zone)
-    return -1;
-
-  return 0;
+  return ty_timetz_cmp((const ty_timetz_t *)time1, (const ty_timetz_t *)time2);
 }
 
 Datum timetz_eq(PG_FUNCTION_ARGS) {
@@ -2115,28 +2071,16 @@ Datum timetz_cmp(PG_FUNCTION_ARGS) {
 
 Datum timetz_hash(PG_FUNCTION_ARGS) {
   TimeTzADT *key = PG_GETARG_TIMETZADT_P(0);
-  uint32 thash;
 
-  /*
-   * To avoid any problems with padding bytes in the struct, we figure the
-   * field hashes separately and XOR them.
-   */
-  thash = DatumGetUInt32(
-      DirectFunctionCall1(hashint8, Int64GetDatumFast(key->time)));
-  thash ^= DatumGetUInt32(hash_uint32(key->zone));
-  PG_RETURN_UINT32(thash);
+  /* the low 32 bits of the hash with seed 0 are the standard hash */
+  PG_RETURN_UINT32((uint32)ty_timetz_hash((const ty_timetz_t *)key, 0));
 }
 
 Datum timetz_hash_extended(PG_FUNCTION_ARGS) {
   TimeTzADT *key = PG_GETARG_TIMETZADT_P(0);
-  Datum seed = PG_GETARG_DATUM(1);
-  uint64 thash;
 
-  /* Same approach as timetz_hash */
-  thash = DatumGetUInt64(DirectFunctionCall2(
-      hashint8extended, Int64GetDatumFast(key->time), seed));
-  thash ^= DatumGetUInt64(hash_uint32_extended(key->zone, DatumGetInt64(seed)));
-  PG_RETURN_UINT64(thash);
+  PG_RETURN_UINT64(
+      ty_timetz_hash((const ty_timetz_t *)key, (uint64)PG_GETARG_INT64(1)));
 }
 
 Datum timetz_larger(PG_FUNCTION_ARGS) {
@@ -2169,19 +2113,12 @@ Datum timetz_smaller(PG_FUNCTION_ARGS) {
 Datum timetz_pl_interval(PG_FUNCTION_ARGS) {
   TimeTzADT *time = PG_GETARG_TIMETZADT_P(0);
   Interval *span = PG_GETARG_INTERVAL_P(1);
-  TimeTzADT *result;
+  TimeTzADT *result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
 
-  if (INTERVAL_NOT_FINITE(span))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("cannot add infinite interval to time")));
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-
-  result->time = time->time + span->time;
-  result->time -= result->time / USECS_PER_DAY * USECS_PER_DAY;
-  if (result->time < INT64CONST(0))
-    result->time += USECS_PER_DAY;
-
+  /* the time of day moves as a time does; the zone stays */
+  if (ty_time_add_interval(time->time, (const ty_interval_t *)span,
+                           &result->time))
+    datetime_ty_error();
   result->zone = time->zone;
 
   PG_RETURN_TIMETZADT_P(result);
@@ -2193,19 +2130,11 @@ Datum timetz_pl_interval(PG_FUNCTION_ARGS) {
 Datum timetz_mi_interval(PG_FUNCTION_ARGS) {
   TimeTzADT *time = PG_GETARG_TIMETZADT_P(0);
   Interval *span = PG_GETARG_INTERVAL_P(1);
-  TimeTzADT *result;
+  TimeTzADT *result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
 
-  if (INTERVAL_NOT_FINITE(span))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("cannot subtract infinite interval from time")));
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-
-  result->time = time->time - span->time;
-  result->time -= result->time / USECS_PER_DAY * USECS_PER_DAY;
-  if (result->time < INT64CONST(0))
-    result->time += USECS_PER_DAY;
-
+  if (ty_time_sub_interval(time->time, (const ty_interval_t *)span,
+                           &result->time))
+    datetime_ty_error();
   result->zone = time->zone;
 
   PG_RETURN_TIMETZADT_P(result);
@@ -2215,40 +2144,17 @@ Datum timetz_mi_interval(PG_FUNCTION_ARGS) {
  * in_range support function for timetz.
  */
 Datum in_range_timetz_interval(PG_FUNCTION_ARGS) {
-  TimeTzADT *val = PG_GETARG_TIMETZADT_P(0);
-  TimeTzADT *base = PG_GETARG_TIMETZADT_P(1);
-  Interval *offset = PG_GETARG_INTERVAL_P(2);
-  bool sub = PG_GETARG_BOOL(3);
-  bool less = PG_GETARG_BOOL(4);
-  TimeTzADT sum;
+  int r;
 
-  /*
-   * Like timetz_pl_interval/timetz_mi_interval, we disregard the month and
-   * day fields of the offset.  So our test for negative should too. This
-   * also catches -infinity, so we only need worry about +infinity below.
-   */
-  if (offset->time < 0)
+  if (ty_timetz_in_range(
+          (const ty_timetz_t *)PG_GETARG_TIMETZADT_P(0),
+          (const ty_timetz_t *)PG_GETARG_TIMETZADT_P(1),
+          (const ty_interval_t *)PG_GETARG_INTERVAL_P(2), PG_GETARG_BOOL(3),
+          PG_GETARG_BOOL(4), &r))
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
              errmsg("invalid preceding or following size in window function")));
-
-  /*
-   * We can't use timetz_pl_interval/timetz_mi_interval here, because their
-   * wraparound behavior would give wrong (or at least undesirable) answers.
-   * Fortunately the equivalent non-wrapping behavior is trivial, except
-   * that adding an infinite (or very large) interval might cause integer
-   * overflow.  Subtraction cannot overflow here.
-   */
-  if (sub)
-    sum.time = base->time - offset->time;
-  else if (pg_add_s64_overflow(base->time, offset->time, &sum.time))
-    PG_RETURN_BOOL(less);
-  sum.zone = base->zone;
-
-  if (less)
-    PG_RETURN_BOOL(timetz_cmp_internal(val, &sum) <= 0);
-  else
-    PG_RETURN_BOOL(timetz_cmp_internal(val, &sum) >= 0);
+  PG_RETURN_BOOL(r);
 }
 
 /* overlaps_timetz() --- implements the SQL OVERLAPS operator.

@@ -136,9 +136,39 @@ static inline int ty_date_diff(int32_t a, int32_t b, int32_t* out) {
 int ty_time_make(int32_t hour, int32_t min, double sec, int64_t* out);
 int ty_time_overflows(int hour, int min, int sec, int32_t fsec);
 
-/* time + interval and time - interval, wrapping at midnight. */
-int ty_time_add_interval(int64_t t, const ty_interval_t* span, int64_t* out);
-int ty_time_sub_interval(int64_t t, const ty_interval_t* span, int64_t* out);
+/* The error of time + or - an infinite interval: cold, out of line. */
+int ty_time_interval_error(int sub);
+
+/* t reduced to within a day, as PostgreSQL does it. */
+static inline int64_t ty_time_wrap_day(int64_t t) {
+    t -= t / INT64_C(86400000000) * INT64_C(86400000000);
+    if (t < 0) {
+        t += INT64_C(86400000000);
+    }
+    return t;
+}
+
+/*
+ * time + interval and time - interval, wrapping at midnight. Only the
+ * microseconds of the interval count; an infinite one is an error. The sum
+ * wraps in two's complement, as PostgreSQL's does.
+ */
+static inline int ty_time_add_interval(int64_t t, const ty_interval_t* span,
+                                       int64_t* out) {
+    if (TY_UNLIKELY(ty_interval_not_finite(span))) {
+        return ty_time_interval_error(0);
+    }
+    *out = ty_time_wrap_day((int64_t)((uint64_t)t + (uint64_t)span->time));
+    return 0;
+}
+static inline int ty_time_sub_interval(int64_t t, const ty_interval_t* span,
+                                       int64_t* out) {
+    if (TY_UNLIKELY(ty_interval_not_finite(span))) {
+        return ty_time_interval_error(1);
+    }
+    *out = ty_time_wrap_day((int64_t)((uint64_t)t - (uint64_t)span->time));
+    return 0;
+}
 
 /* time - time, as an interval of microseconds. */
 void ty_time_diff(int64_t a, int64_t b, ty_interval_t* out);
@@ -159,6 +189,47 @@ int ty_timestamp_sub_interval(int64_t ts, const ty_interval_t* span,
 
 /* timestamp - timestamp, as an interval with the hours justified. */
 int ty_timestamp_diff(int64_t a, int64_t b, ty_interval_t* out);
+
+/*
+ * time with time zone: the time of day in microseconds, and the zone as
+ * seconds west of Greenwich (PostgreSQL's sign). Its arithmetic with an
+ * interval is that of time (ty_time_add_interval), the zone kept.
+ */
+typedef struct ty_timetz_t {
+    int64_t time;
+    int32_t zone;
+} ty_timetz_t;
+
+/*
+ * The order of two timetz: by the time in UTC, then by the zone, so that
+ * two are equal only if the time and the zone are.
+ */
+static inline int ty_timetz_cmp(const ty_timetz_t* a, const ty_timetz_t* b) {
+    int64_t t1 = a->time + (int64_t)a->zone * 1000000;
+    int64_t t2 = b->time + (int64_t)b->zone * 1000000;
+
+    if (t1 != t2) {
+        return t1 > t2 ? 1 : -1;
+    }
+    return (a->zone > b->zone) - (a->zone < b->zone);
+}
+
+/*
+ * The hash of a timetz: PostgreSQL's, the hash of the time and the hash of
+ * the zone folded together by xor. The low 32 bits of the hash with seed 0
+ * are the standard 32-bit hash.
+ */
+uint64_t ty_timetz_hash(const ty_timetz_t* a, uint64_t seed);
+
+/*
+ * Whether val is within offset of base, for a window frame of RANGE offsets
+ * of a time (r is the answer). Only the time of the offset is used, and a
+ * negative one is TY_ERR_INVALID. The sum does not wrap at midnight.
+ */
+int ty_time_in_range(int64_t val, int64_t base, const ty_interval_t* offset,
+                     int sub, int less, int* r);
+int ty_timetz_in_range(const ty_timetz_t* val, const ty_timetz_t* base,
+                       const ty_interval_t* offset, int sub, int less, int* r);
 
 /*
  * The ISO 8601 week of a date: the week number, the year the week is in, the
