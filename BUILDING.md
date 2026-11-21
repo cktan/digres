@@ -90,6 +90,7 @@ make clean
 | sm | `sm/build/libsm.a`, `-O0 -g`, with `assert()` | `sm/build/release/libsm.a`, `-O3 -DNDEBUG` |
 | aa | `aa/build/libaa.a`, `-O0 -g`, with `assert()` | `aa/build/release/libaa.a`, `-O3 -DNDEBUG` |
 | sq | `sq/build/libsq.a`, `-O0 -g`, with `assert()` | `sq/build/libsq-release.a`, `-O2 -DNDEBUG` |
+| ty | `ty/build/libty.a`, `-O0 -g` | `ty/build/libty-release.a`, `-O2 -DNDEBUG` |
 | RocksDB 11.13.2 | `ext/`'s, `-O3 -DNDEBUG`, static | the same |
 | For | the tests, and running by hand | the benchmark |
 

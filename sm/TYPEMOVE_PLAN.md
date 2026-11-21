@@ -1,9 +1,12 @@
 # TYPEMOVE_PLAN — types move into ty
 
-Status: draft. The library `ty/` exists, with its error state
-and its per-thread allocator (§3); no type has moved. This plan
-settles the interface of an operation before any code moves. The
-item is in [`NEXT.md`](NEXT.md), item 11.
+Status: decimal is moved (2026-11-21); the other types are not.
+The library `ty/` holds every operation of `decimal64` and
+`decimal128`, with its error state and its per-thread allocator
+(§3); `decimal.c` in digres keeps only the PostgreSQL glue. This
+plan settled the interface of an operation before any code moved,
+and §7 says what was done and what it cost. The item is in
+[`NEXT.md`](NEXT.md), item 11.
 
 Every fact below was read from the code on 2026-11-09. Each
 number marked "grep" is a count, not an audit.

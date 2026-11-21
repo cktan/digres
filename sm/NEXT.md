@@ -204,7 +204,12 @@ are the catalog tables psql reads
     ([`BTREEINDEX.md`](BTREEINDEX.md#67-a-bulk-load-builds-the-tree-whole)
     §6.7, [`BTREELOAD_PLAN.md`](BTREELOAD_PLAN.md)).
 11. **Types move into sm, with their ADT operations and
-    functions.** Decided 2026-11-09. Two reasons:
+    functions.** Decided 2026-11-09. Decimal is done (2026-11-21):
+    its operations are in `ty/`, a library of its own that sm and
+    digres call, under the rule that `decimal64` and `decimal128`
+    work as `int32` and `int64` do ([`TYPEMOVE_PLAN.md`](
+    TYPEMOVE_PLAN.md) §7, [`../ty/DESIGN.md`](../ty/DESIGN.md)).
+    What is left is the other types, below. Two reasons:
     - sm evaluates expressions without digres: an index
       expression, a partial index, a check.
     - sm plugs into another SQL system, not digres alone.
