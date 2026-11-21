@@ -36,6 +36,21 @@ typedef struct ty_dec128_t {
 } ty_dec128_t;
 
 /*
+ * Records TY_ERR_RANGE as the thread's error, and returns -1. It is out of
+ * line: an inline operation calls it on the rare failure, and costs no
+ * more.
+ */
+int ty_err_range(void);
+
+/* The largest value of a decimal64: 10^17 - 1; of a decimal128: 10^36 - 1. */
+#define TY_DEC64_MAX_VALUE 99999999999999999LL
+#define TY_DEC128_MAX_VALUE \
+    ((ty_int128_t)1000000000000000000LL * 1000000000000000000LL - 1)
+
+/* A branch that is taken on the rare failure. */
+#define TY_UNLIKELY(x) __builtin_expect((x) != 0, 0)
+
+/*
  * A call that cannot fail returns its result, and is inline: the host's
  * wrapper then costs no call. Its argument is a decimal64 that holds at
  * most 17 digits.
@@ -81,12 +96,61 @@ static inline int ty_dec64_cmp(ty_dec64_t a, ty_dec64_t b) {
  * caller who wants more casts an operand to a wider type. *result is then
  * not set. The scales of both operands are at most 36.
  */
-int ty_dec128_add(const ty_dec128_t* a, const ty_dec128_t* b,
-                      ty_dec128_t* result);
-int ty_dec128_sub(const ty_dec128_t* a, const ty_dec128_t* b,
-                      ty_dec128_t* result);
-int ty_dec128_mul(const ty_dec128_t* a, const ty_dec128_t* b,
-                      ty_dec128_t* result);
+int ty_dec128_add_scaled(const ty_dec128_t* a, const ty_dec128_t* b,
+                        ty_dec128_t* result);
+int ty_dec128_sub_scaled(const ty_dec128_t* a, const ty_dec128_t* b,
+                        ty_dec128_t* result);
+
+/*
+ * The three are in line, as a host's wrapper then costs no call: two values
+ * of one scale, the usual case, in the header; two scales, out of line.
+ */
+static inline int ty_dec128_add(const ty_dec128_t* a, const ty_dec128_t* b,
+                                ty_dec128_t* result) {
+    ty_int128_t r;
+
+    if (a->scale != b->scale) {
+        return ty_dec128_add_scaled(a, b, result);
+    }
+    if (TY_UNLIKELY(__builtin_add_overflow(a->value, b->value, &r) ||
+                    r > TY_DEC128_MAX_VALUE || r < -TY_DEC128_MAX_VALUE)) {
+        return ty_err_range();
+    }
+    result->value = r;
+    result->scale = a->scale;
+    return 0;
+}
+
+static inline int ty_dec128_sub(const ty_dec128_t* a, const ty_dec128_t* b,
+                                ty_dec128_t* result) {
+    ty_int128_t r;
+
+    if (a->scale != b->scale) {
+        return ty_dec128_sub_scaled(a, b, result);
+    }
+    if (TY_UNLIKELY(__builtin_sub_overflow(a->value, b->value, &r) ||
+                    r > TY_DEC128_MAX_VALUE || r < -TY_DEC128_MAX_VALUE)) {
+        return ty_err_range();
+    }
+    result->value = r;
+    result->scale = a->scale;
+    return 0;
+}
+
+static inline int ty_dec128_mul(const ty_dec128_t* a, const ty_dec128_t* b,
+                                ty_dec128_t* result) {
+    ty_int128_t p;
+    int s = a->scale + b->scale;
+
+    if (TY_UNLIKELY(__builtin_mul_overflow(a->value, b->value, &p) ||
+                    s > TY_DEC128_MAX_SCALE || p > TY_DEC128_MAX_VALUE ||
+                    p < -TY_DEC128_MAX_VALUE)) {
+        return ty_err_range();
+    }
+    result->value = p;
+    result->scale = s;
+    return 0;
+}
 
 /* -a, |a| and the sign of a, of a decimal128. */
 static inline ty_dec128_t ty_dec128_neg(ty_dec128_t a) {
@@ -229,6 +293,16 @@ int ty_dec128_width_bucket(const ty_dec128_t* operand,
 int ty_dec64_from_dec128(const ty_dec128_t* a,
                                  ty_dec64_t* result);
 
+/*
+ * A hash of a value, 64 bits, by a seed: equal values hash alike whatever
+ * their scales, so 1.5 and 1.50 do, and a decimal64 hashes as the
+ * decimal128 of its value does. The low 32 bits with seed 0 are the
+ * standard 32-bit hash; with another seed, another hash. It cannot
+ * fail.
+ */
+uint64_t ty_dec128_hash(const ty_dec128_t* a, uint64_t seed);
+uint64_t ty_dec64_hash(const ty_dec64_t* a, uint64_t seed);
+
 /* The most digits, and the most places, a decimal64 holds. */
 #define TY_DEC64_MAX_DIGITS 17
 #define TY_DEC64_MAX_SCALE  17
@@ -239,12 +313,44 @@ int ty_dec64_from_dec128(const ty_dec128_t* a,
  * not set. To add without that limit, the caller makes one operand a
  * decimal128 and adds a decimal128 to a decimal64.
  */
-int ty_dec64_add(const ty_dec64_t* a, const ty_dec64_t* b,
-                     ty_dec64_t* result);
+int ty_dec64_add_scaled(const ty_dec64_t* a, const ty_dec64_t* b,
+                       ty_dec64_t* result);
+
+static inline int ty_dec64_add(const ty_dec64_t* a, const ty_dec64_t* b,
+                               ty_dec64_t* result) {
+    int64_t r;
+
+    if (a->scale != b->scale) {
+        return ty_dec64_add_scaled(a, b, result);
+    }
+    if (TY_UNLIKELY(__builtin_add_overflow(a->value, b->value, &r) ||
+                    r > TY_DEC64_MAX_VALUE || r < -TY_DEC64_MAX_VALUE)) {
+        return ty_err_range();
+    }
+    result->value = r;
+    result->scale = a->scale;
+    return 0;
+}
 
 /* *result = a - b, as ty_dec64_add() adds. */
-int ty_dec64_sub(const ty_dec64_t* a, const ty_dec64_t* b,
-                     ty_dec64_t* result);
+int ty_dec64_sub_scaled(const ty_dec64_t* a, const ty_dec64_t* b,
+                       ty_dec64_t* result);
+
+static inline int ty_dec64_sub(const ty_dec64_t* a, const ty_dec64_t* b,
+                               ty_dec64_t* result) {
+    int64_t r;
+
+    if (a->scale != b->scale) {
+        return ty_dec64_sub_scaled(a, b, result);
+    }
+    if (TY_UNLIKELY(__builtin_sub_overflow(a->value, b->value, &r) ||
+                    r > TY_DEC64_MAX_VALUE || r < -TY_DEC64_MAX_VALUE)) {
+        return ty_err_range();
+    }
+    result->value = r;
+    result->scale = a->scale;
+    return 0;
+}
 
 /*
  * *result = a % b, the remainder of the division of a by b, with the
@@ -297,7 +403,18 @@ ty_dec64_t ty_dec64_floor(ty_dec64_t a);
  * if the product needs more than 17 digits, or more than 17 places:
  * *result is then not set. It is exact or an error, as add and sub are.
  */
-int ty_dec64_mul(const ty_dec64_t* a, const ty_dec64_t* b,
-                     ty_dec64_t* result);
+static inline int ty_dec64_mul(const ty_dec64_t* a, const ty_dec64_t* b,
+                               ty_dec64_t* result) {
+    ty_int128_t p = (ty_int128_t)a->value * b->value;
+    int s = a->scale + b->scale;
+
+    if (TY_UNLIKELY(s > TY_DEC64_MAX_SCALE || p > TY_DEC64_MAX_VALUE ||
+                    p < -TY_DEC64_MAX_VALUE)) {
+        return ty_err_range();
+    }
+    result->value = (int64_t)p;
+    result->scale = s;
+    return 0;
+}
 
 #endif /* TY_DECIMAL_H */

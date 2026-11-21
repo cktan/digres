@@ -6,6 +6,9 @@
 /*
  * Tests of the decimal operations.
  */
+#include <algorithm>
+#include <vector>
+
 #include "doctest.h"
 #include "ty_decimal.h"
 
@@ -942,4 +945,45 @@ TEST_CASE("decimal64 from decimal128 rounds places to fit 17 digits") {
   a = {ten_to(18), 0};
   CHECK(-1 == ty_dec64_from_dec128(&a, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
+}
+
+// Verify the hash: equal values hash alike, a decimal64 as a decimal128,
+// and the seed and the value change it.
+// 1. Hash 1.5, 1.50 and 1.500000: one hash. A zero at any scale: one.
+// 2. Hash a decimal64 and the decimal128 of its value: one hash.
+// 3. Hash 1.5 and 1.6, and 1.5 and 15, and -1.5: all different.
+// 4. Hash with seeds 0 and 1: different; and seed 0 twice: the same.
+// 5. Hash 100,000 values: no two the same.
+TEST_CASE("the hash is the same for equal values, at any scale") {
+  // 1. Hash 1.5, 1.50 and 1.500000: one hash. A zero at any scale: one.
+  ty_dec128_t a = {15, 1}, b = {150, 2}, c = {1500000, 6};
+  CHECK(ty_dec128_hash(&a, 0) == ty_dec128_hash(&b, 0));
+  CHECK(ty_dec128_hash(&a, 0) == ty_dec128_hash(&c, 0));
+  ty_dec128_t z0 = {0, 0}, z5 = {0, 5};
+  CHECK(ty_dec128_hash(&z0, 0) == ty_dec128_hash(&z5, 0));
+
+  // 2. Hash a decimal64 and the decimal128 of its value: one hash.
+  ty_dec64_t d = {150, 2};
+  CHECK(ty_dec64_hash(&d, 0) == ty_dec128_hash(&a, 0));
+  CHECK(ty_dec64_hash(&d, 7) == ty_dec128_hash(&a, 7));
+
+  // 3. Hash 1.5 and 1.6, and 1.5 and 15, and -1.5: all different.
+  ty_dec128_t e = {16, 1}, f = {15, 0}, g = {-15, 1};
+  CHECK(ty_dec128_hash(&a, 0) != ty_dec128_hash(&e, 0));
+  CHECK(ty_dec128_hash(&a, 0) != ty_dec128_hash(&f, 0));
+  CHECK(ty_dec128_hash(&a, 0) != ty_dec128_hash(&g, 0));
+
+  // 4. Hash with seeds 0 and 1: different; and seed 0 twice: the same.
+  CHECK(ty_dec128_hash(&a, 0) != ty_dec128_hash(&a, 1));
+  CHECK((uint32_t)ty_dec128_hash(&a, 0) != (uint32_t)ty_dec128_hash(&a, 1));
+  CHECK(ty_dec128_hash(&a, 0) == ty_dec128_hash(&a, 0));
+
+  // 5. Hash 100,000 values: no two the same.
+  std::vector<uint64_t> seen;
+  for (int i = 0; i < 100000; i++) {
+    ty_dec128_t x = {i * 7 + 1, i % 5};
+    seen.push_back(ty_dec128_hash(&x, 0));
+  }
+  std::sort(seen.begin(), seen.end());
+  CHECK(std::adjacent_find(seen.begin(), seen.end()) == seen.end());
 }

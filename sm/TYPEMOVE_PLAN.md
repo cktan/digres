@@ -345,7 +345,14 @@ copied from PostgreSQL keeps its copyright notice
    sum is a 128-bit value, exact to 36 digits, and the squares
    a double. Then `mag_t` and `wide_t` and every helper on
    them were deleted from `decimal.c`: 3,910 lines to 3,444
-   (3,580 before the work began). The hash key stays in digres.
+   (3,580 before the work began). The hash then moved to ty,
+   with its own 64-bit function (`ty_dec128_hash`), and the hot
+   small functions went in line, in `ty_decimal.h`: the three
+   baseline queries then read 4,408,326, 4,462,233 and 4,812,383
+   instructions a statement, 17.9%, 17.4% and 18.5% fewer than
+   the old binary, and 0.2%, 0.6% and 3.7% fewer than after step
+   2. What is left of `decimal.c` is PostgreSQL glue, and it
+   stays.
    The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from

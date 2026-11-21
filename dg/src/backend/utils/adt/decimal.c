@@ -1235,46 +1235,18 @@ Datum in_range_numeric_numeric(PG_FUNCTION_ARGS) {
   PG_RETURN_BOOL(less ? c <= 0 : c >= 0);
 }
 
-/*
- * The bytes a value hashes by: its integer and scale with no zeros at the
- * end, so that equal values, 1.5 and 1.50, hash alike.
- */
-typedef struct hash_key_t {
-  i128 value;
-  int16 scale;
-} hash_key_t;
-
-/* num's hash key. */
-static hash_key_t dec_hash_key(const decimal_t *num) {
-  hash_key_t k;
-  i128 v = dec_value(num);
-  int s = dec_scale(num);
-
-  memset(&k, 0, sizeof(k));
-  while (s > 0 && v % 10 == 0) {
-    v /= 10;
-    s--;
-  }
-  if (v == 0)
-    s = 0;
-  k.value = v;
-  k.scale = (int16)s;
-  return k;
-}
-
-/* hash_numeric: equal values, whatever their scales, hash alike. */
+/* hash_numeric: ty's hash; equal values, whatever their scales, hash alike. */
 Datum hash_numeric(PG_FUNCTION_ARGS) {
-  hash_key_t k = dec_hash_key(PG_GETARG_NUMERIC(0));
+  ty_dec128_t a = dec_ty(PG_GETARG_NUMERIC(0));
 
-  return hash_any((const unsigned char *)&k, sizeof(k));
+  PG_RETURN_UINT32((uint32)ty_dec128_hash(&a, 0));
 }
 
 /* hash_numeric_extended: as hash_numeric, with a seed. */
 Datum hash_numeric_extended(PG_FUNCTION_ARGS) {
-  hash_key_t k = dec_hash_key(PG_GETARG_NUMERIC(0));
+  ty_dec128_t a = dec_ty(PG_GETARG_NUMERIC(0));
 
-  return hash_any_extended((const unsigned char *)&k, sizeof(k),
-                           PG_GETARG_INT64(1));
+  PG_RETURN_UINT64(ty_dec128_hash(&a, (uint64)PG_GETARG_INT64(1)));
 }
 
 /* ----------------------------------------------------------------------
@@ -3155,27 +3127,20 @@ Datum decimal64_ge(PG_FUNCTION_ARGS) {
   PG_RETURN_BOOL(d64_cmp(PG_GETARG_DATUM(0), PG_GETARG_DATUM(1)) >= 0);
 }
 
-/* d's hash key: a decimal128's of the same value, so both hash alike. */
-static hash_key_t d64_hash_key(Datum d) {
-  decimal_t num;
-
-  decimal_set(&num, d64_value(d), d64_scale(d));
-  return dec_hash_key(&num);
-}
-
-/* hash_decimal64: as hash_numeric of the same value. */
+/* hash_decimal64: ty's hash, as hash_numeric of the same value. */
 Datum hash_decimal64(PG_FUNCTION_ARGS) {
-  hash_key_t k = d64_hash_key(PG_GETARG_DATUM(0));
+  Datum d = PG_GETARG_DATUM(0);
+  ty_dec64_t a = {d64_value(d), d64_scale(d)};
 
-  return hash_any((const unsigned char *)&k, sizeof(k));
+  PG_RETURN_UINT32((uint32)ty_dec64_hash(&a, 0));
 }
 
 /* hash_decimal64_extended: as hash_numeric_extended of the same value. */
 Datum hash_decimal64_extended(PG_FUNCTION_ARGS) {
-  hash_key_t k = d64_hash_key(PG_GETARG_DATUM(0));
+  Datum d = PG_GETARG_DATUM(0);
+  ty_dec64_t a = {d64_value(d), d64_scale(d)};
 
-  return hash_any_extended((const unsigned char *)&k, sizeof(k),
-                           PG_GETARG_INT64(1));
+  PG_RETURN_UINT64(ty_dec64_hash(&a, (uint64)PG_GETARG_INT64(1)));
 }
 
 /* The larger of two decimal64s. */

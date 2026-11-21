@@ -40,8 +40,12 @@ The interface is C in style and compiled as C++, as `sm.h` is.
   success.
 - A call that cannot fail returns its result, and may be an
   inline function in the header, so that a host's wrapper costs
-  no call: `ty_dec64_neg`, `_abs` and `_sign` are. So is the
-  usual case of `ty_dec64_cmp`. A host that packs a decimal
+  no call: `ty_dec64_neg`, `_abs` and `_sign` are. So are the
+  equal-scale paths of `add` and `sub`, and the whole of `mul`,
+  for both types, each with an out-of-line `_scaled` function
+  for two scales and the cold `ty_err_range()` for the error. So
+  is the usual case of `ty_dec64_cmp`. A host that packs a
+  decimal
   so that its words order as its values do may compare the
   words itself, as digres does: it costs a sort less than
   unpacking both (`../sm/TYPEMOVE_PLAN.md`, step 3).

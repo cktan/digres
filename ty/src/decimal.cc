@@ -364,32 +364,15 @@ ty_dec64_t ceil_or_floor(ty_dec64_t a, bool floor) {
 } // namespace
 
 /* *result = a + b; fails past 17 digits. */
-int ty_dec64_add(const ty_dec64_t *a, const ty_dec64_t *b, ty_dec64_t *result) {
+int ty_dec64_add_scaled(const ty_dec64_t *a, const ty_dec64_t *b,
+                        ty_dec64_t *result) {
   return add_or_sub(a, b, false, result);
 }
 
 /* *result = a - b; fails past 17 digits. */
-int ty_dec64_sub(const ty_dec64_t *a, const ty_dec64_t *b, ty_dec64_t *result) {
+int ty_dec64_sub_scaled(const ty_dec64_t *a, const ty_dec64_t *b,
+                        ty_dec64_t *result) {
   return add_or_sub(a, b, true, result);
-}
-
-/*
- * *result = a * b, at the sum of the scales.
- * 1. Multiply in 128 bits: two values of 64 bits always fit.
- * 2. If the product has more than 17 digits, or the scale is above 17,
- *    fail.
- * 3. Set the result.
- */
-int ty_dec64_mul(const ty_dec64_t *a, const ty_dec64_t *b, ty_dec64_t *result) {
-  ty_int128_t p = (ty_int128_t)a->value * b->value;
-  int s = a->scale + b->scale;
-
-  if (s > TY_DEC64_MAX_SCALE || p > d64_max || p < -d64_max) {
-    return range_error();
-  }
-  result->value = (int64_t)p;
-  result->scale = s;
-  return 0;
 }
 
 /*
@@ -484,37 +467,15 @@ ty_dec64_t ty_dec64_ceil(ty_dec64_t a) { return ceil_or_floor(a, false); }
 ty_dec64_t ty_dec64_floor(ty_dec64_t a) { return ceil_or_floor(a, true); }
 
 /* *result = a + b; fails past 36 digits. */
-int ty_dec128_add(const ty_dec128_t *a, const ty_dec128_t *b,
-                  ty_dec128_t *result) {
+int ty_dec128_add_scaled(const ty_dec128_t *a, const ty_dec128_t *b,
+                         ty_dec128_t *result) {
   return add_or_sub128(a, b, false, result);
 }
 
 /* *result = a - b; fails past 36 digits. */
-int ty_dec128_sub(const ty_dec128_t *a, const ty_dec128_t *b,
-                  ty_dec128_t *result) {
+int ty_dec128_sub_scaled(const ty_dec128_t *a, const ty_dec128_t *b,
+                         ty_dec128_t *result) {
   return add_or_sub128(a, b, true, result);
-}
-
-/*
- * *result = a * b, at the sum of the scales.
- * 1. Multiply in 128 bits; if that does not fit, the product has more
- *    than 36 digits: fail.
- * 2. If the product has more than 36 digits, or the scale is above 36,
- *    fail.
- * 3. Set the result.
- */
-int ty_dec128_mul(const ty_dec128_t *a, const ty_dec128_t *b,
-                  ty_dec128_t *result) {
-  ty_int128_t p;
-  int s = a->scale + b->scale;
-
-  if (__builtin_mul_overflow(a->value, b->value, &p) ||
-      s > TY_DEC128_MAX_SCALE || p > d128_max || p < -d128_max) {
-    return range_error128();
-  }
-  result->value = p;
-  result->scale = s;
-  return 0;
 }
 
 /* *result = a rounded to n places, half away from zero. */
@@ -873,4 +834,53 @@ int ty_dec128_width_bucket(const ty_dec128_t *operand, const ty_dec128_t *b1,
   }
   *result = (int64_t)q + 1;
   return 0;
+}
+
+namespace {
+
+/* One round of a 64-bit mix, murmur3's finalizer: h folded with w. */
+uint64_t mix64(uint64_t h, uint64_t w) {
+  h ^= w;
+  h ^= h >> 33;
+  h *= 0xff51afd7ed558ccdULL;
+  h ^= h >> 33;
+  h *= 0xc4ceb9fe1a85ec53ULL;
+  h ^= h >> 33;
+  return h;
+}
+
+} // namespace
+
+/*
+ * The hash of a decimal128.
+ * 1. Drop the zeros at the end, past the point: the value and scale of
+ *    its shortest form, and a zero has scale 0.
+ * 2. Mix the seed, then the two halves of the value, then the scale.
+ */
+uint64_t ty_dec128_hash(const ty_dec128_t *a, uint64_t seed) {
+  ty_int128_t v = a->value;
+  int s = a->scale;
+
+  while (s > 0 && v % 10 == 0) {
+    v /= 10;
+    s--;
+  }
+  if (v == 0) {
+    s = 0;
+  }
+  uint64_t h = mix64(seed + 0x9e3779b97f4a7c15ULL, 0x5bd1e9955bd1e995ULL);
+  h = mix64(h, (uint64_t)(u128)v);
+  h = mix64(h, (uint64_t)((u128)v >> 64));
+  return mix64(h, (uint64_t)s);
+}
+
+/* The hash of a decimal64: that of the decimal128 of its value. */
+uint64_t ty_dec64_hash(const ty_dec64_t *a, uint64_t seed) {
+  ty_dec128_t x = {a->value, a->scale};
+  return ty_dec128_hash(&x, seed);
+}
+
+/* Record the range error that an inline operation found; returns -1. */
+int ty_err_range(void) {
+  return ty_internal::set_error(TY_ERR_RANGE, "result out of range");
 }

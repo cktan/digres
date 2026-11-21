@@ -132,9 +132,12 @@ typedef struct decimal_t {  /* decimal128's, in two halves */
   is a check, as PostgreSQL's typmod is.
 - **Equal values compare equal at any scale**: `1.5 = 1.50`.
   Comparison rescales the lower scale up and compares the
-  integers, and at one scale compares the words; hashing first
-  strips trailing zeros, so equal values hash alike, a
-  `decimal64` as a `decimal128` of its value.
+  integers, and at one scale compares the words. The hash is
+  ty's (`ty_dec128_hash`, `ty_dec64_hash`, 64 bits, with a seed;
+  the 32-bit hash is its low half): it first strips trailing
+  zeros, so equal values hash alike, a `decimal64` as a
+  `decimal128` of its value. It is not PostgreSQL's `hash_any`
+  over a key, so its values are not PostgreSQL's.
 
 ### 2.3 Stored as sm2's decimal, at the column's scale
 
@@ -486,7 +489,12 @@ Where it lives:
   casts; `decimal64`'s native `sum` and `avg`; the operations
   themselves are in `ty/`, called by thin wrappers here, which
   unpack a datum and raise PostgreSQL's error for ty's. The
-  512-bit path is gone.
+  512-bit path is gone. What is left of `decimal.c` is that
+  glue: 159 entry points, the type's text and binary form with
+  its typmod, the aggregate states and the planner supports; it
+  holds no arithmetic, and ty's small hot functions (`add`,
+  `sub` and `mul` at one scale, `neg`, `abs`, the compares) are
+  in line, in `ty_decimal.h`, so the glue costs no call.
 - `src/include/catalog/`: the types, functions, operators,
   casts, opclasses and aggregates; what was `numeric` there is
   `decimal128`'s, but for what §2.8 runs on `decimal64`.
