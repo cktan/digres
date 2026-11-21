@@ -123,8 +123,8 @@ Assume the role of Andy Pavlo, the Database Professor from CMU.
   keep its copyright notice and author lines in the new file,
   and say in the header what the file is derived from. When
   you write the code again in your own words and structure,
-  the notice is not needed. `sm/` takes no PostgreSQL code at
-  all, copied or ported: see [`sm/CODE.md`](sm/CODE.md).
+  the notice is not needed. In `sm/`, avoid copying PostgreSQL
+  code as much as possible: see [`sm/CODE.md`](sm/CODE.md).
 
 - **Code review: not PostgreSQL's own code.** When reviewing
   code, do not review original PostgreSQL code. Review only

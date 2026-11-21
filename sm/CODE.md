@@ -26,16 +26,23 @@ two differ, [`CLAUDE.md`](../CLAUDE.md) wins.
   added to sm1's surface, not worked around.
 - **A public header is opaque**: handles, not layouts, no
   private members and no RocksDB type.
-- **sm accepts no PostgreSQL code.** Do not copy, port or adapt
-  a file, a function or a table of PostgreSQL's into `sm/`: write
-  it again in your own words and structure, or put it where it
+- **Avoid copying PostgreSQL code into sm as much as possible.**
+  Do not copy, port or adapt a file, a function or a table of
+  PostgreSQL's into `sm/` when there is another way: write it
+  again in your own words and structure, or put it where it
   belongs, in `ty/` for the operations of a type, or in digres.
-  sm must run for a SQL system that is not PostgreSQL, and its
-  code carries no PostgreSQL copyright notice. Two places break
-  this today: `sm2/src/ryu/`, PostgreSQL's float printers copied
-  as they are, and `sm3/src/analyze/estimate.cc`, ported from
-  PostgreSQL's `analyze.c`. They do not set a precedent: a new
-  case is not added, and these are to be moved out.
+  sm must run for a SQL system that is not PostgreSQL. Copy only
+  when the copy must match PostgreSQL's result exactly and no
+  rewrite can, and then keep the copyright notice, say in the
+  header what the file is derived from, and list it here. Two
+  files are such copies today:
+  - `sm2/src/ryu/`: PostgreSQL's float printers, copied as they
+    are (Ryu by Ulf Adams, modified by PostgreSQL). Upstream Ryu
+    prints other digits for about 0.6% of doubles and 1.4% of
+    floats, so it cannot replace them
+    ([`sm2/TYPE.md`](sm2/TYPE.md#33-float4-float8) §3.3);
+  - `sm3/src/analyze/estimate.cc`: the estimators of
+    PostgreSQL's `analyze.c`, ported.
 
 ## 2. The interface to sm's users
 
