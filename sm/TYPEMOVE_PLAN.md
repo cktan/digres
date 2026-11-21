@@ -382,7 +382,13 @@ copied from PostgreSQL keeps its copyright notice
    alloc that returns NULL gives `TY_ERR_NOMEM` and leaks
    nothing; an index build on sm's own thread never calls the
    host's functions.
-5. **Tests at every layer** the change reaches: ty unit tests
+5. **The next group**, after decimal: integers, bool, uuid and
+   bytea, as [`NEXT.md`](NEXT.md) item 11 says. Not begun. For
+   each type: a baseline, the operations in ty, then the tests
+   of every layer, as for decimal; `bytea`'s results go through
+   the allocator of §3. → verify: the regression files pass,
+   and no statement rises by more than 1%.
+6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and
    pgregress for digres. The mvcc scenarios do not apply:

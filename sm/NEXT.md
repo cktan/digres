@@ -204,7 +204,8 @@ are the catalog tables psql reads
     ([`BTREEINDEX.md`](BTREEINDEX.md#67-a-bulk-load-builds-the-tree-whole)
     §6.7, [`BTREELOAD_PLAN.md`](BTREELOAD_PLAN.md)).
 11. **Types move into sm, with their ADT operations and
-    functions.** Decided 2026-11-09. Decimal is done (2026-11-21):
+    functions.** Decided 2026-11-09. Decimal is done
+    (2026-11-21):
     its operations are in `ty/`, a library of its own that sm and
     digres call, under the rule that `decimal64` and `decimal128`
     work as `int32` and `int64` do ([`TYPEMOVE_PLAN.md`](
@@ -227,12 +228,50 @@ are the catalog tables psql reads
     Types that need a session or the catalog (`regclass`, enums,
     ranges, arrays, `jsonb`, text search) stay in digres. In
     order:
-    1. **decimal**: new code, with no PostgreSQL code to keep.
+    1. **decimal**: done (2026-11-21), as above.
     2. **Types with no session state**: integers, bool, uuid,
-       bytea.
+       bytea. **This is next.** See below.
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.
+
+    **The next group: integers, bool, uuid and bytea.** What is
+    in `utils/adt` today (grep, 2026-11-21):
+
+    | Type | File | Lines | Entry points |
+    | --- | --- | --- | --- |
+    | `int2`, `int4` | `int.c` | 1,412 | 92 |
+    | `int8` | `int8.c` | 1,287 | 88 |
+    | `bool` | `bool.c` | 356 | 19 |
+    | `uuid` | `uuid.c` | 737 | 20 |
+    | `bytea` | `varlena.c`, 32 of its 120 | in 6,144 | 32 |
+
+    This code is PostgreSQL's, so it keeps its copyright notice
+    when it moves. Steps, as decimal's were:
+    1. **Take the rule from decimal.** `int2`, `int4` and `int8`
+       already work as the rule says: `int4 + int4` is an
+       `int4`, and an error if it overflows. So an operation is
+       exact or an error, and a caller who wants more casts an
+       operand. A function of `uuid` and `bool` cannot fail,
+       and returns its result.
+    2. **Put the operations in `ty/`**, in a header of their own
+       beside `ty_decimal.h`: arithmetic, `abs`, `gcd`, `lcm`,
+       the bit operations, the compares, the hash, and the
+       casts between the integers. A small one is in line.
+    3. **`bytea` is the one that allocates**: concatenation,
+       `substring`, `overlay`, `replace`, `encode` and `decode`
+       give a result of variable size, through the thread's
+       alloc function (`ty_set_alloc`). Its errors are
+       `TY_ERR_NOMEM` and `TY_ERR_RANGE` (an index past the
+       end).
+    4. **Test them as ty's decimal is tested**: unit tests, and
+       vectors from a reference in plain Python integers, which
+       follows the rule and not ty's code.
+    5. **Wrappers stay in digres**: the SQL names, the error
+       text, the `Datum`. The 231 regression files must pass.
+    6. **Measure first and after**, by callgrind, on a query
+       that uses each type, as decimal's baseline was: no
+       statement may rise by more than 1%.
 
     This move is not easy. The code in `utils/adt` does not
     copy over. **Moved code cannot call `palloc()`**: it needs
