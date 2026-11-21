@@ -67,8 +67,7 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | zonemap | a CG's statistics in the RG key: min, max, null count and flags |
 | key bytes | a datum in its type's order-preserving key encoding (`type_t::key_encode`), of a varlena's payload past its header; memcmp order is SQL order |
 | RG compaction | the rewrite of an RG with many delete markers into a new RG |
-| long value | a varlena of more than 1024 bytes, its header included; a CG holds a pointer to it |
-| long-value file | the file that holds the long values of one CG |
+| the longest value | `col_max_value`, 2,048 bytes: the most a varlena value of a column store table may hold, its header not counted |
 
 ---
 
@@ -94,12 +93,12 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | min and max | key bytes, cut to 32 bytes | §6.1 |
 | dictionary | for each CG, sorted in key order | §5.2 |
 | encodings | plain, dictionary, delta for sorted integers; zstd on each CG | §5 |
-| long values | out of line, in a long-value file of the RG's file set; left out of the filter, kept in min and max | §5.4 |
+| the longest value | 2,048 bytes; a longer one is refused at its write, and goes into a row store table that a query joins | §5.4 |
 | RG size | 10k rows | §7 |
 | the seal | pessimistic; its tombstones are transparent to first-committer-wins | §10 |
 | RG compaction | moved markers, transparent in the same way | §11 |
 
-The constants (10k rows, 1024 bytes, 32 bytes, 4 KB, 20%, 50%)
+The constants (10k rows, 2,048 bytes, 32 bytes, 4 KB, 20%, 50%)
 may change. An RG key records the real sizes of its CGs,
 so a change of a constant does not make an existing file wrong.
 A test can give a catalog smaller RGs (`sm3::cat_set_rg_rows`),
@@ -129,7 +128,7 @@ hundred rows. The 20% and 50% are of the RG size set.
   `<name>` is the column's attnum in the Catalog of sm3, which a
   column keeps for good, and which a dropped column does not
   give back ([`CATALOG.md`](CATALOG.md)). The `_id` CG's name is
-  `id`. A long-value file's name is `<attnum>.long` (§5.4).
+  `id`.
   `rg_id`s come from a sequence of the table and are never used
   again. So a path is unique for the life of the database. S3's
   keys will take the same path.
@@ -207,7 +206,6 @@ set keys of sm1 (§4.5), in a key class of their own:
 | attnum | CG |
 | file size | CG |
 | CRC32C of the file | CG |
-| size and CRC32C of the long-value file; 0 if none | CG |
 | zonemap (§6.1) | CG |
 
 The encoding of a CG is in the CG file's tail (§5.3), not in the
@@ -239,7 +237,7 @@ sm1 does the whole life of a file:
    version is not a put (§13).
 
 - **sm3 never uses a file path.** It reads a CG through sm1, by
-  `rg_id` and the file's name (`id`, `3`, `3.long`).
+  `rg_id` and the file's name (`id`, `3`).
 - **S3 and the local file cache are sm1's too.** The levels
   above see no change when files move to S3.
 - **The key class is sm1's, so the compaction filter and the GC
@@ -254,12 +252,11 @@ sm1 does the whole life of a file:
 | Encoding | For |
 | --- | --- |
 | plain | every type; the fallback |
-| dictionary | a CG with no long value, where it is smaller than plain (§5.2) |
+| dictionary | where it is smaller than plain (§5.2) |
 | delta, bit-packed | `int2`, `int4` and `int8` in ascending order, with no null: the `_id` CG of a sealed or loaded RG |
 
-**A CG holds no TOAST pointer.** A varlena of 1024 bytes or
-less, its header included, is in the CG. A long value is in the
-CG's long-value file (§5.4), and the CG holds a pointer to it.
+**A CG holds every value of its column, and no TOAST pointer.**
+A varlena value is at most 2,048 bytes (§5.4).
 
 After the encoding, the CG is compressed with zstd. The tail
 tags the encoding, so a new encoding does not change the format
@@ -277,8 +274,7 @@ order, and gets plain encoding.
   keep the order of the values.
 - **The values are bit-packed codes.**
 - **The writer of the CG chooses.** It uses a dictionary if the
-  dictionary and its codes are smaller than plain. A CG with a
-  long value never has one.
+  dictionary and its codes are smaller than plain.
 - **A read expands each code to its datum.** digres evaluates a
   predicate on each row's datums. A predicate evaluated on codes
   waits for the columnar executor.
@@ -310,7 +306,6 @@ A CG file holds, in this order (`sm2/src/col/cg.cc`):
   range read. Its callers check the bytes:
   - sm3 compares the file's size and CRC32C with the RG key's.
   - sm2's `cg_open` checks the tail's CRC32C.
-  - sm2's `cg_long_check` checks a long value's CRC32C.
 
   It costs one pass at memory speed, which is far less than
   zstd's decompression.
@@ -320,44 +315,34 @@ A CG file holds, in this order (`sm2/src/col/cg.cc`):
   header, `x-amz-checksum-crc32c`, so S3 checks the upload from
   end to end.
 
-### 5.4 Long values
+### 5.4 The longest value
 
-A long value is a value of a varlena type (`text`, `bytea`,
-`jsonb` and the others) of more than 1024 bytes, its header
-included. Nobody filters
-on it by equality. So it is kept out of line, as a URL is kept
-in place of a document.
+**A varlena value of a column store table is at most 2,048
+bytes**, its header not counted (`col_max_value` in
+`sm3/src/colstore/colstore.h`). A longer one is refused at its
+write with `SM_ERR_VALUETOOLONG`, which digres reports as
+SQLSTATE `54000`, program limit exceeded. A user keeps a longer
+value, a document or a long URL, in a row store table, and joins
+it.
 
-- **A CG holds a pointer of 16 bytes in its place**:
-  `(offset, length, CRC32C)` in the CG's long-value file
-  (`sm2::cg_long_t`). Only the
-  pointer counts toward the size of the CG (§7), so an RG of
-  long values still holds 10k rows.
-- **The long-value file is `<rg_id>.<attnum>.long`**, in the
-  RG's file set (§4.5). It lives and dies with the RG, and goes
-  to S3 with the other files. A CG with no long value has none.
-- **The writer of an RG holds its rows in memory**, long values
-  whole, and builds the long-value file in memory at the RG's
-  flush (`rg_build_add`, `sm2::cg_build`). The file has no size
-  target.
-- **Each long value has a CRC32C of its own**, in its pointer
-  in the CG. A read of one value is a ranged read, or one
-  ranged GET from S3, and checks that CRC32C. The CRC32C of the
-  whole file (§5.3) is for a read of the whole file.
-- **A scan reads each long value of a column it reads**, for
-  each row, as it reads the row (`rg_read_next`). A query that
-  neither tests nor returns the column reads no long value
-  (§12).
-- **A long value has one owner, its RG.** No delta row points
-  into an RG's file:
-  - The delta store keeps its long values in TOAST, in
-    RocksDB, as a row store table does.
-  - The seal copies each long value from TOAST into the new
-    RG's long-value file, and erases the chunks (§10.1).
-  - An update of a row in an RG copies the row's long values
-    into the TOAST of the new delta row (§9).
-  - RG compaction copies the long values of the rows that it
-    moves into the new RG's long-value files (§11).
+- **Every write checks it** (`need_values_fit` in
+  `sm3/src/table/table.cc`): an insert, an update, an update of a
+  row of an RG, a bulk load's row, a rewrite's row
+  (`rewrite_table`), and an `ADD COLUMN`'s missing value. A TOAST
+  pointer names a value of the table's own, checked when it was
+  written.
+- **So every value is in its CG.** A CG has no pointer to
+  another file, and an RG's file set holds one file for each
+  column. A scan reads a value with its CG.
+- **The delta store still keeps a row past 2,000 bytes in
+  TOAST**, as a row store table does. The seal reads each value
+  out of line whole, and erases the chunks (§10.1).
+- **A row of many long values can still pass 64 KB.** A scan
+  hands out each row as an sm2 tuple, of 64 KB at most, so a row
+  of more than 31 values near 2,048 bytes fails in a scan
+  ([`NEXT.md`](NEXT.md)).
+- **The limit can change.** It is one constant, and no file
+  records it.
 
 ---
 
@@ -373,7 +358,6 @@ in place of a document.
 | distinct count | `uint32`, exact when the CG is written | nothing reads it yet |
 | `has_nan` | bit; `float4`, `float8` | `x = 'NaN'`, `x <> 'NaN'`, and ranges with finite min and max |
 | `has_pos_inf`, `has_neg_inf` | bits; the types of `has_nan`, and `date`, `timestamp`, `timestamptz`, `interval` | `x = 'infinity'`, and ranges with finite min and max |
-| `has_long` | bit: the CG holds a long value (§5.4) | tells the filter's rule of §6.3 |
 | `sorted` | bit: the CG is in ascending key order | nothing reads it yet |
 | collation version | for each collated column | turns off pruning by value for a CG whose version is not the column's |
 
@@ -399,20 +383,11 @@ These follow and need no field:
 ### 6.3 The filter of a CG
 
 Each CG has one filter key: an exact set, a bloom filter, or
-none, for a CG with no value that is short and not null. A CG of
-nulls alone has none, and no equality matches it.
+none, for a CG of nulls alone, which no equality matches.
 
-- **A long value is in no filter.** It is in min and max, cut
-  to 32 bytes as every value is. Out of max, a long value
-  `'zzz…'` would let `x > 'y'` skip a CG that holds a match.
-- **The filter of a CG with `has_long` does not prune.** The
-  size of a long value's key says nothing of the value:
-  - A `char(n)` key leaves out the trailing spaces. The long
-    value `'a'` padded to 2,000 bytes has the key `'a'`.
-  - Under a non-deterministic collation, strings of different
-    lengths can be equal.
-
-  Min and max still prune such a CG.
+- **Every value is in the filter**, by its key. A `char(n)` key
+  leaves out the trailing spaces, so `'a'` padded to 2,000 bytes
+  has the key `'a'`, which an equality on `'a'` finds.
 - **An exact set** when the key bytes of the CG's distinct
   values total 4 KB or less: a sorted list of those key bytes,
   apart from any dictionary. It answers `=` and `IN` with no
@@ -443,9 +418,9 @@ Only RG compaction makes an RG of fewer rows: the live rows of
 the RGs that it rewrites (§11).
 
 - **The size of a CG needs no limit.** A value of a CG is at
-  most 1024 bytes, as a long value is out of line (§5.4). So a
-  CG holds at most about 10 MB before encoding. If the row
-  limit is raised, a limit on a CG's size comes back with it.
+  most 2,048 bytes (§5.4). So a CG holds at most about 20 MB
+  before encoding. If the row limit or the value's limit is
+  raised, a limit on a CG's size comes back with it.
 - **An RG is a scan's unit**, as a page is to PostgreSQL's
   `heapgetpage()`: a scan reads an RG and applies its markers.
   It is also the unit of `ANALYZE`'s sample.
@@ -453,8 +428,7 @@ the RGs that it rewrites (§11).
   and a page of PostgreSQL holds about 100. Counted as pages,
   RGs would make a scan look 100 times cheaper than it is, and
   a nested loop over the table look almost free. So `relpages`
-  is the bytes of all the CGs, their long-value files included,
-  and of the delta store, divided
+  is the bytes of all the CGs and of the delta store, divided
   by 8 KB. `reltuples` is the row counts of the RG keys plus the
   delta store's. Neither needs a file read.
 - **The cost of a scan does not see the projection.** A scan of
@@ -551,9 +525,6 @@ table. A write takes the `rg_id` from the scan instead:
 - **An update of a row in an RG writes two keys in one
   transaction.** The delta key may hold a sealed tombstone. The
   insert goes in over it, as over any tombstone.
-- **An update of a row in an RG copies its long values** from
-  the RG's long-value files into the TOAST of the new delta
-  row. The delta row never points into an RG's file (§5.4).
 - **A savepoint rollback undoes markers and delta writes** with
   the undo list, as for any key.
 - **A wide update copies whole rows into the delta store.** The
@@ -596,8 +567,8 @@ statement. They do not pass through the delta store.
    time, as sm1 has no draw of a batch. `rewrite_table`
    (`copy_rows`) keeps each row's old `_id` instead.
 2. Add 10k rows to the RG being built, in memory.
-3. Write the CG files and the long-value files, and put the file
-   set key and the filter keys of a new RG (§4.5).
+3. Write the CG files, and put the file set key and the filter
+   keys of a new RG (§4.5).
 4. Repeat until fewer than 10k rows are left.
 5. Insert the rows that are left into the delta store, as
    `INSERT` does. A later seal takes them.
@@ -612,8 +583,8 @@ statement. They do not pass through the delta store.
 - **An abort or a rollback to a savepoint** unlinks the files,
   from the transaction's list, and the undo list removes the
   keys (§13).
-- **The memory is one RG**: 10k rows, long values whole, until
-  the RG is written.
+- **The memory is one RG**: 10k rows, of values of 2,048 bytes
+  at most, until the RG is written.
 
 ---
 
@@ -639,8 +610,8 @@ transaction of its own.
       TOAST is read back whole.
 4. With fewer than 10k rows taken, roll back to the savepoint:
    no partial RG.
-5. Draw a new `rg_id`. Write each CG's file and long-value file,
-   and fsync the files and the directory.
+5. Draw a new `rg_id`. Write each CG's file, and fsync the files
+   and the directory.
 6. Put the RG key, and a filter key for each CG.
 7. Erase the TOAST chunks of the rows taken, at once. A
    snapshot older than the seal's commit still sees them.
@@ -747,8 +718,7 @@ It is GC, not a write path.
   tombstone is (§10.2): first-committer-wins judges against the
   row's own commit, and a writer follows `_id` to the new RG.
 - **The `rg_id` of the new RG is new.** Its files have new
-  names. The long values of the rows that it moves are copied
-  into the new RG's long-value files.
+  names.
 - **It runs at READ COMMITTED**, as the seal does (§10.3).
 
 **RG compaction cannot skip a row.** It erases the old RG key,
@@ -883,7 +853,7 @@ A scan at a snapshot:
 | row count | exact: the row counts of the RG keys, less their visible delete markers, plus the delta store's count; no file is read |
 | null fraction | from the sample, as for a row store table |
 | the sample, for most common values, histograms and distinct counts | up to 100 RGs at random from the RG keys; from each, a share of the rows wanted in proportion to its live rows, at random places; the delta store read whole, and its share of the rows wanted kept at random, in proportion to its share of the live rows |
-| the size, for `relpages` | the bytes of the delta store and of every CG, their long-value files included, from the RG keys; no file is read |
+| the size, for `relpages` | the bytes of the delta store and of every CG, from the RG keys; no file is read |
 | the estimators | those of sm3, on the sample, as for a row store table |
 
 - **The cost of a sample is in RGs, not in rows.** A read of one
@@ -1028,10 +998,10 @@ file is corruption; a dropped store's directory goes.
 `sm2/test/test_cg.cc`, the CG file and the statistics (§5, §6):
 a CG of each encoding read back; a changed byte is corruption;
 NaN and infinity in the flags; pruning skips only CGs that
-cannot match; a long value with a short key is not skipped by
-the filter; a CG of another collation version is not pruned by
-value; a dictionary only where it is smaller than plain; the
-exact set to 4 KB of keys and a bloom filter above, with few
+cannot match; a bpchar CG's filter matches a padded value; a CG
+of another collation version is not pruned by value; a
+dictionary only where it is smaller than plain; the exact set to
+4 KB of keys and a bloom filter above, with few
 false positives; a case-insensitive collation's filter, which
 matches another case; **pruning never skips a match**, for
 random CGs and random bounds, against a test of every value.
@@ -1055,9 +1025,8 @@ random CGs and random bounds, against a test of every value.
    20%; the merge of small RGs.
 7. `ANALYZE`: the sample of RGs and of the delta store.
 8. DDL: `TRUNCATE`, `ADD COLUMN`, `DROP COLUMN` and a rewrite.
-9. A changed byte in a long value fails a scan of its column,
-   and not a scan of the others; a changed byte in a CG file
-   fails a scan of its column.
+9. A changed byte in a CG file fails a scan of its column, and
+   not a scan of the others.
 10. A reader's `FOR SHARE` lock and a prepared writer hold off
     RG compaction until they end; a prepared writer holds off the
     seal.
@@ -1082,6 +1051,8 @@ random CGs and random bounds, against a test of every value.
 17. A prepared transaction's delta rows and delete markers count
     toward the seal and RG compaction at its `COMMIT PREPARED`,
     and not after `ROLLBACK PREPARED`.
+18. A value of 2,048 bytes is taken and one of 2,049 refused, on
+    every write; a row store table takes the longer one.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.
@@ -1095,9 +1066,9 @@ name and an abort; the seal's job; an update and a delete by
 counted toward the seal; two loads prepared across a restart,
 one committed and one aborted; bounds on a text column; a
 prepared transaction's inserts sealed after `COMMIT PREPARED`.
-`rel/test/test_toast.rel`, with TOAST on: 10k rows of long
-values inserted one at a time, sealed by the seal's job, read
-back whole.
+`rel/test/test_toast.rel`, with TOAST on: 10k rows of values of
+2,000 bytes inserted one at a time, sealed by the seal's job,
+read back whole; a value of 2,049 bytes refused.
 
 `dg/test/columnar.sql`: `CREATE TABLE ... WITH (storage =
 columnar)`; the warnings of §14.1 but `EXCLUDE`'s, and the `NOT
@@ -1114,7 +1085,8 @@ references a column store table, which fails; bounds on a
 `numeric(10,2)` column of constants at a finer scale or past its
 precision, against a row store copy; `TABLESAMPLE` refused with
 `0A000`; a `DELETE ... USING` that matches a row of an RG twice,
-at REPEATABLE READ, deletes it once.
+at REPEATABLE READ, deletes it once; a value of 2,049 bytes
+refused with `54000`.
 
 ### 15.5 Layers with no test
 

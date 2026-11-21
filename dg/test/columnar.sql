@@ -24,6 +24,8 @@
 -- 10. A row store table's foreign key that references a column store
 --     table fails, as the referenced column has no unique key.
 -- 12. TABLESAMPLE is refused: a feature not supported.
+-- 14. A value of 2,048 bytes is taken; of 2,049, refused: a program
+--     limit exceeded, SQLSTATE 54000.
 -- 13. A DELETE ... USING whose join matches a row of a row group twice,
 --     the scan on the row each time, deletes it once, at REPEATABLE
 --     READ too, as PostgreSQL does.
@@ -161,6 +163,12 @@ delete from columnar_dup using (values (1), (2)) d (x)
 select count(*) from columnar_dup where id = 100;
 rollback;
 drop table columnar_dup;
+create temp table columnar_len (s text) with (storage = columnar);
+insert into columnar_len values (repeat('x', 2048));
+insert into columnar_len values (repeat('x', 2049));
+\echo :SQLSTATE
+select octet_length(s) from columnar_len;
+drop table columnar_len;
 drop table columnar_row;
 drop table columnar_t;
 drop table columnar_ref;

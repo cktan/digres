@@ -124,8 +124,6 @@ void rg_meta_encode(const rg_meta_t &meta, std::string &out) {
     sm0::put_be32(out, static_cast<uint32_t>(c.attnum));
     sm0::put_be64(out, c.size);
     sm0::put_be32(out, c.crc);
-    sm0::put_be64(out, c.long_size);
-    sm0::put_be32(out, c.long_crc);
     std::string st;
     sm2::cg_stats_encode(c.stats, st);
     put_str(out, st);
@@ -144,17 +142,15 @@ int rg_meta_decode(std::string_view in, rg_meta_t &meta) {
   uint32_t n = sm0::get_be32(in.data() + 24);
   in.remove_prefix(28);
   for (uint32_t i = 0; i < n; i++) {
-    if (in.size() < 32) {
+    if (in.size() < 20) {
       return corrupt("an RG key's column is cut short");
     }
     rg_col_t c;
     c.attnum = static_cast<int32_t>(sm0::get_be32(in.data()));
     c.size = sm0::get_be64(in.data() + 4);
     c.crc = sm0::get_be32(in.data() + 12);
-    c.long_size = sm0::get_be64(in.data() + 16);
-    c.long_crc = sm0::get_be32(in.data() + 24);
-    uint32_t len = sm0::get_be32(in.data() + 28);
-    in.remove_prefix(32);
+    uint32_t len = sm0::get_be32(in.data() + 16);
+    in.remove_prefix(20);
     if (in.size() < len) {
       return corrupt("an RG key's statistics are cut short");
     }
@@ -243,14 +239,6 @@ int rg_build_flush(rg_build_t &b) {
     c.attnum = attnum;
     c.size = built.file.size();
     c.crc = sm0::crc32c(built.file);
-    if (!built.long_file.empty()) {
-      if (sm1::fileset_write(s, def.storeid, rg_id, name + ".long",
-                             built.long_file) != 0) {
-        return -1;
-      }
-      c.long_size = built.long_file.size();
-      c.long_crc = sm0::crc32c(built.long_file);
-    }
     c.stats = std::move(built.stats);
     if (sm1::insert_new(s, def.storeid, filter_key(rg_id, attnum),
                         built.filter) != 0) {
@@ -319,7 +307,6 @@ int rg_read_open(table_t *table, uint64_t rg_id, rg_meta_t meta,
   r.rg_id = rg_id;
   r.meta = std::move(meta);
   r.cgs.assign(def.columns.size(), nullptr);
-  r.longs.assign(def.columns.size(), std::string());
   std::vector<bool> in_rg(def.columns.size(), false);
   // 1. Each CG wanted: its file, checked against its RG key.
   for (const rg_col_t &c : r.meta.cols) {
@@ -401,7 +388,7 @@ int col_bytes(table_t *table, uint64_t &bytes) {
       return -1;
     }
     for (const rg_col_t &c : meta.cols) {
-      bytes += c.size + c.long_size;
+      bytes += c.size;
     }
   }
   return 0;
@@ -411,7 +398,6 @@ int col_bytes(table_t *table, uint64_t &bytes) {
 int rg_read_next(table_t *table, rg_read_t &r, uint64_t &id,
                  std::span<sm2::datum_t> values, std::span<bool> isnull) {
   const table_def_t &def = tbl_def(table);
-  sm1::session_t *s = tbl_session(table)->sm1;
   for (size_t c = 0; c < values.size(); c++) {
     values[c] = 0;
     isnull[c] = true;
@@ -419,8 +405,7 @@ int rg_read_next(table_t *table, rg_read_t &r, uint64_t &id,
   while (r.at < sm2::cg_rows(r.ids)) {
     uint32_t i = r.at++;
     std::string_view d;
-    sm2::cg_long_t w;
-    if (sm2::cg_get(r.ids, i, d, w) != 0 || d.size() != 8) {
+    if (sm2::cg_get(r.ids, i, d) != 0 || d.size() != 8) {
       return corrupt("an _id CG's row is not an _id");
     }
     uint64_t row_id;
@@ -437,19 +422,8 @@ int rg_read_next(table_t *table, rg_read_t &r, uint64_t &id,
         }
         continue;
       }
-      int g = sm2::cg_get(r.cgs[c], i, d, w);
-      if (g == 1) {
+      if (sm2::cg_get(r.cgs[c], i, d) == 1) {
         continue;
-      }
-      if (g == 2) {
-        // A long value: one ranged read of its file.
-        if (sm1::fileset_read(s, def.storeid, r.rg_id,
-                              rg_file_name(static_cast<int32_t>(c)) + ".long",
-                              w.offset, w.length, r.longs[c]) != 0 ||
-            sm2::cg_long_check(r.longs[c], w) != 0) {
-          return -1;
-        }
-        d = r.longs[c];
       }
       values[c] = to_datum(def.columns[c].type, d);
       isnull[c] = false;

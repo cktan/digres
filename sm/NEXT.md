@@ -450,19 +450,14 @@ Owed, and blocking nothing above:
   ([`COLSTORE.md`](COLSTORE.md)). Each is owed; none blocks the
   table's use:
   - **A scan hands out sm2 tuples**, so a row of more than
-    64 KB fails in a scan. Datums handed out with no tuple
-    remove the limit (§12).
+    64 KB, more than 31 values near the 2,048-byte limit, fails
+    in a scan. Datums handed out with no tuple remove the limit
+    (§5.4, §12).
   - **A lookup by `_id` reads each RG it may be in**: every
     marker into a set, and the `_id` CG row by row; a read of the
     row reads every CG of its RG. It is to read the `_id`
     filter, find `n` by a binary search, and read one marker
     (§8).
-  - **A scan reads each long value of a column it reads**, for
-    each row. An external pointer, fetched on use, as TOAST is,
-    saves the reads a qual rules out (§5.4).
-  - **The writer of an RG holds its long values in memory**, up
-    to 10k of any size. Written to the long-value file as rows
-    come, the memory is one RG of short values (§5.4).
   - **A bulk load draws each `_id` from the sequence one at a
     time**, as sm1 has no draw of a batch (§9.2).
   - **Nothing reads the `sorted` bit or the distinct count**, and
@@ -579,10 +574,10 @@ Owed, and blocking nothing above:
   PostgreSQL's: padded with spaces to `n`, and compared without
   its trailing spaces. sm's key of a `bpchar` leaves those
   spaces out, so a key can be much shorter than its value: a
-  `char(2000)` value `'a'` is a long value
-  ([`COLSTORE.md`](COLSTORE.md#54-long-values) §5.4) with a key
-  of 3 bytes. That broke the CG filter's test of a long value
-  by its key's size, which is now not made. The choices:
+  `char(2000)` value `'a'` has a key of 3 bytes. That broke the
+  Column Store's filter of long values, which are gone now
+  ([`COLSTORE.md`](COLSTORE.md#54-the-longest-value) §5.4). The
+  choices:
   - **Keep it as PostgreSQL's**, as it is now.
   - **Store it unpadded**: strip the trailing spaces on a write,
     and pad again on output. Comparisons give what they give

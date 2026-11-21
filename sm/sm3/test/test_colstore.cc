@@ -1309,14 +1309,14 @@ int scan_error(col_db_t &db, uint64_t c, std::vector<bool> cols) {
 
 } // namespace
 
-// Verify that a changed byte in a CG file, or in a long value, fails
-// the scan that reads it with SM_ERR_CORRUPT (../COLSTORE.md §5.3,
-// §5.4), with row groups of 100 rows.
-// 1. Load 100 rows whose b is a long value: one row group.
-// 2. Change a byte in the long value of the first row: a scan of a
-//    alone reads no long value, and succeeds; a scan of b fails.
+// Verify that a changed byte in a CG file fails the scan that reads
+// it with SM_ERR_CORRUPT, and not a scan of other columns
+// (../COLSTORE.md §5.3), with row groups of 100 rows.
+// 1. Load 100 rows whose b is 2,000 bytes: one row group.
+// 2. Change a byte in b's CG file: a scan of a alone succeeds; a scan
+//    of b fails.
 // 3. Change a byte in a's CG file: a scan of a fails too.
-TEST_CASE("a changed byte in a CG file or a long value fails the scan") {
+TEST_CASE("a changed byte in a CG file fails the scan") {
   col_db_t db(100);
   db.begin();
   uint64_t c = make(db, "c", true);
@@ -1339,8 +1339,8 @@ TEST_CASE("a changed byte in a CG file or a long value fails the scan") {
   REQUIRE(rgs.size() == 1);
   const std::string rg = std::to_string(rgs[0]);
   REQUIRE(scan_error(db, c, {}) == 0);
-  // 2. The long value.
-  flip_byte(db, rg + ".1.long", 100);
+  // 2. b's CG.
+  flip_byte(db, rg + ".1", 100);
   CHECK(scan_error(db, c, {true, false}) == 0);
   CHECK(scan_error(db, c, {}) == sm1::SM_ERR_CORRUPT);
   // 3. a's CG.
@@ -1744,19 +1744,19 @@ std::map<int32_t, std::string> whole_rows(sm3::session_t *ss, uint64_t oid) {
 // Verify the seal erases the TOAST chunks of the rows it takes, and a
 // snapshot older than its commit still reads them (../COLSTORE.md
 // §10.1), with row groups of 100 rows and TOAST on.
-// 1. Insert 100 rows whose b is 3,000 bytes: in the delta store, b
-//    out of line, in TOAST chunks.
+// 1. Insert 100 rows whose b is 2,000 bytes: in the delta store, b
+//    out of line, in TOAST chunks, as the tuple is past 2,000 bytes.
 // 2. S2 takes an RR snapshot, and reads every row.
 // 3. Seal: a row group of 100 rows; no TOAST chunk is left.
-// 4. A scan gives every b whole, from the row group's long values;
-//    S2 still reads every b whole, from the chunks.
+// 4. A scan gives every b whole, from the row group's CG; S2 still
+//    reads every b whole, from the chunks.
 TEST_CASE("the seal erases its rows' TOAST chunks") {
   col_db_t db(100, true);
   db.begin();
   uint64_t c = make(db, "c", true);
   db.commit();
   // 1. The rows.
-  auto b_of = [](int i) { return std::string(3000, 'a' + i % 26); };
+  auto b_of = [](int i) { return std::string(2000, 'a' + i % 26); };
   db.begin();
   sm3::table_t *t = nullptr;
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
@@ -1982,4 +1982,74 @@ TEST_CASE("a prepared transaction's rows count at COMMIT PREPARED") {
   CHECK(scan_rows(db, c).size() == 80);
   sm3::sealer_detach(db.cat);
   sm3::session_close(ss2);
+}
+
+// Verify a column store table takes a varlena value of 2,048 bytes at
+// most (../COLSTORE.md §5.4), on every write, and a row store table
+// takes a longer one, with row groups of 100 rows.
+// 1. An insert, a bulk load's row and an update in the delta store of
+//    2,048 bytes are taken; of 2,049, refused with SM_ERR_VALUETOOLONG.
+// 2. An update of a row of a row group by its name, of 2,049 bytes,
+//    is refused; a null is taken.
+// 3. ADD COLUMN with a missing value of 2,049 bytes is refused.
+// 4. A row store table takes 2,049 bytes.
+TEST_CASE("a column store table takes a value of 2,048 bytes at most") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  uint64_t r = make(db, "r", false);
+  db.commit();
+  row_t fits(1, std::string(2048, 'f')), over(2, std::string(2049, 'o'));
+  // 1. The delta store's writes, and a load's.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  uint64_t id = 0, id2 = 0;
+  REQUIRE(sm3::tbl_insert(t, fits.d, fits.null, id) == 0);
+  CHECK(sm3::tbl_insert(t, over.d, over.null, id2) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_VALUETOOLONG);
+  CHECK(sm3::tbl_update(t, id, over.d, over.null) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_VALUETOOLONG);
+  REQUIRE(sm3::tbl_update(t, id, fits.d, fits.null) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  sm3::loader_t *l = nullptr;
+  REQUIRE(sm3::tbl_load_open(t, l) == 0);
+  for (int i = 0; i < 100; i++) {
+    row_t v(10 + i, std::string(2048, 'l'));
+    REQUIRE(sm3::tbl_load_add(l, v.d, v.null, id2) == 0);
+  }
+  CHECK(sm3::tbl_load_add(l, over.d, over.null, id2) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_VALUETOOLONG);
+  sm3::tbl_load_free(l);
+  sm3::tbl_close(t);
+  REQUIRE(sm3::abort(db.ss) == 0);
+  // 2. A row of a row group.
+  load_rows(db, c, 100);
+  auto [rg, rid] = where(db, c, 50);
+  REQUIRE(rg != 0);
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK(sm3::tbl_update_at(t, rg, rid, over.d, over.null) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_VALUETOOLONG);
+  row_t none(50, "");
+  none.null[1] = true;
+  REQUIRE(sm3::tbl_update_at(t, rg, rid, none.d, none.null) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  // 3. ADD COLUMN.
+  db.begin();
+  std::string missing = sm2::make_varlena(std::string(2049, 'm'));
+  sm3::column_spec_t z{"z", sm2::type_text.code, -1, false};
+  CHECK(sm3::add_column(db.ss, c, z, missing) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_VALUETOOLONG);
+  REQUIRE(sm3::abort(db.ss) == 0);
+  // 4. A row store table.
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, r, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK(sm3::tbl_insert(t, over.d, over.null, id2) == 0);
+  sm3::tbl_close(t);
+  db.commit();
 }

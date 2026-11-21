@@ -13691,3 +13691,14 @@ A check hook took the new value as a `char **`, to change it with
   marker, which digres skips, as for a row store table.
 - **Test**: step 13 of `test/columnar.sql`, a nested loop that
   deletes a row twice with its scan on it; `sm3`'s test of it.
+
+## Step 456: a column store table takes a value of 2,048 bytes at most
+
+- **What it is**: a write of a column store table refuses a varlena
+  value of more than 2,048 bytes, its header not counted, with
+  SQLSTATE `54000`, program limit exceeded
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §5.4). A longer value
+  goes into a row store table, which a query joins.
+- **How**: sm3 refuses it with `SM_ERR_VALUETOOLONG`;
+  `sm_sqlstate()` in `access/sm/smstore.c` maps it.
+- **Test**: step 14 of `test/columnar.sql`.

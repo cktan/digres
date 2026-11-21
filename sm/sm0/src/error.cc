@@ -209,6 +209,7 @@ const char *errname() {
       "ERR_MOVED",
       "ERR_SEALED",
       "ERR_UNSUPPORTED",
+      "ERR_VALUETOOLONG",
   };
   static_assert(sizeof(names) / sizeof(names[0]) == SM_ERR_LAST + 1,
                 "every error code needs its name");

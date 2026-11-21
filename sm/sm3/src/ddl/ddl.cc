@@ -14,6 +14,7 @@
  */
 
 #include "../catalog/internal.h"
+#include "../colstore/colstore.h"
 
 #include <algorithm>
 #include <functional>
@@ -658,6 +659,17 @@ int add_column(session_t *session, uint64_t oid, const column_spec_t &col,
   if (live_column(rec, col.name) >= 0) {
     return sm1::seterr(sm1::SM_ERR_DUPKEY,
                        "add column: " + col.name + " is taken");
+  }
+  // Every row of a column store table reads the missing value, so it
+  // is held to the table's limit (../../COLSTORE.md §5.4).
+  if (rec.column_store && missing && type->len < 0 &&
+      sm2::varlena_payload(*missing).size() > col_max_value) {
+    return sm1::seterr(
+        sm1::SM_ERR_VALUETOOLONG,
+        "add column: the value of " + col.name + " is " +
+            std::to_string(sm2::varlena_payload(*missing).size()) +
+            " bytes; a column store table takes " +
+            std::to_string(col_max_value) + " at most");
   }
   rec.columns.push_back(
       {col.name,

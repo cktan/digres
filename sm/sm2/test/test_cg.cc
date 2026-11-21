@@ -64,14 +64,9 @@ sm2::cg_built_t round_trip(const sm2::cg_column_t &col,
   REQUIRE(sm2::cg_rows(cg) == v.size());
   for (uint32_t i = 0; i < v.size(); i++) {
     std::string_view d;
-    sm2::cg_long_t w;
-    int r = sm2::cg_get(cg, i, d, w);
+    int r = sm2::cg_get(cg, i, d);
     if (v[i].isnull) {
       CHECK(r == 1);
-    } else if (r == 2) {
-      std::string_view bytes(b.long_file.data() + w.offset, w.length);
-      CHECK(sm2::cg_long_check(bytes, w) == 0);
-      CHECK(bytes == v[i].datum);
     } else {
       CHECK(r == 0);
       CHECK(d == v[i].datum);
@@ -95,7 +90,7 @@ sm2::cg_bound_t eq(const std::string &k) {
 // 1. Sorted int8 with no null: delta.
 // 2. Repeated text: a dictionary.
 // 3. Distinct text with nulls: plain.
-// 4. A text longer than 1024 bytes: out of line, in the long file.
+// 4. A text of 2,048 bytes: in the CG, as every value is.
 TEST_CASE("a CG reads back in each encoding") {
   // 1. Sorted integers.
   std::vector<std::string> ints;
@@ -121,12 +116,12 @@ TEST_CASE("a CG reads back in each encoding") {
   }
   b = round_trip(column(sm2::type_text), values(names, null));
   CHECK(b.stats.nulls == 50);
-  // 4. A long value.
-  std::vector<std::string> docs = {datum(sm2::type_text, "short"),
-                                   std::string(5000, 'x')};
+  // 4. A value of 2,048 bytes.
+  std::vector<std::string> docs = {
+      datum(sm2::type_text, "short"),
+      datum(sm2::type_text, std::string(2048, 'x'))};
   b = round_trip(column(sm2::type_text), values(docs));
-  CHECK(b.stats.has_long);
-  CHECK(b.long_file.size() == 5000);
+  CHECK(b.stats.distinct == 2);
 }
 
 // Verify that a changed byte of a CG file is found by its CRC32C.
@@ -240,13 +235,12 @@ TEST_CASE("pruning skips only CGs that cannot match") {
   CHECK(sm2::cg_may_match(fcol, fb.stats, fb.filter, big));
 }
 
-// Verify that a CG with a long value whose key is short is not skipped
-// by its filter: a bpchar's key leaves out its trailing spaces.
-// 1. Build a bpchar CG of "b" and of "a" padded to 2,000 bytes, a long
-//    value, kept out of the filter.
-// 2. An equality on "a" may match, as the long value is "a".
+// Verify that a bpchar CG's filter matches a padded value by its key,
+// which leaves out its trailing spaces.
+// 1. Build a bpchar CG of "b" and of "a" padded to 2,000 bytes.
+// 2. An equality on "a" may match, as the padded value is "a".
 // 3. An equality on "c", outside min and max, may not.
-TEST_CASE("a long value with a short key is not skipped by the filter") {
+TEST_CASE("a bpchar CG's filter matches a padded value") {
   // 1. The CG.
   sm2::cg_column_t col = column(sm2::type_bpchar);
   std::vector<std::string> d = {
@@ -254,7 +248,6 @@ TEST_CASE("a long value with a short key is not skipped by the filter") {
       datum(sm2::type_bpchar, "a" + std::string(1999, ' '))};
   sm2::cg_built_t b;
   REQUIRE(sm2::cg_build(col, values(d), b) == 0);
-  REQUIRE(b.stats.has_long);
   auto eq = [&](std::string_view s) {
     sm2::cg_bound_t x;
     x.not_null = x.has_in = true;

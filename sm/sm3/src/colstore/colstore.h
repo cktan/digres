@@ -31,6 +31,13 @@ constexpr uint16_t filter_relid = 4;
 /* The rows of a row group (../COLSTORE.md §7). */
 constexpr uint32_t rg_max_rows = 10000;
 
+/*
+ * The longest varlena value a column store table takes, in octets,
+ * its varlena header not counted (../COLSTORE.md §5.4): every value
+ * is in its CG.
+ */
+constexpr size_t col_max_value = 2048;
+
 /* The rows of a row group of cat's tables: fewer if a test set them. */
 inline uint32_t rg_rows(const catalog_t *cat) {
   return cat->rg_rows ? cat->rg_rows : rg_max_rows;
@@ -41,11 +48,9 @@ constexpr const char *rg_id_name = "id";
 
 /* One CG of a row group, as its RG key records it (§4.4). */
 struct rg_col_t {
-  int32_t attnum = 0;     /* 0-based; -1 for the _id CG */
-  uint64_t size = 0;      /* the CG file's bytes */
-  uint32_t crc = 0;       /* its CRC32C */
-  uint64_t long_size = 0; /* its long-value file's, 0 for none */
-  uint32_t long_crc = 0;
+  int32_t attnum = 0;    /* 0-based; -1 for the _id CG */
+  uint64_t size = 0;     /* the CG file's bytes */
+  uint32_t crc = 0;      /* its CRC32C */
   sm2::cg_stats_t stats; /* its zonemap */
 };
 
@@ -104,7 +109,6 @@ struct rg_read_t {
   sm2::cg_t *ids = nullptr;
   std::set<uint64_t> deleted;
   uint32_t at = 0;
-  std::vector<std::string> longs; /* long values of the row at hand */
 };
 
 /* Free what r holds. */

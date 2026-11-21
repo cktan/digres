@@ -175,6 +175,42 @@ int need_not_null(const sm3::table_t *t, std::span<const bool> isnull) {
   return 0;
 }
 
+/*
+ * Fail with SM_ERR_VALUETOOLONG if the row of t, a column store
+ * table, has a varlena value of more than col_max_value octets
+ * (../COLSTORE.md §5.4), so every value fits in its CG. A TOAST
+ * pointer names a value of the table's own, checked when written.
+ */
+int need_values_fit(const sm3::table_t *t, std::span<const sm2::datum_t> values,
+                    std::span<const bool> isnull) {
+  if (!t->def->column_store) {
+    return 0;
+  }
+  const std::vector<sm3::column_def_t> &cols = t->def->columns;
+  for (size_t i = 0; i < cols.size() && i < values.size(); i++) {
+    const sm3::column_def_t &c = cols[i];
+    if (c.dropped || c.type->len >= 0 || (i < isnull.size() && isnull[i])) {
+      continue;
+    }
+    std::string_view bytes;
+    if (sm2::datum_bytes(c.type, c.typmod, values[i], bytes) != 0) {
+      return -1;
+    }
+    if (sm2::varlena_is_toast(bytes)) {
+      continue;
+    }
+    size_t n = sm2::varlena_payload(bytes).size();
+    if (n > sm3::col_max_value) {
+      return sm1::seterr(
+          sm1::SM_ERR_VALUETOOLONG,
+          "value of " + std::to_string(n) + " bytes in column " + c.name +
+              " of " + t->def->name + ", a column store table, which takes " +
+              std::to_string(sm3::col_max_value) + " bytes at most");
+    }
+  }
+  return 0;
+}
+
 /* A non-null datum's native bytes: a varlena's without its header. */
 int native(const sm2::type_t *type, int32_t typmod, const sm2::datum_t &d,
            std::string_view &out) {
@@ -778,6 +814,7 @@ int id_key(table_t *t, uint64_t id, std::string &key) {
 int tbl_insert(table_t *table, std::span<const sm2::datum_t> values,
                std::span<const bool> isnull, uint64_t &id) {
   if (need_writable(table) != 0 || need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0 ||
       insert_row(table, values, isnull, 0, id) != 0) {
     return -1;
   }
@@ -838,7 +875,8 @@ int tbl_insert_arbiter(table_t *table, std::span<const sm2::datum_t> values,
                        std::span<const bool> isnull,
                        std::span<const uint64_t> arbiters, uint64_t &id,
                        std::string *tuple) {
-  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0) {
+  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0) {
     return -1;
   }
   const table_def_t &def = *table->def;
@@ -1048,7 +1086,8 @@ static int update_row(table_t *table, uint64_t id, std::string_view key,
   if (old) {
     *old = {};
   }
-  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0) {
+  if (need_writable(table) != 0 || need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0) {
     return -1;
   }
   // The old row is pinned, in a pin of this call's, so the index
@@ -1382,7 +1421,8 @@ int tbl_load_add(loader_t *l, std::span<const sm2::datum_t> values,
     if (sm_should_stop()) {
       return sm1::seterr(sm1::SM_ERR_INTERRUPTED, "load: interrupted");
     }
-    if (need_not_null(table, isnull) != 0) {
+    if (need_not_null(table, isnull) != 0 ||
+        need_values_fit(table, values, isnull) != 0) {
       return -1;
     }
     // The row's _id now, from the table's sequence; it keeps it in
@@ -1408,7 +1448,8 @@ int tbl_load_add(loader_t *l, std::span<const sm2::datum_t> values,
   if (sm_should_stop()) {
     return sm1::seterr(sm1::SM_ERR_INTERRUPTED, "load: interrupted");
   }
-  if (need_not_null(table, isnull) != 0) {
+  if (need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0) {
     return -1;
   }
   uint64_t r = 0;
@@ -1838,6 +1879,7 @@ int tbl_update_at(table_t *table, uint64_t rg_id, uint64_t id,
     return tbl_update(table, id, values, isnull);
   }
   if (need_not_null(table, isnull) != 0 ||
+      need_values_fit(table, values, isnull) != 0 ||
       mark_deleted(table, rg_id, id) != 0) {
     return -1;
   }
@@ -3330,6 +3372,11 @@ static int copy_rows(table_t *from, table_t *to, const column_conv_t *conv) {
     }
     std::string converted;
     if (conv && convert_value(to, *conv, row, converted) != 0) {
+      return -1;
+    }
+    // A rewrite's value, as an ALTER COLUMN TYPE makes it, is held to a
+    // column store table's limit too.
+    if (need_values_fit(to, row.d, {row.null.get(), row.n}) != 0) {
       return -1;
     }
     if (rg) {

@@ -1517,9 +1517,6 @@ struct cg_column_t {
     const collation_t* collation; /* text, varchar; nullptr: bytes */
 };
 
-/* A value longer than this is long, and kept out of line (§5.4). */
-constexpr size_t cg_long_min = 1024;
-
 /* Min and max are cut to this many bytes (§6.1). */
 constexpr size_t cg_minmax_max = 32;
 
@@ -1539,7 +1536,6 @@ struct cg_stats_t {
     bool        has_nan = false;
     bool        has_pos_inf = false;
     bool        has_neg_inf = false;
-    bool        has_long = false; /* a value is out of line */
     bool        sorted = false;   /* non-null keys ascend, row by row */
     std::string collation_version;
 };
@@ -1553,17 +1549,9 @@ void cg_stats_encode(const cg_stats_t& st, std::string& out);
  */
 int cg_stats_decode(std::string_view& in, cg_stats_t& st);
 
-/* A long value's place in its CG's long-value file (§5.4). */
-struct cg_long_t {
-    uint64_t offset = 0;
-    uint32_t length = 0;
-    uint32_t crc = 0;   /* the CRC32C of the value's bytes */
-};
-
 /* What cg_build makes of one column of a row group. */
 struct cg_built_t {
     std::string file;      /* the CG file */
-    std::string long_file; /* its long-value file; empty for none */
     std::string filter;    /* the filter key's value (§6.3) */
     cg_stats_t  stats;
 };
@@ -1593,16 +1581,9 @@ uint32_t cg_rows(const cg_t* cg);
 
 /*
  * Row i of a CG: 0 with datum viewing the value, valid until
- * cg_close; 1 if it is null; 2 if it is long, with where set.
+ * cg_close; 1 if it is null. Every value is in the CG.
  */
-int cg_get(const cg_t* cg, uint32_t i, std::string_view& datum,
-           cg_long_t& where);
-
-/*
- * Check one long value's bytes, read from its file at where: 0, or
- * -1 with SM_ERR_CORRUPT if the length or the CRC32C differs.
- */
-int cg_long_check(std::string_view bytes, const cg_long_t& where);
+int cg_get(const cg_t* cg, uint32_t i, std::string_view& datum);
 
 /*
  * Bounds on one column, which every matching row meets

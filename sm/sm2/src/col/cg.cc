@@ -16,9 +16,10 @@
  *   tail     fixed: magic, format, encoding, rows, the sizes of
  *            the parts above, the CRC32C of all before it, magic
  *
- * The body, before zstd: the encoding byte, the row count, a null
- * bitmap and a long bitmap (each present only if a row needs it),
- * then the values as the encoding lays them out.
+ * The body, before zstd: the encoding byte, the row count, a flags
+ * byte, a null bitmap if a row is null, then the values as the
+ * encoding lays them out. Every value is in the body: a column store
+ * table takes no varlena past its limit (sm3::col_max_value).
  */
 
 #include "sm2.h"
@@ -68,7 +69,6 @@ enum : uint8_t {
   st_nan = 0x04,
   st_pos_inf = 0x08,
   st_neg_inf = 0x10,
-  st_long = 0x20,
   st_sorted = 0x40,
 };
 
@@ -269,15 +269,6 @@ std::string int_datum(int64_t v, size_t width) {
   return d;
 }
 
-/* A long value's pointer, as a plain varlena entry holds it. */
-std::string long_entry(const sm2::cg_long_t &w) {
-  std::string e;
-  sm0::put_be64(e, w.offset);
-  sm0::put_be32(e, w.length);
-  sm0::put_be32(e, w.crc);
-  return e;
-}
-
 /* Whether some value of st may be above k (or at it, with incl). */
 bool may_be_above(const sm2::cg_stats_t &st, const specials_t &sp,
                   std::string_view k, bool incl) {
@@ -328,12 +319,6 @@ bool may_be_below(const sm2::cg_stats_t &st, const specials_t &sp,
 bool filter_may_hold(const sm2::cg_column_t &col, const sm2::cg_stats_t &st,
                      std::string_view filter, std::string_view k) {
   if (filter.empty()) {
-    return true;
-  }
-  // A long value is in no filter, and its key's size says nothing
-  // of its own: a bpchar's key leaves out its trailing spaces, and a
-  // non-deterministic collation calls strings of other lengths equal.
-  if (st.has_long) {
     return true;
   }
   std::string_view in = filter;
@@ -387,11 +372,10 @@ bool filter_may_hold(const sm2::cg_column_t &col, const sm2::cg_stats_t &st,
 
 } // namespace
 
-/* A CG decoded: each row's datum, or null, or a long pointer. */
+/* A CG decoded: each row's datum, or null. */
 struct sm2::cg_t {
   std::vector<std::string> datums;
   std::vector<bool> nulls;
-  std::vector<bool> longs;
 };
 
 /* Append st's bytes; see sm2.h. */
@@ -401,8 +385,7 @@ void sm2::cg_stats_encode(const cg_stats_t &st, std::string &out) {
   sm0::put_be32(out, st.distinct);
   uint8_t f = (st.min_cut ? st_min_cut : 0) | (st.max_cut ? st_max_cut : 0) |
               (st.has_nan ? st_nan : 0) | (st.has_pos_inf ? st_pos_inf : 0) |
-              (st.has_neg_inf ? st_neg_inf : 0) | (st.has_long ? st_long : 0) |
-              (st.sorted ? st_sorted : 0);
+              (st.has_neg_inf ? st_neg_inf : 0) | (st.sorted ? st_sorted : 0);
   out.push_back(static_cast<char>(f));
   put_str(out, st.min);
   put_str(out, st.max);
@@ -422,7 +405,6 @@ int sm2::cg_stats_decode(std::string_view &in, cg_stats_t &st) {
   st.has_nan = f & st_nan;
   st.has_pos_inf = f & st_pos_inf;
   st.has_neg_inf = f & st_neg_inf;
-  st.has_long = f & st_long;
   st.sorted = f & st_sorted;
   if (!get_str(in, st.min) || !get_str(in, st.max) ||
       !get_str(in, st.collation_version)) {
@@ -445,8 +427,8 @@ int sm2::cg_build(const cg_column_t &col, std::span<const cg_value_t> values,
   }
   // 1. Each value's key, for the statistics, the filter and order.
   std::vector<std::string> keys(n);
-  std::vector<bool> nulls(n, false), longs(n, false);
-  std::unordered_set<std::string> distinct, filtered;
+  std::vector<bool> nulls(n, false);
+  std::unordered_set<std::string> distinct;
   std::string last;
   bool any = false, finite = false;
   st.sorted = true;
@@ -464,13 +446,7 @@ int sm2::cg_build(const cg_column_t &col, std::span<const cg_value_t> values,
       return -1;
     }
     const std::string &k = keys[i];
-    longs[i] = varlena && d.size() > cg_long_min;
-    st.has_long = st.has_long || longs[i];
     distinct.insert(k);
-    // A long value is in no filter (§6.3).
-    if (!longs[i]) {
-      filtered.insert(k);
-    }
     if (any && k < last) {
       st.sorted = false;
     }
@@ -509,7 +485,7 @@ int sm2::cg_build(const cg_column_t &col, std::span<const cg_value_t> values,
   }
   // 2. The filter: the exact set, or a bloom filter.
   {
-    std::vector<std::string> fk(filtered.begin(), filtered.end());
+    std::vector<std::string> fk(distinct.begin(), distinct.end());
     std::sort(fk.begin(), fk.end());
     size_t total = 0;
     for (const std::string &k : fk) {
@@ -539,22 +515,11 @@ int sm2::cg_build(const cg_column_t &col, std::span<const cg_value_t> values,
       out.filter.append(bits);
     }
   }
-  // 3. Long values to their file; a pointer stands in each one's row.
+  // 3. Each row's datum; every value is in the CG.
   std::vector<std::string> datums(n);
   for (size_t i = 0; i < n; i++) {
-    if (nulls[i]) {
-      continue;
-    }
-    std::string_view d = values[i].datum;
-    if (longs[i]) {
-      cg_long_t w;
-      w.offset = out.long_file.size();
-      w.length = static_cast<uint32_t>(d.size());
-      w.crc = sm0::crc32c(d);
-      out.long_file.append(d.data(), d.size());
-      datums[i] = long_entry(w);
-    } else {
-      datums[i] = std::string(d);
+    if (!nulls[i]) {
+      datums[i] = std::string(values[i].datum);
     }
   }
   // 4. The encoding: delta for sorted integers with no null, else
@@ -563,7 +528,7 @@ int sm2::cg_build(const cg_column_t &col, std::span<const cg_value_t> values,
   std::vector<std::string> dict;
   if (is_int(col.type) && st.nulls == 0 && st.sorted && n > 0) {
     enc = enc_delta;
-  } else if (!st.has_long && n > 0) {
+  } else if (n > 0) {
     // The dictionary holds datums, in key order; equal keys under a
     // non-deterministic collation are distinct datums still.
     std::vector<std::pair<std::string, std::string>> kd;
@@ -595,13 +560,10 @@ int sm2::cg_build(const cg_column_t &col, std::span<const cg_value_t> values,
   std::string body;
   body.push_back(static_cast<char>(enc));
   sm0::put_be32(body, static_cast<uint32_t>(n));
-  uint8_t maps = (st.nulls ? 1 : 0) | (st.has_long ? 2 : 0);
+  uint8_t maps = st.nulls ? 1 : 0;
   body.push_back(static_cast<char>(maps));
   if (st.nulls) {
     put_bitmap(body, nulls);
-  }
-  if (st.has_long) {
-    put_bitmap(body, longs);
   }
   if (enc == enc_delta) {
     int64_t base = int_of(datums[0]);
@@ -721,12 +683,8 @@ int sm2::cg_open(std::string_view file, cg_t *&out) {
   std::unique_ptr<cg_t> cg(new cg_t);
   cg->datums.resize(n);
   cg->nulls.assign(n, false);
-  cg->longs.assign(n, false);
   if ((maps & 1) && !get_bitmap(in, n, cg->nulls)) {
     return corrupt("null bitmap cut short");
-  }
-  if ((maps & 2) && !get_bitmap(in, n, cg->longs)) {
-    return corrupt("long bitmap cut short");
   }
   if (enc == enc_delta) {
     if (in.size() < 10) {
@@ -797,28 +755,13 @@ uint32_t sm2::cg_rows(const cg_t *cg) {
 }
 
 /* Row i of a CG; see sm2.h. */
-int sm2::cg_get(const cg_t *cg, uint32_t i, std::string_view &datum,
-                cg_long_t &where) {
+int sm2::cg_get(const cg_t *cg, uint32_t i, std::string_view &datum) {
   datum = std::string_view();
   if (cg->nulls[i]) {
     return 1;
   }
   const std::string &d = cg->datums[i];
-  if (cg->longs[i]) {
-    where.offset = sm0::get_be64(d.data());
-    where.length = sm0::get_be32(d.data() + 8);
-    where.crc = sm0::get_be32(d.data() + 12);
-    return 2;
-  }
   datum = d;
-  return 0;
-}
-
-/* Check a long value's bytes; see sm2.h. */
-int sm2::cg_long_check(std::string_view bytes, const cg_long_t &where) {
-  if (bytes.size() != where.length || sm0::crc32c(bytes) != where.crc) {
-    return corrupt("long value CRC32C mismatch");
-  }
   return 0;
 }
 

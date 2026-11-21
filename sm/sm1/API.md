@@ -120,8 +120,11 @@ typedef enum sm_errnum_t {
     /* sm3's: NOT an abort; a call sm does not support */
     SM_ERR_UNSUPPORTED   = 34,  /* the call is not supported */
 
+    /* sm3's: NOT an abort; a column store table's value too long */
+    SM_ERR_VALUETOOLONG  = 35,  /* a value past its column's limit */
+
     /* The highest code, for code that walks them all. */
-    SM_ERR_LAST          = SM_ERR_UNSUPPORTED
+    SM_ERR_LAST          = SM_ERR_VALUETOOLONG
 } sm_errnum_t;
 
 /* sm1.h */

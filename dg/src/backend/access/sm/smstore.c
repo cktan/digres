@@ -360,6 +360,8 @@ static int sm_sqlstate(void) {
     return ERRCODE_T_R_SERIALIZATION_FAILURE;
   case SM_ERR_UNSUPPORTED:
     return ERRCODE_FEATURE_NOT_SUPPORTED;
+  case SM_ERR_VALUETOOLONG:
+    return ERRCODE_PROGRAM_LIMIT_EXCEEDED;
   default:
     return sm_retryable() == 1 ? ERRCODE_T_R_SERIALIZATION_FAILURE
                                : ERRCODE_INTERNAL_ERROR;

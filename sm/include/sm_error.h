@@ -146,8 +146,14 @@ typedef enum sm_errnum_t {
      */
     SM_ERR_UNSUPPORTED   = 34,  /* the call is not supported */
 
+    /*
+     * sm3's, and not an abort: a varlena value longer than a column
+     * store table takes (../COLSTORE.md §5.4).
+     */
+    SM_ERR_VALUETOOLONG  = 35,  /* a value past its column's limit */
+
     /* The highest code, for code that walks them all. */
-    SM_ERR_LAST          = SM_ERR_UNSUPPORTED
+    SM_ERR_LAST          = SM_ERR_VALUETOOLONG
 } sm_errnum_t;
 
 #endif /* SM_ERROR_H */

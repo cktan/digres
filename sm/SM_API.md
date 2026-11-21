@@ -3134,7 +3134,9 @@ Creates the table `name` in `nspoid` with these columns: its
 store, its `_id` sequence and its definition. With
 `column_store`, a column store table
 ([`COLSTORE.md`](COLSTORE.md)): no index, no SERIALIZABLE
-transaction, and a sequence of its row groups' ids. The session's
+transaction, a varlena value of 2,048 bytes at most, refused past
+it with `SM_ERR_VALUETOOLONG`, and a sequence of its row groups'
+ids. The session's
 transaction sees it at once, and others at commit. An identity
 column owns its sequence from then on.
 

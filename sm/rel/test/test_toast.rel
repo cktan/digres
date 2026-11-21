@@ -10,8 +10,9 @@
 # 4. Another session reads the committed values; an abort undoes a
 #    change to one.
 # 5. The values are there after the environment is attached again.
-# 6. A column store table's long values, in TOAST in its delta
-#    store, are sealed into a row group, and read back whole.
+# 6. A column store table's values of 2,000 bytes, in TOAST in its
+#    delta store, are sealed into a row group, and read back whole; a
+#    value past 2,048 bytes is refused.
 # 7. With TOAST off, the default, a row past 64 KB is refused.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_toast"))
@@ -106,7 +107,7 @@
 
 # 6. A column store table's long values: 10,000 rows inserted one at
 # a time, a row group's worth, which the seal's job seals.
-(defn long-b [i] (string "v" i (string/repeat "x" 2500)))
+(defn long-b [i] (string "v" i (string/repeat "x" 2000)))
 (begin :rc)
     (table-create cs (columns (a :int4) (b :text)) :column-store)
 (commit)
@@ -122,6 +123,13 @@
     (assert-eq (every? (map (fn [r] (= ((r 1) 1) (long-b ((r 1) 0)))) got))
                true "every long value whole")
 (commit)
+(begin :rc)
+    (insert cs [2 (string/repeat "y" 2048)])
+(commit)
+(begin :rc)
+    (assert-eq (fails? (fn [] (insert cs [1 (string/repeat "y" 2049)]))) true
+               "2,049 bytes are refused")
+(abort)
 (session-close s1)
 (env-detach)
 
