@@ -508,6 +508,22 @@ copied from PostgreSQL keeps its copyright notice
      `make_date`, `make_time` and `time + interval` +0.17%.
      The first version was +4.26% on the date arithmetic: the
      calls were not in line.
+   - **Every thread of digres sets ty's alloc; `a || b` moved
+     (2026-11-21).** `MemoryContextInit()` calls
+     `ty_set_alloc(palloc_extended with MCXT_ALLOC_NO_OOM,
+     pfree)`, so the main, session and adopted threads all have
+     it. `ty_text_concat` makes `a || b` in the thread's alloc
+     memory, after a headroom for the varlena header; it is in
+     line in `ty_text.h`, with `ty_alloc` and `ty_free` in
+     `ty.h` (the thread's functions are read in line). A result
+     past 1 GB is "requested length too large", where digres
+     said "invalid memory alloc request size". Measured by
+     callgrind (old, new) on a table: concat of two columns
+     +0.12%; of a column and a literal -0.05%; of a column and
+     a number as text -0.03%. The first version, a call to
+     ty with a call to a function that calls `palloc_extended`,
+     was +1.7% to +1.9%. sm does not call `ty_set_alloc` yet:
+     sm does not link ty.
    - **The C-ctype case functions moved (2026-11-21).**
      `ty_ascii_lower`, `ty_ascii_upper` and `ty_ascii_initcap`,
      for `lower`, `upper` and `initcap` in the C ctype. The

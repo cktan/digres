@@ -614,30 +614,18 @@ Datum textcat(PG_FUNCTION_ARGS) {
  */
 static text *text_catenate(text *t1, text *t2) {
   text *result;
-  int len1, len2, len;
-  char *ptr;
+  size_t len;
 
-  len1 = VARSIZE_ANY_EXHDR(t1);
-  len2 = VARSIZE_ANY_EXHDR(t2);
-
-  /* paranoia ... probably should throw error instead? */
-  if (len1 < 0)
-    len1 = 0;
-  if (len2 < 0)
-    len2 = 0;
-
-  len = len1 + len2 + VARHDRSZ;
-  result = (text *)palloc(len);
-
-  /* Set size of result string... */
-  SET_VARSIZE(result, len);
-
-  /* Fill data field of result string... */
-  ptr = VARDATA(result);
-  if (len1 > 0)
-    memcpy(ptr, VARDATA_ANY(t1), len1);
-  if (len2 > 0)
-    memcpy(ptr + len1, VARDATA_ANY(t2), len2);
+  /* ty makes the result with a varlena header's room before its bytes. */
+  if (ty_text_concat(VARDATA_ANY(t1), VARSIZE_ANY_EXHDR(t1), VARDATA_ANY(t2),
+                     VARSIZE_ANY_EXHDR(t2), VARHDRSZ, (char **)&result,
+                     &len)) {
+    if (ty_errnum() == TY_ERR_NOMEM)
+      ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
+    ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+                    errmsg("requested length too large")));
+  }
+  SET_VARSIZE(result, VARHDRSZ + len);
 
   return result;
 }

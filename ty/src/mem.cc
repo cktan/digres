@@ -17,12 +17,9 @@
 #include "error.h"
 #include "ty.h"
 
-namespace {
-
-thread_local ty_alloc_fn t_alloc = nullptr;
-thread_local ty_free_fn t_free = nullptr;
-
-} // namespace
+/* A thread that sets none has NULL: malloc and free. */
+thread_local ty_alloc_fn ty_t_alloc = nullptr;
+thread_local ty_free_fn ty_t_free = nullptr;
 
 /* Set the calling thread's alloc and free; both NULL for the default. */
 int ty_set_alloc(ty_alloc_fn alloc, ty_free_fn free) {
@@ -30,21 +27,13 @@ int ty_set_alloc(ty_alloc_fn alloc, ty_free_fn free) {
     return ty_internal::set_error(
         TY_ERR_INVALID, "alloc and free must be both set or both NULL");
   }
-  t_alloc = alloc;
-  t_free = free;
+  ty_t_alloc = alloc;
+  ty_t_free = free;
   return 0;
 }
 
 /* size bytes from the thread's alloc function, or malloc. */
-void *ty_internal::mem_alloc(size_t size) {
-  return t_alloc ? t_alloc(size) : malloc(size);
-}
+void *ty_internal::mem_alloc(size_t size) { return ty_alloc(size); }
 
 /* ptr to the thread's free function, or free. */
-void ty_internal::mem_free(void *ptr) {
-  if (t_free) {
-    t_free(ptr);
-  } else {
-    free(ptr);
-  }
-}
+void ty_internal::mem_free(void *ptr) { ty_free(ptr); }

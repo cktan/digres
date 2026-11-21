@@ -7,12 +7,14 @@
  * Tests of ty_set_alloc(): the alloc and free functions of a thread.
  */
 #include <stdlib.h>
+#include <string.h>
 
 #include <thread>
 
 #include "doctest.h"
 #include "mem.h"
 #include "ty.h"
+#include "ty_text.h"
 
 namespace {
 
@@ -153,4 +155,43 @@ TEST_CASE("the alloc and free functions belong to one thread") {
   CHECK(1 == other_frees);
   CHECK(0 == t_count.allocs);
   CHECK(0 == t_count.frees);
+}
+
+// Verify that ty_text_concat makes a || b in the thread's alloc memory, after
+// the headroom, and reports a limit and an alloc that fails.
+// 1. Concatenate two texts with a headroom of 4 bytes, with the counting hook.
+// 2. Check the text is after the headroom, the length is right, and one alloc.
+// 3. Concatenate with an empty side and no headroom.
+// 4. Check a total past the limit is TY_ERR_RANGE, with no alloc.
+// 5. Check an alloc that fails is TY_ERR_NOMEM.
+TEST_CASE("ty_text_concat uses the thread's alloc and keeps the headroom") {
+  reset_t reset;
+  char *out = nullptr;
+  size_t n = 0;
+
+  // 1. Concatenate two texts with a headroom of 4 bytes, with the counting
+  // hook.
+  ty_set_alloc(counting_alloc, counting_free);
+  t_count = count_t();
+  REQUIRE(0 == ty_text_concat("ab", 2, "cde", 3, 4, &out, &n));
+  // 2. Check the text is after the headroom, the length is right, and one
+  // alloc.
+  CHECK(5 == n);
+  CHECK(0 == memcmp(out + 4, "abcde", 5));
+  CHECK(1 == t_count.allocs);
+  free(out);
+  // 3. Concatenate with an empty side and no headroom.
+  REQUIRE(0 == ty_text_concat("", 0, "xy", 2, 0, &out, &n));
+  CHECK(2 == n);
+  CHECK(0 == memcmp(out, "xy", 2));
+  free(out);
+  // 4. Check a total past the limit is TY_ERR_RANGE, with no alloc.
+  t_count = count_t();
+  CHECK(-1 == ty_text_concat("a", (size_t)0x3fffffff, "b", 1, 4, &out, &n));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(0 == t_count.allocs);
+  // 5. Check an alloc that fails is TY_ERR_NOMEM.
+  ty_set_alloc(failing_alloc, plain_free);
+  CHECK(-1 == ty_text_concat("a", 1, "b", 1, 0, &out, &n));
+  CHECK(TY_ERR_NOMEM == ty_errnum());
 }

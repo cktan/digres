@@ -27,6 +27,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "storage/latch.h"
+#include "ty.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_internal.h"
@@ -339,6 +340,20 @@ static Size BogusGetChunkSpace(void *pointer) {
  *
  * In a standalone backend this must be called during backend startup.
  */
+/*
+ * The alloc and free functions ty uses on a thread of digres: the current
+ * memory context's. Neither may throw (ty.h), so a request that palloc would
+ * refuse with an error, one past MaxAllocSize, gets NULL, as does one the
+ * context cannot meet, which palloc_extended() reports as NULL.
+ */
+static void *ty_alloc_fn_palloc(size_t size) {
+  if (size > MaxAllocSize)
+    return NULL;
+  return palloc_extended(size, MCXT_ALLOC_NO_OOM);
+}
+
+static void ty_free_fn_pfree(void *ptr) { pfree(ptr); }
+
 void MemoryContextInit(void) {
   Assert(TopMemoryContext == NULL);
 
@@ -370,6 +385,13 @@ void MemoryContextInit(void) {
   ErrorContext = AllocSetContextCreate(TopMemoryContext, "ErrorContext",
                                        8 * 1024, 8 * 1024, 8 * 1024);
   MemoryContextAllowInCriticalSection(ErrorContext, true);
+
+  /*
+   * Every thread of digres calls this, as it starts: the main thread, a
+   * session's and an adopted one. From here on, what ty allocates is in the
+   * memory context of the call, as palloc's is.
+   */
+  ty_set_alloc(ty_alloc_fn_palloc, ty_free_fn_pfree);
 }
 
 /*

@@ -98,7 +98,12 @@ returns NULL.
 - A thread that sets none has `malloc` and `free`.
 - Both arguments NULL restores that default. Only one NULL fails
   with `TY_ERR_INVALID` and changes nothing.
-- The host calls it at the start of each of its threads. sm
+- The host calls it at the start of each of its threads. digres
+  calls it in `MemoryContextInit()`, which the main thread, each
+  session thread and each adopted thread run: the functions are
+  `palloc_extended()` with `MCXT_ALLOC_NO_OOM` (and NULL past
+  `MaxAllocSize`, so that none throws) and `pfree()`, so a result
+  is in the memory context of the call. sm
   calls it at the start of each of its own threads, such as an
   index-build worker, with functions that cut from an arena of
   the thread.
@@ -440,6 +445,13 @@ string writes it to the caller's buffer, and says in `ty_text.h`
 how large the buffer must be; a function that cuts a string, such
 as `substr`, gives the place of the part in the input, so that no
 copy is needed. A position or a count is in characters.
+
+`a || b` is the one function of text that allocates its result,
+`ty_text_concat`, in memory of the thread's alloc function. The
+host gives the size of the header it keeps before its bytes, as the
+headroom: ty leaves it and writes the text after it, so digres
+gets a varlena with no copy. ty is given a pointer and a length of
+each side, not a varlena: the host has detoasted them.
 
 The functions are `cmp`, `eq`, `starts_with` and the hash;
 `length`; `substr`, `left`, `right`, `reverse` and `overlay`;

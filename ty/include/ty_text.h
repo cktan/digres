@@ -159,6 +159,38 @@ void ty_text_repeat(const char* s, size_t len, int32_t count, char* out);
 int ty_text_size_check(size_t bytes);
 
 /*
+ * a || b. The result is in memory from the thread's alloc function
+ * (ty_set_alloc): headroom bytes, which ty does not write, then the len1 +
+ * len2 bytes of the text. A host with a header in front of the bytes, such as
+ * digres's varlena, gives its size as the headroom, and has the result in
+ * its own memory with no copy. *out is the start of the memory, the
+ * headroom's, and *outlen the length of the text. TY_ERR_RANGE if the
+ * headroom and the text pass TY_TEXT_MAX_LEN, and TY_ERR_NOMEM if alloc
+ * returns NULL. The caller frees the memory as its alloc function suggests.
+ */
+int ty_text_concat_error(size_t alen, size_t blen, size_t headroom);
+static inline int ty_text_concat(const char* a, size_t alen, const char* b, size_t blen,
+                                 size_t headroom, char** out, size_t* outlen) {
+    size_t len = alen + blen;
+    /* PostgreSQL's MaxAllocSize, 0x3fffffff, is the limit of the whole block. */
+    const size_t max_block = TY_TEXT_MAX_LEN + 4;
+    char* p;
+
+    if (TY_UNLIKELY(len > max_block || headroom > max_block - len)) {
+        return ty_text_concat_error(alen, blen, headroom);
+    }
+    p = (char*)ty_alloc(headroom + len);
+    if (TY_UNLIKELY(p == NULL)) {
+        return ty_text_concat_error(alen, blen, headroom);
+    }
+    memcpy(p + headroom, a, alen);
+    memcpy(p + headroom + alen, b, blen);
+    *out = p;
+    *outlen = len;
+    return 0;
+}
+
+/*
  * lpad(s, n, fill) and rpad(s, n, fill): s cut or padded to n characters,
  * the fill used again and again; with an empty fill s is only cut.
  * ty_text_pad_prepare gives the number of characters of the result, *eff,

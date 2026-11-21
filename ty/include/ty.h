@@ -29,6 +29,7 @@
 #define TY_H
 
 #include <stddef.h>
+#include <stdlib.h>
 
 #include "ty_error.h"
 
@@ -90,5 +91,31 @@ typedef void (*ty_free_fn)(void* ptr);
  * the thread is live: free would not match alloc.
  */
 int ty_set_alloc(ty_alloc_fn alloc, ty_free_fn free);
+
+/*
+ * The calling thread's functions, for the operations in line in the headers:
+ * NULL means malloc and free. Use ty_alloc and ty_free, not these.
+ */
+#ifdef __cplusplus
+#define TY_THREAD_LOCAL thread_local
+#else
+#define TY_THREAD_LOCAL _Thread_local
+#endif
+extern TY_THREAD_LOCAL ty_alloc_fn ty_t_alloc;
+extern TY_THREAD_LOCAL ty_free_fn ty_t_free;
+
+/* size bytes from the thread's alloc function, or malloc; NULL if it fails. */
+static inline void* ty_alloc(size_t size) {
+    return ty_t_alloc ? ty_t_alloc(size) : malloc(size);
+}
+
+/* Give ptr, which ty_alloc returned, to the thread's free function. */
+static inline void ty_free(void* ptr) {
+    if (ty_t_free) {
+        ty_t_free(ptr);
+    } else {
+        free(ptr);
+    }
+}
 
 #endif /* TY_H */

@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "error.h"
+#include "mem.h"
 
 namespace {
 
@@ -919,4 +920,16 @@ int ty_text_like_escape(const char *pat, size_t plen, const char *esc,
   }
   *outlen = (size_t)(r - out);
   return 0;
+}
+
+/* The error of a concat: the limit if the block is too large, else no memory.
+ */
+int ty_text_concat_error(size_t alen, size_t blen, size_t headroom) {
+  const size_t max_block = TY_TEXT_MAX_LEN + 4;
+  size_t len = alen + blen;
+
+  if (len > max_block || headroom > max_block - len) {
+    return ty_internal::set_error(TY_ERR_RANGE, "requested length too large");
+  }
+  return ty_internal::set_error(TY_ERR_NOMEM, "out of memory");
 }
