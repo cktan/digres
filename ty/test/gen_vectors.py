@@ -411,6 +411,7 @@ def main():
     gen_float_parse()
     gen_trig()
     gen_float_aggs()
+    gen_bits()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -1782,6 +1783,112 @@ def gen_float_aggs():
         for nm in ("sxx", "syy", "sxy", "avgx", "avgy", "covarpop", "covarsamp", "corr", "r2", "slope", "intercept"):
             r = fin(nm)
             emit("f64.rfinal", (nm, stok(st)), "NULL" if r is None else ftok(r))
+
+
+def btok(s):
+    """A bit string as a token: its 0s and 1s, or - if empty."""
+    return s if s else "-"
+
+
+def rand_bits(maxn=40):
+    """A random bit string, of a length that is, now and then, a multiple
+    of 8, and with edge strings of all zeros and all ones."""
+    n = random.choice([0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 24, random.randint(0, maxn), random.randint(0, maxn)])
+    kind = random.random()
+    if kind < 0.1:
+        return "0" * n
+    if kind < 0.2:
+        return "1" * n
+    return "".join(random.choice("01") for _ in range(n))
+
+
+def gen_bits():
+    """The vectors of bit strings, from a reference of Python strings of
+    0 and 1."""
+    big = 2 ** 31 - 1
+    # text in
+    for t in ["", "b", "B", "x", "X", "101", "b101", "B0110", "x1F", "XaB", "x", "xg", "b102",
+              "0", "1", "b0", "xFFFF", "x0", "bb", "xx", "b 1", "1 0", "x1 ", "x\xc3\xa9", "b\xc3\xa9",
+              "10101010101010101", "x123456789abcdef"]:
+        if t.startswith(("b", "B")) or not t.startswith(("x", "X")):
+            body = t[1:] if t.startswith(("b", "B")) else t
+            ok = all(c in "01" for c in body)
+            r = body if ok else None
+        else:
+            body = t[1:]
+            ok = all(c in "0123456789abcdefABCDEF" for c in body) and t.isascii()
+            r = "".join("{:04b}".format(int(c, 16)) for c in body) if ok else None
+        raw = t.encode("latin-1") if t.isascii() else t.encode("utf-8", "surrogateescape")
+        emit("bits.parse", (hx(raw),), ("E", "INVALID") if r is None else btok(r))
+    for _ in range(150):
+        a, b = rand_bits(), rand_bits()
+        emit("bits.cmp", (btok(a), btok(b)), (a > b) - (a < b))
+        emit("bits.eq", (btok(a), btok(b)), int(a == b))
+        emit("bits.cat", (btok(a), btok(b)), btok(a + b))
+        emit("bits.position", (btok(a), btok(b)), (a.find(b) + 1) if a and len(b) <= len(a) else 0)
+        for op, fn in (("and", lambda x, y: "".join(str(int(p) & int(q)) for p, q in zip(x, y))),
+                       ("or", lambda x, y: "".join(str(int(p) | int(q)) for p, q in zip(x, y))),
+                       ("xor", lambda x, y: "".join(str(int(p) ^ int(q)) for p, q in zip(x, y)))):
+            emit("bits." + op, (btok(a), btok(b)), ("E", "INVALID") if len(a) != len(b) else btok(fn(a, b)))
+        emit("bits.overlay", (btok(a), btok(b), 0, 0), ("E", "INVALID"))
+        for sp in (1, 2, 3, 8, 9, len(a) + 1, len(a) + 5):
+            for sl in (0, 1, 3, 8, big, -2):
+                if sp + sl > big:
+                    res = ("E", "RANGE")
+                else:
+                    res = btok(a[:sp - 1] + b + a[max(sp + sl, 1) - 1:])
+                emit("bits.overlay", (btok(a), btok(b), sp, sl), res)
+    for _ in range(100):
+        a = rand_bits(70)
+        emit("bits.count", (btok(a),), a.count("1"))
+        emit("bits.not", (btok(a),), btok("".join("1" if c == "0" else "0" for c in a)))
+        for n in (0, 1, 3, 7, 8, 9, 16, len(a), len(a) + 3, -1, -5, -9, -len(a)):
+            sl = (a[n:] + "0" * min(n, len(a))) if n >= 0 else ("0" * min(-n, len(a)) + a[:max(len(a) + n, 0)])
+            emit("bits.shl", (btok(a), n), btok(sl if n >= 0 else sl))
+            sr = ("0" * min(n, len(a)) + a[:max(len(a) - n, 0)]) if n >= 0 else (a[-n:] + "0" * min(-n, len(a)))
+            emit("bits.shr", (btok(a), n), btok(sr))
+        for st in (-3, 0, 1, 2, 5, 8, 9, len(a), len(a) + 1):
+            for ln in (None, 0, 1, 4, 9, 100, big, -1):
+                s1 = max(st, 1)
+                if ln is None:
+                    e1 = len(a) + 1
+                elif ln < 0:
+                    emit("bits.substr", (btok(a), st, ln, 1), ("E", "INVALID"))
+                    continue
+                else:
+                    e = st + ln
+                    e1 = len(a) + 1 if e > big else min(e, len(a) + 1)
+                res = "" if (s1 > len(a) or e1 <= s1) else a[s1 - 1:e1 - 1]
+                emit("bits.substr", (btok(a), st, ln if ln is not None else 0, 0 if ln is None else 1), btok(res))
+        for i in (-1, 0, 1, len(a) - 1, len(a), 5):
+            emit("bits.get", (btok(a), i), a[i] if 0 <= i < len(a) else ("E", "RANGE"))
+            for bit in (0, 1, 2, -1):
+                if not 0 <= i < len(a):
+                    res = ("E", "RANGE")
+                elif bit not in (0, 1):
+                    res = ("E", "INVALID")
+                else:
+                    res = btok(a[:i] + str(bit) + a[i + 1:])
+                emit("bits.set", (btok(a), i, bit), res)
+        for ln in (0, 1, 5, 8, 33, 70):
+            emit("bits.resize", (btok(a), ln), btok((a + "0" * ln)[:ln]) if ln <= len(a) or True else None)
+        if len(a) <= 32:
+            emit("bits.toint32", (btok(a),), (lambda v: v - 2 ** 32 if v >= 2 ** 31 else v)(int(a, 2) if a else 0))
+        else:
+            emit("bits.toint32", (btok(a),), ("E", "RANGE"))
+        if len(a) <= 64:
+            emit("bits.toint64", (btok(a),), (lambda v: v - 2 ** 64 if v >= 2 ** 63 else v)(int(a, 2) if a else 0))
+        else:
+            emit("bits.toint64", (btok(a),), ("E", "RANGE"))
+    for _ in range(60):
+        v = random.choice(int_values(32))
+        ln = random.choice([-2, 0, 1, 3, 8, 16, 31, 32, 33, 40, 70])
+        n = 1 if ln <= 0 else ln
+        emit("bits.fromint32", (v, ln), btok(format(v % (1 << n), "0%db" % n)))
+        v = random.choice(int_values(64))
+        ln = random.choice([-2, 0, 1, 3, 8, 32, 63, 64, 65, 100])
+        n = 1 if ln <= 0 else ln
+        emit("bits.fromint64", (v, ln), btok(format(v % (1 << n), "0%db" % n)))
 
 
 def gen_ints():

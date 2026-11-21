@@ -446,3 +446,28 @@ printed for a few hundred texts, good and bad
 rest. digres's storage does not hold these types yet, so they
 have no key in a table.
 
+## 13. bit and bit varying
+
+`ty_bits.h` holds the operations of bit strings, from
+PostgreSQL's `varbit.c`; the code is new. A bit string is its
+bytes and its length in bits; the first bit is the high bit of
+the first byte, and the bits of the last byte past the length are
+zero, in every result, so that `memcmp` orders strings. As with
+bytea, a result goes to the caller's buffer; the sizes are known
+before the call.
+
+`parse` reads binary digits (with `b` or without) or hex digits
+after `x`; `format` writes `0` and `1`; `cmp` is the order of the
+bytes then the lengths; `cat`, `substr`, `overlay`, `position`,
+`count`, `and`, `or`, `xor`, `not`, the shifts (a negative count
+shifts the other way), `get` and `set` of a bit, `from_int32` and
+`from_int64` (two's complement, sign-extended or cut at the
+left), `to_int32` and `to_int64`, and `resize`, which pads or
+cuts for `bit(n)` and `bit varying(n)`. The length rules of the
+types, which of the two errors a cast gives, are the host's.
+
+The vectors are a reference of Python strings of `0` and `1`,
+which are the plainest way to say what each operation means; the
+hand tests are in `test/test_bits.cc`.
+
+

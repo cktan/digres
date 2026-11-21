@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "doctest.h"
+#include "ty_bits.h"
 #include "ty_bool.h"
 #include "ty_bytea.h"
 #include "ty_decimal.h"
@@ -524,6 +525,150 @@ bool run_float(const vec_t &v) {
     rc = ty_float64_width_bucket(a64(0), a64(1), a64(2),
                                  (int32_t)std::stoll(v.args[3]), &bucket);
     check_int(v, rc, bucket);
+  } else {
+    return false;
+  }
+  return true;
+}
+
+/* The bytes of a bit string token (its 0s and 1s, or "-"), and its length. */
+std::vector<uint8_t> bits_of(const std::string &tok, int32_t *nbits) {
+  std::string t = tok == "-" ? "" : tok;
+  std::vector<uint8_t> b(ty_bits_bytes((int32_t)t.size()) + 1, 0);
+
+  for (size_t i = 0; i < t.size(); i++) {
+    if (t[i] == '1') {
+      b[i >> 3] |= (uint8_t)(0x80 >> (i & 7));
+    }
+  }
+  *nbits = (int32_t)t.size();
+  return b;
+}
+
+/* The token of a bit string. */
+std::string bits_token(const uint8_t *b, int32_t nbits) {
+  std::string s(nbits + 1, '0');
+
+  ty_bits_format(b, nbits, &s[0]);
+  s.resize(nbits);
+  return s.empty() ? "-" : s;
+}
+
+/* Run one bit string vector; false if its op is not one. */
+bool run_bits(const vec_t &v) {
+  const std::string &op = v.op;
+
+  if (op.compare(0, 5, "bits.") != 0) {
+    return false;
+  }
+  const std::string name = op.substr(5);
+  int32_t na = 0, nb = 0, nout = 0;
+  std::vector<uint8_t> a, b, out(4096, 0);
+  int rc = 0;
+  auto num = [&](size_t i) { return std::stoll(v.args[i]); };
+  /* check a result that is a bit string, or an error */
+  auto check = [&](int rcode) {
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rcode);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rcode);
+      CHECK(v.res[0] == bits_token(out.data(), nout));
+    }
+  };
+
+  if (name == "parse") {
+    std::vector<uint8_t> t = bytes_of(v.args[0]);
+    out.assign(ty_bits_parse_room(t.size()) + 8, 0);
+    rc = ty_bits_parse(reinterpret_cast<const char *>(t.data()), t.size(),
+                       out.data(), &nout);
+    check(rc);
+    return true;
+  }
+  if (name == "fromint32" || name == "fromint64") {
+    if (name == "fromint32") {
+      ty_bits_from_int32((int32_t)std::stoll(v.args[0]), (int32_t)num(1),
+                         out.data(), &nout);
+    } else {
+      ty_bits_from_int64(std::stoll(v.args[0]), (int32_t)num(1), out.data(),
+                         &nout);
+    }
+    check(0);
+    return true;
+  }
+  a = bits_of(v.args[0], &na);
+  if (name == "cmp" || name == "eq" || name == "cat" || name == "position" ||
+      name == "and" || name == "or" || name == "xor" || name == "overlay") {
+    b = bits_of(v.args[1], &nb);
+  }
+  if (name == "cmp") {
+    int c = ty_bits_cmp(a.data(), na, b.data(), nb);
+    INFO(v.line);
+    CHECK(std::stoi(v.res[0]) == (c > 0) - (c < 0));
+  } else if (name == "eq") {
+    INFO(v.line);
+    CHECK(std::stoi(v.res[0]) == ty_bits_eq(a.data(), na, b.data(), nb));
+  } else if (name == "cat") {
+    rc = ty_bits_cat(a.data(), na, b.data(), nb, out.data(), &nout);
+    check(rc);
+  } else if (name == "position") {
+    INFO(v.line);
+    CHECK(std::stoi(v.res[0]) == ty_bits_position(a.data(), na, b.data(), nb));
+  } else if (name == "and" || name == "or" || name == "xor") {
+    rc = name == "and"  ? ty_bits_and(a.data(), na, b.data(), nb, out.data())
+         : name == "or" ? ty_bits_or(a.data(), na, b.data(), nb, out.data())
+                        : ty_bits_xor(a.data(), na, b.data(), nb, out.data());
+    nout = na;
+    check(rc);
+  } else if (name == "overlay") {
+    rc = ty_bits_overlay(a.data(), na, b.data(), nb, (int32_t)num(2),
+                         (int32_t)num(3), out.data(), &nout);
+    check(rc);
+  } else if (name == "count") {
+    INFO(v.line);
+    CHECK(std::stoll(v.res[0]) == ty_bits_count(a.data(), na));
+  } else if (name == "not") {
+    ty_bits_not(a.data(), na, out.data());
+    nout = na;
+    check(0);
+  } else if (name == "shl" || name == "shr") {
+    if (name == "shl") {
+      ty_bits_shl(a.data(), na, (int32_t)num(1), out.data());
+    } else {
+      ty_bits_shr(a.data(), na, (int32_t)num(1), out.data());
+    }
+    nout = na;
+    check(0);
+  } else if (name == "substr") {
+    rc = ty_bits_substr(a.data(), na, (int32_t)num(1), (int32_t)num(2),
+                        (int)num(3), out.data(), &nout);
+    check(rc);
+  } else if (name == "get") {
+    int32_t r = 0;
+    rc = ty_bits_get(a.data(), na, (int32_t)num(1), &r);
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(std::stoi(v.res[0]) == r);
+    }
+  } else if (name == "set") {
+    rc =
+        ty_bits_set(a.data(), na, (int32_t)num(1), (int32_t)num(2), out.data());
+    nout = na;
+    check(rc);
+  } else if (name == "resize") {
+    ty_bits_resize(a.data(), na, (int32_t)num(1), out.data());
+    nout = (int32_t)num(1);
+    check(0);
+  } else if (name == "toint32" || name == "toint64") {
+    int32_t r32 = 0;
+    int64_t r64 = 0;
+    rc = name == "toint32" ? ty_bits_to_int32(a.data(), na, &r32)
+                           : ty_bits_to_int64(a.data(), na, &r64);
+    check_int(v, rc, name == "toint32" ? r32 : r64);
   } else {
     return false;
   }
@@ -1133,10 +1278,10 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_known(v) || run_float_text(v) || run_float(v) ||
-                 run_hash(v) || run_bytea(v) || run_int_convert(v) ||
-                 run64(v) || run128(v) || run_i16(v) || run_i32(v) ||
-                 run_i64(v);
+    bool known = run_bits(v) || run_known(v) || run_float_text(v) ||
+                 run_float(v) || run_hash(v) || run_bytea(v) ||
+                 run_int_convert(v) || run64(v) || run128(v) || run_i16(v) ||
+                 run_i32(v) || run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

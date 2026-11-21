@@ -438,6 +438,24 @@ copied from PostgreSQL keeps its copyright notice
      the Ryu code took its 32-bit path, 17% slower; ty's is
      fixed, sm2's `src/ryu/postgres_fe.h` has the same defect
      (the output is the same, only slower).
+   - **bit and varbit moved (2026-11-21), unattended.**
+     `ty_bits.h`: the text in and out, the order, `||`,
+     `substring`, `overlay`, `position`, `bit_count`, the logic
+     operators and the shifts, `get_bit` and `set_bit`, the
+     casts with `int4` and `int8`, and the cut or pad of
+     `bit(n)`. The vectors are a Python reference of strings of
+     `0` and `1`. `dg/test/select_bits.sql` prints the same, byte
+     for byte, on a digres built before the move. Left in
+     digres: the typmod rules, `recv` and `send`.
+     Measured by callgrind (old, new): a statement of bit
+     operations over 200,000 rows +0.43%; a sort of `bit(48)`
+     +0.56%; a text in and out and `||` -5.74%. The first
+     version of the integer-to-bits and compare code cost
+     +36% and +3%: loops over single bits, a frame with a stack
+     guard on each call of a small function, and the bit lengths
+     read before the compare of the bytes. Now the common case
+     is in line in `ty_bits.h`, the copies go a byte at a time,
+     and `ty_bits_cmp_bytes` takes pointers to the lengths.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

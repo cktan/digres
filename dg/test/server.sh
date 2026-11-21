@@ -4493,6 +4493,9 @@ done
 #    that is no float or is out of range, and a bad width_bucket.
 # 7. macaddr and macaddr8 text that is no address, an octet past 255, and a
 #    macaddr8 that does not fit a macaddr.
+# 8. Bit strings of two lengths in a bit operation, a digit that is none, a
+#    length that does not match, a negative substring length, an index outside
+#    the string, and a string too long for an integer.
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4597,7 +4600,20 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'08:00:2b-01:02:03'::macaddr8|invalid input syntax for type macaddr8" \
   "'08:00:2b:01:02:03:04:05:06'::macaddr8|invalid input syntax for type macaddr8" \
   "'0g:00:2b:01:02:03'::macaddr8|invalid input syntax for type macaddr8" \
-  "''::macaddr8|invalid input syntax for type macaddr8"; do
+  "''::macaddr8|invalid input syntax for type macaddr8" \
+  "B'1100' & B'101'|cannot AND bit strings of different sizes" \
+  "B'1100' # B'101'|cannot XOR bit strings of different sizes" \
+  "'102'::bit(3)|\"2\" is not a valid binary digit" \
+  "'x1g'::bit|\"g\" is not a valid hexadecimal digit" \
+  "substring(B'101' FROM 1 FOR -1)|negative substring length not allowed" \
+  "overlay(B'101' PLACING B'1' FROM 0)|negative substring length not allowed" \
+  "overlay(B'101' PLACING B'1' FROM 2 FOR 2147483647)|integer out of range" \
+  "get_bit(B'101', 3)|bit index 3 out of valid range (0..2)" \
+  "get_bit(B'', 0)|bit index 0 out of valid range (0..-1)" \
+  "set_bit(B'101', -1, 1)|bit index -1 out of valid range (0..2)" \
+  "set_bit(B'101', 0, 2)|new bit must be 0 or 1" \
+  "B'111111111111111111111111111111111'::int4|integer out of range" \
+  "B'11111111111111111111111111111111111111111111111111111111111111111'::int8|bigint out of range"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"
 done
