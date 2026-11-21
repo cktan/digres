@@ -30,9 +30,10 @@ typedef enum ty_errnum_t {
     TY_ERR_RANGE     = 4,   /* a result does not fit its type */
     TY_ERR_DIVZERO   = 5,   /* a division by zero */
     TY_ERR_UNDERFLOW = 6,   /* a result too small for a double: not zero */
+    TY_ERR_ABORTED   = 7,   /* the host's poll function asked a call to stop */
 
     /* The highest code; move it when one is appended. */
-    TY_ERR_LAST      = TY_ERR_UNDERFLOW
+    TY_ERR_LAST      = TY_ERR_ABORTED
 } ty_errnum_t;
 
 #endif /* TY_ERROR_H */

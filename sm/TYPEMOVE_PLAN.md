@@ -644,6 +644,38 @@ copied from PostgreSQL keeps its copyright notice
      new): overlap -1.24%; position operators -0.22%; distance
      -1.01%; area and order +0.76%; point in a circle and its
      distance -1.56%; `+` and `*` with a point -0.17%.
+   - **path and polygon moved (2026-11-21).** `ty_geo.h` and
+     `src/geo_poly.cc`, on arrays of points, so the width of
+     the types in digres does not matter to ty. For a path: the
+     area, the length, the distance of two paths and of a
+     point from a path, whether two paths meet, whether a point
+     is on a path, and `+`, `-`, `*` and `/` with a point. For
+     a polygon: the position operators, the same, overlap,
+     contain, the distance of two polygons and of a point and a
+     circle from a polygon, the point in a polygon, the box
+     that bounds the points, the circle of a polygon and the
+     points of a polygon around a circle. The text, the binary
+     forms and the conversions between path, polygon and box
+     stay in digres. **A hook is new:** the test that a
+     polygon contains another recurses and takes long, and
+     PostgreSQL calls `check_stack_depth` and
+     `CHECK_FOR_INTERRUPTS` in it. A call takes a poll
+     function (`ty_poll_fn`); it returns nonzero to stop, the
+     call returns `TY_ERR_ABORTED`, and digres raises its own
+     error, or runs the call again. The tests: about 7,000
+     known answers from the old digres, and
+     `dg/test/select_geo_poly_ops.sql`, which prints the same
+     as the digres before the move. Measured by callgrind
+     (old, new): polygon overlap -0.30%; polygon contain
+     -11.77%; distance of polygons -3.98%; a point in a
+     polygon and its distance -4.66%; area and length of a
+     path +0.18%; position operators -0.38%; distance of a
+     point from a path -1.21%. The first version was +5.9% on
+     a point in a polygon (the crossing was a call with an
+     out parameter; it is in line now) and +1.0% on the
+     position operators and on a path: `ty_box_construct`,
+     moved earlier, was a call, and is in line now (the box
+     operators: +0.09%).
    - **The conversions of date, timestamp, time and interval,
      and the earlier arithmetic, measured again on tables
      (2026-11-21).** `max()` over the values, instructions a

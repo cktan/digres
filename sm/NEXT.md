@@ -245,16 +245,15 @@ are the catalog tables psql reads
        collation, with varchar, bpchar and name (`ty_text.h`).
        money (`ty_money.h`), and the arithmetic of interval
        (`ty_interval.h`), and the arithmetic of date, time and
-       timestamp (`ty_datetime.h`), and point, box, line,
-       lseg and circle (`ty_geo.h`). The text out of date, time,
-       timestamp and interval is in ty, and the text in of
-       interval. So are
+       timestamp (`ty_datetime.h`), and the geometric types
+       point, box, line, lseg, circle, path and polygon
+       (`ty_geo.h`). The text out of date, time, timestamp and
+       interval is in ty, and the text in of interval. So are
        the typmod of interval, timestamp and time,
        `make_interval`, `date_trunc` of timestamp and interval,
        `age`, `date_bin`, `extract` and `date_part` of
        timestamp, date, time and interval, OVERLAPS, and the
        order, hash and RANGE offsets of timetz. **Left: the
-       other geometric types (path and polygon), the
        text in of date, time, timestamp and timetz, anything
        with a time zone, and the rest.**
     3. **Types that read a setting**: date and time, interval,

@@ -15,27 +15,6 @@
 /* The float steps return -1 from the caller on an error, as in the header. */
 #define TRY(call) TY_GEO_TRY(call)
 
-/* The box of two corners: the larger of each coordinate is high. */
-void ty_box_construct(ty_box_t *r, const ty_point_t *a, const ty_point_t *b) {
-  ty_box_t t;
-
-  if (ty_float64_gt(a->x, b->x)) {
-    t.high.x = a->x;
-    t.low.x = b->x;
-  } else {
-    t.high.x = b->x;
-    t.low.x = a->x;
-  }
-  if (ty_float64_gt(a->y, b->y)) {
-    t.high.y = a->y;
-    t.low.y = b->y;
-  } else {
-    t.high.y = b->y;
-    t.low.y = a->y;
-  }
-  *r = t;
-}
-
 /* Swap the corners of a box that has them the wrong way. */
 void ty_box_normalize(ty_box_t *r) {
   if (ty_float64_lt(r->high.x, r->low.x)) {

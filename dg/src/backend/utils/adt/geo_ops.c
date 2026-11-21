@@ -87,6 +87,16 @@ enum path_delim { PATH_NONE, PATH_OPEN, PATH_CLOSED };
 #define TYS(p) ((ty_lseg_t *)(p))
 #define TYB(p) ((ty_box_t *)(p))
 #define TYC(p) ((ty_circle_t *)(p))
+#define TYPS(p) ((ty_point_t *)(p))
+
+/*
+ * ty's long tests of polygons call this, to stop for a cancel request or a
+ * stack that is too deep. Only an interrupt that can be served stops one.
+ */
+static int geo_poll(void) {
+  return (INTERRUPTS_PENDING_CONDITION() && INTERRUPTS_CAN_BE_PROCESSED()) ||
+         stack_is_too_deep();
+}
 
 /* Routines for points */
 static inline void point_construct(Point *result, float8 x, float8 y);
@@ -102,7 +112,6 @@ static int point_inside(Point *p, int npts, Point *plist);
 /* Routines for line segments */
 static inline void statlseg_construct(LSEG *lseg, Point *pt1, Point *pt2);
 static bool lseg_interpt_lseg(Point *result, LSEG *l1, LSEG *l2);
-static int lseg_crossing(float8 x, float8 y, float8 prev_x, float8 prev_y);
 static bool lseg_contain_point(LSEG *lseg, Point *pt);
 static float8 lseg_closept_point(Point *result, LSEG *lseg, Point *pt);
 static float8 lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg);
@@ -122,9 +131,7 @@ static float8 circle_ar(CIRCLE *circle);
 /* Routines for polygons */
 static void make_bound_box(POLYGON *poly);
 static void poly_to_circle(CIRCLE *result, POLYGON *poly);
-static bool lseg_inside_poly(Point *a, Point *b, POLYGON *poly, int start);
 static bool poly_contain_poly(POLYGON *contains_poly, POLYGON *contained_poly);
-static bool plist_same(int npts, Point *p1, Point *p2);
 static float8 dist_ppoly_internal(Point *pt, POLYGON *poly);
 
 /* Routines for encoding and decoding */
@@ -1047,19 +1054,15 @@ GEO_NO_CANARY Datum line_interpt(PG_FUNCTION_ARGS) {
 
 Datum path_area(PG_FUNCTION_ARGS) {
   PATH *path = PG_GETARG_PATH_P(0);
-  float8 area = 0.0;
-  int i, j;
+  float8 area;
 
   if (!path->closed)
     PG_RETURN_NULL();
 
-  for (i = 0; i < path->npts; i++) {
-    j = (i + 1) % path->npts;
-    area = float8_pl(area, float8_mul(path->p[i].x, path->p[j].y));
-    area = float8_mi(area, float8_mul(path->p[i].y, path->p[j].x));
-  }
+  if (ty_path_area(path->npts, TYPS(path->p), &area))
+    float_raise_ty();
 
-  PG_RETURN_FLOAT8(float8_div(fabs(area), 2.0));
+  PG_RETURN_FLOAT8(area);
 }
 
 Datum path_in(PG_FUNCTION_ARGS) {
@@ -1281,63 +1284,13 @@ Datum path_open(PG_FUNCTION_ARGS) {
 Datum path_inter(PG_FUNCTION_ARGS) {
   PATH *p1 = PG_GETARG_PATH_P(0);
   PATH *p2 = PG_GETARG_PATH_P(1);
-  BOX b1, b2;
-  int i, j;
-  LSEG seg1, seg2;
+  int r;
 
   Assert(p1->npts > 0 && p2->npts > 0);
+  if (ty_path_intersect(p1->npts, TYPS(p1->p), p1->closed, p2->npts, TYPS(p2->p), p2->closed, &r))
+    float_raise_ty();
 
-  b1.high.x = b1.low.x = p1->p[0].x;
-  b1.high.y = b1.low.y = p1->p[0].y;
-  for (i = 1; i < p1->npts; i++) {
-    b1.high.x = float8_max(p1->p[i].x, b1.high.x);
-    b1.high.y = float8_max(p1->p[i].y, b1.high.y);
-    b1.low.x = float8_min(p1->p[i].x, b1.low.x);
-    b1.low.y = float8_min(p1->p[i].y, b1.low.y);
-  }
-  b2.high.x = b2.low.x = p2->p[0].x;
-  b2.high.y = b2.low.y = p2->p[0].y;
-  for (i = 1; i < p2->npts; i++) {
-    b2.high.x = float8_max(p2->p[i].x, b2.high.x);
-    b2.high.y = float8_max(p2->p[i].y, b2.high.y);
-    b2.low.x = float8_min(p2->p[i].x, b2.low.x);
-    b2.low.y = float8_min(p2->p[i].y, b2.low.y);
-  }
-  if (!box_ov(&b1, &b2))
-    PG_RETURN_BOOL(false);
-
-  /* pairwise check lseg intersections */
-  for (i = 0; i < p1->npts; i++) {
-    int iprev;
-
-    if (i > 0)
-      iprev = i - 1;
-    else {
-      if (!p1->closed)
-        continue;
-      iprev = p1->npts - 1; /* include the closure segment */
-    }
-
-    for (j = 0; j < p2->npts; j++) {
-      int jprev;
-
-      if (j > 0)
-        jprev = j - 1;
-      else {
-        if (!p2->closed)
-          continue;
-        jprev = p2->npts - 1; /* include the closure segment */
-      }
-
-      statlseg_construct(&seg1, &p1->p[iprev], &p1->p[i]);
-      statlseg_construct(&seg2, &p2->p[jprev], &p2->p[j]);
-      if (lseg_interpt_lseg(NULL, &seg1, &seg2))
-        PG_RETURN_BOOL(true);
-    }
-  }
-
-  /* if we dropped through, no two segs intersected */
-  PG_RETURN_BOOL(false);
+  PG_RETURN_BOOL(r);
 }
 
 /* path_distance()
@@ -1347,49 +1300,14 @@ Datum path_inter(PG_FUNCTION_ARGS) {
 Datum path_distance(PG_FUNCTION_ARGS) {
   PATH *p1 = PG_GETARG_PATH_P(0);
   PATH *p2 = PG_GETARG_PATH_P(1);
-  float8 min = 0.0; /* initialize to keep compiler quiet */
-  bool have_min = false;
-  float8 tmp;
-  int i, j;
-  LSEG seg1, seg2;
+  float8 r;
+  int hit;
 
-  for (i = 0; i < p1->npts; i++) {
-    int iprev;
-
-    if (i > 0)
-      iprev = i - 1;
-    else {
-      if (!p1->closed)
-        continue;
-      iprev = p1->npts - 1; /* include the closure segment */
-    }
-
-    for (j = 0; j < p2->npts; j++) {
-      int jprev;
-
-      if (j > 0)
-        jprev = j - 1;
-      else {
-        if (!p2->closed)
-          continue;
-        jprev = p2->npts - 1; /* include the closure segment */
-      }
-
-      statlseg_construct(&seg1, &p1->p[iprev], &p1->p[i]);
-      statlseg_construct(&seg2, &p2->p[jprev], &p2->p[j]);
-
-      tmp = lseg_closept_lseg(NULL, &seg1, &seg2);
-      if (!have_min || float8_lt(tmp, min)) {
-        min = tmp;
-        have_min = true;
-      }
-    }
-  }
-
-  if (!have_min)
+  if (ty_path_distance(p1->npts, TYPS(p1->p), p1->closed, p2->npts, TYPS(p2->p), p2->closed, &r, &hit))
+    float_raise_ty();
+  if (!hit)
     PG_RETURN_NULL();
-
-  PG_RETURN_FLOAT8(min);
+  PG_RETURN_FLOAT8(r);
 }
 
 /*----------------------------------------------------------
@@ -1398,24 +1316,12 @@ Datum path_distance(PG_FUNCTION_ARGS) {
 
 Datum path_length(PG_FUNCTION_ARGS) {
   PATH *path = PG_GETARG_PATH_P(0);
-  float8 result = 0.0;
-  int i;
+  float8 r;
 
-  for (i = 0; i < path->npts; i++) {
-    int iprev;
+  if (ty_path_length(path->npts, TYPS(path->p), path->closed, &r))
+    float_raise_ty();
 
-    if (i > 0)
-      iprev = i - 1;
-    else {
-      if (!path->closed)
-        continue;
-      iprev = path->npts - 1; /* include the closure segment */
-    }
-
-    result = float8_pl(result, point_dt(&path->p[iprev], &path->p[i]));
-  }
-
-  PG_RETURN_FLOAT8(result);
+  PG_RETURN_FLOAT8(r);
 }
 
 /***********************************************************************
@@ -1931,38 +1837,12 @@ GEO_NO_CANARY Datum dist_sp(PG_FUNCTION_ARGS) {
 }
 
 static float8 dist_ppath_internal(Point *pt, PATH *path) {
-  float8 result = 0.0; /* keep compiler quiet */
-  bool have_min = false;
-  float8 tmp;
-  int i;
-  LSEG lseg;
+  float8 r;
 
   Assert(path->npts > 0);
-
-  /*
-   * The distance from a point to a path is the smallest distance from the
-   * point to any of its constituent segments.
-   */
-  for (i = 0; i < path->npts; i++) {
-    int iprev;
-
-    if (i > 0)
-      iprev = i - 1;
-    else {
-      if (!path->closed)
-        continue;
-      iprev = path->npts - 1; /* Include the closure segment */
-    }
-
-    statlseg_construct(&lseg, &path->p[iprev], &path->p[i]);
-    tmp = lseg_closept_point(NULL, &lseg, pt);
-    if (!have_min || float8_lt(tmp, result)) {
-      result = tmp;
-      have_min = true;
-    }
-  }
-
-  return result;
+  if (ty_point_path_distance(TYP(pt), path->npts, TYPS(path->p), path->closed, &r))
+    float_raise_ty();
+  return r;
 }
 
 /*
@@ -2064,15 +1944,11 @@ GEO_NO_CANARY Datum dist_bs(PG_FUNCTION_ARGS) {
 }
 
 static float8 dist_cpoly_internal(CIRCLE *circle, POLYGON *poly) {
-  float8 result;
+  float8 r;
 
-  /* calculate distance to center, and subtract radius */
-  result =
-      float8_mi(dist_ppoly_internal(&circle->center, poly), circle->radius);
-  if (result < 0.0)
-    result = 0.0;
-
-  return result;
+  if (ty_circle_polygon_distance(TYC(circle), poly->npts, TYPS(poly->p), &r))
+    float_raise_ty();
+  return r;
 }
 
 /*
@@ -2113,33 +1989,11 @@ Datum dist_polyp(PG_FUNCTION_ARGS) {
 }
 
 static float8 dist_ppoly_internal(Point *pt, POLYGON *poly) {
-  float8 result;
-  float8 d;
-  int i;
-  LSEG seg;
+  float8 r;
 
-  if (point_inside(pt, poly->npts, poly->p) != 0)
-    return 0.0;
-
-  /* initialize distance with segment between first and last points */
-  seg.p[0].x = poly->p[0].x;
-  seg.p[0].y = poly->p[0].y;
-  seg.p[1].x = poly->p[poly->npts - 1].x;
-  seg.p[1].y = poly->p[poly->npts - 1].y;
-  result = lseg_closept_point(NULL, &seg, pt);
-
-  /* check distances for other segments */
-  for (i = 0; i < poly->npts - 1; i++) {
-    seg.p[0].x = poly->p[i].x;
-    seg.p[0].y = poly->p[i].y;
-    seg.p[1].x = poly->p[i + 1].x;
-    seg.p[1].y = poly->p[i + 1].y;
-    d = lseg_closept_point(NULL, &seg, pt);
-    if (float8_lt(d, result))
-      result = d;
-  }
-
-  return result;
+  if (ty_point_polygon_distance(TYP(pt), poly->npts, TYPS(poly->p), &r))
+    float_raise_ty();
+  return r;
 }
 
 /*---------------------------------------------------------------------
@@ -2329,24 +2183,12 @@ GEO_NO_CANARY Datum box_contain_pt(PG_FUNCTION_ARGS) {
 Datum on_ppath(PG_FUNCTION_ARGS) {
   Point *pt = PG_GETARG_POINT_P(0);
   PATH *path = PG_GETARG_PATH_P(1);
-  int i, n;
-  float8 a, b;
+  int r;
 
-  /*-- OPEN --*/
-  if (!path->closed) {
-    n = path->npts - 1;
-    a = point_dt(pt, &path->p[0]);
-    for (i = 0; i < n; i++) {
-      b = point_dt(pt, &path->p[i + 1]);
-      if (FPeq(float8_pl(a, b), point_dt(&path->p[i], &path->p[i + 1])))
-        PG_RETURN_BOOL(true);
-      a = b;
-    }
-    PG_RETURN_BOOL(false);
-  }
+  if (ty_point_on_path(TYP(pt), path->npts, TYPS(path->p), path->closed, &r))
+    float_raise_ty();
 
-  /*-- CLOSED --*/
-  PG_RETURN_BOOL(point_inside(pt, path->npts, path->p) != 0);
+  PG_RETURN_BOOL(r);
 }
 
 /*
@@ -2422,32 +2264,9 @@ GEO_NO_CANARY Datum inter_lb(PG_FUNCTION_ARGS) {
  * make_bound_box - create the bounding box for the input polygon
  *------------------------------------------------------------------*/
 
-/*---------------------------------------------------------------------
- * Make the smallest bounding box for the given polygon.
- *---------------------------------------------------------------------*/
 static void make_bound_box(POLYGON *poly) {
-  int i;
-  float8 x1, y1, x2, y2;
-
   Assert(poly->npts > 0);
-
-  x1 = x2 = poly->p[0].x;
-  y2 = y1 = poly->p[0].y;
-  for (i = 1; i < poly->npts; i++) {
-    if (float8_lt(poly->p[i].x, x1))
-      x1 = poly->p[i].x;
-    if (float8_gt(poly->p[i].x, x2))
-      x2 = poly->p[i].x;
-    if (float8_lt(poly->p[i].y, y1))
-      y1 = poly->p[i].y;
-    if (float8_gt(poly->p[i].y, y2))
-      y2 = poly->p[i].y;
-  }
-
-  poly->boundbox.low.x = x1;
-  poly->boundbox.high.x = x2;
-  poly->boundbox.low.y = y1;
-  poly->boundbox.high.y = y2;
+  ty_polygon_bound_box(poly->npts, TYPS(poly->p), TYB(&poly->boundbox));
 }
 
 /*------------------------------------------------------------------
@@ -2574,11 +2393,9 @@ Datum poly_left(PG_FUNCTION_ARGS) {
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
   bool result;
 
-  result = polya->boundbox.high.x < polyb->boundbox.low.x;
+  result = ty_polygon_left(TYB(&polya->boundbox), TYB(&polyb->boundbox));
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2595,11 +2412,9 @@ Datum poly_overleft(PG_FUNCTION_ARGS) {
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
   bool result;
 
-  result = polya->boundbox.high.x <= polyb->boundbox.high.x;
+  result = ty_polygon_overleft(TYB(&polya->boundbox), TYB(&polyb->boundbox));
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2616,11 +2431,9 @@ Datum poly_right(PG_FUNCTION_ARGS) {
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
   bool result;
 
-  result = polya->boundbox.low.x > polyb->boundbox.high.x;
+  result = ty_polygon_right(TYB(&polya->boundbox), TYB(&polyb->boundbox));
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2637,11 +2450,9 @@ Datum poly_overright(PG_FUNCTION_ARGS) {
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
   bool result;
 
-  result = polya->boundbox.low.x >= polyb->boundbox.low.x;
+  result = ty_polygon_overright(TYB(&polya->boundbox), TYB(&polyb->boundbox));
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2658,11 +2469,9 @@ Datum poly_below(PG_FUNCTION_ARGS) {
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
   bool result;
 
-  result = polya->boundbox.high.y < polyb->boundbox.low.y;
+  result = ty_polygon_below(TYB(&polya->boundbox), TYB(&polyb->boundbox));
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2679,11 +2488,9 @@ Datum poly_overbelow(PG_FUNCTION_ARGS) {
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
   bool result;
 
-  result = polya->boundbox.high.y <= polyb->boundbox.high.y;
+  result = ty_polygon_overbelow(TYB(&polya->boundbox), TYB(&polyb->boundbox));
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2700,11 +2507,9 @@ Datum poly_above(PG_FUNCTION_ARGS) {
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
   bool result;
 
-  result = polya->boundbox.low.y > polyb->boundbox.high.y;
+  result = ty_polygon_above(TYB(&polya->boundbox), TYB(&polyb->boundbox));
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2721,11 +2526,9 @@ Datum poly_overabove(PG_FUNCTION_ARGS) {
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
   bool result;
 
-  result = polya->boundbox.low.y >= polyb->boundbox.low.y;
+  result = ty_polygon_overabove(TYB(&polya->boundbox), TYB(&polyb->boundbox));
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2744,70 +2547,23 @@ Datum poly_same(PG_FUNCTION_ARGS) {
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
   bool result;
 
-  if (polya->npts != polyb->npts)
-    result = false;
-  else
-    result = plist_same(polya->npts, polya->p, polyb->p);
+  result = ty_polygon_same(polya->npts, TYPS(polya->p), polyb->npts, TYPS(polyb->p));
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
   PG_RETURN_BOOL(result);
 }
 
-/*-----------------------------------------------------------------
- * Determine if polygon A overlaps polygon B
- *-----------------------------------------------------------------*/
 static bool poly_overlap_internal(POLYGON *polya, POLYGON *polyb) {
-  bool result;
+  int r;
 
   Assert(polya->npts > 0 && polyb->npts > 0);
-
-  /* Quick check by bounding box */
-  result = box_ov(&polya->boundbox, &polyb->boundbox);
-
-  /*
-   * Brute-force algorithm - try to find intersected edges, if so then
-   * polygons are overlapped else check is one polygon inside other or not
-   * by testing single point of them.
-   */
-  if (result) {
-    int ia, ib;
-    LSEG sa, sb;
-
-    /* Init first of polya's edge with last point */
-    sa.p[0] = polya->p[polya->npts - 1];
-    result = false;
-
-    for (ia = 0; ia < polya->npts && !result; ia++) {
-      /* Second point of polya's edge is a current one */
-      sa.p[1] = polya->p[ia];
-
-      /* Init first of polyb's edge with last point */
-      sb.p[0] = polyb->p[polyb->npts - 1];
-
-      for (ib = 0; ib < polyb->npts && !result; ib++) {
-        sb.p[1] = polyb->p[ib];
-        result = lseg_interpt_lseg(NULL, &sa, &sb);
-        sb.p[0] = sb.p[1];
-      }
-
-      /*
-       * move current endpoint to the first point of next edge
-       */
-      sa.p[0] = sa.p[1];
-    }
-
-    if (!result) {
-      result = (point_inside(polya->p, polyb->npts, polyb->p) ||
-                point_inside(polyb->p, polya->npts, polya->p));
-    }
-  }
-
-  return result;
+  if (ty_polygon_overlap(polya->npts, TYPS(polya->p), TYB(&polya->boundbox), polyb->npts,
+                         TYPS(polyb->p), TYB(&polyb->boundbox), &r))
+    float_raise_ty();
+  return r;
 }
 
 Datum poly_overlap(PG_FUNCTION_ARGS) {
@@ -2817,9 +2573,7 @@ Datum poly_overlap(PG_FUNCTION_ARGS) {
 
   result = poly_overlap_internal(polya, polyb);
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2837,118 +2591,26 @@ Datum poly_overlap(PG_FUNCTION_ARGS) {
  *	  mean that segment is in polygon!
  */
 
-static bool touched_lseg_inside_poly(Point *a, Point *b, LSEG *s, POLYGON *poly,
-                                     int start) {
-  /* point a is on s, b is not */
-  LSEG t;
 
-  t.p[0] = *a;
-  t.p[1] = *b;
 
-  if (point_eq_point(a, s->p)) {
-    if (lseg_contain_point(&t, s->p + 1))
-      return lseg_inside_poly(b, s->p + 1, poly, start);
-  } else if (point_eq_point(a, s->p + 1)) {
-    if (lseg_contain_point(&t, s->p))
-      return lseg_inside_poly(b, s->p, poly, start);
-  } else if (lseg_contain_point(&t, s->p)) {
-    return lseg_inside_poly(b, s->p, poly, start);
-  } else if (lseg_contain_point(&t, s->p + 1)) {
-    return lseg_inside_poly(b, s->p + 1, poly, start);
-  }
-
-  return true; /* may be not true, but that will check later */
-}
-
-/*
- * Returns true if segment (a,b) is in polygon, option
- * start is used for optimization - function checks
- * polygon's edges starting from start
- */
-static bool lseg_inside_poly(Point *a, Point *b, POLYGON *poly, int start) {
-  LSEG s, t;
-  int i;
-  bool res = true, intersection = false;
-
-  /* since this function recurses, it could be driven to stack overflow */
-  check_stack_depth();
-
-  t.p[0] = *a;
-  t.p[1] = *b;
-  s.p[0] = poly->p[(start == 0) ? (poly->npts - 1) : (start - 1)];
-
-  for (i = start; i < poly->npts && res; i++) {
-    Point interpt;
-
-    CHECK_FOR_INTERRUPTS();
-
-    s.p[1] = poly->p[i];
-
-    if (lseg_contain_point(&s, t.p)) {
-      if (lseg_contain_point(&s, t.p + 1))
-        return true; /* t is contained by s */
-
-      /* Y-cross */
-      res = touched_lseg_inside_poly(t.p, t.p + 1, &s, poly, i + 1);
-    } else if (lseg_contain_point(&s, t.p + 1)) {
-      /* Y-cross */
-      res = touched_lseg_inside_poly(t.p + 1, t.p, &s, poly, i + 1);
-    } else if (lseg_interpt_lseg(&interpt, &t, &s)) {
-      /*
-       * segments are X-crossing, go to check each subsegment
-       */
-
-      intersection = true;
-      res = lseg_inside_poly(t.p, &interpt, poly, i + 1);
-      if (res)
-        res = lseg_inside_poly(t.p + 1, &interpt, poly, i + 1);
-    }
-
-    s.p[0] = s.p[1];
-  }
-
-  if (res && !intersection) {
-    Point p;
-
-    /*
-     * if X-intersection wasn't found, then check central point of tested
-     * segment. In opposite case we already check all subsegments
-     */
-    p.x = float8_div(float8_pl(t.p[0].x, t.p[1].x), 2.0);
-    p.y = float8_div(float8_pl(t.p[0].y, t.p[1].y), 2.0);
-
-    res = point_inside(&p, poly->npts, poly->p);
-  }
-
-  return res;
-}
-
-/*
- * Check whether the first polygon contains the second
- */
 static bool poly_contain_poly(POLYGON *contains_poly, POLYGON *contained_poly) {
-  int i;
-  LSEG s;
+  int r;
 
   Assert(contains_poly->npts > 0 && contained_poly->npts > 0);
-
   /*
-   * Quick check to see if contained's bounding box is contained in
-   * contains' bb.
+   * A call that the poll function stopped is run again, after the host has
+   * raised the error if there is one: a cancel, or a stack that is too deep.
    */
-  if (!box_contain_box(&contains_poly->boundbox, &contained_poly->boundbox))
-    return false;
-
-  s.p[0] = contained_poly->p[contained_poly->npts - 1];
-
-  for (i = 0; i < contained_poly->npts; i++) {
-    s.p[1] = contained_poly->p[i];
-    if (!lseg_inside_poly(s.p, s.p + 1, contains_poly, 0))
-      return false;
-    s.p[0] = s.p[1];
+  for (;;) {
+    if (ty_polygon_contain(contains_poly->npts, TYPS(contains_poly->p),
+                           TYB(&contains_poly->boundbox), contained_poly->npts,
+                           TYPS(contained_poly->p), TYB(&contained_poly->boundbox), geo_poll, &r) == 0)
+      return r;
+    if (ty_errnum() != TY_ERR_ABORTED)
+      float_raise_ty();
+    check_stack_depth();
+    CHECK_FOR_INTERRUPTS();
   }
-
-  return true;
 }
 
 Datum poly_contain(PG_FUNCTION_ARGS) {
@@ -2958,9 +2620,7 @@ Datum poly_contain(PG_FUNCTION_ARGS) {
 
   result = poly_contain_poly(polya, polyb);
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -2978,9 +2638,7 @@ Datum poly_contained(PG_FUNCTION_ARGS) {
   /* Just switch the arguments and pass it off to poly_contain */
   result = poly_contain_poly(polyb, polya);
 
-  /*
-   * Avoid leaking memory for toasted inputs ... needed for rtree indexes
-   */
+  /* Avoid leaking memory for toasted inputs: needed for rtree indexes. */
   PG_FREE_IF_COPY(polya, 0);
   PG_FREE_IF_COPY(polyb, 1);
 
@@ -3004,56 +2662,12 @@ Datum pt_contained_poly(PG_FUNCTION_ARGS) {
 Datum poly_distance(PG_FUNCTION_ARGS) {
   POLYGON *polya = PG_GETARG_POLYGON_P(0);
   POLYGON *polyb = PG_GETARG_POLYGON_P(1);
-  float8 min = 0.0; /* initialize to keep compiler quiet */
-  bool have_min = false;
-  float8 tmp;
-  int i, j;
-  LSEG seg1, seg2;
+  float8 r;
 
-  /*
-   * Distance is zero if polygons overlap.  We must check this because the
-   * path distance will not give the right answer if one poly is entirely
-   * within the other.
-   */
-  if (poly_overlap_internal(polya, polyb))
-    PG_RETURN_FLOAT8(0.0);
-
-  /*
-   * When they don't overlap, the distance calculation is identical to that
-   * for closed paths (i.e., we needn't care about the fact that polygons
-   * include their contained areas).  See path_distance().
-   */
-  for (i = 0; i < polya->npts; i++) {
-    int iprev;
-
-    if (i > 0)
-      iprev = i - 1;
-    else
-      iprev = polya->npts - 1;
-
-    for (j = 0; j < polyb->npts; j++) {
-      int jprev;
-
-      if (j > 0)
-        jprev = j - 1;
-      else
-        jprev = polyb->npts - 1;
-
-      statlseg_construct(&seg1, &polya->p[iprev], &polya->p[i]);
-      statlseg_construct(&seg2, &polyb->p[jprev], &polyb->p[j]);
-
-      tmp = lseg_closept_lseg(NULL, &seg1, &seg2);
-      if (!have_min || float8_lt(tmp, min)) {
-        min = tmp;
-        have_min = true;
-      }
-    }
-  }
-
-  if (!have_min)
-    PG_RETURN_NULL();
-
-  PG_RETURN_FLOAT8(min);
+  if (ty_polygon_distance(polya->npts, TYPS(polya->p), TYB(&polya->boundbox), polyb->npts, TYPS(polyb->p),
+                          TYB(&polyb->boundbox), &r))
+    float_raise_ty();
+  PG_RETURN_FLOAT8(r);
 }
 
 /***********************************************************************
@@ -3306,10 +2920,9 @@ Datum path_add(PG_FUNCTION_ARGS) {
 Datum path_add_pt(PG_FUNCTION_ARGS) {
   PATH *path = PG_GETARG_PATH_P_COPY(0);
   Point *point = PG_GETARG_POINT_P(1);
-  int i;
 
-  for (i = 0; i < path->npts; i++)
-    point_add_point(&path->p[i], &path->p[i], point);
+  if (ty_points_add(path->npts, TYPS(path->p), TYP(point)))
+    float_raise_ty();
 
   PG_RETURN_PATH_P(path);
 }
@@ -3317,10 +2930,9 @@ Datum path_add_pt(PG_FUNCTION_ARGS) {
 Datum path_sub_pt(PG_FUNCTION_ARGS) {
   PATH *path = PG_GETARG_PATH_P_COPY(0);
   Point *point = PG_GETARG_POINT_P(1);
-  int i;
 
-  for (i = 0; i < path->npts; i++)
-    point_sub_point(&path->p[i], &path->p[i], point);
+  if (ty_points_sub(path->npts, TYPS(path->p), TYP(point)))
+    float_raise_ty();
 
   PG_RETURN_PATH_P(path);
 }
@@ -3331,10 +2943,9 @@ Datum path_sub_pt(PG_FUNCTION_ARGS) {
 Datum path_mul_pt(PG_FUNCTION_ARGS) {
   PATH *path = PG_GETARG_PATH_P_COPY(0);
   Point *point = PG_GETARG_POINT_P(1);
-  int i;
 
-  for (i = 0; i < path->npts; i++)
-    point_mul_point(&path->p[i], &path->p[i], point);
+  if (ty_points_mul(path->npts, TYPS(path->p), TYP(point)))
+    float_raise_ty();
 
   PG_RETURN_PATH_P(path);
 }
@@ -3342,10 +2953,9 @@ Datum path_mul_pt(PG_FUNCTION_ARGS) {
 Datum path_div_pt(PG_FUNCTION_ARGS) {
   PATH *path = PG_GETARG_PATH_P_COPY(0);
   Point *point = PG_GETARG_POINT_P(1);
-  int i;
 
-  for (i = 0; i < path->npts; i++)
-    point_div_point(&path->p[i], &path->p[i], point);
+  if (ty_points_div(path->npts, TYPS(path->p), TYP(point)))
+    float_raise_ty();
 
   PG_RETURN_PATH_P(path);
 }
@@ -3401,6 +3011,7 @@ Datum poly_center(PG_FUNCTION_ARGS) {
   result = (Point *)palloc(sizeof(Point));
 
   poly_to_circle(&circle, poly);
+
   *result = circle.center;
 
   PG_RETURN_POINT_P(result);
@@ -4083,32 +3694,10 @@ Datum circle_poly(PG_FUNCTION_ARGS) {
   PG_RETURN_POLYGON_P(poly);
 }
 
-/*
- * Convert polygon to circle
- *
- * The result must be preallocated.
- *
- * XXX This algorithm should use weighted means of line segments
- *	rather than straight average values of points - tgl 97/01/21.
- */
 static void poly_to_circle(CIRCLE *result, POLYGON *poly) {
-  int i;
-
   Assert(poly->npts > 0);
-
-  result->center.x = 0;
-  result->center.y = 0;
-  result->radius = 0;
-
-  for (i = 0; i < poly->npts; i++)
-    point_add_point(&result->center, &result->center, &poly->p[i]);
-  result->center.x = float8_div(result->center.x, poly->npts);
-  result->center.y = float8_div(result->center.y, poly->npts);
-
-  for (i = 0; i < poly->npts; i++)
-    result->radius =
-        float8_pl(result->radius, point_dt(&poly->p[i], &result->center));
-  result->radius = float8_div(result->radius, poly->npts);
+  if (ty_polygon_to_circle(poly->npts, TYPS(poly->p), TYC(result)))
+    float_raise_ty();
 }
 
 Datum poly_circle(PG_FUNCTION_ARGS) {
@@ -4139,46 +3728,15 @@ Datum poly_circle(PG_FUNCTION_ARGS) {
  *							   http://www.linuxjournal.com/article/2029
  */
 
-#define POINT_ON_POLYGON INT_MAX
 
 static int point_inside(Point *p, int npts, Point *plist) {
-  float8 x0, y0;
-  float8 prev_x, prev_y;
-  int i = 0;
-  float8 x, y;
-  int cross, total_cross = 0;
+  int r;
 
   Assert(npts > 0);
-
-  /* compute first polygon point relative to single point */
-  x0 = float8_mi(plist[0].x, p->x);
-  y0 = float8_mi(plist[0].y, p->y);
-
-  prev_x = x0;
-  prev_y = y0;
-  /* loop over polygon points and aggregate total_cross */
-  for (i = 1; i < npts; i++) {
-    /* compute next polygon point relative to single point */
-    x = float8_mi(plist[i].x, p->x);
-    y = float8_mi(plist[i].y, p->y);
-
-    /* compute previous to current point crossing */
-    if ((cross = lseg_crossing(x, y, prev_x, prev_y)) == POINT_ON_POLYGON)
-      return 2;
-    total_cross += cross;
-
-    prev_x = x;
-    prev_y = y;
-  }
-
-  /* now do the first point */
-  if ((cross = lseg_crossing(x0, y0, prev_x, prev_y)) == POINT_ON_POLYGON)
-    return 2;
-  total_cross += cross;
-
-  if (total_cross != 0)
-    return 1;
-  return 0;
+  r = ty_point_in_polygon(TYP(p), npts, TYPS(plist));
+  if (r < 0)
+    float_raise_ty();
+  return r;
 }
 
 /* lseg_crossing()
@@ -4190,86 +3748,7 @@ static int point_inside(Point *p, int npts, Point *plist) {
  * can tell is if a point is in a polygon.
  */
 
-static int lseg_crossing(float8 x, float8 y, float8 prev_x, float8 prev_y) {
-  float8 z;
-  int y_sign;
 
-  if (FPzero(y)) { /* y == 0, on X axis */
-    if (FPzero(x)) /* (x,y) is (0,0)? */
-      return POINT_ON_POLYGON;
-    else if (FPgt(x, 0)) { /* x > 0 */
-      if (FPzero(prev_y))  /* y and prev_y are zero */
-        /* prev_x > 0? */
-        return FPgt(prev_x, 0.0) ? 0 : POINT_ON_POLYGON;
-      return FPlt(prev_y, 0.0) ? 1 : -1;
-    } else { /* x < 0, x not on positive X axis */
-      if (FPzero(prev_y))
-        /* prev_x < 0? */
-        return FPlt(prev_x, 0.0) ? 0 : POINT_ON_POLYGON;
-      return 0;
-    }
-  } else { /* y != 0 */
-    /* compute y crossing direction from previous point */
-    y_sign = FPgt(y, 0.0) ? 1 : -1;
-
-    if (FPzero(prev_y))
-      /* previous point was on X axis, so new point is either off or on */
-      return FPlt(prev_x, 0.0) ? 0 : y_sign;
-    else if ((y_sign < 0 && FPlt(prev_y, 0.0)) ||
-             (y_sign > 0 && FPgt(prev_y, 0.0)))
-      /* both above or below X axis */
-      return 0; /* same sign */
-    else {      /* y and prev_y cross X-axis */
-      if (FPge(x, 0.0) && FPgt(prev_x, 0.0))
-        /* both non-negative so cross positive X-axis */
-        return 2 * y_sign;
-      if (FPlt(x, 0.0) && FPle(prev_x, 0.0))
-        /* both non-positive so do not cross positive X-axis */
-        return 0;
-
-      /* x and y cross axes, see URL above point_inside() */
-      z = float8_mi(float8_mul(float8_mi(x, prev_x), y),
-                    float8_mul(float8_mi(y, prev_y), x));
-      if (FPzero(z))
-        return POINT_ON_POLYGON;
-      if ((y_sign < 0 && FPlt(z, 0.0)) || (y_sign > 0 && FPgt(z, 0.0)))
-        return 0;
-      return 2 * y_sign;
-    }
-  }
-}
-
-static bool plist_same(int npts, Point *p1, Point *p2) {
-  int i, ii, j;
-
-  /* find match for first point */
-  for (i = 0; i < npts; i++) {
-    if (point_eq_point(&p2[i], &p1[0])) {
-
-      /* match found? then look forward through remaining points */
-      for (ii = 1, j = i + 1; ii < npts; ii++, j++) {
-        if (j >= npts)
-          j = 0;
-        if (!point_eq_point(&p2[j], &p1[ii]))
-          break;
-      }
-      if (ii == npts)
-        return true;
-
-      /* match not found forwards? then look backwards */
-      for (ii = 1, j = i - 1; ii < npts; ii++, j--) {
-        if (j < 0)
-          j = (npts - 1);
-        if (!point_eq_point(&p2[j], &p1[ii]))
-          break;
-      }
-      if (ii == npts)
-        return true;
-    }
-  }
-
-  return false;
-}
 
 /*-------------------------------------------------------------------------
  * Determine the hypotenuse.

@@ -1980,6 +1980,10 @@ struct geo_arg_t {
   ty_lseg_t s;
   ty_box_t b;
   ty_circle_t c;
+  std::vector<ty_point_t> pts; /* the points of a path or a polygon */
+  int closed = 0;              /* a path: closed, or open */
+  ty_box_t pbox;               /* a polygon: the box that bounds it */
+  int n = 0;                   /* a count of points */
 };
 
 struct geo_res_t {
@@ -2001,6 +2005,16 @@ std::string geo_point_text(const ty_point_t &p) {
 
 std::string geo_circle_text(const ty_circle_t &c) {
   return "<" + geo_point_text(c.center) + "," + geo_num(c.radius) + ">";
+}
+
+/* A path or a polygon: [(x,y),...] if it is open, else ((x,y),...). */
+std::string geo_points_text(const std::vector<ty_point_t> &pts, int closed) {
+  std::string t = closed ? "(" : "[";
+
+  for (size_t i = 0; i < pts.size(); i++) {
+    t += (i ? "," : "") + geo_point_text(pts[i]);
+  }
+  return t + (closed ? ")" : "]");
 }
 
 std::string geo_box_text(const ty_box_t &b) {
@@ -2056,6 +2070,24 @@ void geo_read(char kind, const std::string &text, geo_arg_t &a) {
     geo_read_point(c, a.s.p[0]);
     c++;
     geo_read_point(c, a.s.p[1]);
+  } else if (kind == 'N') {
+    a.n = atoi(c);
+  } else if (kind == 'A' || kind == 'G') {
+    /* "[(x,y),...]" is an open path, "((x,y),...)" a closed one, a polygon */
+    a.closed = *c != '[';
+    c++;
+    while (*c == '(') {
+      ty_point_t pt;
+
+      geo_read_point(c, pt);
+      a.pts.push_back(pt);
+      if (*c == ',') {
+        c++;
+      }
+    }
+    if (kind == 'G') {
+      ty_polygon_bound_box((int)a.pts.size(), a.pts.data(), &a.pbox);
+    }
   } else if (kind == 'C') {
     c++;
     geo_read_point(c, a.c.center);
@@ -2118,6 +2150,18 @@ struct geo_op_t {
      if (rc == 0) {                                                         \
        r.null = !hit;                                                       \
        r.text = geo_point_text(pt);                                         \
+     }                                                                      \
+     return rc;                                                             \
+   }}
+
+/* A path result: the points of the first argument, changed by CALL on v. */
+#define GEO_PATH(NAME, K, CALL)                                             \
+  {NAME, K, [](const geo_arg_t &x, const geo_arg_t &y, geo_res_t &r) -> int { \
+     (void)y;                                                               \
+     std::vector<ty_point_t> v = x.pts;                                     \
+     int rc = CALL;                                                         \
+     if (rc == 0) {                                                         \
+       r.text = geo_points_text(v, x.closed);                               \
      }                                                                      \
      return rc;                                                             \
    }}
@@ -2214,6 +2258,123 @@ const geo_op_t geo_ops[] = {
     GEO_BOOL("inter_sl", "SL", ty_lseg_interpt_line(&x.s, &y.l, nullptr, &v)),
     GEO_BOOL("inter_sb", "SB", ty_box_interpt_lseg(&y.b, &x.s, nullptr, &v)),
     GEO_BOOL("inter_lb", "LB", ty_box_interpt_line(&y.b, &x.l, &v)),
+    {"path_area", "A",
+     [](const geo_arg_t &x, const geo_arg_t &, geo_res_t &r) -> int {
+       double d;
+
+       if (!x.closed) {
+         r.null = true;
+         return 0;
+       }
+       int rc = ty_path_area((int)x.pts.size(), x.pts.data(), &d);
+
+       if (rc == 0) {
+         r.text = geo_num(d);
+       }
+       return rc;
+     }},
+    GEO_BOOL("path_inter", "AA",
+             ty_path_intersect((int)x.pts.size(), x.pts.data(), x.closed,
+                               (int)y.pts.size(), y.pts.data(), y.closed, &v)),
+    {"path_distance", "AA",
+     [](const geo_arg_t &x, const geo_arg_t &y, geo_res_t &r) -> int {
+       double d;
+       int hit;
+       int rc = ty_path_distance((int)x.pts.size(), x.pts.data(), x.closed,
+                                 (int)y.pts.size(), y.pts.data(), y.closed, &d,
+                                 &hit);
+
+       if (rc == 0) {
+         r.null = !hit;
+         r.text = geo_num(d);
+       }
+       return rc;
+     }},
+    GEO_FLOAT("path_length", "A",
+              ty_path_length((int)x.pts.size(), x.pts.data(), x.closed, &d)),
+    GEO_PATH("path_add_pt", "AP", ty_points_add((int)v.size(), v.data(), &y.p)),
+    GEO_PATH("path_sub_pt", "AP", ty_points_sub((int)v.size(), v.data(), &y.p)),
+    GEO_PATH("path_mul_pt", "AP", ty_points_mul((int)v.size(), v.data(), &y.p)),
+    GEO_PATH("path_div_pt", "AP", ty_points_div((int)v.size(), v.data(), &y.p)),
+    GEO_BOOL(
+        "on_ppath", "PA",
+        ty_point_on_path(&x.p, (int)y.pts.size(), y.pts.data(), y.closed, &v)),
+    GEO_FLOAT("dist_ppath", "PA",
+              ty_point_path_distance(&x.p, (int)y.pts.size(), y.pts.data(),
+                                     y.closed, &d)),
+    GEO_FLOAT("dist_pathp", "AP",
+              ty_point_path_distance(&y.p, (int)x.pts.size(), x.pts.data(),
+                                     x.closed, &d)),
+    GEO_PURE("poly_left", "GG", ty_polygon_left(&x.pbox, &y.pbox)),
+    GEO_PURE("poly_overleft", "GG", ty_polygon_overleft(&x.pbox, &y.pbox)),
+    GEO_PURE("poly_right", "GG", ty_polygon_right(&x.pbox, &y.pbox)),
+    GEO_PURE("poly_overright", "GG", ty_polygon_overright(&x.pbox, &y.pbox)),
+    GEO_PURE("poly_below", "GG", ty_polygon_below(&x.pbox, &y.pbox)),
+    GEO_PURE("poly_overbelow", "GG", ty_polygon_overbelow(&x.pbox, &y.pbox)),
+    GEO_PURE("poly_above", "GG", ty_polygon_above(&x.pbox, &y.pbox)),
+    GEO_PURE("poly_overabove", "GG", ty_polygon_overabove(&x.pbox, &y.pbox)),
+    GEO_PURE("poly_same", "GG",
+             ty_polygon_same((int)x.pts.size(), x.pts.data(), (int)y.pts.size(),
+                             y.pts.data())),
+    GEO_BOOL("poly_overlap", "GG",
+             ty_polygon_overlap((int)x.pts.size(), x.pts.data(), &x.pbox,
+                                (int)y.pts.size(), y.pts.data(), &y.pbox, &v)),
+    GEO_BOOL("poly_contain", "GG",
+             ty_polygon_contain((int)x.pts.size(), x.pts.data(), &x.pbox,
+                                (int)y.pts.size(), y.pts.data(), &y.pbox,
+                                nullptr, &v)),
+    GEO_BOOL("poly_contained", "GG",
+             ty_polygon_contain((int)y.pts.size(), y.pts.data(), &y.pbox,
+                                (int)x.pts.size(), x.pts.data(), &x.pbox,
+                                nullptr, &v)),
+    GEO_BOOL("poly_contain_pt", "GP",
+             (v = ty_point_in_polygon(&y.p, (int)x.pts.size(), x.pts.data())) <
+                     0
+                 ? -1
+                 : (v = v != 0, 0)),
+    GEO_BOOL("pt_contained_poly", "PG",
+             (v = ty_point_in_polygon(&x.p, (int)y.pts.size(), y.pts.data())) <
+                     0
+                 ? -1
+                 : (v = v != 0, 0)),
+    GEO_FLOAT("poly_distance", "GG",
+              ty_polygon_distance((int)x.pts.size(), x.pts.data(), &x.pbox,
+                                  (int)y.pts.size(), y.pts.data(), &y.pbox,
+                                  &d)),
+    {"poly_center", "G",
+     [](const geo_arg_t &x, const geo_arg_t &, geo_res_t &r) -> int {
+       ty_circle_t c;
+       int rc = ty_polygon_to_circle((int)x.pts.size(), x.pts.data(), &c);
+
+       if (rc == 0) {
+         r.text = geo_point_text(c.center);
+       }
+       return rc;
+     }},
+    GEO_CIRCLE("poly_circle", "G",
+               ty_polygon_to_circle((int)x.pts.size(), x.pts.data(), &c)),
+    GEO_FLOAT(
+        "dist_ppoly", "PG",
+        ty_point_polygon_distance(&x.p, (int)y.pts.size(), y.pts.data(), &d)),
+    GEO_FLOAT(
+        "dist_polyp", "GP",
+        ty_point_polygon_distance(&y.p, (int)x.pts.size(), x.pts.data(), &d)),
+    GEO_FLOAT(
+        "dist_cpoly", "CG",
+        ty_circle_polygon_distance(&x.c, (int)y.pts.size(), y.pts.data(), &d)),
+    GEO_FLOAT(
+        "dist_polyc", "GC",
+        ty_circle_polygon_distance(&y.c, (int)x.pts.size(), x.pts.data(), &d)),
+    {"circle_poly", "NC",
+     [](const geo_arg_t &x, const geo_arg_t &y, geo_res_t &r) -> int {
+       std::vector<ty_point_t> v((size_t)x.n);
+       int rc = ty_circle_to_polygon_points(x.n, &y.c, v.data());
+
+       if (rc == 0) {
+         r.text = geo_points_text(v, 1);
+       }
+       return rc;
+     }},
     GEO_PURE("circle_same", "CC", ty_circle_same(&x.c, &y.c)),
     GEO_BOOL("circle_overlap", "CC", ty_circle_overlap(&x.c, &y.c, &v)),
     GEO_BOOL("circle_overleft", "CC", ty_circle_overleft(&x.c, &y.c, &v)),

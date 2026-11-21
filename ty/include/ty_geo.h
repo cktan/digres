@@ -174,7 +174,25 @@ static inline TY_GEO_INLINE int ty_point_invslope(const ty_point_t* a, const ty_
 /* Sum, difference, product and quotient of two points, as complex numbers. */
 
 /* The box with these two corners, the high one first. */
-void ty_box_construct(ty_box_t* r, const ty_point_t* a, const ty_point_t* b);
+static inline void ty_box_construct(ty_box_t* r, const ty_point_t* a, const ty_point_t* b) {
+    ty_box_t t;
+
+    if (ty_float64_gt(a->x, b->x)) {
+        t.high.x = a->x;
+        t.low.x = b->x;
+    } else {
+        t.high.x = b->x;
+        t.low.x = a->x;
+    }
+    if (ty_float64_gt(a->y, b->y)) {
+        t.high.y = a->y;
+        t.low.y = b->y;
+    } else {
+        t.high.y = b->y;
+        t.low.y = a->y;
+    }
+    *r = t;
+}
 
 /* The box with its corners in order (the text and recv of a box). */
 void ty_box_normalize(ty_box_t* r);
@@ -717,5 +735,102 @@ static inline int ty_box_to_circle(const ty_box_t* b, ty_circle_t* r) {
     *r = t;
     return 0;
 }
+
+/*
+ * path and polygon: an array of points, with how many. A path is open or
+ * closed (a closed path has a segment from its last point to its first); a
+ * polygon is closed, and has the box that bounds it. A call that can fail
+ * returns 0, or -1 with the thread's error set.
+ */
+
+/* The polygon's position against another's, by the boxes that bound them. */
+static inline int ty_polygon_left(const ty_box_t* a, const ty_box_t* b) {
+    return a->high.x < b->low.x;
+}
+static inline int ty_polygon_overleft(const ty_box_t* a, const ty_box_t* b) {
+    return a->high.x <= b->high.x;
+}
+static inline int ty_polygon_right(const ty_box_t* a, const ty_box_t* b) {
+    return a->low.x > b->high.x;
+}
+static inline int ty_polygon_overright(const ty_box_t* a, const ty_box_t* b) {
+    return a->low.x >= b->low.x;
+}
+static inline int ty_polygon_below(const ty_box_t* a, const ty_box_t* b) {
+    return a->high.y < b->low.y;
+}
+static inline int ty_polygon_overbelow(const ty_box_t* a, const ty_box_t* b) {
+    return a->high.y <= b->high.y;
+}
+static inline int ty_polygon_above(const ty_box_t* a, const ty_box_t* b) {
+    return a->low.y > b->high.y;
+}
+static inline int ty_polygon_overabove(const ty_box_t* a, const ty_box_t* b) {
+    return a->low.y >= b->low.y;
+}
+
+/* The box that bounds the points (npts above 0). */
+void ty_polygon_bound_box(int npts, const ty_point_t* p, ty_box_t* r);
+
+/* The same points, from any of them, in either direction. */
+int ty_polygon_same(int na, const ty_point_t* pa, int nb, const ty_point_t* pb);
+
+/*
+ * The point is in the polygon: 1, outside: 0, on its border: 2. A negative
+ * return is an error.
+ */
+int ty_point_in_polygon(const ty_point_t* pt, int npts, const ty_point_t* p);
+
+/* Two polygons overlap. */
+int ty_polygon_overlap(int na, const ty_point_t* pa, const ty_box_t* ba, int nb,
+                       const ty_point_t* pb, const ty_box_t* bb, int* r);
+
+/*
+ * a contains b. The test recurses and takes long: it calls poll, which may
+ * be NULL, and stops with TY_ERR_ABORTED if it returns nonzero.
+ */
+int ty_polygon_contain(int na, const ty_point_t* pa, const ty_box_t* ba, int nb,
+                       const ty_point_t* pb, const ty_box_t* bb, ty_poll_fn poll, int* r);
+
+/* The distance of two polygons: 0 if they overlap. */
+int ty_polygon_distance(int na, const ty_point_t* pa, const ty_box_t* ba, int nb,
+                        const ty_point_t* pb, const ty_box_t* bb, double* r);
+
+/* The distance of a point, and of a circle, from a polygon: 0 in it. */
+int ty_point_polygon_distance(const ty_point_t* pt, int npts, const ty_point_t* p, double* r);
+int ty_circle_polygon_distance(const ty_circle_t* c, int npts, const ty_point_t* p, double* r);
+
+/* The circle of a polygon: the mean of its points, and their mean distance from it. */
+int ty_polygon_to_circle(int npts, const ty_point_t* p, ty_circle_t* r);
+
+/* The npts points of a polygon around a circle (the radius is not 0, npts is 2 or more). */
+int ty_circle_to_polygon_points(int npts, const ty_circle_t* c, ty_point_t* out);
+
+/* The area of a closed path. */
+int ty_path_area(int npts, const ty_point_t* p, double* r);
+
+/* The length of a path, with the closing segment of a closed one. */
+int ty_path_length(int npts, const ty_point_t* p, int closed, double* r);
+
+/* Two paths meet. */
+int ty_path_intersect(int na, const ty_point_t* pa, int closeda, int nb, const ty_point_t* pb,
+                      int closedb, int* r);
+
+/* The distance of two paths: hit is 0 if there is no segment to measure. */
+int ty_path_distance(int na, const ty_point_t* pa, int closeda, int nb, const ty_point_t* pb,
+                     int closedb, double* r, int* hit);
+
+/* The distance of a point from a path. */
+int ty_point_path_distance(const ty_point_t* pt, int npts, const ty_point_t* p, int closed,
+                           double* r);
+
+/* The point is on the path (inside it, if it is closed). */
+int ty_point_on_path(const ty_point_t* pt, int npts, const ty_point_t* p, int closed, int* r);
+
+/* Each point of the array, in place, plus, minus, times or over the point. */
+int ty_points_add(int npts, ty_point_t* p, const ty_point_t* pt);
+int ty_points_sub(int npts, ty_point_t* p, const ty_point_t* pt);
+int ty_points_mul(int npts, ty_point_t* p, const ty_point_t* pt);
+int ty_points_div(int npts, ty_point_t* p, const ty_point_t* pt);
 
 #endif

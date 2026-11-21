@@ -58,6 +58,15 @@ int ty_err_invalid(const char* msg);
 /* A branch that is taken on the rare failure. */
 #define TY_UNLIKELY(x) __builtin_expect((x) != 0, 0)
 
+/*
+ * A poll function: a long operation that takes one calls it now and then. It
+ * returns nonzero to ask the operation to stop, which then returns -1 with
+ * TY_ERR_ABORTED. The host uses it to see a cancel request or a stack that is
+ * too deep, and raises the error itself after ty has returned. It may not
+ * throw or longjmp. A NULL poll function is never called.
+ */
+typedef int (*ty_poll_fn)(void);
+
 /* ---- memory ---- */
 
 /*

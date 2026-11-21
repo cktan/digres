@@ -57,13 +57,13 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty_money.h` | the money operations |
 | `include/ty_interval.h` | the arithmetic of interval |
 | `include/ty_datetime.h` | the calendar, date, time and timestamp arithmetic |
-| `include/ty_geo.h` | point, box, line, lseg and circle, and the fuzzy float compares |
+| `include/ty_geo.h` | the geometric types, and the fuzzy float compares |
 | `include/ty_error.h` | the error codes |
 | `src/` | the library |
 | `test/` | the unit tests, in doctest, and the vectors |
 | `test/gen_vectors.py` | a reference of plain Python integers that writes `test/vectors.txt` |
 | `test/vectors.txt` | about 198,000 vectors of the operations of every type, with the result or the error kind |
-| `test/known.txt` | about 34,200 texts, with what the old digres printed for them |
+| `test/known.txt` | about 41,300 texts, with what the old digres printed for them |
 
 `ty/` follows [`../sm/CODE.md`](../sm/CODE.md).
 
