@@ -710,6 +710,10 @@ An epoch of a timestamp at the end of the range is exact now: the
 old numeric division rounded it to three digits. The infinities
 and the numeric are still in digres.
 
+`ty_interval_trunc` is `date_trunc` of an interval: the fields
+are cut at the unit, as for a timestamp. A week is not a unit of
+an interval.
+
 The tests: the vectors, from Python integers and a second
 formulation of the Julian day (the Wikipedia formula and
 Richards' inverse, not PostgreSQL's), about 3,500;

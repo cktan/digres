@@ -682,6 +682,33 @@ int ty_timestamp_bin(const ty_interval_t *stride, int64_t timestamp,
 }
 
 /*
+ * The interval of broken-down fields (itm2interval of PostgreSQL): the months
+ * of the years must fit in 32 bits, and the time in 64.
+ */
+static int itm_to_interval(int64_t year, int64_t mon, int64_t mday,
+                           int64_t hour, int64_t min, int64_t sec, int64_t usec,
+                           ty_interval_t *result) {
+  int64_t months = year * 12 + mon, time;
+
+  if (months > INT32_MAX || months < INT32_MIN) {
+    return iv_range();
+  }
+  if (__builtin_mul_overflow(hour, TY_USECS_PER_HOUR, &time) ||
+      __builtin_add_overflow(time, min * TY_USECS_PER_MINUTE, &time) ||
+      __builtin_add_overflow(time, sec * TY_USECS_PER_SEC, &time) ||
+      __builtin_add_overflow(time, usec, &time)) {
+    return iv_range();
+  }
+  result->month = (int32_t)months;
+  result->day = (int32_t)mday;
+  result->time = time;
+  if (ty_interval_not_finite(result)) {
+    return iv_range();
+  }
+  return 0;
+}
+
+/*
  * age: the fields of the two timestamps subtracted, then the borrows made
  * from the smallest to the largest; the larger is first, and the sign put
  * back at the end.
@@ -749,25 +776,7 @@ int ty_timestamp_age(int64_t dt1, int64_t dt2, ty_interval_t *result) {
     mon = -mon;
     year = -year;
   }
-  /* itm2interval: the months of the years must fit, and the time too */
-  int64_t months = (int64_t)year * 12 + mon, time;
-
-  if (months > INT32_MAX || months < INT32_MIN) {
-    return iv_range();
-  }
-  if (__builtin_mul_overflow(hour, TY_USECS_PER_HOUR, &time) ||
-      __builtin_add_overflow(time, (int64_t)min * TY_USECS_PER_MINUTE, &time) ||
-      __builtin_add_overflow(time, (int64_t)sec * TY_USECS_PER_SEC, &time) ||
-      __builtin_add_overflow(time, usec, &time)) {
-    return iv_range();
-  }
-  result->month = (int32_t)months;
-  result->day = mday;
-  result->time = time;
-  if (ty_interval_not_finite(result)) {
-    return iv_range();
-  }
-  return 0;
+  return itm_to_interval(year, mon, mday, hour, min, sec, usec, result);
 }
 
 /* The hash of a timetz: the time and the zone hashed, folded by xor. */
@@ -808,4 +817,106 @@ int ty_timetz_in_range(const ty_timetz_t *val, const ty_timetz_t *base,
 
   *r = less ? c <= 0 : c >= 0;
   return 0;
+}
+
+/*
+ * date_trunc of an interval: the fields cut at the unit by falling through
+ * the cases from the largest. A week is no unit of an interval, since months
+ * usually have fractional weeks.
+ */
+int ty_interval_trunc(int code, const ty_interval_t *iv, ty_interval_t *out) {
+  enum {
+    WEEK = 22,
+    MONTH = 23,
+    QUARTER = 24,
+    YEAR = 25,
+    DECADE = 26,
+    CENTURY = 27,
+    MILLENNIUM = 28,
+    MILLISEC = 29,
+    MICROSEC = 30,
+    SECOND = 18,
+    MINUTE = 19,
+    HOUR = 20,
+    DAY = 21
+  };
+  ty_itm_t tm;
+
+  if (ty_interval_not_finite(iv)) {
+    switch (code) {
+    case MILLENNIUM:
+    case CENTURY:
+    case DECADE:
+    case YEAR:
+    case QUARTER:
+    case MONTH:
+    case DAY:
+    case HOUR:
+    case MINUTE:
+    case SECOND:
+    case MILLISEC:
+    case MICROSEC:
+      *out = *iv;
+      return 0;
+    default:
+      return ty_internal::set_error(TY_ERR_INVALID, "unit not supported");
+    }
+  }
+  ty_interval_to_itm(iv, &tm);
+  int64_t year = tm.year, mon = tm.mon, mday = tm.mday, hour = tm.hour,
+          min = tm.min, sec = tm.sec, usec = tm.usec;
+
+  switch (code) {
+  case MILLENNIUM:
+  case CENTURY:
+  case DECADE:
+  case YEAR:
+  case QUARTER:
+  case MONTH:
+  case DAY:
+  case HOUR:
+  case MINUTE:
+  case SECOND:
+    /* each case cuts its field, and goes on to the smaller ones */
+    if (code == MILLENNIUM) {
+      year = (year / 1000) * 1000;
+    }
+    if (code == MILLENNIUM || code == CENTURY) {
+      year = (year / 100) * 100;
+    }
+    if (code == MILLENNIUM || code == CENTURY || code == DECADE) {
+      year = (year / 10) * 10;
+    }
+    if (code == MILLENNIUM || code == CENTURY || code == DECADE ||
+        code == YEAR) {
+      mon = 0;
+    }
+    if (code == MILLENNIUM || code == CENTURY || code == DECADE ||
+        code == YEAR || code == QUARTER) {
+      mon = 3 * (mon / 3);
+    }
+    if (code == MILLENNIUM || code == CENTURY || code == DECADE ||
+        code == YEAR || code == QUARTER || code == MONTH) {
+      mday = 0;
+    }
+    if (code != HOUR && code != MINUTE && code != SECOND) {
+      hour = 0;
+    }
+    if (code != MINUTE && code != SECOND) {
+      min = 0;
+    }
+    if (code != SECOND) {
+      sec = 0;
+    }
+    usec = 0;
+    break;
+  case MILLISEC:
+    usec = (usec / 1000) * 1000;
+    break;
+  case MICROSEC:
+    break;
+  default:
+    return ty_internal::set_error(TY_ERR_INVALID, "unit not supported");
+  }
+  return itm_to_interval(year, mon, mday, hour, min, sec, usec, out);
 }

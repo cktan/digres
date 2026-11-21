@@ -910,7 +910,7 @@ bool run_interval(const vec_t &v) {
   const std::string name = op.substr(3);
 
   /* the text of an interval is in known.txt, run by run_known */
-  if (name == "out" || name == "parse") {
+  if (name == "out" || name == "parse" || name == "trunc") {
     return false;
   }
   if (name == "make") {
@@ -1740,7 +1740,30 @@ bool run_ts_known(const vec_t &v) {
   bool unknown = false;
 
   INFO(v.line);
-  if (op == "ts.trunc") {
+  if (op == "iv.trunc") {
+    std::vector<uint8_t> ub = bytes_of(v.args[0]);
+    std::string unit(reinterpret_cast<const char *>(ub.data()), ub.size());
+    int code = 0;
+    long long m, d, t;
+
+    for (char &c : unit) {
+      c = (char)tolower((unsigned char)c);
+    }
+    if (v.args[1] == "inf" || v.args[1] == "-inf") {
+      m = v.args[1] == "inf" ? INT32_MAX : INT32_MIN;
+      d = m;
+      t = v.args[1] == "inf" ? INT64_MAX : INT64_MIN;
+    } else {
+      REQUIRE(3 == sscanf(v.args[1].c_str(), "%lld:%lld:%lld", &m, &d, &t));
+    }
+    ty_interval_t in = {t, (int32_t)d, (int32_t)m};
+
+    if (!ty_datetime_unit(unit.c_str(), &code)) {
+      unknown = true;
+    } else {
+      rc = ty_interval_trunc(code, &in, &iv);
+    }
+  } else if (op == "ts.trunc") {
     std::vector<uint8_t> ub = bytes_of(v.args[0]);
     std::string unit(reinterpret_cast<const char *>(ub.data()), ub.size());
     int code = 0;
@@ -1775,7 +1798,8 @@ bool run_ts_known(const vec_t &v) {
   }
   REQUIRE(!unknown);
   REQUIRE(0 == rc);
-  std::string text = op == "ts.age" ? iv_text(iv) : ts_text(r);
+  std::string text =
+      (op == "ts.age" || op == "iv.trunc") ? iv_text(iv) : ts_text(r);
 
   CHECK(v.res[0] ==
         token_of(reinterpret_cast<const uint8_t *>(text.data()), text.size()));
@@ -1920,7 +1944,8 @@ bool run_known(const vec_t &v) {
     }
     return true;
   }
-  if (op == "ts.trunc" || op == "ts.age" || op == "ts.bin") {
+  if (op == "ts.trunc" || op == "ts.age" || op == "ts.bin" ||
+      op == "iv.trunc") {
     return run_ts_known(v);
   }
   if (op.compare(0, 5, "part.") == 0) {

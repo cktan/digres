@@ -1,0 +1,164 @@
+-- Verify date_trunc of interval, which ty does (ty/DESIGN.md section 18).
+-- (Errors are server.sh's: a run stops at its first, so the units that are
+-- errors, week, dow, epoch and foo, are server.sh's too.)
+SELECT * FROM (
+SELECT 'microseconds' AS u, i::text AS v, date_trunc('microseconds', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'milliseconds' AS u, i::text AS v, date_trunc('milliseconds', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'second' AS u, i::text AS v, date_trunc('second', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'minute' AS u, i::text AS v, date_trunc('minute', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'hour' AS u, i::text AS v, date_trunc('hour', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'day' AS u, i::text AS v, date_trunc('day', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'month' AS u, i::text AS v, date_trunc('month', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'quarter' AS u, i::text AS v, date_trunc('quarter', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'year' AS u, i::text AS v, date_trunc('year', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'decade' AS u, i::text AS v, date_trunc('decade', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'century' AS u, i::text AS v, date_trunc('century', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'millennium' AS u, i::text AS v, date_trunc('millennium', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+UNION ALL
+SELECT 'YEAR' AS u, i::text AS v, date_trunc('YEAR', i)::text AS t FROM (VALUES ('1 year 14 months 3 days 04:05:06.789012'::interval), ('-1 year -14 months -3 days -04:05:06.789012'::interval), ('0'::interval), ('25 years 7 months 400 days 99999 hours'::interval), ('1500 years 5 months'::interval), ('-1500 years -5 months'::interval), ('0.0000005 seconds'::interval), ('3 days 23:59:59.9999995'::interval), ('infinity'::interval), ('-infinity'::interval)) b(i)
+) x ORDER BY 1, 2, 3;
+      u       |                     v                     |                     t                     
+--------------+-------------------------------------------+-------------------------------------------
+ YEAR         | -1500 years -5 mons                       | -1500 years
+ YEAR         | -2 years -2 mons -3 days -04:05:06.789012 | -2 years
+ YEAR         | -infinity                                 | -infinity
+ YEAR         | 00:00:00                                  | 00:00:00
+ YEAR         | 00:00:00                                  | 00:00:00
+ YEAR         | 1500 years 5 mons                         | 1500 years
+ YEAR         | 2 years 2 mons 3 days 04:05:06.789012     | 2 years
+ YEAR         | 25 years 7 mons 400 days 99999:00:00      | 25 years
+ YEAR         | 3 days 24:00:00                           | 00:00:00
+ YEAR         | infinity                                  | infinity
+ century      | -1500 years -5 mons                       | -1500 years
+ century      | -2 years -2 mons -3 days -04:05:06.789012 | 00:00:00
+ century      | -infinity                                 | -infinity
+ century      | 00:00:00                                  | 00:00:00
+ century      | 00:00:00                                  | 00:00:00
+ century      | 1500 years 5 mons                         | 1500 years
+ century      | 2 years 2 mons 3 days 04:05:06.789012     | 00:00:00
+ century      | 25 years 7 mons 400 days 99999:00:00      | 00:00:00
+ century      | 3 days 24:00:00                           | 00:00:00
+ century      | infinity                                  | infinity
+ day          | -1500 years -5 mons                       | -1500 years -5 mons
+ day          | -2 years -2 mons -3 days -04:05:06.789012 | -2 years -2 mons -3 days
+ day          | -infinity                                 | -infinity
+ day          | 00:00:00                                  | 00:00:00
+ day          | 00:00:00                                  | 00:00:00
+ day          | 1500 years 5 mons                         | 1500 years 5 mons
+ day          | 2 years 2 mons 3 days 04:05:06.789012     | 2 years 2 mons 3 days
+ day          | 25 years 7 mons 400 days 99999:00:00      | 25 years 7 mons 400 days
+ day          | 3 days 24:00:00                           | 3 days
+ day          | infinity                                  | infinity
+ decade       | -1500 years -5 mons                       | -1500 years
+ decade       | -2 years -2 mons -3 days -04:05:06.789012 | 00:00:00
+ decade       | -infinity                                 | -infinity
+ decade       | 00:00:00                                  | 00:00:00
+ decade       | 00:00:00                                  | 00:00:00
+ decade       | 1500 years 5 mons                         | 1500 years
+ decade       | 2 years 2 mons 3 days 04:05:06.789012     | 00:00:00
+ decade       | 25 years 7 mons 400 days 99999:00:00      | 20 years
+ decade       | 3 days 24:00:00                           | 00:00:00
+ decade       | infinity                                  | infinity
+ hour         | -1500 years -5 mons                       | -1500 years -5 mons
+ hour         | -2 years -2 mons -3 days -04:05:06.789012 | -2 years -2 mons -3 days -04:00:00
+ hour         | -infinity                                 | -infinity
+ hour         | 00:00:00                                  | 00:00:00
+ hour         | 00:00:00                                  | 00:00:00
+ hour         | 1500 years 5 mons                         | 1500 years 5 mons
+ hour         | 2 years 2 mons 3 days 04:05:06.789012     | 2 years 2 mons 3 days 04:00:00
+ hour         | 25 years 7 mons 400 days 99999:00:00      | 25 years 7 mons 400 days 99999:00:00
+ hour         | 3 days 24:00:00                           | 3 days 24:00:00
+ hour         | infinity                                  | infinity
+ microseconds | -1500 years -5 mons                       | -1500 years -5 mons
+ microseconds | -2 years -2 mons -3 days -04:05:06.789012 | -2 years -2 mons -3 days -04:05:06.789012
+ microseconds | -infinity                                 | -infinity
+ microseconds | 00:00:00                                  | 00:00:00
+ microseconds | 00:00:00                                  | 00:00:00
+ microseconds | 1500 years 5 mons                         | 1500 years 5 mons
+ microseconds | 2 years 2 mons 3 days 04:05:06.789012     | 2 years 2 mons 3 days 04:05:06.789012
+ microseconds | 25 years 7 mons 400 days 99999:00:00      | 25 years 7 mons 400 days 99999:00:00
+ microseconds | 3 days 24:00:00                           | 3 days 24:00:00
+ microseconds | infinity                                  | infinity
+ millennium   | -1500 years -5 mons                       | -1000 years
+ millennium   | -2 years -2 mons -3 days -04:05:06.789012 | 00:00:00
+ millennium   | -infinity                                 | -infinity
+ millennium   | 00:00:00                                  | 00:00:00
+ millennium   | 00:00:00                                  | 00:00:00
+ millennium   | 1500 years 5 mons                         | 1000 years
+ millennium   | 2 years 2 mons 3 days 04:05:06.789012     | 00:00:00
+ millennium   | 25 years 7 mons 400 days 99999:00:00      | 00:00:00
+ millennium   | 3 days 24:00:00                           | 00:00:00
+ millennium   | infinity                                  | infinity
+ milliseconds | -1500 years -5 mons                       | -1500 years -5 mons
+ milliseconds | -2 years -2 mons -3 days -04:05:06.789012 | -2 years -2 mons -3 days -04:05:06.789
+ milliseconds | -infinity                                 | -infinity
+ milliseconds | 00:00:00                                  | 00:00:00
+ milliseconds | 00:00:00                                  | 00:00:00
+ milliseconds | 1500 years 5 mons                         | 1500 years 5 mons
+ milliseconds | 2 years 2 mons 3 days 04:05:06.789012     | 2 years 2 mons 3 days 04:05:06.789
+ milliseconds | 25 years 7 mons 400 days 99999:00:00      | 25 years 7 mons 400 days 99999:00:00
+ milliseconds | 3 days 24:00:00                           | 3 days 24:00:00
+ milliseconds | infinity                                  | infinity
+ minute       | -1500 years -5 mons                       | -1500 years -5 mons
+ minute       | -2 years -2 mons -3 days -04:05:06.789012 | -2 years -2 mons -3 days -04:05:00
+ minute       | -infinity                                 | -infinity
+ minute       | 00:00:00                                  | 00:00:00
+ minute       | 00:00:00                                  | 00:00:00
+ minute       | 1500 years 5 mons                         | 1500 years 5 mons
+ minute       | 2 years 2 mons 3 days 04:05:06.789012     | 2 years 2 mons 3 days 04:05:00
+ minute       | 25 years 7 mons 400 days 99999:00:00      | 25 years 7 mons 400 days 99999:00:00
+ minute       | 3 days 24:00:00                           | 3 days 24:00:00
+ minute       | infinity                                  | infinity
+ month        | -1500 years -5 mons                       | -1500 years -5 mons
+ month        | -2 years -2 mons -3 days -04:05:06.789012 | -2 years -2 mons
+ month        | -infinity                                 | -infinity
+ month        | 00:00:00                                  | 00:00:00
+ month        | 00:00:00                                  | 00:00:00
+ month        | 1500 years 5 mons                         | 1500 years 5 mons
+ month        | 2 years 2 mons 3 days 04:05:06.789012     | 2 years 2 mons
+ month        | 25 years 7 mons 400 days 99999:00:00      | 25 years 7 mons
+ month        | 3 days 24:00:00                           | 00:00:00
+ month        | infinity                                  | infinity
+ quarter      | -1500 years -5 mons                       | -1500 years -3 mons
+ quarter      | -2 years -2 mons -3 days -04:05:06.789012 | -2 years
+ quarter      | -infinity                                 | -infinity
+ quarter      | 00:00:00                                  | 00:00:00
+ quarter      | 00:00:00                                  | 00:00:00
+ quarter      | 1500 years 5 mons                         | 1500 years 3 mons
+ quarter      | 2 years 2 mons 3 days 04:05:06.789012     | 2 years
+ quarter      | 25 years 7 mons 400 days 99999:00:00      | 25 years 6 mons
+ quarter      | 3 days 24:00:00                           | 00:00:00
+ quarter      | infinity                                  | infinity
+ second       | -1500 years -5 mons                       | -1500 years -5 mons
+ second       | -2 years -2 mons -3 days -04:05:06.789012 | -2 years -2 mons -3 days -04:05:06
+ second       | -infinity                                 | -infinity
+ second       | 00:00:00                                  | 00:00:00
+ second       | 00:00:00                                  | 00:00:00
+ second       | 1500 years 5 mons                         | 1500 years 5 mons
+ second       | 2 years 2 mons 3 days 04:05:06.789012     | 2 years 2 mons 3 days 04:05:06
+ second       | 25 years 7 mons 400 days 99999:00:00      | 25 years 7 mons 400 days 99999:00:00
+ second       | 3 days 24:00:00                           | 3 days 24:00:00
+ second       | infinity                                  | infinity
+ year         | -1500 years -5 mons                       | -1500 years
+ year         | -2 years -2 mons -3 days -04:05:06.789012 | -2 years
+ year         | -infinity                                 | -infinity
+ year         | 00:00:00                                  | 00:00:00
+ year         | 00:00:00                                  | 00:00:00
+ year         | 1500 years 5 mons                         | 1500 years
+ year         | 2 years 2 mons 3 days 04:05:06.789012     | 2 years
+ year         | 25 years 7 mons 400 days 99999:00:00      | 25 years
+ year         | 3 days 24:00:00                           | 00:00:00
+ year         | infinity                                  | infinity
+(130 rows)
+

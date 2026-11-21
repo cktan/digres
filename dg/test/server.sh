@@ -4676,6 +4676,10 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "date_bin('0 seconds'::interval, timestamp '2024-01-01', timestamp '2001-01-01')|stride must be greater than zero" \
   "date_bin('1 day'::interval, timestamp '2024-01-01', timestamp 'infinity')|origin out of range" \
   "date_bin('infinity'::interval, timestamp '2024-01-01', timestamp '2001-01-01')|timestamps cannot be binned into infinite intervals" \
+  "date_trunc('week', interval '1 day')|unit \"week\" not supported for type interval" \
+  "date_trunc('week', interval 'infinity')|unit \"week\" not supported for type interval" \
+  "date_trunc('dow', interval '1 day')|unit \"dow\" not recognized for type interval" \
+  "date_trunc('epoch', interval '1 day')|unit \"epoch\" not recognized for type interval" \
   "extract('timezone' from timestamp '2024-01-01')|unit \"timezone\" not supported for type timestamp without time zone" \
   "extract('now' from timestamp '2024-01-01')|unit \"now\" not supported for type timestamp without time zone" \
   "date_part('foo', timestamp '2024-01-01')|unit \"foo\" not recognized for type timestamp without time zone" \

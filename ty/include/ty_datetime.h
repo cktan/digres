@@ -259,6 +259,13 @@ int ty_datetime_unit(const char* lowtoken, int* code);
 int ty_timestamp_trunc(int code, int64_t ts, int64_t* out);
 
 /*
+ * date_trunc of an interval: cut at a unit as ty_timestamp_trunc does. A
+ * week, and a code that is no unit of an interval, is TY_ERR_INVALID
+ * ("unit not supported"); a result out of range is TY_ERR_RANGE.
+ */
+int ty_interval_trunc(int code, const ty_interval_t* iv, ty_interval_t* out);
+
+/*
  * date_bin: the start of the bin of timestamp, of stride, from origin. The
  * errors are TY_ERR_RANGE with PostgreSQL's message, and for a stride with
  * months, TY_ERR_INVALID ("timestamps cannot be binned into intervals

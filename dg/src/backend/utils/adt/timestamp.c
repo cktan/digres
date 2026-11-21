@@ -3484,107 +3484,31 @@ Datum interval_trunc(PG_FUNCTION_ARGS) {
   Interval *result;
   int type, val;
   char *lowunits;
-  struct pg_itm tt, *tm = &tt;
 
   result = (Interval *)palloc(sizeof(Interval));
 
   lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
                                           VARSIZE_ANY_EXHDR(units), false);
 
-  type = DecodeUnits(0, lowunits, &val);
+  type = ty_datetime_unit(lowunits, &val);
 
-  if (type == UNITS) {
-    if (INTERVAL_NOT_FINITE(interval)) {
-      /*
-       * Errors thrown here for invalid units should exactly match those
-       * below, else there will be unexpected discrepancies between
-       * finite- and infinite-input cases.
-       */
-      switch (val) {
-      case DTK_MILLENNIUM:
-      case DTK_CENTURY:
-      case DTK_DECADE:
-      case DTK_YEAR:
-      case DTK_QUARTER:
-      case DTK_MONTH:
-      case DTK_DAY:
-      case DTK_HOUR:
-      case DTK_MINUTE:
-      case DTK_SECOND:
-      case DTK_MILLISEC:
-      case DTK_MICROSEC:
-        memcpy(result, interval, sizeof(Interval));
-        PG_RETURN_INTERVAL_P(result);
-        break;
+  if (!type)
+    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                    errmsg("unit \"%s\" not recognized for type %s", lowunits,
+                           format_type_be(INTERVALOID))));
 
-      default:
-        ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                        errmsg("unit \"%s\" not supported for type %s",
-                               lowunits, format_type_be(INTERVALOID)),
-                        (val == DTK_WEEK)
-                            ? errdetail("Months usually have fractional weeks.")
-                            : 0));
-        result = 0;
-      }
-    }
-
-    interval2itm(*interval, tm);
-    switch (val) {
-    case DTK_MILLENNIUM:
-      /* caution: C division may have negative remainder */
-      tm->tm_year = (tm->tm_year / 1000) * 1000;
-      /* FALL THRU */
-    case DTK_CENTURY:
-      /* caution: C division may have negative remainder */
-      tm->tm_year = (tm->tm_year / 100) * 100;
-      /* FALL THRU */
-    case DTK_DECADE:
-      /* caution: C division may have negative remainder */
-      tm->tm_year = (tm->tm_year / 10) * 10;
-      /* FALL THRU */
-    case DTK_YEAR:
-      tm->tm_mon = 0;
-      /* FALL THRU */
-    case DTK_QUARTER:
-      tm->tm_mon = 3 * (tm->tm_mon / 3);
-      /* FALL THRU */
-    case DTK_MONTH:
-      tm->tm_mday = 0;
-      /* FALL THRU */
-    case DTK_DAY:
-      tm->tm_hour = 0;
-      /* FALL THRU */
-    case DTK_HOUR:
-      tm->tm_min = 0;
-      /* FALL THRU */
-    case DTK_MINUTE:
-      tm->tm_sec = 0;
-      /* FALL THRU */
-    case DTK_SECOND:
-      tm->tm_usec = 0;
-      break;
-    case DTK_MILLISEC:
-      tm->tm_usec = (tm->tm_usec / 1000) * 1000;
-      break;
-    case DTK_MICROSEC:
-      break;
-
-    default:
+  /* ty cuts the interval at the unit */
+  if (ty_interval_trunc(val, (const ty_interval_t *)interval,
+                        (ty_interval_t *)result)) {
+    if (ty_errnum() == TY_ERR_INVALID)
       ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
                       errmsg("unit \"%s\" not supported for type %s", lowunits,
                              format_type_be(INTERVALOID)),
                       (val == DTK_WEEK)
                           ? errdetail("Months usually have fractional weeks.")
                           : 0));
-    }
-
-    if (itm2interval(tm, result) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-  } else {
-    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                    errmsg("unit \"%s\" not recognized for type %s", lowunits,
-                           format_type_be(INTERVALOID))));
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("interval out of range")));
   }
 
   PG_RETURN_INTERVAL_P(result);

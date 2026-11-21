@@ -17,6 +17,7 @@
 
 import random
 import subprocess
+import os
 import sys
 
 random.seed(20261121)
@@ -353,6 +354,20 @@ def main_trunc(args):
             for o in origins[:3]:
                 qs.append("select date_bin(make_interval(0, %d, 0, %d, 0, 0, 0) + interval '%d microseconds', %s, %s)::text" % (st[0], st[1], st[2], lit(t), lit(o)))
                 keys.append(("ts.bin", "%d:%d:%d" % st, t, o))
+    ivs = [(0, 0, 0), (0, 0, 1), (1, 0, 0), (-1, 0, 0), (13, 40, 3661000001), (-13, -40, -3661000001), (14, 0, 0), (25 * 12 + 7, 1, 0), (12 * 1000 + 5, 400, 0),
+           (-12 * 1000 - 5, -400, -1), (7, 0, 0), (-7, 0, 0), (0, 15, 90000000000), (0, 0, 86399999999), (0, 0, -86399999999), (5, 100, -5), (-4, -3, -1500500),
+           (2147483646, 2147483647, 9223372036854775806), (-2147483647, -2147483647, -9223372036854775807), (123456, 0, 0), (-123456, 0, 0), (1, 0, 3599999999)]
+    for u in units:
+        for m, d, t in ivs:
+            qs.append("select date_trunc('%s', interval '%d months %d days %d microseconds')::text" % (u, m, d, t))
+            keys.append(("iv.trunc", u, "%d:%d:%d" % (m, d, t)))
+    for u in units[:14]:
+        for t in ("infinity", "-infinity"):
+            qs.append("select date_trunc('%s', interval '%s')::text" % (u, t))
+            keys.append(("iv.trunc", u, "inf" if t == "infinity" else "-inf"))
+    if os.environ.get("ONLY_IV"):
+        both = [(q, k) for q, k in zip(qs, keys) if k[0] == "iv.trunc"]
+        qs, keys = [b[0] for b in both], [b[1] for b in both]
     # one psql, with a statement per query; errors go to stderr in order: use a marker for each
     out = []
     for q, k in zip(qs, keys):
@@ -365,6 +380,8 @@ def main_trunc(args):
             res = "E INVALID" if "0A000" in e else "E UNKNOWN" if "22023" in e else "E RANGE" if "22008" in e else "E FEATURE" if "0A000" in e else "E ?" + e.strip().replace(" ", "_")[:30]
         if k[0] == "ts.trunc":
             print("ts.trunc %s %d => %s" % (k[1].encode().hex() or "-", k[2], res))
+        elif k[0] == "iv.trunc":
+            print("iv.trunc %s %s => %s" % (k[1].encode().hex() or "-", k[2], res))
         elif k[0] == "ts.age":
             print("ts.age %d %d => %s" % (k[1], k[2], res))
         else:

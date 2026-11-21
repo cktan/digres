@@ -657,6 +657,11 @@ copied from PostgreSQL keeps its copyright notice
      julian numeric of a timestamp past the year 290000. Cost:
      -6% to -15%, because the common unit words skip the
      tables of words; before that fast path it was +5%.
+   - **date_trunc of interval moved (2026-11-21).**
+     `ty_interval_trunc`. The tests: 688 known answers from the
+     old digres, and `dg/test/select_interval_trunc.sql`, which
+     prints the same as the digres before the move. Cost:
+     +0.28%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,
