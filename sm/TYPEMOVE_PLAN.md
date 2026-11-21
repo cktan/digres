@@ -487,6 +487,26 @@ copied from PostgreSQL keeps its copyright notice
      Measured by callgrind (old, new): tid text, sort and
      `::text` -11.17%; a sort of "char" +0.08%; pg_lsn text in
      and out -13.11%.
+   - **text moved (2026-11-21), unattended.** The user asked
+     for the text group. digres has one encoding, UTF8, and
+     the C collation by default, so ty holds the UTF-8 text
+     operations for the C collation (`ty_text.h`): the order,
+     the equality, the hash, `length`, `substr`, `left`,
+     `right`, `reverse`, `overlay`, `position`, `replace`,
+     `split_part`, `repeat`, `lpad`, `rpad`, the trims,
+     `translate`, `ascii` and `chr`. A collation that is not C
+     or not deterministic still takes digres's old path. Left
+     in digres: the case functions, `like`, the regular
+     expressions, `format`, the functions on arrays of text,
+     `varchar` and `bpchar`, `name`. The tests: about 51,000
+     vectors from a Python reference, `test_text.cc`, and
+     `dg/test/select_text_ops.sql`, which prints the same as the
+     digres before the move. Measured by callgrind (old, new):
+     `repeat` and `length` -21.90%; `substr`, `left`, `right`
+     and `reverse` -30.24%; `position`, `replace` and
+     `split_part` -6.98%; the pad and trim functions
+     -49.97%; a sort of text -0.03%; compares and a group by
+     -1.29%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

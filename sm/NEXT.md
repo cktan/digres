@@ -241,9 +241,9 @@ are the catalog tables psql reads
        the floats, with their text, and macaddr and macaddr8
        (`ty_float.h`, `ty_mac.h`), and bit and varbit
        (`ty_bits.h`), inet and cidr (`ty_inet.h`), and tid,
-       pg_lsn and "char" (`ty_small.h`). **Left: date, time
-       and interval, text, and the rest with no session
-       state.**
+       pg_lsn and "char" (`ty_small.h`), and text for the C
+       collation (`ty_text.h`). **Left: date, time and
+       interval, varchar, bpchar, name, and the rest.**
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.

@@ -4499,6 +4499,8 @@ done
 # 9. Bad inet and cidr text, values of two families in an operation, an
 #    address past the end of its range, and a mask length too long.
 # 10. Bad tid and pg_lsn text, and an integer too big for "char".
+# 11. A text function with a negative length, a zero field, a result past
+#     the limit, and a character number that is none.
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4632,7 +4634,18 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'(1,65536)'::tid|invalid input syntax for type tid" \
   "'1'::pg_lsn|invalid input syntax for type pg_lsn" \
   "'123456789/1'::pg_lsn|invalid input syntax for type pg_lsn" \
-  "200::\"char\"|\"char\" out of range"; do
+  "200::\"char\"|\"char\" out of range" \
+  "substring('abc' from 1 for -1)|negative substring length not allowed" \
+  "overlay('abc' placing 'x' from 0)|negative substring length not allowed" \
+  "overlay('abc' placing 'x' from 2 for 2147483647)|integer out of range" \
+  "split_part('a,b', ',', 0)|field position must not be zero" \
+  "repeat('abc', 2147483647)|requested length too large" \
+  "lpad('a', 2147483647, 'x')|requested length too large" \
+  "rpad('a', 300000000, 'x')|requested length too large" \
+  "chr(-1)|character number must be positive" \
+  "chr(0)|null character not permitted" \
+  "chr(1114112)|requested character too large for encoding: 1114112" \
+  "chr(55296)|requested character not valid for encoding: 55296"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"
 done

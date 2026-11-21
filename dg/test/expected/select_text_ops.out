@@ -1,0 +1,142 @@
+-- Verify the text functions that ty does (ty/DESIGN.md section 16), on text
+-- with 1-, 2-, 3- and 4-byte characters.
+-- 1. length, octet_length, the order and the compares.
+-- 2. substring, left, right, reverse, overlay.
+-- 3. position, replace, split_part, starts_with.
+-- 4. repeat, lpad, rpad, btrim, ltrim, rtrim, translate.
+-- 5. ascii and chr.
+-- (Errors are server.sh's: a run stops at its first.)
+SELECT s, length(s) AS len, octet_length(s) AS octets, s < 'b' AS lt, s = 'abc' AS eq, s || 'x' AS cat FROM (VALUES (''), ('abc'), ('héllo'), ('日本語'), ('a😀b'), ('€uro'), ('Zz')) v(s);
+   s    | len | octets | lt | eq |   cat   
+--------+-----+--------+----+----+---------
+        |   0 |      0 | t  | f  | x
+ abc    |   3 |      3 | t  | t  | abcx
+ héllo  |   5 |      6 | f  | f  | héllox
+ 日本語 |   3 |      9 | f  | f  | 日本語x
+ a😀b   |   3 |      6 | t  | f  | a😀bx
+ €uro   |   4 |      6 | f  | f  | €urox
+ Zz     |   2 |      2 | t  | f  | Zzx
+(7 rows)
+
+SELECT s FROM (VALUES ('b'), ('a'), ('é'), ('z'), ('日'), (''), ('ab'), ('a😀'), ('€'), ('B')) v(s) ORDER BY s;
+  s  
+-----
+ 
+ B
+ a
+ ab
+ a😀
+ b
+ z
+ é
+ €
+ 日
+(10 rows)
+
+SELECT s, substring(s FROM 2) AS f2, substring(s FROM 2 FOR 2) AS f22, substring(s FROM 0 FOR 2) AS f02, substring(s FROM -1 FOR 3) AS fm13, substring(s FROM 10) AS f10, substr(s, 3, 1) AS s31, substring(s FROM 2 FOR 2147483647) AS fbig FROM (VALUES ('abcdef'), ('héllo wörld'), ('日本語テキスト'), ('a😀b😀c'), ('')) v(s);
+       s        |      f2      | f22  | f02 | fm13 | f10 | s31 |     fbig     
+----------------+--------------+------+-----+------+-----+-----+--------------
+ abcdef         | bcdef        | bc   | a   | a    |     | c   | bcdef
+ héllo wörld    | éllo wörld   | él   | h   | h    | ld  | l   | éllo wörld
+ 日本語テキスト | 本語テキスト | 本語 | 日  | 日   |     | 語  | 本語テキスト
+ a😀b😀c        | 😀b😀c       | 😀b  | a   | a    |     | b   | 😀b😀c
+                |              |      |     |      |     |     | 
+(5 rows)
+
+SELECT s, left(s, 2) AS l2, left(s, -2) AS lm2, left(s, 0) AS l0, left(s, 99) AS l99, right(s, 2) AS r2, right(s, -2) AS rm2, right(s, 0) AS r0, right(s, 99) AS r99, reverse(s) AS rev FROM (VALUES ('abcdef'), ('héllo'), ('日本語'), ('a😀b'), ('')) v(s);
+   s    |  l2  | lm2  | l0 |  l99   |  r2  | rm2  | r0 |  r99   |  rev   
+--------+------+------+----+--------+------+------+----+--------+--------
+ abcdef | ab   | abcd |    | abcdef | ef   | cdef |    | abcdef | fedcba
+ héllo  | hé   | hél  |    | héllo  | lo   | llo  |    | héllo  | olléh
+ 日本語 | 日本 | 日   |    | 日本語 | 本語 | 語   |    | 日本語 | 語本日
+ a😀b   | a😀  | a    |    | a😀b   | 😀b  | b    |    | a😀b   | b😀a
+        |      |      |    |        |      |      |    |        | 
+(5 rows)
+
+SELECT overlay(s PLACING 'XY' FROM 2 FOR 2) AS a, overlay(s PLACING 'XY' FROM 2) AS b, overlay(s PLACING 'é' FROM 1 FOR 0) AS c, overlay(s PLACING '😀' FROM 9 FOR 1) AS d, overlay(s PLACING 'Q' FROM 3 FOR -1) AS e FROM (VALUES ('abcdef'), ('héllo'), ('日本語'), ('')) v(s);
+   a    |   b    |    c    |    d     |     e     
+--------+--------+---------+----------+-----------
+ aXYdef | aXYdef | éabcdef | abcdef😀 | abQbcdef
+ hXYlo  | hXYlo  | éhéllo  | héllo😀  | héQéllo
+ 日XY   | 日XY   | é日本語 | 日本語😀 | 日本Q本語
+ XY     | XY     | é       | 😀       | Q
+(4 rows)
+
+SELECT s, n, position(n IN s) AS pos, strpos(s, n) AS strp, s ^@ n AS sw, starts_with(s, n) AS sw2, replace(s, n, '--') AS repl, replace(s, n, '') AS del FROM (VALUES ('abcabc', 'bc'), ('héllo wörld', 'ö'), ('日本語日本語', '本語'), ('a😀b😀c', '😀'), ('abc', ''), ('', 'a'), ('aaaa', 'aa'), ('abc', 'abcd'), ('xxabcxx', 'abc'), ('abababab', 'abab')) v(s, n);
+      s       |  n   | pos | strp | sw | sw2 |     repl     |    del     
+--------------+------+-----+------+----+-----+--------------+------------
+ abcabc       | bc   |   2 |    2 | f  | f   | a--a--       | aa
+ héllo wörld  | ö    |   8 |    8 | f  | f   | héllo w--rld | héllo wrld
+ 日本語日本語 | 本語 |   2 |    2 | f  | f   | 日--日--     | 日日
+ a😀b😀c      | 😀   |   2 |    2 | f  | f   | a--b--c      | abc
+ abc          |      |   1 |    1 | t  | t   | abc          | abc
+              | a    |   0 |    0 | f  | f   |              | 
+ aaaa         | aa   |   1 |    1 | t  | t   | ----         | 
+ abc          | abcd |   0 |    0 | f  | f   | abc          | abc
+ xxabcxx      | abc  |   3 |    3 | f  | f   | xx--xx       | xxxx
+ abababab     | abab |   1 |    1 | t  | t   | ----         | 
+(10 rows)
+
+SELECT s, sep, split_part(s, sep, 1) AS p1, split_part(s, sep, 2) AS p2, split_part(s, sep, 3) AS p3, split_part(s, sep, -1) AS m1, split_part(s, sep, -2) AS m2, split_part(s, sep, -9) AS m9 FROM (VALUES ('a,b,c', ','), ('a,,c', ','), (',a,', ','), ('日本;語;テ', ';'), ('abc', ','), ('', ','), ('abc', ''), ('a😀b😀c', '😀'), ('aXXbXXc', 'XX')) v(s, sep);
+     s      | sep |  p1  | p2 | p3 | m1  | m2 | m9 
+------------+-----+------+----+----+-----+----+----
+ a,b,c      | ,   | a    | b  | c  | c   | b  | 
+ a,,c       | ,   | a    |    | c  | c   |    | 
+ ,a,        | ,   |      | a  |    |     | a  | 
+ 日本;語;テ | ;   | 日本 | 語 | テ | テ  | 語 | 
+ abc        | ,   | abc  |    |    | abc |    | 
+            | ,   |      |    |    |     |    | 
+ abc        |     | abc  |    |    | abc |    | 
+ a😀b😀c    | 😀  | a    | b  | c  | c   | b  | 
+ aXXbXXc    | XX  | a    | b  | c  | c   | b  | 
+(9 rows)
+
+SELECT repeat('ab', 3) AS a, repeat('é', 2) AS b, repeat('', 5) AS c, repeat('x', 0) AS d, repeat('日', -1) AS e, repeat('😀b', 2) AS f;
+   a    | b  | c | d | e |   f    
+--------+----+---+---+---+--------
+ ababab | éé |   |   |   | 😀b😀b
+(1 row)
+
+SELECT lpad(s, 7, '*') AS lp, rpad(s, 7, '*') AS rp, lpad(s, 3, 'xy') AS lp3, rpad(s, 3, 'xy') AS rp3, lpad(s, 9, 'é日') AS lpm, rpad(s, 9, 'é日') AS rpm, lpad(s, 9, '') AS lpe, rpad(s, 0, 'x') AS rp0, lpad(s, -1, 'x') AS lpn FROM (VALUES ('abc'), ('héllo'), ('日本語'), ('a😀b'), ('')) v(s);
+     lp     |     rp     |  lp3   |  rp3   |       lpm       |       rpm       |  lpe   | rp0 | lpn 
+------------+------------+--------+--------+-----------------+-----------------+--------+-----+-----
+ ****abc    | abc****    | abc    | abc    | é日é日é日abc    | abcé日é日é日    | abc    |     | 
+ **héllo    | héllo**    | hél    | hél    | é日é日héllo     | hélloé日é日     | héllo  |     | 
+ ****日本語 | 日本語**** | 日本語 | 日本語 | é日é日é日日本語 | 日本語é日é日é日 | 日本語 |     | 
+ ****a😀b   | a😀b****   | a😀b   | a😀b   | é日é日é日a😀b   | a😀bé日é日é日   | a😀b   |     | 
+ *******    | *******    | xyx    | xyx    | é日é日é日é日é   | é日é日é日é日é   |        |     | 
+(5 rows)
+
+SELECT btrim('  xx  ') AS a, ltrim('  xx  ') AS b, rtrim('  xx  ') AS c, btrim('xyxhixyx', 'xy') AS d, ltrim('xyxhixyx', 'xy') AS e, rtrim('xyxhixyx', 'xy') AS f, btrim('éé日hi日é', 'é日') AS g, rtrim('hi😀😀', '😀') AS h, ltrim('😀😀hi', '😀x') AS i, btrim('abc', '') AS j, btrim('', 'a') AS k, btrim('aaa', 'a') AS l;
+ a  |  b   |  c   | d  |   e   |   f   | g  | h  | i  |  j  | k | l 
+----+------+------+----+-------+-------+----+----+----+-----+---+---
+ xx | xx   |   xx | hi | hixyx | xyxhi | hi | hi | hi | abc |   | 
+(1 row)
+
+SELECT translate('12345', '143', 'ax') AS a, translate('héllo', 'é', 'e') AS b, translate('日本語', '本', '😀') AS c, translate('abc', 'abc', '') AS d, translate('a😀b', '😀', 'xy') AS e, translate('', 'a', 'b') AS f, translate('hello', 'lo', '0') AS g;
+  a   |   b   |   c    | d |  e  | f |  g   
+------+-------+--------+---+-----+---+------
+ a2x5 | hello | 日😀語 |   | axb |   | he00
+(1 row)
+
+SELECT ascii('') AS a, ascii('A') AS b, ascii('é') AS c, ascii('日') AS d, ascii('😀') AS e, ascii('abc') AS f, chr(65) AS g, chr(233) AS h, chr(26085) AS i, chr(128512) AS j, chr(127) AS k, chr(128) AS l, chr(2047) AS m, chr(2048) AS n, chr(65535) AS o, chr(65536) AS p, chr(1114111) AS q;
+ a | b  |  c  |   d   |   e    | f  | g | h | i  | j  |  k   |   l    | m | n | o | p | q 
+---+----+-----+-------+--------+----+---+---+----+----+------+--------+---+---+---+---+---
+ 0 | 65 | 233 | 26085 | 128512 | 97 | A | é | 日 | 😀 | \x7F | \u0080 | ߿ | ࠀ | ￿ | 𐀀 | 
+(1 row)
+
+SELECT s, hashtext(s) AS h, hashtextextended(s, 1) AS h1 FROM (VALUES (''), ('abc'), ('héllo'), ('日本語')) v(s);
+   s    |      h      |          h1          
+--------+-------------+----------------------
+        | -1477818771 |  -150071773020461347
+ abc    |  -785388649 |  2125675926272891485
+ héllo  | -1340490493 | -4745589531464487085
+ 日本語 |   554517316 |  4918542965680842510
+(4 rows)
+
+SELECT count(*), count(DISTINCT s) FROM (SELECT substr(repeat('日本語a', 3), (i % 10) + 1, 4) s FROM generate_series(1, 1000) i) x;
+ count | count 
+-------+-------
+  1000 |     5
+(1 row)
+

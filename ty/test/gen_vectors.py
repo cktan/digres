@@ -413,6 +413,7 @@ def main():
     gen_float_aggs()
     gen_bits()
     gen_inet()
+    gen_text()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -1984,6 +1985,128 @@ def gen_inet():
             emit("inet.add", (t, n), itok(fx, bx, r) if 0 <= r <= full else ("E", "RANGE"))
         nb = random.randint(0, mbx)
         emit("inet.cidrmask", (t, nb), itok(fx, nb, ax & ip_mask(fx, nb)))
+
+
+def ttok(s):
+    """A text as a token: the hex of its UTF-8 bytes, or - if empty."""
+    return hx(s.encode("utf-8"))
+
+
+TEXT_MAX = 0x3fffffff - 4
+ALPHABET = list("abcxyz ABC,.-_/0123") + ["é", "ñ", "ß", "€", "日", "本", "😀", "𝄞", "\u0100", "\u07ff", "\u0800", "\uffff", "\U0010ffff"]
+
+
+def rand_text(maxlen=12, pool=None):
+    """A random text of a random number of characters; the characters are
+    of 1, 2, 3 and 4 bytes, and the strings repeat a few of them so that
+    searches find things."""
+    pool = pool or random.sample(ALPHABET, random.randint(2, 6))
+    return "".join(random.choice(pool) for _ in range(random.choice([0, 0, 1, 2, 3, random.randint(0, maxlen), random.randint(0, maxlen)])))
+
+
+def gen_text():
+    """The vectors of text, from a reference of Python strings, whose
+    characters are code points, as UTF-8 text's are."""
+    big = 2 ** 31 - 1
+    for _ in range(260):
+        pool = random.sample(ALPHABET, random.randint(2, 5))
+        a, b, c = rand_text(14, pool), rand_text(4, pool), rand_text(4, pool)
+        ta, tb, tc = ttok(a), ttok(b), ttok(c)
+        emit("text.length", (ta,), len(a))
+        ab, bb = a.encode(), b.encode()
+        emit("text.cmp", (ta, tb), (ab > bb) - (ab < bb))
+        emit("text.starts_with", (ta, tb), int(ab.startswith(bb)))
+        emit("text.position", (ta, tb), (a.find(b) + 1) if b else 1)
+        emit("text.reverse", (ta,), ttok(a[::-1]))
+        emit("text.replace", (ta, tb, tc), ttok(a.replace(b, c)) if a and b else ta)
+        for n in (0, 1, 2, 3, -1, -2, 5, 20, -20, big, -big - 1):
+            emit("text.left", (ta, n), ttok(a[:n] if n >= 0 else a[:max(len(a) + n, 0)]))
+            emit("text.right", (ta, n), ttok((a[len(a) - n:] if 0 < n < len(a) else (a if n >= len(a) else "")) if n >= 0 else a[min(-n, len(a)):] if n != -big - 1 else ""))
+        for st in (-2, 0, 1, 2, 3, 5, 9, len(a), len(a) + 1, big, -big):
+            for ln in (None, 0, 1, 2, 4, 9, 100, big, -1):
+                if ln is None:
+                    emit("text.substr", (ta, st, 0, 0), ttok(a[max(st, 1) - 1:]))
+                elif ln < 0:
+                    emit("text.substr", (ta, st, ln, 1), ("E", "INVALID"))
+                else:
+                    e = st + ln
+                    if e > big:
+                        res = a[max(st, 1) - 1:]
+                    elif e <= 1:
+                        res = ""
+                    else:
+                        res = a[max(st, 1) - 1:e - 1]
+                    emit("text.substr", (ta, st, ln, 1), ttok(res))
+        for sp in (-1, 0, 1, 2, 4, len(a) + 1, len(a) + 3):
+            for sl in (0, 1, 3, big, -2):
+                if sp <= 0:
+                    res = ("E", "INVALID")
+                elif sp + sl > big:
+                    res = ("E", "RANGE")
+                else:
+                    res = ttok(a[:sp - 1] + b + a[max(sp + sl, 1) - 1:])
+                emit("text.overlay", (ta, tb, sp, sl), res)
+        for n in (0, 1, 2, 3, -1, -2, 7):
+            if n == 0:
+                emit("text.split_part", (ta, tb, 0), ("E", "INVALID"))
+                continue
+            if not a:
+                res = ""
+            elif not b:
+                res = a if n in (1, -1) else ""
+            else:
+                parts = a.split(b)
+                if n > 0:
+                    res = parts[n - 1] if n <= len(parts) else ""
+                else:
+                    res = parts[n] if -n <= len(parts) else ""
+            emit("text.split_part", (ta, tb, n), ttok(res))
+        for n in (0, 1, 2, 3, -1):
+            emit("text.repeat", (ta, n), ttok(a * max(n, 0)))
+        emit("text.repeat", (ta, big), ("E", "RANGE") if a else "-")
+        for n in (-1, 0, 1, 2, 5, 9, 20):
+            t = a[:max(n, 0)]
+            eff = max(n, 0) if b else len(t)
+            fill = (b * (eff // len(b) + 1)) if b else ""
+            padn = eff - len(t)
+            pad = ""
+            if b:
+                pad = "".join(b[i % len(b)] for i in range(padn))
+            emit("text.lpad", (ta, n, tb), ttok(pad + t))
+            emit("text.rpad", (ta, n, tb), ttok(t + pad))
+        emit("text.lpad", (ta, big, tb), ("E", "RANGE") if b else ttok(a))
+        emit("text.rpad", (ta, 300000000, tb), ("E", "RANGE") if b else ttok(a))
+        for mode, l, r in (("b", 1, 1), ("l", 1, 0), ("r", 0, 1)):
+            res = a
+            if a and b:
+                if l:
+                    i = 0
+                    while i < len(res) and res[i] in b:
+                        i += 1
+                    res = res[i:]
+                if r:
+                    j = len(res)
+                    while j > 0 and res[j - 1] in b:
+                        j -= 1
+                    res = res[:j]
+            emit("text.trim", (ta, tb, mode), ttok(res))
+        out_chars = []
+        for ch in a:
+            i = b.find(ch)
+            if i < 0:
+                out_chars.append(ch)
+            elif i < len(c):
+                out_chars.append(c[i])
+        emit("text.translate", (ta, tb, tc), ttok("".join(out_chars)))
+        emit("text.ascii", (ta,), ord(a[0]) if a else 0)
+    for cp in [-1, 0, 1, 65, 127, 128, 233, 2047, 2048, 8364, 55295, 55296, 57343, 57344, 65535, 65536, 128512, 1114111, 1114112, 2 ** 31 - 1] + [random.randint(1, 1114111) for _ in range(60)]:
+        if cp < 0:
+            res = ("E", "INVALID")
+        elif cp == 0 or cp > 1114111 or 55296 <= cp <= 57343:
+            res = ("E", "RANGE")
+        else:
+            res = ttok(chr(cp))
+        emit("text.chr", (cp,), res)
 
 
 def gen_ints():

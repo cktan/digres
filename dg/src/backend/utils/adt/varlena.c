@@ -44,6 +44,7 @@
 #include "utils/pg_locale.h"
 #include "utils/sortsupport.h"
 #include "utils/varlena.h"
+#include "ty_text.h"
 #include "ty_bytea.h"
 #include "utils/control_block.h"
 
@@ -136,7 +137,6 @@ static int32 text_length(Datum str);
 static text *text_catenate(text *t1, text *t2);
 static text *text_substring(Datum str, int32 start, int32 length,
                             bool length_not_specified);
-static int pg_mbcharcliplen_chars(const char *mbstr, int len, int limit);
 static text *text_overlay(text *t1, text *t2, int sp, int sl);
 static int text_position(text *t1, text *t2, Oid collid);
 static void text_position_setup(text *t1, text *t2, Oid collid,
@@ -571,14 +571,10 @@ Datum textlen(PG_FUNCTION_ARGS) {
  *it at all in some cases.
  */
 static int32 text_length(Datum str) {
-  /* fastpath when max encoding length is one */
-  if (pg_database_encoding_max_length() == 1)
-    PG_RETURN_INT32(toast_raw_datum_size(str) - VARHDRSZ);
-  else {
-    text *t = DatumGetTextPP(str);
+  /* the database encoding is UTF8: ty counts the characters */
+  text *t = DatumGetTextPP(str);
 
-    PG_RETURN_INT32(pg_mbstrlen_with_len(VARDATA_ANY(t), VARSIZE_ANY_EXHDR(t)));
-  }
+  return (int32)ty_text_length(VARDATA_ANY(t), VARSIZE_ANY_EXHDR(t));
 }
 
 /*
@@ -725,222 +721,43 @@ Datum text_substr_no_len(PG_FUNCTION_ARGS) {
  */
 static text *text_substring(Datum str, int32 start, int32 length,
                             bool length_not_specified) {
-  int32 eml = pg_database_encoding_max_length();
-  int32 S = start; /* start position */
-  int32 S1;        /* adjusted start position */
-  int32 L1;        /* adjusted substring length */
-  int32 E;         /* end position, exclusive */
+  int32 slice_size = -1; /* bytes to read of a compressed or external value */
+  int32 E;
+  text *slice;
+  text *ret;
+  size_t off, len;
 
   /*
-   * SQL99 says S can be zero or negative (which we don't document), but we
-   * still must fetch from the start of the string.
-   * https://www.postgresql.org/message-id/170905442373.643.11536838320909376197%40wrigleys.postgresql.org
+   * A character is at most 4 bytes, so the first E - 1 characters are in the
+   * first 4 * (E - 1) bytes: a value that is compressed or in a TOAST table
+   * need not be read in full.
    */
-  S1 = Max(S, 1);
-
-  /* life is easy if the encoding max length is 1 */
-  if (eml == 1) {
-    if (length_not_specified) /* special case - get length to end of
-                               * string */
-      L1 = -1;
-    else if (length < 0) {
-      /* SQL99 says to throw an error for E < S, i.e., negative length */
-      ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
-                      errmsg("negative substring length not allowed")));
-      L1 = -1; /* silence stupider compilers */
-    } else if (pg_add_s32_overflow(S, length, &E)) {
-      /*
-       * L could be large enough for S + L to overflow, in which case
-       * the substring must run to end of string.
-       */
-      L1 = -1;
-    } else {
-      /*
-       * A zero or negative value for the end position can happen if the
-       * start was negative or one. SQL99 says to return a zero-length
-       * string.
-       */
-      if (E < 1)
-        return cstring_to_text("");
-
-      L1 = E - S1;
-    }
-
-    /*
-     * If the start position is past the end of the string, SQL99 says to
-     * return a zero-length string -- DatumGetTextPSlice() will do that
-     * for us.  We need only convert S1 to zero-based starting position.
-     */
-    return DatumGetTextPSlice(str, S1 - 1, L1);
-  } else if (eml > 1) {
-    /*
-     * When encoding max length is > 1, we can't get LC without
-     * detoasting, so we'll grab a conservatively large slice now and go
-     * back later to do the right thing
-     */
-    int32 slice_start;
-    int32 slice_size;
-    int32 slice_strlen;
-    int32 slice_len;
-    text *slice;
-    int32 E1;
-    int32 i;
-    char *p;
-    char *s;
-    text *ret;
-
-    /*
-     * We need to start at position zero because there is no way to know
-     * in advance which byte offset corresponds to the supplied start
-     * position.
-     */
-    slice_start = 0;
-
-    if (length_not_specified) /* special case - get length to end of
-                               * string */
-      E = slice_size = L1 = -1;
-    else if (length < 0) {
-      /* SQL99 says to throw an error for E < S, i.e., negative length */
-      ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
-                      errmsg("negative substring length not allowed")));
-      E = slice_size = L1 = -1; /* silence stupider compilers */
-    } else if (pg_add_s32_overflow(S, length, &E)) {
-      /*
-       * L could be large enough for S + L to overflow, in which case
-       * the substring must run to end of string.
-       */
-      slice_size = L1 = -1;
-    } else {
-      /*
-       * Ending at position 1, exclusive, obviously yields an empty
-       * string.  A zero or negative value can happen if the start was
-       * negative or one. SQL99 says to return a zero-length string.
-       */
-      if (E <= 1)
-        return cstring_to_text("");
-
-      /*
-       * if E is past the end of the string, the tuple toaster will
-       * truncate the length for us
-       */
-      L1 = E - S1;
-
-      /*
-       * Total slice size in bytes can't be any longer than the
-       * inclusive end position times the encoding max length.  If that
-       * overflows, we can just use -1.
-       */
-      if (pg_mul_s32_overflow(E - 1, eml, &slice_size))
-        slice_size = -1;
-    }
-
-    /*
-     * If we're working with an untoasted source, no need to do an extra
-     * copying step.
-     */
-    if (VARATT_IS_COMPRESSED(DatumGetPointer(str)) ||
-        VARATT_IS_EXTERNAL(DatumGetPointer(str)))
-      slice = DatumGetTextPSlice(str, slice_start, slice_size);
-    else
-      slice = (text *)DatumGetPointer(str);
-
-    /* see if we got back an empty string */
-    slice_len = VARSIZE_ANY_EXHDR(slice);
-    if (slice_len == 0) {
-      if (slice != (text *)DatumGetPointer(str))
-        pfree(slice);
+  if (!length_not_specified && length >= 0 &&
+      !pg_add_s32_overflow(start, length, &E)) {
+    if (E <= 1)
       return cstring_to_text("");
-    }
-
-    /*
-     * Now we can get the actual length of the slice in MB characters,
-     * stopping at the end of the substring.  Continuing beyond the
-     * substring end could find an incomplete character attributable
-     * solely to DatumGetTextPSlice() chopping in the middle of a
-     * character, and it would be superfluous work at best.
-     */
-    slice_strlen =
-        (slice_size == -1
-             ? pg_mbstrlen_with_len(VARDATA_ANY(slice), slice_len)
-             : pg_mbcharcliplen_chars(VARDATA_ANY(slice), slice_len, E - 1));
-
-    /*
-     * Check that the start position wasn't > slice_strlen. If so, SQL99
-     * says to return a zero-length string.
-     */
-    if (S1 > slice_strlen) {
-      if (slice != (text *)DatumGetPointer(str))
-        pfree(slice);
-      return cstring_to_text("");
-    }
-
-    /*
-     * Adjust L1 and E1 now that we know the slice string length. Again
-     * remember that S1 is one based, and slice_start is zero based.
-     */
-    if (L1 > -1)
-      E1 = Min(S1 + L1, slice_start + 1 + slice_strlen);
-    else
-      E1 = slice_start + 1 + slice_strlen;
-
-    /*
-     * Find the start position in the slice; remember S1 is not zero based
-     */
-    p = VARDATA_ANY(slice);
-    for (i = 0; i < S1 - 1; i++)
-      p += pg_mblen_unbounded(p);
-
-    /* hang onto a pointer to our start position */
-    s = p;
-
-    /*
-     * Count the actual bytes used by the substring of the requested
-     * length.
-     */
-    for (i = S1; i < E1; i++)
-      p += pg_mblen_unbounded(p);
-
-    ret = (text *)palloc(VARHDRSZ + (p - s));
-    SET_VARSIZE(ret, VARHDRSZ + (p - s));
-    memcpy(VARDATA(ret), s, (p - s));
-
-    if (slice != (text *)DatumGetPointer(str))
-      pfree(slice);
-
-    return ret;
-  } else
-    elog(ERROR, "invalid backend encoding: encoding max length < 1");
-
-  /* not reached: suppress compiler warning */
-  return NULL;
-}
-
-/*
- * pg_mbcharcliplen_chars -
- *	Mirror pg_mbcharcliplen(), except return value unit is chars, not bytes.
- *
- *	This mirrors all the dubious historical behavior, so it's static to
- *	discourage proliferation.  The assertions are specific to the one
- *caller.
- */
-static int pg_mbcharcliplen_chars(const char *mbstr, int len, int limit) {
-  int nch = 0;
-  int l;
-
-  Assert(len > 0);
-  Assert(limit > 0);
-  Assert(pg_database_encoding_max_length() > 1);
-
-  while (len > 0 && *mbstr) {
-    l = pg_mblen_with_len(mbstr, len);
-    nch++;
-    if (nch == limit)
-      break;
-    len -= l;
-    mbstr += l;
+    if (pg_mul_s32_overflow(E - 1, 4, &slice_size))
+      slice_size = -1;
   }
-  return nch;
+
+  if (VARATT_IS_COMPRESSED(DatumGetPointer(str)) ||
+      VARATT_IS_EXTERNAL(DatumGetPointer(str)))
+    slice = DatumGetTextPSlice(str, 0, slice_size);
+  else
+    slice = (text *)DatumGetPointer(str);
+
+  /* ty finds the part: its place in the slice, and its size */
+  if (ty_text_substr(VARDATA_ANY(slice), VARSIZE_ANY_EXHDR(slice), start,
+                     length, !length_not_specified, &off, &len))
+    ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
+                    errmsg("negative substring length not allowed")));
+
+  ret = cstring_to_text_with_len(VARDATA_ANY(slice) + off, len);
+  if (slice != (text *)DatumGetPointer(str))
+    pfree(slice);
+  return ret;
 }
+
 
 /*
  * textoverlay
@@ -969,28 +786,20 @@ Datum textoverlay_no_len(PG_FUNCTION_ARGS) {
 }
 
 static text *text_overlay(text *t1, text *t2, int sp, int sl) {
+  size_t len1 = VARSIZE_ANY_EXHDR(t1), len2 = VARSIZE_ANY_EXHDR(t2), outlen;
   text *result;
-  text *s1;
-  text *s2;
-  int sp_pl_sl;
 
-  /*
-   * Check for possible integer-overflow cases.  For negative sp, throw a
-   * "substring length" error because that's what should be expected
-   * according to the spec's definition of OVERLAY().
-   */
-  if (sp <= 0)
-    ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
-                    errmsg("negative substring length not allowed")));
-  if (pg_add_s32_overflow(sp, sl, &sp_pl_sl))
+  /* the head and the tail may overlap, if the length is negative */
+  result = (text *)palloc(VARHDRSZ + 2 * len1 + len2);
+  if (ty_text_overlay(VARDATA_ANY(t1), len1, VARDATA_ANY(t2), len2, sp, sl,
+                      VARDATA(result), &outlen)) {
+    if (ty_errnum() == TY_ERR_INVALID)
+      ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
+                      errmsg("negative substring length not allowed")));
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("integer out of range")));
-
-  s1 = text_substring(PointerGetDatum(t1), 1, sp - 1, false);
-  s2 = text_substring(PointerGetDatum(t1), sp_pl_sl, -1, true);
-  result = text_catenate(s1, t2);
-  result = text_catenate(result, s2);
-
+  }
+  SET_VARSIZE(result, VARHDRSZ + outlen);
   return result;
 }
 
@@ -1036,6 +845,11 @@ static int text_position(text *t1, text *t2, Oid collid) {
   if (VARSIZE_ANY_EXHDR(t1) < VARSIZE_ANY_EXHDR(t2) &&
       pg_newlocale_from_collation(collid)->deterministic)
     return 0;
+
+  /* a deterministic collation: ty searches the bytes */
+  if (pg_newlocale_from_collation(collid)->deterministic)
+    return ty_text_position(VARDATA_ANY(t1), VARSIZE_ANY_EXHDR(t1),
+                            VARDATA_ANY(t2), VARSIZE_ANY_EXHDR(t2));
 
   text_position_setup(t1, t2, collid, &state);
   /* don't need greedy mode here */
@@ -1439,9 +1253,7 @@ int varstr_cmp(const char *arg1, int len1, const char *arg2, int len2,
   mylocale = pg_newlocale_from_collation(collid);
 
   if (mylocale->collate_is_c) {
-    result = memcmp(arg1, arg2, Min(len1, len2));
-    if ((result == 0) && (len1 != len2))
-      result = (len1 < len2) ? -1 : 1;
+    result = ty_text_cmp(arg1, len1, arg2, len2);
   } else {
     /*
      * memcmp() can't tell us which of two unequal strings sorts first,
@@ -1522,8 +1334,8 @@ Datum texteq(PG_FUNCTION_ARGS) {
       text *targ1 = DatumGetTextPP(arg1);
       text *targ2 = DatumGetTextPP(arg2);
 
-      result = (memcmp(VARDATA_ANY(targ1), VARDATA_ANY(targ2),
-                       len1 - VARHDRSZ) == 0);
+      result = ty_text_eq(VARDATA_ANY(targ1), len1 - VARHDRSZ,
+                          VARDATA_ANY(targ2), len2 - VARHDRSZ);
 
       PG_FREE_IF_COPY(targ1, 0);
       PG_FREE_IF_COPY(targ2, 1);
@@ -1564,8 +1376,8 @@ Datum textne(PG_FUNCTION_ARGS) {
       text *targ1 = DatumGetTextPP(arg1);
       text *targ2 = DatumGetTextPP(arg2);
 
-      result = (memcmp(VARDATA_ANY(targ1), VARDATA_ANY(targ2),
-                       len1 - VARHDRSZ) != 0);
+      result = !ty_text_eq(VARDATA_ANY(targ1), len1 - VARHDRSZ,
+                           VARDATA_ANY(targ2), len2 - VARHDRSZ);
 
       PG_FREE_IF_COPY(targ1, 0);
       PG_FREE_IF_COPY(targ2, 1);
@@ -1846,9 +1658,7 @@ static int varstrfastcmp_c(Datum x, Datum y, SortSupport ssup) {
   len1 = VARSIZE_ANY_EXHDR(arg1);
   len2 = VARSIZE_ANY_EXHDR(arg2);
 
-  result = memcmp(a1p, a2p, Min(len1, len2));
-  if ((result == 0) && (len1 != len2))
-    result = (len1 < len2) ? -1 : 1;
+  result = ty_text_cmp(a1p, len1, a2p, len2);
 
   /* We can't afford to leak memory here. */
   if (PointerGetDatum(arg1) != x)
@@ -3577,6 +3387,28 @@ Datum replace_text(PG_FUNCTION_ARGS) {
     PG_RETURN_TEXT_P(src_text);
   }
 
+  /* a deterministic collation: ty counts the copies, then replaces them */
+  check_collation_set(PG_GET_COLLATION());
+  if (pg_newlocale_from_collation(PG_GET_COLLATION())->deterministic) {
+    size_t total;
+    int any;
+
+    if (ty_text_replace_size(VARDATA_ANY(src_text), src_text_len,
+                             VARDATA_ANY(from_sub_text), from_sub_text_len,
+                             VARSIZE_ANY_EXHDR(to_sub_text), &total, &any))
+      ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+                      errmsg("%s", ty_errmsg())));
+    if (!any)
+      PG_RETURN_TEXT_P(src_text);
+    ret_text = (text *)palloc(VARHDRSZ + total);
+    SET_VARSIZE(ret_text, VARHDRSZ + total);
+    ty_text_replace(VARDATA_ANY(src_text), src_text_len,
+                    VARDATA_ANY(from_sub_text), from_sub_text_len,
+                    VARDATA_ANY(to_sub_text), VARSIZE_ANY_EXHDR(to_sub_text),
+                    VARDATA(ret_text));
+    PG_RETURN_TEXT_P(ret_text);
+  }
+
   text_position_setup(src_text, from_sub_text, PG_GET_COLLATION(), &state);
 
   found = text_position_next(&state);
@@ -3907,6 +3739,20 @@ Datum split_part(PG_FUNCTION_ARGS) {
 
   inputstring_len = VARSIZE_ANY_EXHDR(inputstring);
   fldsep_len = VARSIZE_ANY_EXHDR(fldsep);
+
+  /* a deterministic collation: ty finds the field */
+  if (inputstring_len >= 1 && fldsep_len >= 1)
+    check_collation_set(PG_GET_COLLATION());
+  if (pg_newlocale_from_collation(PG_GET_COLLATION())->deterministic) {
+    size_t off, len;
+
+    ty_text_split_part(VARDATA_ANY(inputstring), inputstring_len,
+                       VARDATA_ANY(fldsep), fldsep_len, fldnum, &off, &len);
+    if (off == 0 && len == (size_t)inputstring_len)
+      PG_RETURN_TEXT_P(inputstring);
+    PG_RETURN_TEXT_P(
+        cstring_to_text_with_len(VARDATA_ANY(inputstring) + off, len));
+  }
 
   /* return empty string for empty input string */
   if (inputstring_len < 1)
@@ -4930,13 +4776,10 @@ Datum text_left(PG_FUNCTION_ARGS) {
 
   if (n < 0) {
     text *str = PG_GETARG_TEXT_PP(0);
-    const char *p = VARDATA_ANY(str);
-    int len = VARSIZE_ANY_EXHDR(str);
-    int rlen;
+    size_t off, len;
 
-    n = pg_mbstrlen_with_len(p, len) + n;
-    rlen = pg_mbcharcliplen(p, len, n);
-    PG_RETURN_TEXT_P(cstring_to_text_with_len(p, rlen));
+    ty_text_left(VARDATA_ANY(str), VARSIZE_ANY_EXHDR(str), n, &off, &len);
+    PG_RETURN_TEXT_P(cstring_to_text_with_len(VARDATA_ANY(str), len));
   } else
     PG_RETURN_TEXT_P(text_substring(PG_GETARG_DATUM(0), 1, n, false));
 }
@@ -4947,26 +4790,11 @@ Datum text_left(PG_FUNCTION_ARGS) {
  */
 Datum text_right(PG_FUNCTION_ARGS) {
   text *str = PG_GETARG_TEXT_PP(0);
-  const char *p = VARDATA_ANY(str);
-  int len = VARSIZE_ANY_EXHDR(str);
   int n = PG_GETARG_INT32(1);
-  int off;
+  size_t off, len;
 
-  if (n < 0) {
-    /*
-     * Negating PG_INT32_MIN would overflow, so clamp instead.  Any n whose
-     * absolute value is at least the string's length skips the whole
-     * string, and len can't exceed PG_INT32_MAX, so this is equivalent.
-     */
-    if (unlikely(n == PG_INT32_MIN))
-      n = PG_INT32_MAX;
-    else
-      n = -n;
-  } else
-    n = pg_mbstrlen_with_len(p, len) - n;
-  off = pg_mbcharcliplen(p, len, n);
-
-  PG_RETURN_TEXT_P(cstring_to_text_with_len(p + off, len - off));
+  ty_text_right(VARDATA_ANY(str), VARSIZE_ANY_EXHDR(str), n, &off, &len);
+  PG_RETURN_TEXT_P(cstring_to_text_with_len(VARDATA_ANY(str) + off, len));
 }
 
 /*
@@ -4974,31 +4802,12 @@ Datum text_right(PG_FUNCTION_ARGS) {
  */
 Datum text_reverse(PG_FUNCTION_ARGS) {
   text *str = PG_GETARG_TEXT_PP(0);
-  const char *p = VARDATA_ANY(str);
   int len = VARSIZE_ANY_EXHDR(str);
-  const char *endp = p + len;
   text *result;
-  char *dst;
 
   result = (text *)palloc(len + VARHDRSZ);
-  dst = (char *)VARDATA(result) + len;
   SET_VARSIZE(result, len + VARHDRSZ);
-
-  if (pg_database_encoding_max_length() > 1) {
-    /* multibyte version */
-    while (p < endp) {
-      int sz;
-
-      sz = pg_mblen_range(p, endp);
-      dst -= sz;
-      memcpy(dst, p, sz);
-      p += sz;
-    }
-  } else {
-    /* single byte version */
-    while (p < endp)
-      *(--dst) = *p++;
-  }
+  ty_text_reverse(VARDATA_ANY(str), len, VARDATA(result));
 
   PG_RETURN_TEXT_P(result);
 }

@@ -25,6 +25,7 @@
 #include "ty_hash.h"
 #include "ty_inet.h"
 #include "ty_small.h"
+#include "ty_text.h"
 #include "ty_int.h"
 #include "ty_mac.h"
 #include "ty_uuid.h"
@@ -756,6 +757,163 @@ bool run_small_text(const vec_t &v) {
   return true;
 }
 
+/* Run one text vector: the strings are the hex of UTF-8 bytes. */
+bool run_text(const vec_t &v) {
+  const std::string &op = v.op;
+
+  if (op.compare(0, 5, "text.") != 0) {
+    return false;
+  }
+  const std::string name = op.substr(5);
+  auto str = [&](size_t i) {
+    std::vector<uint8_t> b = bytes_of(v.args[i]);
+    return std::string(reinterpret_cast<const char *>(b.data()), b.size());
+  };
+  auto tok = [](const char *p, size_t n) {
+    return token_of(reinterpret_cast<const uint8_t *>(p), n);
+  };
+  auto num = [&](size_t i) { return std::stoll(v.args[i]); };
+  /* a result that is a text, or an error */
+  auto check = [&](int rc, const std::string &got) {
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(v.res[0] == got);
+    }
+  };
+  std::string a = str(0), b, c;
+  size_t off = 0, n = 0;
+  int rc = 0;
+
+  if (v.args.size() > 1 && name != "left" && name != "right" &&
+      name != "repeat" && name != "chr" && name != "length" &&
+      name != "substr") {
+    b = str(1);
+  }
+  if (name == "chr") {
+    char buf[8];
+
+    rc = ty_text_chr((int32_t)num(0), buf, &n);
+    check(rc, tok(buf, n));
+    return true;
+  }
+  if (v.args.size() > 2 && name != "substr" && name != "overlay" &&
+      name != "split_part" && name != "lpad" && name != "rpad" &&
+      name != "trim") {
+    c = str(2);
+  }
+  INFO(v.line);
+  if (name == "length") {
+    CHECK(std::stoll(v.res[0]) == (int64_t)ty_text_length(a.data(), a.size()));
+  } else if (name == "cmp") {
+    int r = ty_text_cmp(a.data(), a.size(), b.data(), b.size());
+    CHECK(std::stoi(v.res[0]) == (r > 0) - (r < 0));
+  } else if (name == "starts_with") {
+    CHECK(std::stoi(v.res[0]) ==
+          ty_text_starts_with(a.data(), a.size(), b.data(), b.size()));
+  } else if (name == "position") {
+    CHECK(std::stoi(v.res[0]) ==
+          ty_text_position(a.data(), a.size(), b.data(), b.size()));
+  } else if (name == "reverse") {
+    std::string out(a.size() + 1, '\0');
+
+    ty_text_reverse(a.data(), a.size(), &out[0]);
+    CHECK(v.res[0] == tok(out.data(), a.size()));
+  } else if (name == "replace") {
+    int found = 0;
+    size_t total = 0;
+
+    rc = ty_text_replace_size(a.data(), a.size(), b.data(), b.size(), c.size(),
+                              &total, &found);
+    REQUIRE(0 == rc);
+    if (!found) {
+      CHECK(v.res[0] == tok(a.data(), a.size()));
+    } else {
+      std::string out(total + 1, '\0');
+
+      ty_text_replace(a.data(), a.size(), b.data(), b.size(), c.data(),
+                      c.size(), &out[0]);
+      CHECK(v.res[0] == tok(out.data(), total));
+    }
+  } else if (name == "left" || name == "right") {
+    if (name == "left") {
+      ty_text_left(a.data(), a.size(), (int32_t)num(1), &off, &n);
+    } else {
+      ty_text_right(a.data(), a.size(), (int32_t)num(1), &off, &n);
+    }
+    CHECK(v.res[0] == tok(a.data() + off, n));
+  } else if (name == "substr") {
+    rc = ty_text_substr(a.data(), a.size(), (int32_t)num(1), (int32_t)num(2),
+                        (int)num(3), &off, &n);
+    check(rc, tok(a.data() + off, n));
+  } else if (name == "overlay") {
+    std::string r = str(1), out(2 * a.size() + r.size() + 1, '\0');
+
+    rc = ty_text_overlay(a.data(), a.size(), r.data(), r.size(),
+                         (int32_t)num(2), (int32_t)num(3), &out[0], &n);
+    check(rc, tok(out.data(), n));
+  } else if (name == "split_part") {
+    std::string sep = str(1);
+
+    rc = ty_text_split_part(a.data(), a.size(), sep.data(), sep.size(),
+                            (int32_t)num(2), &off, &n);
+    check(rc, tok(a.data() + off, n));
+  } else if (name == "repeat") {
+    rc = ty_text_repeat_size(a.size(), (int32_t)num(1), &n);
+    if (rc == 0) {
+      std::string out(n + 1, '\0');
+
+      ty_text_repeat(a.data(), a.size(), (int32_t)num(1), &out[0]);
+      check(rc, tok(out.data(), n));
+    } else {
+      check(rc, "");
+    }
+  } else if (name == "lpad" || name == "rpad") {
+    std::string fill = str(2);
+    int32_t eff = 0;
+
+    rc = ty_text_pad_prepare(a.data(), a.size(), (int32_t)num(1), fill.size(),
+                             &eff);
+    if (rc == 0) {
+      std::string out((size_t)eff * 4 + 1, '\0');
+
+      if (name == "lpad") {
+        ty_text_lpad(a.data(), a.size(), eff, fill.data(), fill.size(), &out[0],
+                     &n);
+      } else {
+        ty_text_rpad(a.data(), a.size(), eff, fill.data(), fill.size(), &out[0],
+                     &n);
+      }
+      check(rc, tok(out.data(), n));
+    } else {
+      check(rc, "");
+    }
+  } else if (name == "trim") {
+    std::string set = str(1), mode = v.args[2];
+
+    ty_text_trim(a.data(), a.size(), set.data(), set.size(), mode != "r",
+                 mode != "l", &off, &n);
+    CHECK(v.res[0] == tok(a.data() + off, n));
+  } else if (name == "translate") {
+    std::string out(a.size() * 4 + 1, '\0');
+
+    ty_text_translate(a.data(), a.size(), b.data(), b.size(), c.data(),
+                      c.size(), &out[0], &n);
+    CHECK(v.res[0] == tok(out.data(), n));
+  } else if (name == "ascii") {
+    int32_t r = 0;
+
+    rc = ty_text_ascii(a.data(), a.size(), &r);
+    check_int(v, rc, r);
+  } else {
+    return false;
+  }
+  return true;
+}
+
 /* An inet token "family:bits:hex" as a value. */
 ty_inet_t inet_of(const std::string &tok) {
   ty_inet_t a;
@@ -1474,7 +1632,7 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_inet(v) || run_bits(v) || run_known(v) ||
+    bool known = run_text(v) || run_inet(v) || run_bits(v) || run_known(v) ||
                  run_float_text(v) || run_float(v) || run_hash(v) ||
                  run_bytea(v) || run_int_convert(v) || run64(v) || run128(v) ||
                  run_i16(v) || run_i32(v) || run_i64(v);

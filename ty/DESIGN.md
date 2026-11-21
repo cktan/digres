@@ -523,4 +523,38 @@ The text of all three is in `test/known.txt`, what the old digres
 printed for about 100 inputs each. The hand tests are in
 `test/test_small.cc`.
 
+## 16. text
+
+`ty_text.h` holds the operations of text: UTF-8 strings ordered
+by their bytes, the C collation. digres has one encoding, UTF8; a
+collation that is not C, or not deterministic, stays in digres,
+which calls ty only for the C collation. The input is valid
+UTF-8: the host checks it when the text comes in. A function
+never reads past its string, whatever the bytes.
+
+A string is a pointer and a length. A function that makes a
+string writes it to the caller's buffer, and says in `ty_text.h`
+how large the buffer must be; a function that cuts a string, such
+as `substr`, gives the place of the part in the input, so that no
+copy is needed. A position or a count is in characters.
+
+The functions are `cmp`, `eq`, `starts_with` and the hash;
+`length`; `substr`, `left`, `right`, `reverse` and `overlay`;
+`position`, `replace` and `split_part`, which use the search of
+PostgreSQL (a skip table of a size that fits the length of the
+text); `repeat`, `lpad`, `rpad`, the trims and `translate`; and
+`ascii` and `chr`. `replace` counts the copies first, so that the
+result is made in one buffer. The limits are PostgreSQL's: a
+result may not pass `MaxAllocSize`, and `lpad` and `rpad` apply
+the limit to four bytes a character, as PostgreSQL does.
+
+The case functions (`lower`, `upper`, `initcap`) depend on the
+collation and stay in digres, with `like`, the regular
+expressions, `format` and the functions on arrays of text.
+
+The tests: the vectors, from a reference of Python strings, whose
+characters are code points as UTF-8's are (about 51,000); the
+hand tests in `test/test_text.cc`; and `dg/test/select_text_ops.sql`,
+which prints the same as the digres before the move.
+
 

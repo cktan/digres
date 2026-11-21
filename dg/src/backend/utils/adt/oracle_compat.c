@@ -22,6 +22,7 @@
 #include "utils/formatting.h"
 #include "utils/memutils.h"
 #include "varatt.h"
+#include "ty_text.h"
 
 static text *dotrim(const char *string, int stringlen, const char *set,
                     int setlen, bool doltrim, bool dortrim);
@@ -146,68 +147,20 @@ Datum lpad(PG_FUNCTION_ARGS) {
   int32 len = PG_GETARG_INT32(1);
   text *string2 = PG_GETARG_TEXT_PP(2);
   text *ret;
-  char *ptr1, *ptr2, *ptr2start, *ptr_ret;
-  const char *ptr2end;
-  int m, s1len, s2len;
-  int bytelen;
+  int32 eff;
+  size_t outlen;
 
-  /* Negative len is silently taken as zero */
-  if (len < 0)
-    len = 0;
-
-  s1len = VARSIZE_ANY_EXHDR(string1);
-  if (s1len < 0)
-    s1len = 0; /* shouldn't happen */
-
-  s2len = VARSIZE_ANY_EXHDR(string2);
-  if (s2len < 0)
-    s2len = 0; /* shouldn't happen */
-
-  s1len = pg_mbstrlen_with_len(VARDATA_ANY(string1), s1len);
-
-  if (s1len > len)
-    s1len = len; /* truncate string1 to len chars */
-
-  if (s2len <= 0)
-    len = s1len; /* nothing to pad with, so don't pad */
-
-  /* compute worst-case output length */
-  if (unlikely(pg_mul_s32_overflow(pg_database_encoding_max_length(), len,
-                                   &bytelen)) ||
-      unlikely(pg_add_s32_overflow(bytelen, VARHDRSZ, &bytelen)) ||
-      unlikely(!AllocSizeIsValid(bytelen)))
+  /* ty gives the length in characters, and checks PostgreSQL's limit */
+  if (ty_text_pad_prepare(VARDATA_ANY(string1), VARSIZE_ANY_EXHDR(string1), len,
+                          VARSIZE_ANY_EXHDR(string2), &eff))
     ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
                     errmsg("requested length too large")));
 
-  ret = (text *)palloc(bytelen);
-
-  m = len - s1len;
-
-  ptr2 = ptr2start = VARDATA_ANY(string2);
-  ptr2end = ptr2 + s2len;
-  ptr_ret = VARDATA(ret);
-
-  while (m--) {
-    int mlen = pg_mblen_range(ptr2, ptr2end);
-
-    memcpy(ptr_ret, ptr2, mlen);
-    ptr_ret += mlen;
-    ptr2 += mlen;
-    if (ptr2 == ptr2end) /* wrap around at end of s2 */
-      ptr2 = ptr2start;
-  }
-
-  ptr1 = VARDATA_ANY(string1);
-
-  while (s1len--) {
-    int mlen = pg_mblen_unbounded(ptr1);
-
-    memcpy(ptr_ret, ptr1, mlen);
-    ptr_ret += mlen;
-    ptr1 += mlen;
-  }
-
-  SET_VARSIZE(ret, ptr_ret - (char *)ret);
+  ret = (text *)palloc(VARHDRSZ + (size_t)eff * 4);
+  ty_text_lpad(VARDATA_ANY(string1), VARSIZE_ANY_EXHDR(string1), eff,
+               VARDATA_ANY(string2), VARSIZE_ANY_EXHDR(string2),
+               VARDATA(ret), &outlen);
+  SET_VARSIZE(ret, VARHDRSZ + outlen);
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -233,69 +186,20 @@ Datum rpad(PG_FUNCTION_ARGS) {
   int32 len = PG_GETARG_INT32(1);
   text *string2 = PG_GETARG_TEXT_PP(2);
   text *ret;
-  char *ptr1, *ptr2, *ptr2start, *ptr_ret;
-  const char *ptr2end;
-  int m, s1len, s2len;
-  int bytelen;
+  int32 eff;
+  size_t outlen;
 
-  /* Negative len is silently taken as zero */
-  if (len < 0)
-    len = 0;
-
-  s1len = VARSIZE_ANY_EXHDR(string1);
-  if (s1len < 0)
-    s1len = 0; /* shouldn't happen */
-
-  s2len = VARSIZE_ANY_EXHDR(string2);
-  if (s2len < 0)
-    s2len = 0; /* shouldn't happen */
-
-  s1len = pg_mbstrlen_with_len(VARDATA_ANY(string1), s1len);
-
-  if (s1len > len)
-    s1len = len; /* truncate string1 to len chars */
-
-  if (s2len <= 0)
-    len = s1len; /* nothing to pad with, so don't pad */
-
-  /* compute worst-case output length */
-  if (unlikely(pg_mul_s32_overflow(pg_database_encoding_max_length(), len,
-                                   &bytelen)) ||
-      unlikely(pg_add_s32_overflow(bytelen, VARHDRSZ, &bytelen)) ||
-      unlikely(!AllocSizeIsValid(bytelen)))
+  /* ty gives the length in characters, and checks PostgreSQL's limit */
+  if (ty_text_pad_prepare(VARDATA_ANY(string1), VARSIZE_ANY_EXHDR(string1), len,
+                          VARSIZE_ANY_EXHDR(string2), &eff))
     ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
                     errmsg("requested length too large")));
 
-  ret = (text *)palloc(bytelen);
-
-  m = len - s1len;
-
-  ptr1 = VARDATA_ANY(string1);
-
-  ptr_ret = VARDATA(ret);
-
-  while (s1len--) {
-    int mlen = pg_mblen_unbounded(ptr1);
-
-    memcpy(ptr_ret, ptr1, mlen);
-    ptr_ret += mlen;
-    ptr1 += mlen;
-  }
-
-  ptr2 = ptr2start = VARDATA_ANY(string2);
-  ptr2end = ptr2 + s2len;
-
-  while (m--) {
-    int mlen = pg_mblen_range(ptr2, ptr2end);
-
-    memcpy(ptr_ret, ptr2, mlen);
-    ptr_ret += mlen;
-    ptr2 += mlen;
-    if (ptr2 == ptr2end) /* wrap around at end of s2 */
-      ptr2 = ptr2start;
-  }
-
-  SET_VARSIZE(ret, ptr_ret - (char *)ret);
+  ret = (text *)palloc(VARHDRSZ + (size_t)eff * 4);
+  ty_text_rpad(VARDATA_ANY(string1), VARSIZE_ANY_EXHDR(string1), eff,
+               VARDATA_ANY(string2), VARSIZE_ANY_EXHDR(string2),
+               VARDATA(ret), &outlen);
+  SET_VARSIZE(ret, VARHDRSZ + outlen);
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -347,138 +251,11 @@ Datum btrim1(PG_FUNCTION_ARGS) {
  */
 static text *dotrim(const char *string, int stringlen, const char *set,
                     int setlen, bool doltrim, bool dortrim) {
-  int i;
+  size_t off, len;
 
-  /* Nothing to do if either string or set is empty */
-  if (stringlen > 0 && setlen > 0) {
-    if (pg_database_encoding_max_length() > 1) {
-      /*
-       * In the multibyte-encoding case, build arrays of pointers to
-       * character starts, so that we can avoid inefficient checks in
-       * the inner loops.
-       */
-      const char **stringchars;
-      const char **setchars;
-      const char *setend;
-      int *stringmblen;
-      int *setmblen;
-      int stringnchars;
-      int setnchars;
-      int resultndx;
-      int resultnchars;
-      const char *p;
-      const char *pend;
-      int len;
-      int mblen;
-      const char *str_pos;
-      int str_len;
-
-      stringchars = (const char **)palloc(stringlen * sizeof(char *));
-      stringmblen = (int *)palloc(stringlen * sizeof(int));
-      stringnchars = 0;
-      p = string;
-      len = stringlen;
-      pend = p + len;
-      while (len > 0) {
-        stringchars[stringnchars] = p;
-        stringmblen[stringnchars] = mblen = pg_mblen_range(p, pend);
-        stringnchars++;
-        p += mblen;
-        len -= mblen;
-      }
-
-      setchars = (const char **)palloc(setlen * sizeof(char *));
-      setmblen = (int *)palloc(setlen * sizeof(int));
-      setnchars = 0;
-      p = set;
-      len = setlen;
-      setend = set + setlen;
-      while (len > 0) {
-        setchars[setnchars] = p;
-        setmblen[setnchars] = mblen = pg_mblen_range(p, setend);
-        setnchars++;
-        p += mblen;
-        len -= mblen;
-      }
-
-      resultndx = 0; /* index in stringchars[] */
-      resultnchars = stringnchars;
-
-      if (doltrim) {
-        while (resultnchars > 0) {
-          str_pos = stringchars[resultndx];
-          str_len = stringmblen[resultndx];
-          for (i = 0; i < setnchars; i++) {
-            if (str_len == setmblen[i] &&
-                memcmp(str_pos, setchars[i], str_len) == 0)
-              break;
-          }
-          if (i >= setnchars)
-            break; /* no match here */
-          string += str_len;
-          stringlen -= str_len;
-          resultndx++;
-          resultnchars--;
-        }
-      }
-
-      if (dortrim) {
-        while (resultnchars > 0) {
-          str_pos = stringchars[resultndx + resultnchars - 1];
-          str_len = stringmblen[resultndx + resultnchars - 1];
-          for (i = 0; i < setnchars; i++) {
-            if (str_len == setmblen[i] &&
-                memcmp(str_pos, setchars[i], str_len) == 0)
-              break;
-          }
-          if (i >= setnchars)
-            break; /* no match here */
-          stringlen -= str_len;
-          resultnchars--;
-        }
-      }
-
-      pfree(stringchars);
-      pfree(stringmblen);
-      pfree(setchars);
-      pfree(setmblen);
-    } else {
-      /*
-       * In the single-byte-encoding case, we don't need such overhead.
-       */
-      if (doltrim) {
-        while (stringlen > 0) {
-          char str_ch = *string;
-
-          for (i = 0; i < setlen; i++) {
-            if (str_ch == set[i])
-              break;
-          }
-          if (i >= setlen)
-            break; /* no match here */
-          string++;
-          stringlen--;
-        }
-      }
-
-      if (dortrim) {
-        while (stringlen > 0) {
-          char str_ch = string[stringlen - 1];
-
-          for (i = 0; i < setlen; i++) {
-            if (str_ch == set[i])
-              break;
-          }
-          if (i >= setlen)
-            break; /* no match here */
-          stringlen--;
-        }
-      }
-    }
-  }
-
-  /* Return selected portion of string */
-  return cstring_to_text_with_len(string, stringlen);
+  /* ty finds the part that is left */
+  ty_text_trim(string, stringlen, set, setlen, doltrim, dortrim, &off, &len);
+  return cstring_to_text_with_len(string + off, len);
 }
 
 /*
@@ -719,89 +496,21 @@ Datum translate(PG_FUNCTION_ARGS) {
   text *from = PG_GETARG_TEXT_PP(1);
   text *to = PG_GETARG_TEXT_PP(2);
   text *result;
-  char *from_ptr, *to_ptr, *to_end;
-  char *source, *target;
-  const char *source_end;
-  const char *from_end;
-  int m, fromlen, tolen, retlen, i;
-  int bytelen;
-  int len;
-  int source_len;
-  int from_index;
+  size_t m = VARSIZE_ANY_EXHDR(string), retlen;
 
-  m = VARSIZE_ANY_EXHDR(string);
   if (m <= 0)
     PG_RETURN_TEXT_P(string);
-  source = VARDATA_ANY(string);
-  source_end = source + m;
 
-  fromlen = VARSIZE_ANY_EXHDR(from);
-  from_ptr = VARDATA_ANY(from);
-  from_end = from_ptr + fromlen;
-  tolen = VARSIZE_ANY_EXHDR(to);
-  to_ptr = VARDATA_ANY(to);
-  to_end = to_ptr + tolen;
-
-  /*
-   * The worst-case expansion is to substitute a max-length character for a
-   * single-byte character at each position of the string.
-   */
-  if (unlikely(pg_mul_s32_overflow(pg_database_encoding_max_length(), m,
-                                   &bytelen)) ||
-      unlikely(pg_add_s32_overflow(bytelen, VARHDRSZ, &bytelen)) ||
-      unlikely(!AllocSizeIsValid(bytelen)))
+  /* a character may be 4 bytes: PostgreSQL's limit is on 4 * m */
+  if (ty_text_size_check(m * 4 + 0))
     ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
                     errmsg("requested length too large")));
 
-  result = (text *)palloc(bytelen);
-
-  target = VARDATA(result);
-  retlen = 0;
-
-  while (m > 0) {
-    source_len = pg_mblen_range(source, source_end);
-    from_index = 0;
-
-    for (i = 0; i < fromlen; i += len) {
-      len = pg_mblen_range(&from_ptr[i], from_end);
-      if (len == source_len && memcmp(source, &from_ptr[i], len) == 0)
-        break;
-
-      from_index++;
-    }
-    if (i < fromlen) {
-      /* substitute, or delete if no corresponding "to" character */
-      char *p = to_ptr;
-
-      for (i = 0; i < from_index; i++) {
-        if (p >= to_end)
-          break;
-        p += pg_mblen_range(p, to_end);
-      }
-      if (p < to_end) {
-        len = pg_mblen_range(p, to_end);
-        memcpy(target, p, len);
-        target += len;
-        retlen += len;
-      }
-    } else {
-      /* no match, so copy */
-      memcpy(target, source, source_len);
-      target += source_len;
-      retlen += source_len;
-    }
-
-    source += source_len;
-    m -= source_len;
-  }
-
+  result = (text *)palloc(VARHDRSZ + m * 4);
+  ty_text_translate(VARDATA_ANY(string), m, VARDATA_ANY(from),
+                    VARSIZE_ANY_EXHDR(from), VARDATA_ANY(to),
+                    VARSIZE_ANY_EXHDR(to), VARDATA(result), &retlen);
   SET_VARSIZE(result, retlen + VARHDRSZ);
-
-  /*
-   * The function result is probably much bigger than needed, if we're using
-   * a multibyte encoding, but it's not worth reallocating it; the result
-   * probably won't live long anyway.
-   */
 
   PG_RETURN_TEXT_P(result);
 }
@@ -830,57 +539,14 @@ Datum translate(PG_FUNCTION_ARGS) {
 
 Datum ascii(PG_FUNCTION_ARGS) {
   text *string = PG_GETARG_TEXT_PP(0);
-  int encoding = GetDatabaseEncoding();
-  unsigned char *data;
-  int len;
+  int32 result;
 
-  len = VARSIZE_ANY_EXHDR(string);
-  if (len <= 0)
-    PG_RETURN_INT32(0);
+  if (ty_text_ascii(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), &result))
+    ereport(ERROR, (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
+                    errmsg("invalid byte sequence for encoding \"%s\"",
+                           GetDatabaseEncodingName())));
 
-  data = (unsigned char *)VARDATA_ANY(string);
-
-  if (encoding == PG_UTF8 && *data > 127) {
-    /* return the code point for Unicode */
-
-    int result = 0, tbytes = 0, i;
-
-    if (*data >= 0xF0) {
-      result = *data & 0x07;
-      tbytes = 3;
-    } else if (*data >= 0xE0) {
-      result = *data & 0x0F;
-      tbytes = 2;
-    } else if (*data > 0xC0) {
-      result = *data & 0x1f;
-      tbytes = 1;
-    } else
-      ereport(ERROR, (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
-                      errmsg("invalid byte sequence for encoding \"%s\"",
-                             GetDatabaseEncodingName())));
-
-    /* All continuation bytes are present in the input */
-    if (tbytes >= len)
-      ereport(ERROR, (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
-                      errmsg("invalid byte sequence for encoding \"%s\"",
-                             GetDatabaseEncodingName())));
-
-    for (i = 1; i <= tbytes; i++) {
-      if (unlikely((data[i] & 0xC0) != 0x80))
-        ereport(ERROR, (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
-                        errmsg("invalid byte sequence for encoding \"%s\"",
-                               GetDatabaseEncodingName())));
-      result = (result << 6) + (data[i] & 0x3f);
-    }
-
-    PG_RETURN_INT32(result);
-  } else {
-    if (pg_encoding_max_length(encoding) > 1 && *data > 127)
-      ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                      errmsg("requested character too large")));
-
-    PG_RETURN_INT32((int32)*data);
-  }
+  PG_RETURN_INT32(result);
 }
 
 /********************************************************************
@@ -907,86 +573,21 @@ Datum ascii(PG_FUNCTION_ARGS) {
 
 Datum chr(PG_FUNCTION_ARGS) {
   int32 arg = PG_GETARG_INT32(0);
-  uint32 cvalue;
   text *result;
-  int encoding = GetDatabaseEncoding();
+  size_t bytes;
+  char buf[4];
 
-  /*
-   * Error out on arguments that make no sense or that we can't validly
-   * represent in the encoding.
-   */
-  if (arg < 0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                    errmsg("character number must be positive")));
-  else if (arg == 0)
-    ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                    errmsg("null character not permitted")));
-
-  cvalue = arg;
-
-  if (encoding == PG_UTF8 && cvalue > 127) {
-    /* for Unicode we treat the argument as a code point */
-    int bytes;
-    unsigned char *wch;
-
-    /*
-     * We only allow valid Unicode code points; per RFC3629 that stops at
-     * U+10FFFF, even though 4-byte UTF8 sequences can hold values up to
-     * U+1FFFFF.
-     */
-    if (cvalue > 0x0010ffff)
-      ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                      errmsg("requested character too large for encoding: %u",
-                             cvalue)));
-
-    if (cvalue > 0xffff)
-      bytes = 4;
-    else if (cvalue > 0x07ff)
-      bytes = 3;
-    else
-      bytes = 2;
-
-    result = (text *)palloc(VARHDRSZ + bytes);
-    SET_VARSIZE(result, VARHDRSZ + bytes);
-    wch = (unsigned char *)VARDATA(result);
-
-    if (bytes == 2) {
-      wch[0] = 0xC0 | ((cvalue >> 6) & 0x1F);
-      wch[1] = 0x80 | (cvalue & 0x3F);
-    } else if (bytes == 3) {
-      wch[0] = 0xE0 | ((cvalue >> 12) & 0x0F);
-      wch[1] = 0x80 | ((cvalue >> 6) & 0x3F);
-      wch[2] = 0x80 | (cvalue & 0x3F);
-    } else {
-      wch[0] = 0xF0 | ((cvalue >> 18) & 0x07);
-      wch[1] = 0x80 | ((cvalue >> 12) & 0x3F);
-      wch[2] = 0x80 | ((cvalue >> 6) & 0x3F);
-      wch[3] = 0x80 | (cvalue & 0x3F);
-    }
-
-    /*
-     * The preceding range check isn't sufficient, because UTF8 excludes
-     * Unicode "surrogate pair" codes.  Make sure what we created is valid
-     * UTF8.
-     */
-    if (!pg_utf8_islegal(wch, bytes))
-      ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                      errmsg("requested character not valid for encoding: %u",
-                             cvalue)));
-  } else {
-    bool is_mb;
-
-    is_mb = pg_encoding_max_length(encoding) > 1;
-
-    if ((is_mb && (cvalue > 127)) || (!is_mb && (cvalue > 255)))
-      ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                      errmsg("requested character too large for encoding: %u",
-                             cvalue)));
-
-    result = (text *)palloc(VARHDRSZ + 1);
-    SET_VARSIZE(result, VARHDRSZ + 1);
-    *VARDATA(result) = (char)cvalue;
+  if (ty_text_chr(arg, buf, &bytes)) {
+    /* the number was negative, or no character: ty's message says which */
+    ereport(ERROR, (errcode(ty_errnum() == TY_ERR_INVALID
+                                ? ERRCODE_INVALID_PARAMETER_VALUE
+                                : ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+                    errmsg("%s", ty_errmsg())));
   }
+
+  result = (text *)palloc(VARHDRSZ + bytes);
+  SET_VARSIZE(result, VARHDRSZ + bytes);
+  memcpy(VARDATA(result), buf, bytes);
 
   PG_RETURN_TEXT_P(result);
 }
@@ -1009,31 +610,16 @@ Datum repeat(PG_FUNCTION_ARGS) {
   text *string = PG_GETARG_TEXT_PP(0);
   int32 count = PG_GETARG_INT32(1);
   text *result;
-  int slen, tlen;
-  int i;
-  char *cp, *sp;
+  size_t tlen;
 
-  if (count < 0)
-    count = 0;
-
-  slen = VARSIZE_ANY_EXHDR(string);
-
-  if (unlikely(pg_mul_s32_overflow(count, slen, &tlen)) ||
-      unlikely(pg_add_s32_overflow(tlen, VARHDRSZ, &tlen)) ||
-      unlikely(!AllocSizeIsValid(tlen)))
+  if (ty_text_repeat_size(VARSIZE_ANY_EXHDR(string), count, &tlen))
     ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
                     errmsg("requested length too large")));
 
-  result = (text *)palloc(tlen);
-
-  SET_VARSIZE(result, tlen);
-  cp = VARDATA(result);
-  sp = VARDATA_ANY(string);
-  for (i = 0; i < count; i++) {
-    memcpy(cp, sp, slen);
-    cp += slen;
-    CHECK_FOR_INTERRUPTS();
-  }
+  result = (text *)palloc(VARHDRSZ + tlen);
+  SET_VARSIZE(result, VARHDRSZ + tlen);
+  ty_text_repeat(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), count,
+                 VARDATA(result));
 
   PG_RETURN_TEXT_P(result);
 }
