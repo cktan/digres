@@ -422,6 +422,7 @@ def main():
     gen_typmod()
     gen_timetz()
     gen_overlaps()
+    gen_dateconv()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -3232,6 +3233,58 @@ def gen_overlaps():
         tok = lambda x: "N" if x is None else "%d:%d" % x
         r = overlaps_ref((ends[0], ends[1]), (ends[2], ends[3]), lambda x, y: key(x) > key(y), lambda x, y: key(x) < key(y))
         emit("overlaps.timetz", tuple(tok(x) for x in ends), r)
+
+
+def gen_dateconv():
+    """date, timestamp and time conversions."""
+    DAY = 86400000000
+    D_MIN, D_MAX = -2 ** 31, 2 ** 31 - 1
+    END_J = 109203528 - 2451545
+    dates = [0, 1, -1, -2451545, -2451546, END_J - 1, END_J, END_J + 1, 2145031948, D_MIN, D_MAX, 10957, 365, -365, 5874897 - 2451545 + 1]
+    for d in dates:
+        if d in (D_MIN, D_MAX):
+            r = I64MIN if d == D_MIN else I64MAX
+            emit("date.totimestamp", (d, 0), r)
+            emit("date.totimestamp", (d, 1), r)
+        elif d >= END_J:
+            emit("date.totimestamp", (d, 0), ("E", "RANGE"))
+            emit("date.totimestamp", (d, 1), I64MAX)
+        else:
+            emit("date.totimestamp", (d, 0), d * DAY)
+            emit("date.totimestamp", (d, 1), d * DAY)
+    tss = [0, 1, -1, DAY, -DAY, MIN_TS, MIN_TS - 1, END_TS - 1, END_TS, I64MIN + 1, I64MAX - 1, I64MIN, I64MAX, 86399999999, -86399999999, 123456789012345678, -2451545 * DAY, -2451545 * DAY - 1]
+    for t in tss:
+        if t == I64MIN:
+            emit("ts.todate", (t,), D_MIN)
+        elif t == I64MAX:
+            emit("ts.todate", (t,), D_MAX)
+        else:
+            jd = t // DAY + 2451545
+            if jd < 0 or jd > 2 ** 31 - 1:
+                emit("ts.todate", (t,), ("E", "RANGE"))
+            else:
+                emit("ts.todate", (t,), t // DAY)
+        if t not in (I64MIN, I64MAX):
+            jd = t // DAY + 2451545
+            if jd < 0 or jd > 2 ** 31 - 1:
+                emit("ts.totime", (t,), ("E", "RANGE"))
+            else:
+                emit("ts.totime", (t,), t - t // DAY * DAY)
+    for d in dates:
+        for tm in [0, 1, DAY, 43200000000, -1]:
+            if d in (D_MIN, D_MAX):
+                emit("dt.totimestamp", (d, tm), I64MIN if d == D_MIN else I64MAX)
+            elif d >= END_J:
+                emit("dt.totimestamp", (d, tm), ("E", "RANGE"))
+            else:
+                r = d * DAY + tm
+                emit("dt.totimestamp", (d, tm), r if MIN_TS <= r < END_TS else ("E", "RANGE"))
+    for (m, dd, t) in [(0, 0, 0), (0, 0, 1), (0, 0, -1), (5, 5, DAY), (0, 0, -DAY), (0, 0, 3 * DAY + 5), (0, 0, -3 * DAY - 5), (0, 0, I64MAX - 1), (0, 0, I64MIN + 1), (2 ** 31 - 1, 2 ** 31 - 1, I64MAX), (-2 ** 31 + 1, -2 ** 31 + 1, I64MIN)]:
+        inf = (m == 2 ** 31 - 1 and dd == 2 ** 31 - 1 and t == I64MAX) or (m == -2 ** 31 + 1 and dd == -2 ** 31 + 1 and t == I64MIN)
+        if inf:
+            emit("iv.totime", ("%d:%d:%d" % (-2 ** 31 if t == I64MIN else 2 ** 31 - 1, -2 ** 31 if t == I64MIN else 2 ** 31 - 1, t),), ("E", "RANGE"))
+        else:
+            emit("iv.totime", ("%d:%d:%d" % (m, dd, t),), cmod(t, DAY) if cmod(t, DAY) >= 0 else cmod(t, DAY) + DAY)
 
 
 def gen_typmod():

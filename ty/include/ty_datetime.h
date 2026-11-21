@@ -232,6 +232,50 @@ int ty_timetz_in_range(const ty_timetz_t* val, const ty_timetz_t* base,
                        const ty_interval_t* offset, int sub, int less, int* r);
 
 /*
+ * date to timestamp: midnight. The infinities map to the infinities. A date
+ * from 294277-01-01 on has no timestamp: if overflow is not NULL, the
+ * timestamp is infinity and *overflow is 1 (for a compare); else it is
+ * TY_ERR_RANGE ("date out of range for timestamp").
+ */
+#define TY_TIMESTAMP_END_JULIAN 109203528 /* date2j(294277, 1, 1) */
+int ty_date_to_ts_error(void);
+static inline int ty_date_to_timestamp(int32_t d, int64_t* out, int* overflow) {
+    if (overflow) {
+        *overflow = 0;
+    }
+    if (!ty_date_finite(d)) {
+        *out = d == TY_DATE_NOBEGIN ? TY_TIMESTAMP_NOBEGIN : TY_TIMESTAMP_NOEND;
+        return 0;
+    }
+    if (TY_UNLIKELY(d >= TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE)) {
+        if (overflow) {
+            *overflow = 1;
+            *out = TY_TIMESTAMP_NOEND;
+            return 0;
+        }
+        return ty_date_to_ts_error();
+    }
+    *out = (int64_t)d * (TY_USECS_PER_HOUR * 24);
+    return 0;
+}
+
+/*
+ * timestamp to date and to time of day, and a date and a time to a timestamp.
+ * The infinities of a timestamp are the infinities of a date (a time has
+ * none: the caller makes it null). TY_ERR_RANGE if a timestamp is out of
+ * range.
+ */
+int ty_timestamp_to_date(int64_t ts, int32_t* out);
+int ty_timestamp_to_time(int64_t ts, int64_t* out);
+int ty_datetime_to_timestamp(int32_t date, int64_t time, int64_t* out);
+
+/*
+ * An interval to a time of day: the part of the days, 0 to a day; the months
+ * and days are dropped. An infinite interval is TY_ERR_RANGE.
+ */
+int ty_interval_to_time(const ty_interval_t* iv, int64_t* out);
+
+/*
  * The ISO 8601 week of a date: the week number, the year the week is in, the
  * day of that year, and the Julian day of the first day of a week of a year.
  */
@@ -282,8 +326,41 @@ int ty_overlaps_timetz(const ty_timetz_t* ts1, const ty_timetz_t* te1,
  * months, TY_ERR_INVALID ("timestamps cannot be binned into intervals
  * containing months or years").
  */
-int ty_timestamp_bin(const ty_interval_t* stride, int64_t ts, int64_t origin,
-                     int64_t* out);
+int ty_timestamp_bin_error(const ty_interval_t* stride, int64_t ts,
+                           int64_t origin); /* cold: says which error */
+static inline int ty_timestamp_bin(const ty_interval_t* stride, int64_t ts,
+                                   int64_t origin, int64_t* out) {
+    int64_t stride_usecs, tm_diff, tm_modulo, result;
+
+    if (!ty_timestamp_finite(ts)) {
+        *out = ts;
+        return 0;
+    }
+    /* the rare cases, and every error, are in the cold function */
+    if (TY_UNLIKELY(!ty_timestamp_finite(origin) ||
+                    ty_interval_not_finite(stride) || stride->month != 0 ||
+                    __builtin_mul_overflow((int64_t)stride->day,
+                                           TY_USECS_PER_HOUR * 24,
+                                           &stride_usecs) ||
+                    __builtin_add_overflow(stride_usecs, stride->time,
+                                           &stride_usecs) ||
+                    stride_usecs <= 0 ||
+                    __builtin_sub_overflow(ts, origin, &tm_diff))) {
+        return ty_timestamp_bin_error(stride, ts, origin);
+    }
+    tm_modulo = tm_diff % stride_usecs;
+    result = origin + (tm_diff - tm_modulo);
+    /* round toward minus infinity: this can overflow */
+    if (tm_modulo < 0) {
+        if (TY_UNLIKELY(__builtin_sub_overflow(result, stride_usecs,
+                                               &result) ||
+                        !ty_timestamp_valid(result))) {
+            return ty_timestamp_bin_error(stride, ts, origin);
+        }
+    }
+    *out = result;
+    return 0;
+}
 
 /*
  * age(a, b) of two timestamps: the years, months, days and time from b to a,
@@ -363,7 +440,24 @@ int ty_interval_part(int reserved, int code, const ty_interval_t* iv,
  * 6 is TY_ERR_INVALID ("timestamp(%d) precision must be between 0 and 6").
  * An infinite timestamp is not changed.
  */
-int ty_timestamp_adjust_typmod(int64_t* ts, int32_t typmod);
+int ty_timestamp_typmod_error(int32_t typmod); /* cold */
+static inline int ty_timestamp_adjust_typmod(int64_t* ts, int32_t typmod) {
+    static const int64_t scales[7] = {1000000, 100000, 10000, 1000, 100, 10, 1};
+    static const int64_t offsets[7] = {500000, 50000, 5000, 500, 50, 5, 0};
+
+    if (!ty_timestamp_finite(*ts) || typmod == -1 || typmod == 6) {
+        return 0;
+    }
+    if (TY_UNLIKELY(typmod < 0 || typmod > 6)) {
+        return ty_timestamp_typmod_error(typmod);
+    }
+    if (*ts >= 0) {
+        *ts = ((*ts + offsets[typmod]) / scales[typmod]) * scales[typmod];
+    } else {
+        *ts = -((((-*ts) + offsets[typmod]) / scales[typmod]) * scales[typmod]);
+    }
+    return 0;
+}
 
 /* Make a time fit its precision (0 to 6; anything else leaves it). */
 static inline void ty_time_adjust_typmod(int64_t* t, int32_t typmod) {

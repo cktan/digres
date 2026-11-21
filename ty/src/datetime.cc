@@ -415,27 +415,13 @@ int ty_timestamp_diff(int64_t dt1, int64_t dt2, ty_interval_t *result) {
   return ty_interval_justify_hours(&span, result);
 }
 
-/* Make a timestamp fit its precision. */
-int ty_timestamp_adjust_typmod(int64_t *ts, int32_t typmod) {
-  static const int64_t scales[7] = {1000000, 100000, 10000, 1000, 100, 10, 1};
-  static const int64_t offsets[7] = {500000, 50000, 5000, 500, 50, 5, 0};
+/* The error of a timestamp precision out of range. */
+int ty_timestamp_typmod_error(int32_t typmod) {
+  char msg[96];
 
-  if (!ty_timestamp_finite(*ts) || typmod == -1 || typmod == 6) {
-    return 0;
-  }
-  if (typmod < 0 || typmod > 6) {
-    char msg[96];
-
-    snprintf(msg, sizeof msg,
-             "timestamp(%d) precision must be between %d and %d", typmod, 0, 6);
-    return ty_internal::set_error(TY_ERR_INVALID, msg);
-  }
-  if (*ts >= 0) {
-    *ts = ((*ts + offsets[typmod]) / scales[typmod]) * scales[typmod];
-  } else {
-    *ts = -((((-*ts) + offsets[typmod]) / scales[typmod]) * scales[typmod]);
-  }
-  return 0;
+  snprintf(msg, sizeof msg, "timestamp(%d) precision must be between %d and %d",
+           typmod, 0, 6);
+  return ty_internal::set_error(TY_ERR_INVALID, msg);
 }
 
 /* The Julian day of the Monday of the first ISO week of a year. */
@@ -635,13 +621,12 @@ int ty_timestamp_trunc(int code, int64_t timestamp, int64_t *out) {
   return 0;
 }
 
-/* date_bin. */
-int ty_timestamp_bin(const ty_interval_t *stride, int64_t timestamp,
-                     int64_t origin, int64_t *out) {
+/* date_bin: which error it is (the hot path is in the header). */
+int ty_timestamp_bin_error(const ty_interval_t *stride, int64_t timestamp,
+                           int64_t origin) {
   int64_t stride_usecs, tm_diff, tm_modulo, tm_delta, result;
 
   if (!ty_timestamp_finite(timestamp)) {
-    *out = timestamp;
     return 0;
   }
   if (!ty_timestamp_finite(origin)) {
@@ -678,7 +663,7 @@ int ty_timestamp_bin(const ty_interval_t *stride, int64_t timestamp,
       return ts_range();
     }
   }
-  *out = result;
+  /* the hot path would not have called: no error found */
   return 0;
 }
 
@@ -1013,4 +998,74 @@ int ty_overlaps_i64(const int64_t *ts1, const int64_t *te1, const int64_t *ts2,
 int ty_overlaps_timetz(const ty_timetz_t *ts1, const ty_timetz_t *te1,
                        const ty_timetz_t *ts2, const ty_timetz_t *te2) {
   return overlaps<ty_timetz_t, timetz_order_t>(ts1, te1, ts2, te2);
+}
+
+/* The error of a date past the range of a timestamp. */
+int ty_date_to_ts_error(void) {
+  return ty_internal::set_error(TY_ERR_RANGE,
+                                "date out of range for timestamp");
+}
+
+/* timestamp to date. */
+int ty_timestamp_to_date(int64_t ts, int32_t *out) {
+  ty_tm_t tm;
+  int32_t fsec;
+
+  if (ts == TY_TIMESTAMP_NOBEGIN) {
+    *out = TY_DATE_NOBEGIN;
+  } else if (ts == TY_TIMESTAMP_NOEND) {
+    *out = TY_DATE_NOEND;
+  } else {
+    if (ty_timestamp_to_tm(ts, &tm, &fsec) != 0) {
+      return ts_range();
+    }
+    *out = ty_date2j(tm.year, tm.mon, tm.mday) - TY_POSTGRES_EPOCH_JDATE;
+  }
+  return 0;
+}
+
+/* timestamp to time of day: the timestamp must be finite. */
+int ty_timestamp_to_time(int64_t ts, int64_t *out) {
+  ty_tm_t tm;
+  int32_t fsec;
+
+  if (ty_timestamp_to_tm(ts, &tm, &fsec) != 0) {
+    return ts_range();
+  }
+  *out = ((((int64_t)tm.hour * 60 + tm.min) * 60) + tm.sec) * TY_USECS_PER_SEC +
+         fsec;
+  return 0;
+}
+
+/* date and time to timestamp. */
+int ty_datetime_to_timestamp(int32_t date, int64_t time, int64_t *out) {
+  int64_t r;
+
+  if (ty_date_to_timestamp(date, &r, nullptr) != 0) {
+    return -1;
+  }
+  if (ty_timestamp_finite(r)) {
+    r += time;
+    if (!ty_timestamp_valid(r)) {
+      return ts_range();
+    }
+  }
+  *out = r;
+  return 0;
+}
+
+/* interval to time of day. */
+int ty_interval_to_time(const ty_interval_t *iv, int64_t *out) {
+  int64_t r;
+
+  if (ty_interval_not_finite(iv)) {
+    return ty_internal::set_error(TY_ERR_RANGE,
+                                  "cannot convert infinite interval to time");
+  }
+  r = iv->time % (TY_USECS_PER_HOUR * 24);
+  if (r < 0) {
+    r += TY_USECS_PER_HOUR * 24;
+  }
+  *out = r;
+  return 0;
 }

@@ -668,6 +668,27 @@ copied from PostgreSQL keeps its copyright notice
      Python port of the SQL rule, and
      `dg/test/select_overlaps_ops.sql`, which prints the same
      as the digres before the move. Cost: -5%.
+   - **Conversions of date, timestamp, time and interval
+     moved (2026-11-21).** `ty_date_to_timestamp`,
+     `ty_timestamp_to_date`, `ty_timestamp_to_time`,
+     `ty_datetime_to_timestamp`, `ty_interval_to_time`. The
+     tests: about 300 vectors from a Python port, and
+     `dg/test/select_dateconv_ops.sql`, which prints the same
+     as the digres before the move.
+   - **Warning on the callgrind numbers of the typmod, trunc,
+     age, bin, interval trunc and conversion moves above.**
+     They were taken with `count(*)` over a subquery, and the
+     planner drops the unused outputs of a subquery: they did
+     not run the functions. Measured again with `max()` over
+     the values, the typmod cast was +1.3% and `date_bin`
+     +1.3% as functions, out of line; both are inline in the
+     header now (typmod +0.14%, bin -7%). `date_trunc` of
+     timestamp and interval, `age`, and the cast to interval(p)
+     were not remeasured by function; their query totals were
+     +1.5% to +2.7% against the old binary, which includes the
+     earlier moves of `interval * double` and
+     `timestamp + interval`. Measure these again before a
+     release.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

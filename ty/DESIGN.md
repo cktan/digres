@@ -719,6 +719,12 @@ operator. A null end is a null pointer. The answer is true, false
 or null, as the SQL standard says, which gives a result that is
 not null for some inputs with nulls.
 
+`ty_date_to_timestamp`, `ty_timestamp_to_date`,
+`ty_timestamp_to_time`, `ty_datetime_to_timestamp` and
+`ty_interval_to_time` are the conversions between date, time,
+timestamp and interval. The conversions that need a time zone are
+still in digres.
+
 The tests: the vectors, from Python integers and a second
 formulation of the Julian day (the Wikipedia formula and
 Richards' inverse, not PostgreSQL's), about 3,500;

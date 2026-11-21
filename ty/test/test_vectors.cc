@@ -1016,6 +1016,41 @@ bool run_timetz(const vec_t &v) {
     }
     return true;
   }
+  if (op == "date.totimestamp" || op == "ts.todate" || op == "ts.totime" ||
+      op == "dt.totimestamp" || op == "iv.totime") {
+    int64_t out64 = 0;
+    int32_t out32 = 0;
+    int ovf = 0;
+
+    if (op == "date.totimestamp") {
+      rc = ty_date_to_timestamp((int32_t)std::stoll(v.args[0]), &out64,
+                                v.args[1] == "1" ? &ovf : nullptr);
+    } else if (op == "ts.todate") {
+      rc = ty_timestamp_to_date(std::stoll(v.args[0]), &out32);
+      out64 = out32;
+    } else if (op == "ts.totime") {
+      rc = ty_timestamp_to_time(std::stoll(v.args[0]), &out64);
+    } else if (op == "dt.totimestamp") {
+      rc = ty_datetime_to_timestamp((int32_t)std::stoll(v.args[0]),
+                                    std::stoll(v.args[1]), &out64);
+    } else {
+      long long m, d, t;
+
+      REQUIRE(3 == sscanf(v.args[0].c_str(), "%lld:%lld:%lld", &m, &d, &t));
+      ty_interval_t in = {t, (int32_t)d, (int32_t)m};
+
+      rc = ty_interval_to_time(&in, &out64);
+    }
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      CHECK(0 == rc);
+      CHECK(std::stoll(v.res[0]) == out64);
+    }
+    return true;
+  }
   if (op == "overlaps.i64" || op == "overlaps.timetz") {
     int64_t iv[4];
     ty_timetz_t tz[4];

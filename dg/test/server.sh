@@ -4680,6 +4680,10 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "date_trunc('week', interval 'infinity')|unit \"week\" not supported for type interval" \
   "date_trunc('dow', interval '1 day')|unit \"dow\" not recognized for type interval" \
   "date_trunc('epoch', interval '1 day')|unit \"epoch\" not recognized for type interval" \
+  "date '294277-01-01'::timestamp|date out of range for timestamp" \
+  "date '5874897-12-31' + time '24:00'|date out of range for timestamp" \
+  "date '294276-12-31' + time '24:00'|timestamp out of range" \
+  "'infinity'::interval::time|cannot convert infinite interval to time" \
   "extract('timezone' from timestamp '2024-01-01')|unit \"timezone\" not supported for type timestamp without time zone" \
   "extract('now' from timestamp '2024-01-01')|unit \"now\" not supported for type timestamp without time zone" \
   "date_part('foo', timestamp '2024-01-01')|unit \"foo\" not recognized for type timestamp without time zone" \

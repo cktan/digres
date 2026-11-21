@@ -501,32 +501,10 @@ Datum date_mii(PG_FUNCTION_ARGS) {
 Timestamp date2timestamp_opt_overflow(DateADT dateVal, int *overflow) {
   Timestamp result;
 
-  if (overflow)
-    *overflow = 0;
-
-  if (DATE_IS_NOBEGIN(dateVal))
-    TIMESTAMP_NOBEGIN(result);
-  else if (DATE_IS_NOEND(dateVal))
-    TIMESTAMP_NOEND(result);
-  else {
-    /*
-     * Since dates have the same minimum values as timestamps, only upper
-     * boundary need be checked for overflow.
-     */
-    if (dateVal >= (TIMESTAMP_END_JULIAN - POSTGRES_EPOCH_JDATE)) {
-      if (overflow) {
-        *overflow = 1;
-        TIMESTAMP_NOEND(result);
-        return result;
-      } else {
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("date out of range for timestamp")));
-      }
-    }
-
-    /* date is days since 2000, timestamp is microseconds since same... */
-    result = dateVal * USECS_PER_DAY;
-  }
+  /* ty makes midnight; a date past the range is an error, or the overflow */
+  if (ty_date_to_timestamp(dateVal, &result, overflow))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("date out of range for timestamp")));
 
   return result;
 }
@@ -1017,21 +995,10 @@ Datum date_timestamp(PG_FUNCTION_ARGS) {
 Datum timestamp_date(PG_FUNCTION_ARGS) {
   Timestamp timestamp = PG_GETARG_TIMESTAMP(0);
   DateADT result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
 
-  if (TIMESTAMP_IS_NOBEGIN(timestamp))
-    DATE_NOBEGIN(result);
-  else if (TIMESTAMP_IS_NOEND(timestamp))
-    DATE_NOEND(result);
-  else {
-    if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-
-    result =
-        date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) - POSTGRES_EPOCH_JDATE;
-  }
+  if (ty_timestamp_to_date(timestamp, &result))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("timestamp out of range")));
 
   PG_RETURN_DATEADT(result);
 }
@@ -1410,24 +1377,13 @@ Datum overlaps_time(PG_FUNCTION_ARGS) {
 Datum timestamp_time(PG_FUNCTION_ARGS) {
   Timestamp timestamp = PG_GETARG_TIMESTAMP(0);
   TimeADT result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
 
   if (TIMESTAMP_NOT_FINITE(timestamp))
     PG_RETURN_NULL();
 
-  if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) != 0)
+  if (ty_timestamp_to_time(timestamp, &result))
     ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
                     errmsg("timestamp out of range")));
-
-  /*
-   * Could also do this with time = (timestamp / USECS_PER_DAY *
-   * USECS_PER_DAY) - timestamp;
-   */
-  result = ((((tm->tm_hour * MINS_PER_HOUR + tm->tm_min) * SECS_PER_MINUTE) +
-             tm->tm_sec) *
-            USECS_PER_SEC) +
-           fsec;
 
   PG_RETURN_TIMEADT(result);
 }
@@ -1469,13 +1425,9 @@ Datum datetime_timestamp(PG_FUNCTION_ARGS) {
   TimeADT time = PG_GETARG_TIMEADT(1);
   Timestamp result;
 
-  result = date2timestamp(date);
-  if (!TIMESTAMP_NOT_FINITE(result)) {
-    result += time;
-    if (!IS_VALID_TIMESTAMP(result))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-  }
+  if (ty_datetime_to_timestamp(date, time, &result))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
 
   PG_RETURN_TIMESTAMP(result);
 }
@@ -1508,13 +1460,9 @@ Datum interval_time(PG_FUNCTION_ARGS) {
   Interval *span = PG_GETARG_INTERVAL_P(0);
   TimeADT result;
 
-  if (INTERVAL_NOT_FINITE(span))
+  if (ty_interval_to_time((const ty_interval_t *)span, &result))
     ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
                     errmsg("cannot convert infinite interval to time")));
-
-  result = span->time % USECS_PER_DAY;
-  if (result < 0)
-    result += USECS_PER_DAY;
 
   PG_RETURN_TIMEADT(result);
 }
