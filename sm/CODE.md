@@ -26,6 +26,16 @@ two differ, [`CLAUDE.md`](../CLAUDE.md) wins.
   added to sm1's surface, not worked around.
 - **A public header is opaque**: handles, not layouts, no
   private members and no RocksDB type.
+- **sm accepts no PostgreSQL code.** Do not copy, port or adapt
+  a file, a function or a table of PostgreSQL's into `sm/`: write
+  it again in your own words and structure, or put it where it
+  belongs, in `ty/` for the operations of a type, or in digres.
+  sm must run for a SQL system that is not PostgreSQL, and its
+  code carries no PostgreSQL copyright notice. Two places break
+  this today: `sm2/src/ryu/`, PostgreSQL's float printers copied
+  as they are, and `sm3/src/analyze/estimate.cc`, ported from
+  PostgreSQL's `analyze.c`. They do not set a precedent: a new
+  case is not added, and these are to be moved out.
 
 ## 2. The interface to sm's users
 
