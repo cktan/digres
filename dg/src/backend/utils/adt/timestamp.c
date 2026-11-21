@@ -2095,108 +2095,19 @@ Datum interval_hash_extended(PG_FUNCTION_ARGS) {
  * where some of the inputs are null.
  */
 Datum overlaps_timestamp(PG_FUNCTION_ARGS) {
-  /*
-   * The arguments are Timestamps, but we leave them as generic Datums to
-   * avoid unnecessary conversions between value and reference forms --- not
-   * to mention possible dereferences of null pointers.
-   */
-  Datum ts1 = PG_GETARG_DATUM(0);
-  Datum te1 = PG_GETARG_DATUM(1);
-  Datum ts2 = PG_GETARG_DATUM(2);
-  Datum te2 = PG_GETARG_DATUM(3);
-  bool ts1IsNull = PG_ARGISNULL(0);
-  bool te1IsNull = PG_ARGISNULL(1);
-  bool ts2IsNull = PG_ARGISNULL(2);
-  bool te2IsNull = PG_ARGISNULL(3);
+  int64 v[4];
+  const int64 *p[4];
+  int r;
 
-#define TIMESTAMP_GT(t1, t2) \
-	DatumGetBool(DirectFunctionCall2(timestamp_gt,t1,t2))
-#define TIMESTAMP_LT(t1, t2) \
-	DatumGetBool(DirectFunctionCall2(timestamp_lt,t1,t2))
-
-  /*
-   * If both endpoints of interval 1 are null, the result is null (unknown).
-   * If just one endpoint is null, take ts1 as the non-null one. Otherwise,
-   * take ts1 as the lesser endpoint.
-   */
-  if (ts1IsNull) {
-    if (te1IsNull)
-      PG_RETURN_NULL();
-    /* swap null for non-null */
-    ts1 = te1;
-    te1IsNull = true;
-  } else if (!te1IsNull) {
-    if (TIMESTAMP_GT(ts1, te1)) {
-      Datum tt = ts1;
-
-      ts1 = te1;
-      te1 = tt;
-    }
+  /* a null end is a null pointer to ty, which applies the SQL standard */
+  for (int i = 0; i < 4; i++) {
+    v[i] = PG_ARGISNULL(i) ? 0 : DatumGetTimestamp(PG_GETARG_DATUM(i));
+    p[i] = PG_ARGISNULL(i) ? NULL : &v[i];
   }
-
-  /* Likewise for interval 2. */
-  if (ts2IsNull) {
-    if (te2IsNull)
-      PG_RETURN_NULL();
-    /* swap null for non-null */
-    ts2 = te2;
-    te2IsNull = true;
-  } else if (!te2IsNull) {
-    if (TIMESTAMP_GT(ts2, te2)) {
-      Datum tt = ts2;
-
-      ts2 = te2;
-      te2 = tt;
-    }
-  }
-
-  /*
-   * At this point neither ts1 nor ts2 is null, so we can consider three
-   * cases: ts1 > ts2, ts1 < ts2, ts1 = ts2
-   */
-  if (TIMESTAMP_GT(ts1, ts2)) {
-    /*
-     * This case is ts1 < te2 OR te1 < te2, which may look redundant but
-     * in the presence of nulls it's not quite completely so.
-     */
-    if (te2IsNull)
-      PG_RETURN_NULL();
-    if (TIMESTAMP_LT(ts1, te2))
-      PG_RETURN_BOOL(true);
-    if (te1IsNull)
-      PG_RETURN_NULL();
-
-    /*
-     * If te1 is not null then we had ts1 <= te1 above, and we just found
-     * ts1 >= te2, hence te1 >= te2.
-     */
-    PG_RETURN_BOOL(false);
-  } else if (TIMESTAMP_LT(ts1, ts2)) {
-    /* This case is ts2 < te1 OR te2 < te1 */
-    if (te1IsNull)
-      PG_RETURN_NULL();
-    if (TIMESTAMP_LT(ts2, te1))
-      PG_RETURN_BOOL(true);
-    if (te2IsNull)
-      PG_RETURN_NULL();
-
-    /*
-     * If te2 is not null then we had ts2 <= te2 above, and we just found
-     * ts2 >= te1, hence te2 >= te1.
-     */
-    PG_RETURN_BOOL(false);
-  } else {
-    /*
-     * For ts1 = ts2 the spec says te1 <> te2 OR te1 = te2, which is a
-     * rather silly way of saying "true if both are non-null, else null".
-     */
-    if (te1IsNull || te2IsNull)
-      PG_RETURN_NULL();
-    PG_RETURN_BOOL(true);
-  }
-
-#undef TIMESTAMP_GT
-#undef TIMESTAMP_LT
+  r = ty_overlaps_i64(p[0], p[1], p[2], p[3]);
+  if (r == 2)
+    PG_RETURN_NULL();
+  PG_RETURN_BOOL(r == 1);
 }
 
 /*----------------------------------------------------------

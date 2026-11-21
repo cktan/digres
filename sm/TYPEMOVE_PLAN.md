@@ -662,6 +662,12 @@ copied from PostgreSQL keeps its copyright notice
      old digres, and `dg/test/select_interval_trunc.sql`, which
      prints the same as the digres before the move. Cost:
      +0.28%.
+   - **OVERLAPS of timestamp, date, time and timetz moved
+     (2026-11-21).** `ty_overlaps_i64` and
+     `ty_overlaps_timetz`. The tests: 1,200 vectors from a
+     Python port of the SQL rule, and
+     `dg/test/select_overlaps_ops.sql`, which prints the same
+     as the digres before the move. Cost: -5%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

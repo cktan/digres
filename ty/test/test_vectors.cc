@@ -1016,6 +1016,29 @@ bool run_timetz(const vec_t &v) {
     }
     return true;
   }
+  if (op == "overlaps.i64" || op == "overlaps.timetz") {
+    int64_t iv[4];
+    ty_timetz_t tz[4];
+    const int64_t *ip[4];
+    const ty_timetz_t *tp[4];
+
+    for (int i = 0; i < 4; i++) {
+      bool null = v.args[i] == "N";
+
+      if (op == "overlaps.i64") {
+        iv[i] = null ? 0 : std::stoll(v.args[i]);
+        ip[i] = null ? nullptr : &iv[i];
+      } else {
+        tz[i] = null ? ty_timetz_t{0, 0} : timetz_of(v.args[i]);
+        tp[i] = null ? nullptr : &tz[i];
+      }
+    }
+    r = op == "overlaps.i64" ? ty_overlaps_i64(ip[0], ip[1], ip[2], ip[3])
+                             : ty_overlaps_timetz(tp[0], tp[1], tp[2], tp[3]);
+    INFO(v.line);
+    CHECK(std::stoi(v.res[0]) == r);
+    return true;
+  }
   if (op != "timetz.inrange" && op != "time.inrange") {
     return false;
   }

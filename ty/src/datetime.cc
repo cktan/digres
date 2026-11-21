@@ -13,6 +13,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <utility>
 
 #include "error.h"
 
@@ -919,4 +920,97 @@ int ty_interval_trunc(int code, const ty_interval_t *iv, ty_interval_t *out) {
     return ty_internal::set_error(TY_ERR_INVALID, "unit not supported");
   }
   return itm_to_interval(year, mon, mday, hour, min, sec, usec, out);
+}
+
+namespace {
+
+/* The order of int64 for overlaps. */
+struct i64_order_t {
+  static bool gt(const int64_t *a, const int64_t *b) { return *a > *b; }
+  static bool lt(const int64_t *a, const int64_t *b) { return *a < *b; }
+};
+
+/* The order of timetz for overlaps. */
+struct timetz_order_t {
+  static bool gt(const ty_timetz_t *a, const ty_timetz_t *b) {
+    return ty_timetz_cmp(a, b) > 0;
+  }
+  static bool lt(const ty_timetz_t *a, const ty_timetz_t *b) {
+    return ty_timetz_cmp(a, b) < 0;
+  }
+};
+
+/*
+ * OVERLAPS by the SQL standard, which must give a result that is not null for
+ * some inputs with nulls.
+ * 1. If both ends of a period are null, the result is null.
+ * 2. If one end is null, take the other as the start. Else take the lesser as
+ *    the start.
+ * 3. Compare the starts, and then the end that decides.
+ */
+template <class T, class Order>
+int overlaps(const T *ts1, const T *te1, const T *ts2, const T *te2) {
+  if (ts1 == nullptr) {
+    if (te1 == nullptr) {
+      return 2;
+    }
+    ts1 = te1;
+    te1 = nullptr;
+  } else if (te1 != nullptr && Order::gt(ts1, te1)) {
+    std::swap(ts1, te1);
+  }
+  if (ts2 == nullptr) {
+    if (te2 == nullptr) {
+      return 2;
+    }
+    ts2 = te2;
+    te2 = nullptr;
+  } else if (te2 != nullptr && Order::gt(ts2, te2)) {
+    std::swap(ts2, te2);
+  }
+  if (Order::gt(ts1, ts2)) {
+    /* ts1 < te2 or te1 < te2; with a null end, the nulls matter */
+    if (te2 == nullptr) {
+      return 2;
+    }
+    if (Order::lt(ts1, te2)) {
+      return 1;
+    }
+    if (te1 == nullptr) {
+      return 2;
+    }
+    return 0;
+  }
+  if (Order::lt(ts1, ts2)) {
+    /* ts2 < te1 or te2 < te1 */
+    if (te1 == nullptr) {
+      return 2;
+    }
+    if (Order::lt(ts2, te1)) {
+      return 1;
+    }
+    if (te2 == nullptr) {
+      return 2;
+    }
+    return 0;
+  }
+  /* the starts are equal: they overlap, if both periods have an end */
+  if (te1 == nullptr || te2 == nullptr) {
+    return 2;
+  }
+  return 1;
+}
+
+} // namespace
+
+/* OVERLAPS of timestamps, and of times. */
+int ty_overlaps_i64(const int64_t *ts1, const int64_t *te1, const int64_t *ts2,
+                    const int64_t *te2) {
+  return overlaps<int64_t, i64_order_t>(ts1, te1, ts2, te2);
+}
+
+/* OVERLAPS of timetz. */
+int ty_overlaps_timetz(const ty_timetz_t *ts1, const ty_timetz_t *te1,
+                       const ty_timetz_t *ts2, const ty_timetz_t *te2) {
+  return overlaps<ty_timetz_t, timetz_order_t>(ts1, te1, ts2, te2);
 }

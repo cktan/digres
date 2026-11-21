@@ -714,6 +714,11 @@ and the numeric are still in digres.
 are cut at the unit, as for a timestamp. A week is not a unit of
 an interval.
 
+`ty_overlaps_i64` and `ty_overlaps_timetz` are the SQL OVERLAPS
+operator. A null end is a null pointer. The answer is true, false
+or null, as the SQL standard says, which gives a result that is
+not null for some inputs with nulls.
+
 The tests: the vectors, from Python integers and a second
 formulation of the Julian day (the Wikipedia formula and
 Richards' inverse, not PostgreSQL's), about 3,500;

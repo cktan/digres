@@ -266,6 +266,17 @@ int ty_timestamp_trunc(int code, int64_t ts, int64_t* out);
 int ty_interval_trunc(int code, const ty_interval_t* iv, ty_interval_t* out);
 
 /*
+ * The SQL OVERLAPS operator on two periods. A null end is a null pointer.
+ * The answer is 1 (true), 0 (false) or 2 (null: it cannot be told), by the
+ * SQL standard, which gives a result for some inputs that have nulls.
+ * Timestamp and time compare as int64; timetz as ty_timetz_cmp.
+ */
+int ty_overlaps_i64(const int64_t* ts1, const int64_t* te1, const int64_t* ts2,
+                    const int64_t* te2);
+int ty_overlaps_timetz(const ty_timetz_t* ts1, const ty_timetz_t* te1,
+                       const ty_timetz_t* ts2, const ty_timetz_t* te2);
+
+/*
  * date_bin: the start of the bin of timestamp, of stride, from origin. The
  * errors are TY_ERR_RANGE with PostgreSQL's message, and for a stride with
  * months, TY_ERR_INVALID ("timestamps cannot be binned into intervals

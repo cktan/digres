@@ -421,6 +421,7 @@ def main():
     gen_geo()
     gen_typmod()
     gen_timetz()
+    gen_overlaps()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -3177,6 +3178,60 @@ def gen_timetz():
         c = (ta > ts) - (ta < ts) or (a[1] > b[1]) - (a[1] < b[1])
         emit("timetz.inrange", args, int(c <= 0 if less else c >= 0))
         emit("time.inrange", (a[0], b[0], "%d:%d:%d" % o, sub, less), int(a[0] <= sm if less else a[0] >= sm))
+
+
+def overlaps_ref(a, b, gt, lt):
+    """OVERLAPS by the SQL standard (None is a null end); 1, 0 or 2 (null)."""
+    ts1, te1 = a
+    ts2, te2 = b
+    if ts1 is None:
+        if te1 is None:
+            return 2
+        ts1, te1 = te1, None
+    elif te1 is not None and gt(ts1, te1):
+        ts1, te1 = te1, ts1
+    if ts2 is None:
+        if te2 is None:
+            return 2
+        ts2, te2 = te2, None
+    elif te2 is not None and gt(ts2, te2):
+        ts2, te2 = te2, ts2
+    if gt(ts1, ts2):
+        if te2 is None:
+            return 2
+        if lt(ts1, te2):
+            return 1
+        if te1 is None:
+            return 2
+        return 0
+    if lt(ts1, ts2):
+        if te1 is None:
+            return 2
+        if lt(ts2, te1):
+            return 1
+        if te2 is None:
+            return 2
+        return 0
+    if te1 is None or te2 is None:
+        return 2
+    return 1
+
+
+def gen_overlaps():
+    """OVERLAPS of timestamps (int64) and of timetz, with null ends."""
+    vals = [0, 1, 2, 3, 10, -5, 86400000000, I64MAX, I64MIN]
+    for _ in range(600):
+        ends = [random.choice(vals + [None, None]) for _ in range(4)]
+        tok = lambda x: "N" if x is None else str(x)
+        r = overlaps_ref((ends[0], ends[1]), (ends[2], ends[3]), lambda x, y: x > y, lambda x, y: x < y)
+        emit("overlaps.i64", tuple(tok(x) for x in ends), r)
+    tzs = [(0, 0), (43200000000, 0), (43200000000, 3600), (43200000000, -3600), (0, 43200), (86399999999, -43200), (1, 1)]
+    key = lambda x: (x[0] + x[1] * 1000000, x[1])
+    for _ in range(600):
+        ends = [random.choice(tzs + [None]) for _ in range(4)]
+        tok = lambda x: "N" if x is None else "%d:%d" % x
+        r = overlaps_ref((ends[0], ends[1]), (ends[2], ends[3]), lambda x, y: key(x) > key(y), lambda x, y: key(x) < key(y))
+        emit("overlaps.timetz", tuple(tok(x) for x in ends), r)
 
 
 def gen_typmod():
