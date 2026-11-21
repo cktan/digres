@@ -657,17 +657,26 @@ microseconds, and back; `timestamp + interval` and `- interval`
 then the days, then the microseconds); and `timestamp -
 timestamp`, which justifies the hours into days.
 
-The text of these types reads `DateStyle` and the time zone
-(`DecodeDateTime`, `EncodeDateTime`), `extract`, `date_trunc`,
-`age`, the casts, the typmods and everything with a time zone
-stay in digres until those settings are passed in, as the locale
-of money is.
+The text out of date, time, timestamp, timestamptz and interval
+is here too (`ty_date_format`, `ty_time_format`,
+`ty_timestamp_format` and `ty_interval_format`), by the settings
+the host passes in: the date style, the date order and the
+interval style, with PostgreSQL's values. For a timestamptz the
+host finds the broken-down time in its zone and the name of the
+zone, and passes them. The special values, infinity, are written
+by the host. The text in is the host's, and reads `DateStyle` and
+the time zone (`DecodeDateTime`), `extract`, `date_trunc`, `age`,
+the casts, the typmods and everything with a time zone stay in
+digres until those settings are passed in, as the locale of money
+is.
 
 The tests: the vectors, from Python integers and a second
 formulation of the Julian day (the Wikipedia formula and
 Richards' inverse, not PostgreSQL's), about 3,500;
 `test/test_datetime.cc`; and `dg/test/select_datetime_ops.sql`,
 which prints the same as the digres before the move.
+
+
 
 ## 20. point and box
 

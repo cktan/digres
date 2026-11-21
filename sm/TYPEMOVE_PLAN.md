@@ -598,6 +598,17 @@ copied from PostgreSQL keeps its copyright notice
      operators +0.58%; point arithmetic -0.22%. The first
      version was +1.2% to +1.3% on the box and arithmetic
      statements: the functions were not in line.
+   - **The text out of date, time, timestamp, timestamptz and
+     interval moved (2026-11-21).** The settings are passed in:
+     the date style, the date order and the interval style (a
+     third kind of hook of section 8: the host reads the
+     setting). The text in stays in digres. The tests: about
+     1,600 lines in `known.txt` from the old digres, in 8 date
+     styles and 4 interval styles, and
+     `dg/test/select_datetime_text.sql`, with time zones, which
+     prints the same as before. Measured by callgrind (old,
+     new): timestamp text -7.43%; date text -6.73%; interval
+     text -52.84%; timestamptz text -7.81%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

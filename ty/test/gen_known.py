@@ -204,7 +204,74 @@ def run(psql_args, sql):
     return "E " + err.strip().replace(" ", "_")[:40]
 
 
+def datetime_text_cases():
+    """The cases of the text of date, time, timestamp and interval: a kind,
+    a date style and order or an interval style, and a value."""
+    random.seed(20261122)
+    dates = [0, -1, 1, 366, -366, 8000, -2451545, 2147483494 - 2451545 - 1, 3652059, 2451911, -730119, -730120, 1460, 10957]
+    dates += [random.randint(-2451545, 2145031948) for _ in range(30)] + [random.randint(-100000, 100000) for _ in range(20)]
+    times = [0, 1, 10, 100, 1000, 100000, 999999, 1000000, 3600500000, 45296789012, 86399999999, 86400000000, 12345678, 60000000, 3600000000]
+    times += [random.randint(0, 86400000000) for _ in range(20)]
+    tss = [0, 1, -1, 86400000000, -86400000000, -211813488000000000, -211813488000000000 + 1, 9223371331200000000 - 1, 86399999999,
+           725803200000000, 1000000000000000000, -200000000000000000, 3155760000000000, -3155760000000000, 500, 1500000, 10000, 120000]
+    tss += [random.randint(-211813488000000000, 9223371331200000000 - 1) for _ in range(20)] + [random.randint(-10 ** 15, 10 ** 15) for _ in range(30)]
+    ivs = [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (-1, 0, 0), (0, -1, 0), (0, 0, -1), (1, 1, 1), (-1, -1, -1), (1, -1, 1), (-1, 1, -1),
+           (14, 3, 4271000000), (-14, -3, -4271000000), (0, 0, 90000000000), (0, 0, -90000000), (3, 0, 500000), (0, 5, -500000), (12, 0, 0), (-12, 0, 0),
+           (0, 0, 3600000000), (0, 0, 59999999), (0, 0, -59999999), (2, 0, 0), (0, 30, 0), (25, 40, 1234567890123), (0, 0, 9223372036854775807), (0, 0, -9223372036854775807),
+           (2147483647, 2147483647, 0), (-2147483647, -2147483647, 0), (1, 2, 3), (-1, 2, 3), (1, -2, 3), (1, 2, -3), (0, 1, -1000000)]
+    ivs += [(random.randint(-100, 100), random.randint(-100, 100), random.randint(-10 ** 11, 10 ** 11)) for _ in range(30)]
+    return dates, times, tss, ivs
+
+
+def run_batch(psql_args, sets, queries):
+    """Run set statements and queries in one psql, and return the lines."""
+    script = "".join(sets) + "".join(q + ";\n" for q in queries)
+    r = subprocess.run(["psql", "-X", "-A", "-t", "-q"] + psql_args, input=script, capture_output=True, text=True)
+    return r.stdout.rstrip("\n").split("\n"), r.stderr
+
+
+def iso_interval(v):
+    """An interval in the ISO 8601 form, whose fields have signs of their own."""
+    m, d, t = v
+    if m == 0 and d == 0:
+        return "%d microseconds" % t  # exact: the seconds of ISO are a float
+    sign = "-" if t < 0 else ""
+    t = abs(t)
+    return "P%dM%dDT%s%d.%06dS" % (m, d, sign, t // 1000000, t % 1000000)
+
+
+def main_datetime(args):
+    dates, times, tss, ivs = datetime_text_cases()
+    dstyles = [("Postgres", "MDY", 0, 2), ("Postgres", "DMY", 0, 1), ("ISO", "MDY", 1, 2), ("ISO", "YMD", 1, 0), ("SQL", "MDY", 2, 2), ("SQL", "DMY", 2, 1),
+               ("German", "DMY", 3, 1), ("German", "MDY", 3, 2)]
+    for name, order, sty, ordn in dstyles:
+        sets = ["set datestyle = '%s, %s';\n" % (name, order)]
+        out, err = run_batch(args, sets, ["select (date '2000-01-01' + %d)::text" % d for d in dates])
+        assert len(out) == len(dates), err
+        for d, t in zip(dates, out):
+            print("date.out %d %d %d => %s" % (sty, ordn, d, t.encode().hex()))
+        out, err = run_batch(args, sets, ["select (time '00:00' + interval '%d microseconds')::text" % t for t in times if t < 86400000000])
+        for t, o in zip([t for t in times if t < 86400000000], out):
+            print("time.out %d %d %d => %s" % (sty, ordn, t, o.encode().hex()))
+        out, err = run_batch(args, sets, ["select (timestamp '2000-01-01' + interval '%d microseconds')::text" % t for t in tss])
+        assert len(out) == len(tss), err
+        for t, o in zip(tss, out):
+            print("ts.out %d %d %d => %s" % (sty, ordn, t, o.encode().hex()))
+    ists = [("postgres", 0), ("postgres_verbose", 1), ("sql_standard", 2), ("iso_8601", 3)]
+    for name, sty in ists:
+        sets = ["set intervalstyle = '%s';\n" % name]
+        out, err = run_batch(args, sets, ["select (interval '%s')::text" % iso_interval(v) for v in ivs])
+        assert len(out) == len(ivs), err
+        for v, o in zip(ivs, out):
+            print("iv.out %d %d:%d:%d => %s" % (sty, v[0], v[1], v[2], o.encode().hex()))
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--datetime":
+        sys.argv.pop(1)
+        main_datetime(sys.argv[1:])
+        return
+
     args = sys.argv[1:]
     for name, (sqltype, gen) in OPS.items():
         for text in gen():

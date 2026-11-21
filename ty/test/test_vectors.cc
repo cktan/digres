@@ -908,6 +908,11 @@ bool run_interval(const vec_t &v) {
     return false;
   }
   const std::string name = op.substr(3);
+
+  /* the text of an interval is in known.txt, run by run_known */
+  if (name == "out") {
+    return false;
+  }
   ty_interval_t a = iv_of(v.args[0]), b, r;
   int rc = 0;
 
@@ -965,6 +970,11 @@ bool run_datetime(const vec_t &v) {
     return false;
   }
   const std::string name = op.substr(op.find('.') + 1);
+
+  /* the text of these types is in known.txt, run by run_known */
+  if (name == "out") {
+    return false;
+  }
   int rc = 0;
   auto i64 = [&](size_t i) { return (int64_t)std::stoll(v.args[i]); };
   /* a result that is a number, or an error */
@@ -1454,6 +1464,51 @@ bool run_text(const vec_t &v) {
   return true;
 }
 
+/*
+ * The text of date, time, timestamp and interval (known.txt): what the old
+ * digres printed in a style, as hex.
+ */
+bool run_datetime_text(const vec_t &v) {
+  const std::string &op = v.op;
+  char out[TY_DATETIME_TEXT_MAX];
+  size_t n = 0;
+
+  INFO(v.line);
+  if (op == "iv.out") {
+    int style = std::stoi(v.args[0]);
+    long long m, d, t;
+
+    REQUIRE(3 == sscanf(v.args[1].c_str(), "%lld:%lld:%lld", &m, &d, &t));
+    ty_interval_t iv = {t, (int32_t)d, (int32_t)m};
+    ty_itm_t itm;
+
+    ty_interval_to_itm(&iv, &itm);
+    n = ty_interval_format(&itm, style, out);
+  } else {
+    int style = std::stoi(v.args[0]), order = std::stoi(v.args[1]);
+    long long x = std::stoll(v.args[2]);
+    ty_tm_t tm = {};
+    int32_t fsec = 0;
+
+    if (op == "date.out") {
+      ty_j2date((int)(x + TY_POSTGRES_EPOCH_JDATE), &tm.year, &tm.mon,
+                &tm.mday);
+      n = ty_date_format(&tm, style, order, out);
+    } else if (op == "time.out") {
+      tm.hour = (int32_t)(x / TY_USECS_PER_HOUR);
+      tm.min = (int32_t)(x / TY_USECS_PER_MINUTE % 60);
+      tm.sec = (int32_t)(x / TY_USECS_PER_SEC % 60);
+      fsec = (int32_t)(x % TY_USECS_PER_SEC);
+      n = ty_time_format(&tm, fsec, 0, 0, style, out);
+    } else {
+      REQUIRE(0 == ty_timestamp_to_tm(x, &tm, &fsec));
+      n = ty_timestamp_format(&tm, fsec, 0, 0, nullptr, -1, style, order, out);
+    }
+  }
+  CHECK(v.res[0] == token_of(reinterpret_cast<const uint8_t *>(out), n));
+  return true;
+}
+
 /* An inet token "family:bits:hex" as a value. */
 ty_inet_t inet_of(const std::string &tok) {
   ty_inet_t a;
@@ -1591,6 +1646,10 @@ bool run_known(const vec_t &v) {
       CHECK(v.res[0] == std::string(out));
     }
     return true;
+  }
+  if (op == "date.out" || op == "time.out" || op == "ts.out" ||
+      op == "iv.out") {
+    return run_datetime_text(v);
   }
   if (op == "like.pair") {
     std::vector<uint8_t> tb = bytes_of(v.args[0]), pb = bytes_of(v.args[1]);

@@ -51,8 +51,6 @@ static const datetkn *datebsearch(const char *key, const datetkn *base,
                                   int nel);
 static int DecodeDate(char *str, int fmask, int *tmask, bool *is2digits,
                       struct pg_tm *tm);
-static char *AppendSeconds(char *cp, int sec, fsec_t fsec, int precision,
-                           bool fillzeros);
 static bool int64_multiply_add(int64 val, int64 multiplier, int64 *sum);
 static bool AdjustFractMicroseconds(double frac, int64 scale,
                                     struct pg_itm_in *itm_in);
@@ -390,57 +388,6 @@ void GetCurrentTimeUsec(struct pg_tm *tm, fsec_t *fsec, int *tzp) {
  *
  * Note that any sign is stripped from the input sec and fsec values.
  */
-static char *AppendSeconds(char *cp, int sec, fsec_t fsec, int precision,
-                           bool fillzeros) {
-  Assert(precision >= 0);
-
-  if (fillzeros)
-    cp = pg_ultostr_zeropad(cp, abs(sec), 2);
-  else
-    cp = pg_ultostr(cp, abs(sec));
-
-  /* fsec_t is just an int32 */
-  if (fsec != 0) {
-    int32 value = abs(fsec);
-    char *end = &cp[precision + 1];
-    bool gotnonzero = false;
-
-    *cp++ = '.';
-
-    /*
-     * Append the fractional seconds part.  Note that we don't want any
-     * trailing zeros here, so since we're building the number in reverse
-     * we'll skip appending zeros until we've output a non-zero digit.
-     */
-    while (precision--) {
-      int32 oldval = value;
-      int32 remainder;
-
-      value /= 10;
-      remainder = oldval - value * 10;
-
-      /* check if we got a non-zero */
-      if (remainder)
-        gotnonzero = true;
-
-      if (gotnonzero)
-        cp[precision] = '0' + remainder;
-      else
-        end = &cp[precision];
-    }
-
-    /*
-     * If we still have a non-zero value then precision must have not been
-     * enough to print the number.  We punt the problem to pg_ultostr(),
-     * which will generate a correct answer in the minimum valid width.
-     */
-    if (value)
-      return pg_ultostr(cp, abs(fsec));
-
-    return end;
-  } else
-    return cp;
-}
 
 /*
  * Variant of above that's specialized to timestamp case.
@@ -448,9 +395,6 @@ static char *AppendSeconds(char *cp, int sec, fsec_t fsec, int precision,
  * Returns a pointer to the new end of string.  No NUL terminator is put
  * there; callers are responsible for NUL terminating str themselves.
  */
-static char *AppendTimestampSeconds(char *cp, struct pg_tm *tm, fsec_t fsec) {
-  return AppendSeconds(cp, tm->tm_sec, fsec, MAX_TIMESTAMP_PRECISION, true);
-}
 
 /*
  * Add val * multiplier to *sum.
@@ -3812,100 +3756,15 @@ static const datetkn *datebsearch(const char *key, const datetkn *base,
  * Returns a pointer to the new end of string.  No NUL terminator is put
  * there; callers are responsible for NUL terminating str themselves.
  */
-static char *EncodeTimezone(char *str, int tz, int style) {
-  int hour, min, sec;
-
-  sec = abs(tz);
-  min = sec / SECS_PER_MINUTE;
-  sec -= min * SECS_PER_MINUTE;
-  hour = min / MINS_PER_HOUR;
-  min -= hour * MINS_PER_HOUR;
-
-  /* TZ is negated compared to sign we wish to display ... */
-  *str++ = (tz <= 0 ? '+' : '-');
-
-  if (sec != 0) {
-    str = pg_ultostr_zeropad(str, hour, 2);
-    *str++ = ':';
-    str = pg_ultostr_zeropad(str, min, 2);
-    *str++ = ':';
-    str = pg_ultostr_zeropad(str, sec, 2);
-  } else if (min != 0 || style == USE_XSD_DATES) {
-    str = pg_ultostr_zeropad(str, hour, 2);
-    *str++ = ':';
-    str = pg_ultostr_zeropad(str, min, 2);
-  } else
-    str = pg_ultostr_zeropad(str, hour, 2);
-  return str;
-}
 
 /* EncodeDateOnly()
  * Encode date as local time.
  */
 void EncodeDateOnly(struct pg_tm *tm, int style, char *str) {
-  Assert(tm->tm_mon >= 1 && tm->tm_mon <= MONTHS_PER_YEAR);
+  ty_tm_t t = {tm->tm_year, tm->tm_mon, tm->tm_mday, 0, 0, 0};
 
-  switch (style) {
-  case USE_ISO_DATES:
-  case USE_XSD_DATES:
-    /* compatible with ISO date formats */
-    str = pg_ultostr_zeropad(
-        str, (tm->tm_year > 0) ? tm->tm_year : -(tm->tm_year - 1), 4);
-    *str++ = '-';
-    str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-    *str++ = '-';
-    str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-    break;
-
-  case USE_SQL_DATES:
-    /* compatible with Oracle/Ingres date formats */
-    if (DateOrder == DATEORDER_DMY) {
-      str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-      *str++ = '/';
-      str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-    } else {
-      str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-      *str++ = '/';
-      str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-    }
-    *str++ = '/';
-    str = pg_ultostr_zeropad(
-        str, (tm->tm_year > 0) ? tm->tm_year : -(tm->tm_year - 1), 4);
-    break;
-
-  case USE_GERMAN_DATES:
-    /* German-style date format */
-    str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-    *str++ = '.';
-    str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-    *str++ = '.';
-    str = pg_ultostr_zeropad(
-        str, (tm->tm_year > 0) ? tm->tm_year : -(tm->tm_year - 1), 4);
-    break;
-
-  case USE_POSTGRES_DATES:
-  default:
-    /* traditional date-only style for Postgres */
-    if (DateOrder == DATEORDER_DMY) {
-      str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-      *str++ = '-';
-      str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-    } else {
-      str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-      *str++ = '-';
-      str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-    }
-    *str++ = '-';
-    str = pg_ultostr_zeropad(
-        str, (tm->tm_year > 0) ? tm->tm_year : -(tm->tm_year - 1), 4);
-    break;
-  }
-
-  if (tm->tm_year <= 0) {
-    memcpy(str, " BC", 3); /* Don't copy NUL */
-    str += 3;
-  }
-  *str = '\0';
+  /* ty writes the date, by the style and the date order */
+  ty_date_format(&t, style, DateOrder, str);
 }
 
 /* EncodeTimeOnly()
@@ -3918,14 +3777,10 @@ void EncodeDateOnly(struct pg_tm *tm, int style, char *str) {
  */
 void EncodeTimeOnly(struct pg_tm *tm, fsec_t fsec, bool print_tz, int tz,
                     int style, char *str) {
-  str = pg_ultostr_zeropad(str, tm->tm_hour, 2);
-  *str++ = ':';
-  str = pg_ultostr_zeropad(str, tm->tm_min, 2);
-  *str++ = ':';
-  str = AppendSeconds(str, tm->tm_sec, fsec, MAX_TIME_PRECISION, true);
-  if (print_tz)
-    str = EncodeTimezone(str, tz, style);
-  *str = '\0';
+  ty_tm_t t = {tm->tm_year, tm->tm_mon, tm->tm_mday,
+               tm->tm_hour, tm->tm_min, tm->tm_sec};
+
+  ty_time_format(&t, fsec, print_tz, tz, style, str);
 }
 
 /* EncodeDateTime()
@@ -3946,148 +3801,11 @@ void EncodeTimeOnly(struct pg_tm *tm, fsec_t fsec, bool print_tz, int tz,
  */
 void EncodeDateTime(struct pg_tm *tm, fsec_t fsec, bool print_tz, int tz,
                     const char *tzn, int style, char *str) {
-  int day;
+  ty_tm_t t = {tm->tm_year, tm->tm_mon, tm->tm_mday,
+               tm->tm_hour, tm->tm_min, tm->tm_sec};
 
-  Assert(tm->tm_mon >= 1 && tm->tm_mon <= MONTHS_PER_YEAR);
-
-  /*
-   * Negative tm_isdst means we have no valid time zone translation.
-   */
-  if (tm->tm_isdst < 0)
-    print_tz = false;
-
-  switch (style) {
-  case USE_ISO_DATES:
-  case USE_XSD_DATES:
-    /* Compatible with ISO-8601 date formats */
-    str = pg_ultostr_zeropad(
-        str, (tm->tm_year > 0) ? tm->tm_year : -(tm->tm_year - 1), 4);
-    *str++ = '-';
-    str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-    *str++ = '-';
-    str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-    *str++ = (style == USE_ISO_DATES) ? ' ' : 'T';
-    str = pg_ultostr_zeropad(str, tm->tm_hour, 2);
-    *str++ = ':';
-    str = pg_ultostr_zeropad(str, tm->tm_min, 2);
-    *str++ = ':';
-    str = AppendTimestampSeconds(str, tm, fsec);
-    if (print_tz)
-      str = EncodeTimezone(str, tz, style);
-    break;
-
-  case USE_SQL_DATES:
-    /* Compatible with Oracle/Ingres date formats */
-    if (DateOrder == DATEORDER_DMY) {
-      str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-      *str++ = '/';
-      str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-    } else {
-      str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-      *str++ = '/';
-      str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-    }
-    *str++ = '/';
-    str = pg_ultostr_zeropad(
-        str, (tm->tm_year > 0) ? tm->tm_year : -(tm->tm_year - 1), 4);
-    *str++ = ' ';
-    str = pg_ultostr_zeropad(str, tm->tm_hour, 2);
-    *str++ = ':';
-    str = pg_ultostr_zeropad(str, tm->tm_min, 2);
-    *str++ = ':';
-    str = AppendTimestampSeconds(str, tm, fsec);
-
-    /*
-     * Note: the uses of %.*s in this function would be risky if the
-     * timezone names ever contain non-ASCII characters, since we are
-     * not being careful to do encoding-aware clipping.  However, all
-     * TZ abbreviations in the IANA database are plain ASCII.
-     */
-    if (print_tz) {
-      if (tzn) {
-        sprintf(str, " %.*s", MAXTZLEN, tzn);
-        str += strlen(str);
-      } else
-        str = EncodeTimezone(str, tz, style);
-    }
-    break;
-
-  case USE_GERMAN_DATES:
-    /* German variant on European style */
-    str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-    *str++ = '.';
-    str = pg_ultostr_zeropad(str, tm->tm_mon, 2);
-    *str++ = '.';
-    str = pg_ultostr_zeropad(
-        str, (tm->tm_year > 0) ? tm->tm_year : -(tm->tm_year - 1), 4);
-    *str++ = ' ';
-    str = pg_ultostr_zeropad(str, tm->tm_hour, 2);
-    *str++ = ':';
-    str = pg_ultostr_zeropad(str, tm->tm_min, 2);
-    *str++ = ':';
-    str = AppendTimestampSeconds(str, tm, fsec);
-
-    if (print_tz) {
-      if (tzn) {
-        sprintf(str, " %.*s", MAXTZLEN, tzn);
-        str += strlen(str);
-      } else
-        str = EncodeTimezone(str, tz, style);
-    }
-    break;
-
-  case USE_POSTGRES_DATES:
-  default:
-    /* Backward-compatible with traditional Postgres abstime dates */
-    day = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday);
-    tm->tm_wday = j2day(day);
-    memcpy(str, days[tm->tm_wday], 3);
-    str += 3;
-    *str++ = ' ';
-    if (DateOrder == DATEORDER_DMY) {
-      str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-      *str++ = ' ';
-      memcpy(str, months[tm->tm_mon - 1], 3);
-      str += 3;
-    } else {
-      memcpy(str, months[tm->tm_mon - 1], 3);
-      str += 3;
-      *str++ = ' ';
-      str = pg_ultostr_zeropad(str, tm->tm_mday, 2);
-    }
-    *str++ = ' ';
-    str = pg_ultostr_zeropad(str, tm->tm_hour, 2);
-    *str++ = ':';
-    str = pg_ultostr_zeropad(str, tm->tm_min, 2);
-    *str++ = ':';
-    str = AppendTimestampSeconds(str, tm, fsec);
-    *str++ = ' ';
-    str = pg_ultostr_zeropad(
-        str, (tm->tm_year > 0) ? tm->tm_year : -(tm->tm_year - 1), 4);
-
-    if (print_tz) {
-      if (tzn) {
-        sprintf(str, " %.*s", MAXTZLEN, tzn);
-        str += strlen(str);
-      } else {
-        /*
-         * We have a time zone, but no string version. Use the
-         * numeric form, but be sure to include a leading space to
-         * avoid formatting something which would be rejected by
-         * the date/time parser later. - thomas 2001-10-19
-         */
-        *str++ = ' ';
-        str = EncodeTimezone(str, tz, style);
-      }
-    }
-    break;
-  }
-
-  if (tm->tm_year <= 0) {
-    memcpy(str, " BC", 3); /* Don't copy NUL */
-    str += 3;
-  }
-  *str = '\0';
+  ty_timestamp_format(&t, fsec, print_tz, tz, tzn, tm->tm_isdst, style,
+                      DateOrder, str);
 }
 
 /*
@@ -4095,46 +3813,10 @@ void EncodeDateTime(struct pg_tm *tm, fsec_t fsec, bool print_tz, int tz,
  */
 
 /* Append an ISO-8601-style interval field, but only if value isn't zero */
-static char *AddISO8601IntPart(char *cp, int64 value, char units) {
-  if (value == 0)
-    return cp;
-  sprintf(cp, "%" PRId64 "%c", value, units);
-  return cp + strlen(cp);
-}
 
 /* Append a postgres-style interval field, but only if value isn't zero */
-static char *AddPostgresIntPart(char *cp, int64 value, const char *units,
-                                bool *is_zero, bool *is_before) {
-  if (value == 0)
-    return cp;
-  sprintf(cp, "%s%s%" PRId64 " %s%s", (!*is_zero) ? " " : "",
-          (*is_before && value > 0) ? "+" : "", value, units,
-          (value != 1) ? "s" : "");
-
-  /*
-   * Each nonzero field sets is_before for (only) the next one.  This is a
-   * tad bizarre but it's how it worked before...
-   */
-  *is_before = (value < 0);
-  *is_zero = false;
-  return cp + strlen(cp);
-}
 
 /* Append a verbose-style interval field, but only if value isn't zero */
-static char *AddVerboseIntPart(char *cp, int64 value, const char *units,
-                               bool *is_zero, bool *is_before) {
-  if (value == 0)
-    return cp;
-  /* first nonzero value sets is_before */
-  if (*is_zero) {
-    *is_before = (value < 0);
-    value = i64abs(value);
-  } else if (*is_before)
-    value = -value;
-  sprintf(cp, " %" PRId64 " %s%s", value, units, (value == 1) ? "" : "s");
-  *is_zero = false;
-  return cp + strlen(cp);
-}
 
 /* EncodeInterval()
  * Interpret time structure as a delta time and convert to string.
@@ -4156,163 +3838,10 @@ static char *AddVerboseIntPart(char *cp, int64 value, const char *units,
  * "day-time literal"s (that look like ('4 5:6:7')
  */
 void EncodeInterval(struct pg_itm *itm, int style, char *str) {
-  char *cp = str;
-  int year = itm->tm_year;
-  int mon = itm->tm_mon;
-  int64 mday = itm->tm_mday; /* tm_mday could be INT_MIN */
-  int64 hour = itm->tm_hour;
-  int min = itm->tm_min;
-  int sec = itm->tm_sec;
-  int fsec = itm->tm_usec;
-  bool is_before = false;
-  bool is_zero = true;
+  ty_itm_t t = {itm->tm_hour, itm->tm_mday, itm->tm_mon, itm->tm_year,
+                itm->tm_min,  itm->tm_sec,  itm->tm_usec};
 
-  /*
-   * The sign of year and month are guaranteed to match, since they are
-   * stored internally as "month". But we'll need to check for is_before and
-   * is_zero when determining the signs of day and hour/minute/seconds
-   * fields.
-   */
-  switch (style) {
-    /* SQL Standard interval format */
-  case INTSTYLE_SQL_STANDARD: {
-    bool has_negative = year < 0 || mon < 0 || mday < 0 || hour < 0 ||
-                        min < 0 || sec < 0 || fsec < 0;
-    bool has_positive = year > 0 || mon > 0 || mday > 0 || hour > 0 ||
-                        min > 0 || sec > 0 || fsec > 0;
-    bool has_year_month = year != 0 || mon != 0;
-    bool has_day_time =
-        mday != 0 || hour != 0 || min != 0 || sec != 0 || fsec != 0;
-    bool has_day = mday != 0;
-    bool sql_standard_value =
-        !(has_negative && has_positive) && !(has_year_month && has_day_time);
-
-    /*
-     * SQL Standard wants only 1 "<sign>" preceding the whole
-     * interval ... but can't do that if mixed signs.
-     */
-    if (has_negative && sql_standard_value) {
-      *cp++ = '-';
-      year = -year;
-      mon = -mon;
-      mday = -mday;
-      hour = -hour;
-      min = -min;
-      sec = -sec;
-      fsec = -fsec;
-    }
-
-    if (!has_negative && !has_positive) {
-      sprintf(cp, "0");
-    } else if (!sql_standard_value) {
-      /*
-       * For non sql-standard interval values, force outputting
-       * the signs to avoid ambiguities with intervals with
-       * mixed sign components.
-       */
-      char year_sign = (year < 0 || mon < 0) ? '-' : '+';
-      char day_sign = (mday < 0) ? '-' : '+';
-      char sec_sign = (hour < 0 || min < 0 || sec < 0 || fsec < 0) ? '-' : '+';
-
-      sprintf(cp, "%c%d-%d %c%" PRId64 " %c%" PRId64 ":%02d:", year_sign,
-              abs(year), abs(mon), day_sign, i64abs(mday), sec_sign,
-              i64abs(hour), abs(min));
-      cp += strlen(cp);
-      cp = AppendSeconds(cp, sec, fsec, MAX_INTERVAL_PRECISION, true);
-      *cp = '\0';
-    } else if (has_year_month) {
-      sprintf(cp, "%d-%d", year, mon);
-    } else if (has_day) {
-      sprintf(cp, "%" PRId64 " %" PRId64 ":%02d:", mday, hour, min);
-      cp += strlen(cp);
-      cp = AppendSeconds(cp, sec, fsec, MAX_INTERVAL_PRECISION, true);
-      *cp = '\0';
-    } else {
-      sprintf(cp, "%" PRId64 ":%02d:", hour, min);
-      cp += strlen(cp);
-      cp = AppendSeconds(cp, sec, fsec, MAX_INTERVAL_PRECISION, true);
-      *cp = '\0';
-    }
-  } break;
-
-    /* ISO 8601 "time-intervals by duration only" */
-  case INTSTYLE_ISO_8601:
-    /* special-case zero to avoid printing nothing */
-    if (year == 0 && mon == 0 && mday == 0 && hour == 0 && min == 0 &&
-        sec == 0 && fsec == 0) {
-      sprintf(cp, "PT0S");
-      break;
-    }
-    *cp++ = 'P';
-    cp = AddISO8601IntPart(cp, year, 'Y');
-    cp = AddISO8601IntPart(cp, mon, 'M');
-    cp = AddISO8601IntPart(cp, mday, 'D');
-    if (hour != 0 || min != 0 || sec != 0 || fsec != 0)
-      *cp++ = 'T';
-    cp = AddISO8601IntPart(cp, hour, 'H');
-    cp = AddISO8601IntPart(cp, min, 'M');
-    if (sec != 0 || fsec != 0) {
-      if (sec < 0 || fsec < 0)
-        *cp++ = '-';
-      cp = AppendSeconds(cp, sec, fsec, MAX_INTERVAL_PRECISION, false);
-      *cp++ = 'S';
-      *cp++ = '\0';
-    }
-    break;
-
-    /* Compatible with postgresql < 8.4 when DateStyle = 'iso' */
-  case INTSTYLE_POSTGRES:
-    cp = AddPostgresIntPart(cp, year, "year", &is_zero, &is_before);
-
-    /*
-     * Ideally we should spell out "month" like we do for "year" and
-     * "day".  However, for backward compatibility, we can't easily
-     * fix this.  bjm 2011-05-24
-     */
-    cp = AddPostgresIntPart(cp, mon, "mon", &is_zero, &is_before);
-    cp = AddPostgresIntPart(cp, mday, "day", &is_zero, &is_before);
-    if (is_zero || hour != 0 || min != 0 || sec != 0 || fsec != 0) {
-      bool minus = (hour < 0 || min < 0 || sec < 0 || fsec < 0);
-
-      sprintf(cp, "%s%s%02" PRId64 ":%02d:", is_zero ? "" : " ",
-              (minus ? "-" : (is_before ? "+" : "")), i64abs(hour), abs(min));
-      cp += strlen(cp);
-      cp = AppendSeconds(cp, sec, fsec, MAX_INTERVAL_PRECISION, true);
-      *cp = '\0';
-    }
-    break;
-
-    /* Compatible with postgresql < 8.4 when DateStyle != 'iso' */
-  case INTSTYLE_POSTGRES_VERBOSE:
-  default:
-    strcpy(cp, "@");
-    cp++;
-    cp = AddVerboseIntPart(cp, year, "year", &is_zero, &is_before);
-    cp = AddVerboseIntPart(cp, mon, "mon", &is_zero, &is_before);
-    cp = AddVerboseIntPart(cp, mday, "day", &is_zero, &is_before);
-    cp = AddVerboseIntPart(cp, hour, "hour", &is_zero, &is_before);
-    cp = AddVerboseIntPart(cp, min, "min", &is_zero, &is_before);
-    if (sec != 0 || fsec != 0) {
-      *cp++ = ' ';
-      if (sec < 0 || (sec == 0 && fsec < 0)) {
-        if (is_zero)
-          is_before = true;
-        else if (!is_before)
-          *cp++ = '-';
-      } else if (is_before)
-        *cp++ = '-';
-      cp = AppendSeconds(cp, sec, fsec, MAX_INTERVAL_PRECISION, false);
-      /* We output "ago", not negatives, so use abs(). */
-      sprintf(cp, " sec%s", (abs(sec) != 1 || fsec != 0) ? "s" : "");
-      is_zero = false;
-    }
-    /* identically zero? then put in a unitless zero... */
-    if (is_zero)
-      strcat(cp, " 0");
-    if (is_before)
-      strcat(cp, " ago");
-    break;
-  }
+  ty_interval_format(&t, style, str);
 }
 
 /*

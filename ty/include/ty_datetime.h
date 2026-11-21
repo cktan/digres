@@ -160,4 +160,44 @@ int ty_timestamp_sub_interval(int64_t ts, const ty_interval_t* span,
 /* timestamp - timestamp, as an interval with the hours justified. */
 int ty_timestamp_diff(int64_t a, int64_t b, ty_interval_t* out);
 
+/*
+ * The text of date, time, timestamp and interval, written by the settings
+ * the host passes in: a date style, a date order and an interval style, whose
+ * values are PostgreSQL's. The result is written to out, which must have
+ * TY_DATETIME_TEXT_MAX bytes, with a NUL; the length is returned. (The
+ * special values, infinity, are the host's.) The text read is still in the
+ * host.
+ */
+#define TY_DATETIME_TEXT_MAX 128
+
+enum { TY_DATES_POSTGRES, TY_DATES_ISO, TY_DATES_SQL, TY_DATES_GERMAN, TY_DATES_XSD };
+enum { TY_DATEORDER_YMD, TY_DATEORDER_DMY, TY_DATEORDER_MDY };
+enum { TY_INTSTYLE_POSTGRES, TY_INTSTYLE_POSTGRES_VERBOSE, TY_INTSTYLE_SQL_STANDARD, TY_INTSTYLE_ISO_8601 };
+
+/* An interval in parts, as PostgreSQL's pg_itm. */
+typedef struct ty_itm_t {
+    int64_t hour;
+    int32_t mday, mon, year, min, sec, usec;
+} ty_itm_t;
+
+/* The parts of a finite interval. */
+void ty_interval_to_itm(const ty_interval_t* span, ty_itm_t* itm);
+
+/* A date: "2000-01-31" in ISO, and the other styles. */
+size_t ty_date_format(const ty_tm_t* tm, int style, int order, char* out);
+
+/*
+ * A time of day, and a timestamp. print_tz writes the zone: tzn is its name
+ * (or NULL), tz the offset in seconds west of Greenwich (the sign PostgreSQL
+ * uses); isdst below 0 means the zone is not known, and nothing is written.
+ */
+size_t ty_time_format(const ty_tm_t* tm, int32_t fsec, int print_tz, int tz,
+                      int style, char* out);
+size_t ty_timestamp_format(const ty_tm_t* tm, int32_t fsec, int print_tz,
+                           int tz, const char* tzn, int isdst, int style,
+                           int order, char* out);
+
+/* An interval, in an interval style. */
+size_t ty_interval_format(const ty_itm_t* itm, int style, char* out);
+
 #endif
