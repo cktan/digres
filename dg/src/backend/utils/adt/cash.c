@@ -34,124 +34,98 @@
 #include "utils/float.h"
 #include "utils/numeric.h"
 #include "utils/pg_locale.h"
+#include "ty_money.h"
 
 /*************************************************************************
  * Private routines
  ************************************************************************/
 
-static void append_num_word(StringInfo buf, Cash value) {
-  static const char *const small[] = {
-      "zero",     "one",      "two",      "three",   "four",    "five",
-      "six",      "seven",    "eight",    "nine",    "ten",     "eleven",
-      "twelve",   "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
-      "eighteen", "nineteen", "twenty",   "thirty",  "forty",   "fifty",
-      "sixty",    "seventy",  "eighty",   "ninety"};
-  const char *const *big = small + 18;
-  int tu = value % 100;
+/* The money fields of the locale, as ty reads them. */
+static ty_money_fmt_t money_fmt_of(const struct lconv *l) {
+  ty_money_fmt_t f;
 
-  /* deal with the simple cases first */
-  if (value <= 20) {
-    appendStringInfoString(buf, small[value]);
-    return;
-  }
+  f.frac_digits = l->frac_digits;
+  f.mon_decimal_point = l->mon_decimal_point;
+  f.mon_thousands_sep = l->mon_thousands_sep;
+  f.currency_symbol = l->currency_symbol;
+  f.positive_sign = l->positive_sign;
+  f.negative_sign = l->negative_sign;
+  f.mon_grouping = *l->mon_grouping;
+  f.p_cs_precedes = l->p_cs_precedes;
+  f.n_cs_precedes = l->n_cs_precedes;
+  f.p_sep_by_space = l->p_sep_by_space;
+  f.n_sep_by_space = l->n_sep_by_space;
+  f.p_sign_posn = l->p_sign_posn;
+  f.n_sign_posn = l->n_sign_posn;
+  return f;
+}
 
-  /* is it an even multiple of 100? */
-  if (!tu) {
-    appendStringInfo(buf, "%s hundred", small[value / 100]);
-    return;
-  }
-
-  /* more than 99? */
-  if (value > 99) {
-    /* is it an even multiple of 10 other than 10? */
-    if (value % 10 == 0 && tu > 10)
-      appendStringInfo(buf, "%s hundred %s", small[value / 100], big[tu / 10]);
-    else if (tu < 20)
-      appendStringInfo(buf, "%s hundred and %s", small[value / 100], small[tu]);
-    else
-      appendStringInfo(buf, "%s hundred %s %s", small[value / 100],
-                       big[tu / 10], small[tu % 10]);
-  } else {
-    /* is it an even multiple of 10 other than 10? */
-    if (value % 10 == 0 && tu > 10)
-      appendStringInfoString(buf, big[tu / 10]);
-    else if (tu < 20)
-      appendStringInfoString(buf, small[tu]);
-    else
-      appendStringInfo(buf, "%s %s", big[tu / 10], small[tu % 10]);
+/* Raise the error of a failed ty money call. */
+static pg_noreturn void money_raise(void) {
+  switch (ty_errnum()) {
+  case TY_ERR_DIVZERO:
+    ereport(ERROR,
+            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
+  default:
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("money out of range")));
   }
 }
+
 
 static inline Cash cash_pl_cash(Cash c1, Cash c2) {
   Cash res;
 
-  if (unlikely(pg_add_s64_overflow(c1, c2, &res)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("money out of range")));
-
+  if (unlikely(ty_money_add(c1, c2, &res)))
+    money_raise();
   return res;
 }
 
 static inline Cash cash_mi_cash(Cash c1, Cash c2) {
   Cash res;
 
-  if (unlikely(pg_sub_s64_overflow(c1, c2, &res)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("money out of range")));
-
+  if (unlikely(ty_money_sub(c1, c2, &res)))
+    money_raise();
   return res;
 }
 
 static inline Cash cash_mul_float8(Cash c, float8 f) {
-  float8 res = rint(float8_mul((float8)c, f));
+  Cash res;
 
-  if (unlikely(isnan(res) || !FLOAT8_FITS_IN_INT64(res)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("money out of range")));
-
-  return (Cash)res;
+  if (unlikely(ty_money_mul_float64(c, f, &res))) {
+    /* an overflow or underflow of the float multiply is its own error */
+    if (strcmp(ty_errmsg(), "money out of range") != 0)
+      float_raise_ty();
+    money_raise();
+  }
+  return res;
 }
 
 static inline Cash cash_div_float8(Cash c, float8 f) {
-  float8 res = rint(float8_div((float8)c, f));
+  Cash res;
 
-  if (unlikely(isnan(res) || !FLOAT8_FITS_IN_INT64(res)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("money out of range")));
-
-  return (Cash)res;
+  if (unlikely(ty_money_div_float64(c, f, &res))) {
+    if (strcmp(ty_errmsg(), "money out of range") != 0)
+      float_raise_ty();
+    money_raise();
+  }
+  return res;
 }
 
 static inline Cash cash_mul_int64(Cash c, int64 i) {
   Cash res;
 
-  if (unlikely(pg_mul_s64_overflow(c, i, &res)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("money out of range")));
-
+  if (unlikely(ty_money_mul_int64(c, i, &res)))
+    money_raise();
   return res;
 }
 
 static inline Cash cash_div_int64(Cash c, int64 i) {
-  if (unlikely(i == 0))
-    ereport(ERROR,
-            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
+  Cash res;
 
-  /*
-   * INT64_MIN / -1 is problematic, since the result can't be represented on
-   * a two's-complement machine.  Some machines produce INT64_MIN, some
-   * produce zero, some throw an exception.  We can dodge the problem by
-   * recognizing that division by -1 is the same as negation.
-   */
-  if (i == -1) {
-    if (unlikely(c == PG_INT64_MIN))
-      ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                      errmsg("money out of range")));
-    return -c;
-  }
-
-  /* No overflow is possible */
-  return c / i;
+  if (unlikely(ty_money_div_int64(c, i, &res)))
+    money_raise();
+  return res;
 }
 
 /* cash_in()
@@ -164,190 +138,20 @@ Datum cash_in(PG_FUNCTION_ARGS) {
   char *str = PG_GETARG_CSTRING(0);
   Node *escontext = fcinfo->context;
   Cash result;
-  Cash value = 0;
-  Cash dec = 0;
-  Cash sgn = 1;
-  bool seen_dot = false;
-  const char *s = str;
-  int fpoint;
-  char dsymbol;
-  const char *ssymbol, *psymbol, *nsymbol, *csymbol;
-  struct lconv *lconvert = PGLC_localeconv();
+  ty_money_fmt_t f = money_fmt_of(PGLC_localeconv());
 
-  /*
-   * frac_digits will be CHAR_MAX in some locales, notably C.  However, just
-   * testing for == CHAR_MAX is risky, because of compilers like gcc that
-   * "helpfully" let you alter the platform-standard definition of whether
-   * char is signed or not.  If we are so unfortunate as to get compiled
-   * with a nonstandard -fsigned-char or -funsigned-char switch, then our
-   * idea of CHAR_MAX will not agree with libc's. The safest course is not
-   * to test for CHAR_MAX at all, but to impose a range check for plausible
-   * frac_digits values.
-   */
-  fpoint = lconvert->frac_digits;
-  if (fpoint < 0 || fpoint > 10)
-    fpoint = 2; /* best guess in this case, I think */
-
-  /* we restrict dsymbol to be a single byte, but not the other symbols */
-  if (*lconvert->mon_decimal_point != '\0' &&
-      lconvert->mon_decimal_point[1] == '\0')
-    dsymbol = *lconvert->mon_decimal_point;
-  else
-    dsymbol = '.';
-  if (*lconvert->mon_thousands_sep != '\0')
-    ssymbol = lconvert->mon_thousands_sep;
-  else /* ssymbol should not equal dsymbol */
-    ssymbol = (dsymbol != ',') ? "," : ".";
-  csymbol =
-      (*lconvert->currency_symbol != '\0') ? lconvert->currency_symbol : "$";
-  psymbol = (*lconvert->positive_sign != '\0') ? lconvert->positive_sign : "+";
-  nsymbol = (*lconvert->negative_sign != '\0') ? lconvert->negative_sign : "-";
-
-#ifdef CASHDEBUG
-  printf("cashin- precision '%d'; decimal '%c'; thousands '%s'; currency '%s'; "
-         "positive '%s'; negative '%s'\n",
-         fpoint, dsymbol, ssymbol, csymbol, psymbol, nsymbol);
-#endif
-
-  /* we need to add all sorts of checking here.  For now just */
-  /* strip all leading whitespace and any leading currency symbol */
-  while (isspace((unsigned char)*s))
-    s++;
-  if (strncmp(s, csymbol, strlen(csymbol)) == 0)
-    s += strlen(csymbol);
-  while (isspace((unsigned char)*s))
-    s++;
-
-#ifdef CASHDEBUG
-  printf("cashin- string is '%s'\n", s);
-#endif
-
-  /* a leading minus or paren signifies a negative number */
-  /* again, better heuristics needed */
-  /* XXX - doesn't properly check for balanced parens - djmc */
-  if (strncmp(s, nsymbol, strlen(nsymbol)) == 0) {
-    sgn = -1;
-    s += strlen(nsymbol);
-  } else if (*s == '(') {
-    sgn = -1;
-    s++;
-  } else if (strncmp(s, psymbol, strlen(psymbol)) == 0)
-    s += strlen(psymbol);
-
-#ifdef CASHDEBUG
-  printf("cashin- string is '%s'\n", s);
-#endif
-
-  /* allow whitespace and currency symbol after the sign, too */
-  while (isspace((unsigned char)*s))
-    s++;
-  if (strncmp(s, csymbol, strlen(csymbol)) == 0)
-    s += strlen(csymbol);
-  while (isspace((unsigned char)*s))
-    s++;
-
-#ifdef CASHDEBUG
-  printf("cashin- string is '%s'\n", s);
-#endif
-
-  /*
-   * We accumulate the absolute amount in "value" and then apply the sign at
-   * the end.  (The sign can appear before or after the digits, so it would
-   * be more complicated to do otherwise.)  Because of the larger range of
-   * negative signed integers, we build "value" in the negative and then
-   * flip the sign at the end, catching most-negative-number overflow if
-   * necessary.
-   */
-
-  for (; *s; s++) {
-    /*
-     * We look for digits as long as we have found less than the required
-     * number of decimal places.
-     */
-    if (isdigit((unsigned char)*s) && (!seen_dot || dec < fpoint)) {
-      int8 digit = *s - '0';
-
-      if (pg_mul_s64_overflow(value, 10, &value) ||
-          pg_sub_s64_overflow(value, digit, &value))
-        ereturn(
-            escontext, (Datum)0,
-            (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-             errmsg("value \"%s\" is out of range for type %s", str, "money")));
-
-      if (seen_dot)
-        dec++;
-    }
-    /* decimal point? then start counting fractions... */
-    else if (*s == dsymbol && !seen_dot) {
-      seen_dot = true;
-    }
-    /* ignore if "thousands" separator, else we're done */
-    else if (strncmp(s, ssymbol, strlen(ssymbol)) == 0)
-      s += strlen(ssymbol) - 1;
-    else
-      break;
-  }
-
-  /* round off if there's another digit */
-  if (isdigit((unsigned char)*s) && *s >= '5') {
-    /* remember we build the value in the negative */
-    if (pg_sub_s64_overflow(value, 1, &value))
+  /* ty reads the text, by the locale's money settings */
+  if (ty_money_parse(str, &f, &result)) {
+    if (ty_errnum() == TY_ERR_RANGE)
       ereturn(
           escontext, (Datum)0,
           (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
            errmsg("value \"%s\" is out of range for type %s", str, "money")));
+    ereturn(
+        escontext, (Datum)0,
+        (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+         errmsg("invalid input syntax for type %s: \"%s\"", "money", str)));
   }
-
-  /* adjust for less than required decimal places */
-  for (; dec < fpoint; dec++) {
-    if (pg_mul_s64_overflow(value, 10, &value))
-      ereturn(
-          escontext, (Datum)0,
-          (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-           errmsg("value \"%s\" is out of range for type %s", str, "money")));
-  }
-
-  /*
-   * should only be trailing digits followed by whitespace, right paren,
-   * trailing sign, and/or trailing currency symbol
-   */
-  while (isdigit((unsigned char)*s))
-    s++;
-
-  while (*s) {
-    if (isspace((unsigned char)*s) || *s == ')')
-      s++;
-    else if (strncmp(s, nsymbol, strlen(nsymbol)) == 0) {
-      sgn = -1;
-      s += strlen(nsymbol);
-    } else if (strncmp(s, psymbol, strlen(psymbol)) == 0)
-      s += strlen(psymbol);
-    else if (strncmp(s, csymbol, strlen(csymbol)) == 0)
-      s += strlen(csymbol);
-    else
-      ereturn(
-          escontext, (Datum)0,
-          (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-           errmsg("invalid input syntax for type %s: \"%s\"", "money", str)));
-  }
-
-  /*
-   * If the value is supposed to be positive, flip the sign, but check for
-   * the most negative number.
-   */
-  if (sgn > 0) {
-    if (value == PG_INT64_MIN)
-      ereturn(
-          escontext, (Datum)0,
-          (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-           errmsg("value \"%s\" is out of range for type %s", str, "money")));
-    result = -value;
-  } else
-    result = value;
-
-#ifdef CASHDEBUG
-  printf("cashin- result is " INT64_FORMAT "\n", result);
-#endif
 
   PG_RETURN_CASH(result);
 }
@@ -358,155 +162,14 @@ Datum cash_in(PG_FUNCTION_ARGS) {
  */
 Datum cash_out(PG_FUNCTION_ARGS) {
   Cash value = PG_GETARG_CASH(0);
-  uint64 uvalue;
-  char *result;
-  char buf[128];
-  char *bufptr;
-  int digit_pos;
-  int points, mon_group;
-  char dsymbol;
-  const char *ssymbol, *csymbol, *signsymbol;
-  char sign_posn, cs_precedes, sep_by_space;
-  struct lconv *lconvert = PGLC_localeconv();
+  ty_money_fmt_t f = money_fmt_of(PGLC_localeconv());
+  char *result = (char *)palloc(64);
+  size_t n = ty_money_format(value, &f, result, 64);
 
-  /* see comments about frac_digits in cash_in() */
-  points = lconvert->frac_digits;
-  if (points < 0 || points > 10)
-    points = 2; /* best guess in this case, I think */
-
-  /*
-   * As with frac_digits, must apply a range check to mon_grouping to avoid
-   * being fooled by variant CHAR_MAX values.
-   */
-  mon_group = *lconvert->mon_grouping;
-  if (mon_group <= 0 || mon_group > 6)
-    mon_group = 3;
-
-  /* we restrict dsymbol to be a single byte, but not the other symbols */
-  if (*lconvert->mon_decimal_point != '\0' &&
-      lconvert->mon_decimal_point[1] == '\0')
-    dsymbol = *lconvert->mon_decimal_point;
-  else
-    dsymbol = '.';
-  if (*lconvert->mon_thousands_sep != '\0')
-    ssymbol = lconvert->mon_thousands_sep;
-  else /* ssymbol should not equal dsymbol */
-    ssymbol = (dsymbol != ',') ? "," : ".";
-  csymbol =
-      (*lconvert->currency_symbol != '\0') ? lconvert->currency_symbol : "$";
-
-  if (value < 0) {
-    /* set up formatting data */
-    signsymbol =
-        (*lconvert->negative_sign != '\0') ? lconvert->negative_sign : "-";
-    sign_posn = lconvert->n_sign_posn;
-    cs_precedes = lconvert->n_cs_precedes;
-    sep_by_space = lconvert->n_sep_by_space;
-  } else {
-    signsymbol = lconvert->positive_sign;
-    sign_posn = lconvert->p_sign_posn;
-    cs_precedes = lconvert->p_cs_precedes;
-    sep_by_space = lconvert->p_sep_by_space;
-  }
-
-  /* make the amount positive for digit-reconstruction loop */
-  uvalue = pg_abs_s64(value);
-
-  /* we build the digits+decimal-point+sep string right-to-left in buf[] */
-  bufptr = buf + sizeof(buf) - 1;
-  *bufptr = '\0';
-
-  /*
-   * Generate digits till there are no non-zero digits left and we emitted
-   * at least one to the left of the decimal point.  digit_pos is the
-   * current digit position, with zero as the digit just left of the decimal
-   * point, increasing to the right.
-   */
-  digit_pos = points;
-  do {
-    if (points && digit_pos == 0) {
-      /* insert decimal point, but not if value cannot be fractional */
-      *(--bufptr) = dsymbol;
-    } else if (digit_pos < 0 && (digit_pos % mon_group) == 0) {
-      /* insert thousands sep, but only to left of radix point */
-      bufptr -= strlen(ssymbol);
-      memcpy(bufptr, ssymbol, strlen(ssymbol));
-    }
-
-    *(--bufptr) = (uvalue % 10) + '0';
-    uvalue = uvalue / 10;
-    digit_pos--;
-  } while (uvalue || digit_pos >= 0);
-
-  /*----------
-   * Now, attach currency symbol and sign symbol in the correct order.
-   *
-   * The POSIX spec defines these values controlling this code:
-   *
-   * p/n_sign_posn:
-   *	0	Parentheses enclose the quantity and the currency_symbol.
-   *	1	The sign string precedes the quantity and the currency_symbol.
-   *	2	The sign string succeeds the quantity and the currency_symbol.
-   *	3	The sign string precedes the currency_symbol.
-   *	4	The sign string succeeds the currency_symbol.
-   *
-   * p/n_cs_precedes: 0 means currency symbol after value, else before it.
-   *
-   * p/n_sep_by_space:
-   *	0	No <space> separates the currency symbol and value.
-   *	1	If the currency symbol and sign string are adjacent, a <space>
-   *		separates them from the value; otherwise, a <space> separates
-   *		the currency symbol from the value.
-   *	2	If the currency symbol and sign string are adjacent, a <space>
-   *		separates them; otherwise, a <space> separates the sign string
-   *		from the value.
-   *----------
-   */
-  switch (sign_posn) {
-  case 0:
-    if (cs_precedes)
-      result =
-          psprintf("(%s%s%s)", csymbol, (sep_by_space == 1) ? " " : "", bufptr);
-    else
-      result =
-          psprintf("(%s%s%s)", bufptr, (sep_by_space == 1) ? " " : "", csymbol);
-    break;
-  case 1:
-  default:
-    if (cs_precedes)
-      result =
-          psprintf("%s%s%s%s%s", signsymbol, (sep_by_space == 2) ? " " : "",
-                   csymbol, (sep_by_space == 1) ? " " : "", bufptr);
-    else
-      result =
-          psprintf("%s%s%s%s%s", signsymbol, (sep_by_space == 2) ? " " : "",
-                   bufptr, (sep_by_space == 1) ? " " : "", csymbol);
-    break;
-  case 2:
-    if (cs_precedes)
-      result = psprintf("%s%s%s%s%s", csymbol, (sep_by_space == 1) ? " " : "",
-                        bufptr, (sep_by_space == 2) ? " " : "", signsymbol);
-    else
-      result = psprintf("%s%s%s%s%s", bufptr, (sep_by_space == 1) ? " " : "",
-                        csymbol, (sep_by_space == 2) ? " " : "", signsymbol);
-    break;
-  case 3:
-    if (cs_precedes)
-      result =
-          psprintf("%s%s%s%s%s", signsymbol, (sep_by_space == 2) ? " " : "",
-                   csymbol, (sep_by_space == 1) ? " " : "", bufptr);
-    else
-      result = psprintf("%s%s%s%s%s", bufptr, (sep_by_space == 1) ? " " : "",
-                        signsymbol, (sep_by_space == 2) ? " " : "", csymbol);
-    break;
-  case 4:
-    if (cs_precedes)
-      result = psprintf("%s%s%s%s%s", csymbol, (sep_by_space == 2) ? " " : "",
-                        signsymbol, (sep_by_space == 1) ? " " : "", bufptr);
-    else
-      result = psprintf("%s%s%s%s%s", bufptr, (sep_by_space == 1) ? " " : "",
-                        csymbol, (sep_by_space == 2) ? " " : "", signsymbol);
-    break;
+  if (n >= 64) {
+    /* a long currency symbol: ask again, with room */
+    result = (char *)repalloc(result, n + 1);
+    ty_money_format(value, &f, result, n + 1);
   }
 
   PG_RETURN_CSTRING(result);
@@ -620,11 +283,9 @@ Datum cash_div_cash(PG_FUNCTION_ARGS) {
   Cash divisor = PG_GETARG_CASH(1);
   float8 quotient;
 
-  if (divisor == 0)
-    ereport(ERROR,
-            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
+  if (ty_money_div_money(dividend, divisor, &quotient))
+    money_raise();
 
-  quotient = (float8)dividend / (float8)divisor;
   PG_RETURN_FLOAT8(quotient);
 }
 
@@ -813,80 +474,10 @@ Datum cashsmaller(PG_FUNCTION_ARGS) {
  */
 Datum cash_words(PG_FUNCTION_ARGS) {
   Cash value = PG_GETARG_CASH(0);
-  uint64 val;
-  StringInfoData buf;
-  text *res;
-  Cash dollars;
-  Cash m0;
-  Cash m1;
-  Cash m2;
-  Cash m3;
-  Cash m4;
-  Cash m5;
-  Cash m6;
+  char buf[256];
+  size_t n = ty_money_words(value, buf);
 
-  initStringInfo(&buf);
-
-  /* work with positive numbers */
-  if (value < 0) {
-    value = -value;
-    appendStringInfoString(&buf, "minus ");
-  }
-
-  /* Now treat as unsigned, to avoid trouble at INT_MIN */
-  val = (uint64)value;
-
-  dollars = val / INT64CONST(100);
-  m0 = val % INT64CONST(100);                         /* cents */
-  m1 = (val / INT64CONST(100)) % 1000;                /* hundreds */
-  m2 = (val / INT64CONST(100000)) % 1000;             /* thousands */
-  m3 = (val / INT64CONST(100000000)) % 1000;          /* millions */
-  m4 = (val / INT64CONST(100000000000)) % 1000;       /* billions */
-  m5 = (val / INT64CONST(100000000000000)) % 1000;    /* trillions */
-  m6 = (val / INT64CONST(100000000000000000)) % 1000; /* quadrillions */
-
-  if (m6) {
-    append_num_word(&buf, m6);
-    appendStringInfoString(&buf, " quadrillion ");
-  }
-
-  if (m5) {
-    append_num_word(&buf, m5);
-    appendStringInfoString(&buf, " trillion ");
-  }
-
-  if (m4) {
-    append_num_word(&buf, m4);
-    appendStringInfoString(&buf, " billion ");
-  }
-
-  if (m3) {
-    append_num_word(&buf, m3);
-    appendStringInfoString(&buf, " million ");
-  }
-
-  if (m2) {
-    append_num_word(&buf, m2);
-    appendStringInfoString(&buf, " thousand ");
-  }
-
-  if (m1)
-    append_num_word(&buf, m1);
-
-  if (dollars == 0)
-    appendStringInfoString(&buf, "zero");
-
-  appendStringInfoString(&buf, dollars == 1 ? " dollar and " : " dollars and ");
-  append_num_word(&buf, m0);
-  appendStringInfoString(&buf, m0 == 1 ? " cent" : " cents");
-
-  /* capitalize output */
-  buf.data[0] = pg_toupper((unsigned char)buf.data[0]);
-
-  /* return as text datum */
-  res = cstring_to_text_with_len(buf.data, buf.len);
-  pfree(buf.data);
-  PG_RETURN_TEXT_P(res);
+  PG_RETURN_TEXT_P(cstring_to_text_with_len(buf, n));
 }
 
 /* cash_numeric()

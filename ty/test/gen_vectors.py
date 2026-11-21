@@ -415,6 +415,7 @@ def main():
     gen_inet()
     gen_text()
     gen_like()
+    gen_money()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -2205,6 +2206,150 @@ def gen_like():
                     res += ch
                     after = False
         emit("text.like_escape", (ttok(pat), ttok(esc)), ttok(res))
+
+
+I64MIN, I64MAX = -2 ** 63, 2 ** 63 - 1
+
+
+def money_values():
+    out = [0, 1, -1, 99, 100, -100, 101, 999, 1000, 100000, 123456789, I64MAX, I64MIN, I64MAX - 1, I64MIN + 1,
+           12345678901234567, 100000000000000000, 100000000000000001]
+    out += [random.randint(-10 ** random.randint(1, 18), 10 ** random.randint(1, 18)) for _ in range(40)]
+    return out
+
+
+def mnum(words, n):
+    """A port of cash_words' helper for a number below 1000."""
+    small = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+             "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty", "thirty",
+             "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+    big = small[18:]
+    tu = n % 100
+    if n <= 20:
+        return small[n]
+    if tu == 0:
+        return "%s hundred" % small[n // 100]
+    if n > 99:
+        if n % 10 == 0 and tu > 10:
+            return "%s hundred %s" % (small[n // 100], big[tu // 10])
+        if tu < 20:
+            return "%s hundred and %s" % (small[n // 100], small[tu])
+        return "%s hundred %s %s" % (small[n // 100], big[tu // 10], small[tu % 10])
+    if n % 10 == 0 and tu > 10:
+        return big[tu // 10]
+    if tu < 20:
+        return small[tu]
+    return "%s %s" % (big[tu // 10], small[tu % 10])
+
+
+def money_words(v):
+    s = ""
+    if v < 0:
+        v = -v
+        s += "minus "
+    dollars = v // 100
+    m0 = v % 100
+    for div, name in ((100000000000000000, " quadrillion "), (100000000000000, " trillion "), (100000000000, " billion "),
+                      (100000000, " million "), (100000, " thousand ")):
+        m = (v // div) % 1000
+        if m:
+            s += mnum(None, m) + name
+    m1 = (v // 100) % 1000
+    if m1:
+        s += mnum(None, m1)
+    if dollars == 0:
+        s += "zero"
+    s += " dollar and " if dollars == 1 else " dollars and "
+    s += mnum(None, m0)
+    s += " cent" if m0 == 1 else " cents"
+    return s[0].upper() + s[1:]
+
+
+def money_format(v, fmt):
+    """A port of cash_out; fmt is a dict of the lconv fields."""
+    points = fmt["frac"] if 0 <= fmt["frac"] <= 10 else 2
+    grp = fmt["grp"] if 0 < fmt["grp"] <= 6 else 3
+    d = fmt["dec"] if len(fmt["dec"]) == 1 else "."
+    ss = fmt["thou"] if fmt["thou"] else ("," if d != "," else ".")
+    cs = fmt["cur"] or "$"
+    if v < 0:
+        sg = fmt["neg"] or "-"
+        posn, csp, sep = fmt["nposn"], fmt["ncs"], fmt["nsep"]
+    else:
+        sg = fmt["pos"]
+        posn, csp, sep = fmt["pposn"], fmt["pcs"], fmt["psep"]
+    u = abs(v)
+    buf = ""
+    pos = points
+    while True:
+        if points and pos == 0:
+            buf = d + buf
+        elif pos < 0 and pos % grp == 0 or (pos < 0 and (-pos) % grp == 0):
+            buf = ss + buf
+        buf = str(u % 10) + buf
+        u //= 10
+        pos -= 1
+        if not (u or pos >= 0):
+            break
+    sp1 = " " if sep == 1 else ""
+    sp2 = " " if sep == 2 else ""
+    if posn == 0:
+        return "(%s%s%s)" % ((cs, sp1, buf) if csp else (buf, sp1, cs))
+    if posn == 2:
+        return ("%s%s%s%s%s" % (cs, sp1, buf, sp2, sg)) if csp else ("%s%s%s%s%s" % (buf, sp1, cs, sp2, sg))
+    if posn == 3:
+        return ("%s%s%s%s%s" % (sg, sp2, cs, sp1, buf)) if csp else ("%s%s%s%s%s" % (buf, sp1, sg, sp2, cs))
+    if posn == 4:
+        return ("%s%s%s%s%s" % (cs, sp2, sg, sp1, buf)) if csp else ("%s%s%s%s%s" % (buf, sp1, cs, sp2, sg))
+    return ("%s%s%s%s%s" % (sg, sp2, cs, sp1, buf)) if csp else ("%s%s%s%s%s" % (sg, sp2, buf, sp1, cs))
+
+
+def gen_money():
+    """The vectors of money: arithmetic from Python integers, the words and the
+    text from a port of PostgreSQL's code, over made-up locales."""
+    vals = money_values()
+    for a in vals:
+        emit("money.words", (a,), ttok(money_words(a)))
+        for b in random.sample(vals, 4):
+            r = a + b
+            emit("money.add", (a, b), r if I64MIN <= r <= I64MAX else ("E", "RANGE"))
+            r = a - b
+            emit("money.sub", (a, b), r if I64MIN <= r <= I64MAX else ("E", "RANGE"))
+            r = a * b
+            emit("money.mul_i64", (a, b), r if I64MIN <= r <= I64MAX else ("E", "RANGE"))
+            if b == 0:
+                emit("money.div_i64", (a, b), ("E", "DIVZERO"))
+                emit("money.div_money", (a, b), ("E", "DIVZERO"))
+            else:
+                q = abs(a) // abs(b) * (1 if (a < 0) == (b < 0) else -1)
+                emit("money.div_i64", (a, b), q if I64MIN <= q <= I64MAX else ("E", "RANGE"))
+        emit("money.div_i64", (a, -1), -a if a != I64MIN else ("E", "RANGE"))
+    fmts = [dict(frac=2, dec=".", thou=",", cur="$", pos="", neg="-", grp=3, pcs=1, ncs=1, psep=0, nsep=0, pposn=1, nposn=1),
+            dict(frac=0, dec="", thou=".", cur="€", pos="+", neg="-", grp=3, pcs=0, ncs=0, psep=1, nsep=1, pposn=2, nposn=2),
+            dict(frac=3, dec=",", thou=" ", cur="kr", pos="", neg="~", grp=2, pcs=0, ncs=1, psep=2, nsep=2, pposn=3, nposn=4),
+            dict(frac=2, dec=".", thou=",", cur="USD", pos="", neg="", grp=3, pcs=1, ncs=1, psep=1, nsep=2, pposn=0, nposn=0),
+            dict(frac=127, dec="", thou="", cur="", pos="", neg="", grp=0, pcs=127, ncs=127, psep=127, nsep=127, pposn=127, nposn=127),
+            dict(frac=4, dec="..", thou="'", cur="CHF", pos="", neg="-", grp=4, pcs=1, ncs=0, psep=1, nsep=0, pposn=4, nposn=3)]
+    for fi, fmt in enumerate(fmts):
+        for a in vals:
+            emit("money.format", (fi, a), ttok(money_format(a, fmt)))
+    for a in vals:
+        for f in (0.5, 2.0, -3.0, 1.5, 0.0, 1e10, 1e300, 0.001):
+            r = float(a) * f
+            if r != r or r in (float("inf"), float("-inf")) or r >= 2.0 ** 63 or r < -2.0 ** 63:
+                res = ("E", "RANGE")
+            else:
+                res = int(round(r))
+            emit("money.mul_f64", (a, repr(f)), res)
+            if f != 0.0:
+                r = float(a) / f
+                if r != r or r in (float("inf"), float("-inf")) or r >= 2.0 ** 63 or r < -2.0 ** 63:
+                    res = ("E", "RANGE")
+                else:
+                    res = int(round(r))
+                emit("money.div_f64", (a, repr(f)), res)
+            else:
+                emit("money.div_f64", (a, repr(f)), ("E", "DIVZERO"))
 
 
 def gen_ints():

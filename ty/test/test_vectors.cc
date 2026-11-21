@@ -24,6 +24,7 @@
 #include "ty_float.h"
 #include "ty_hash.h"
 #include "ty_inet.h"
+#include "ty_money.h"
 #include "ty_small.h"
 #include "ty_text.h"
 #include "ty_int.h"
@@ -808,6 +809,74 @@ bool run_bpchar(const vec_t &v) {
   return true;
 }
 
+/* The made-up locales of the money vectors (see gen_vectors.py). */
+ty_money_fmt_t money_fmt(int i) {
+  static const ty_money_fmt_t fmts[] = {
+      {2, ".", ",", "$", "", "-", 3, 1, 1, 0, 0, 1, 1},
+      {0, "", ".", "€", "+", "-", 3, 0, 0, 1, 1, 2, 2},
+      {3, ",", " ", "kr", "", "~", 2, 0, 1, 2, 2, 3, 4},
+      {2, ".", ",", "USD", "", "", 3, 1, 1, 1, 2, 0, 0},
+      {127, "", "", "", "", "", 0, 127, 127, 127, 127, 127, 127},
+      {4, "..", "'", "CHF", "", "-", 4, 1, 0, 1, 0, 4, 3},
+  };
+
+  return fmts[i];
+}
+
+/* Run one money vector. */
+bool run_money(const vec_t &v) {
+  const std::string &op = v.op;
+
+  if (op.compare(0, 6, "money.") != 0) {
+    return false;
+  }
+  const std::string name = op.substr(6);
+  int rc = 0;
+  int64_t r = 0;
+  auto i64 = [&](size_t i) { return (int64_t)std::stoll(v.args[i]); };
+
+  INFO(v.line);
+  if (name == "words") {
+    char out[256];
+    size_t n = ty_money_words(i64(0), out);
+
+    CHECK(v.res[0] == token_of(reinterpret_cast<const uint8_t *>(out), n));
+    return true;
+  }
+  if (name == "format") {
+    ty_money_fmt_t f = money_fmt(std::stoi(v.args[0]));
+    char out[512];
+    size_t n = ty_money_format(i64(1), &f, out, sizeof out);
+
+    CHECK(v.res[0] == token_of(reinterpret_cast<const uint8_t *>(out), n));
+    return true;
+  }
+  if (name == "add") {
+    rc = ty_money_add(i64(0), i64(1), &r);
+  } else if (name == "sub") {
+    rc = ty_money_sub(i64(0), i64(1), &r);
+  } else if (name == "mul_i64") {
+    rc = ty_money_mul_int64(i64(0), i64(1), &r);
+  } else if (name == "div_i64") {
+    rc = ty_money_div_int64(i64(0), i64(1), &r);
+  } else if (name == "mul_f64") {
+    rc = ty_money_mul_float64(i64(0), std::stod(v.args[1]), &r);
+  } else if (name == "div_f64") {
+    rc = ty_money_div_float64(i64(0), std::stod(v.args[1]), &r);
+  } else if (name == "div_money") {
+    double d;
+
+    rc = ty_money_div_money(i64(0), i64(1), &d);
+    CHECK(-1 == rc);
+    CHECK(errnum_of(v.res[1]) == ty_errnum());
+    return true;
+  } else {
+    return false;
+  }
+  check_int(v, rc, r);
+  return true;
+}
+
 /* Run one text vector: the strings are the hex of UTF-8 bytes. */
 bool run_text(const vec_t &v) {
   const std::string &op = v.op;
@@ -1095,6 +1164,24 @@ bool run_known(const vec_t &v) {
   }
   if (op == "tid.parse" || op == "lsn.parse" || op == "char.parse") {
     return run_small_text(v);
+  }
+  if (op == "money.parse") {
+    std::vector<uint8_t> tb = bytes_of(v.args[0]);
+    std::string z(reinterpret_cast<const char *>(tb.data()), tb.size());
+    int64_t r = 0;
+    int rc = ty_money_parse(z.c_str(), &ty_money_fmt_c, &r);
+    char out[128];
+
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      ty_money_format(r, &ty_money_fmt_c, out, sizeof out);
+      CHECK(v.res[0] == std::string(out));
+    }
+    return true;
   }
   if (op == "like.pair") {
     std::vector<uint8_t> tb = bytes_of(v.args[0]), pb = bytes_of(v.args[1]);
@@ -1709,11 +1796,11 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_bpchar(v) || run_text(v) || run_inet(v) || run_bits(v) ||
-                 run_known(v) || run_float_text(v) || run_float(v) ||
-                 run_hash(v) || run_bytea(v) || run_int_convert(v) ||
-                 run64(v) || run128(v) || run_i16(v) || run_i32(v) ||
-                 run_i64(v);
+    bool known = run_money(v) || run_bpchar(v) || run_text(v) || run_inet(v) ||
+                 run_bits(v) || run_known(v) || run_float_text(v) ||
+                 run_float(v) || run_hash(v) || run_bytea(v) ||
+                 run_int_convert(v) || run64(v) || run128(v) || run_i16(v) ||
+                 run_i32(v) || run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

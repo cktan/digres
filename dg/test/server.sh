@@ -4501,6 +4501,8 @@ done
 # 10. Bad tid and pg_lsn text, and an integer too big for "char".
 # 11. A text function with a negative length, a zero field, a result past
 #     the limit, and a character number that is none.
+# 12. LIKE with a backslash at the end of the pattern, and a bad ESCAPE.
+# 13. money out of range, a division by zero, and bad money text.
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4648,7 +4650,14 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "chr(55296)|requested character not valid for encoding: 55296" \
   "'abc' LIKE 'a\\'|LIKE pattern must not end with escape character" \
   "'abc' LIKE '%\\'|LIKE pattern must not end with escape character" \
-  "'a' LIKE 'a' ESCAPE 'xy'|invalid escape string"; do
+  "'a' LIKE 'a' ESCAPE 'xy'|invalid escape string" \
+  "'\$1'::money * 1e300::float8|money out of range" \
+  "'\$1'::money / 0::float8|division by zero" \
+  "'\$1'::money / 0|division by zero" \
+  "'\$92233720368547758.07'::money + '\$1'::money|money out of range" \
+  "'\$92233720368547758.07'::money * 2|money out of range" \
+  "'abc'::money|invalid input syntax for type money" \
+  "'\$92233720368547758.08'::money|is out of range for type money"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"
 done

@@ -576,4 +576,31 @@ hand tests in `test/test_text.cc`; and
 `dg/test/select_text_ops.sql`, which prints the same as the
 digres before the move.
 
+## 17. money
+
+`ty_money.h` holds the operations of money: an `int64` count of
+the smallest unit. The text depends on the locale
+(`lc_monetary`). The host gives it as a `ty_money_fmt_t`, a copy
+of the fields of C's `struct lconv` that PostgreSQL reads, so
+that ty reads no setting itself; `ty_money_fmt_c` is the C
+locale. The settings are the second kind of hook of
+[`../sm/TYPEMOVE_PLAN.md`](../sm/TYPEMOVE_PLAN.md): a value
+passed in, as `extra_float_digits` is for the floats.
+
+The functions are `parse` and `format` (the signs and the symbols
+in the places `sign_posn`, `cs_precedes` and `sep_by_space` say),
+`+` and `-`, `*` and `/` with an integer or a float, `/` of two
+values and `cash_words`. The float arithmetic is that of
+`ty_float.h`. The casts with `numeric` stay in digres, as they
+use it.
+
+The tests: the arithmetic and the words are in the vectors, from
+Python integers; the text in six made-up locales is a port in
+Python of PostgreSQL's code (about 250 values each); the text in
+the C locale is in `test/known.txt`, from the old digres; the
+hand tests are in `test/test_money.cc`. The words of the smallest
+money value were wrong in the old digres (a signed overflow,
+which the compiler used): ty gives "Minus ninety two quadrillion
+...".
+
 

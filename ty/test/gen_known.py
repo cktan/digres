@@ -163,7 +163,21 @@ def like_ops():
 OPS["tid.parse"] = ("tid", tid_inputs)
 OPS["lsn.parse"] = ("pg_lsn", lsn_inputs)
 OPS["char.parse"] = ('"char"', char_inputs)
+def money_inputs():
+    out = ["$1.23", "1.23", "-$1.23", "($1.23)", "$1,234.56", "1,234", "1234567.891", "0.005", "0.004", "  $ 5 ", "$5 -",
+           "5-", "+5", "$+5", "$-5", "92233720368547758.07", "-92233720368547758.08", "92233720368547758.08",
+           "-92233720368547758.09", "abc", "$", "", "1.2.3", "1,2,3", "$1,2", "$ -1", "-1$", "1.", ".5", "$.5", "0", "-0",
+           "$0.00", "1e5", "12 34", "1 000", "$1,000,000.00", "1,000,000", "($1)", "(1", "1)", "- 5", "$ - 5", "5.5", "5.45",
+           "5.455", "5.445", "5.4", "99999999999999999.99", "922337203685477580.7", "$$5", "5$$"]
+    for _ in range(60):
+        n = random.randint(0, 10 ** random.randint(1, 17))
+        t = "%d.%02d" % (n // 100, n % 100) if random.random() < 0.7 else str(n)
+        out.append(random.choice(["", "$", "-", "-$", "($"]) + t + random.choice(["", "", ")", " "]))
+    return out
+
+
 OPS["like.pair"] = ("like", like_ops)
+OPS["money.parse"] = ("money", money_inputs)
 
 OPS["cidr.parse"] = ("cidr", inet_inputs)
 

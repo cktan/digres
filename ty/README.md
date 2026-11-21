@@ -51,6 +51,7 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty_inet.h` | the inet and cidr operations |
 | `include/ty_small.h` | tid, pg_lsn and "char" |
 | `include/ty_text.h` | the text operations, UTF-8 |
+| `include/ty_money.h` | the money operations |
 | `include/ty_error.h` | the error codes |
 | `src/` | the library |
 | `test/` | the unit tests, in doctest, and the vectors |

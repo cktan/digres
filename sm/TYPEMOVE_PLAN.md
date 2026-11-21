@@ -524,6 +524,23 @@ copied from PostgreSQL keeps its copyright notice
      Measured by callgrind (old, new): LIKE -12.61% and
      -5.64%, ILIKE -8.91%. The first version was +1.55% on
      ILIKE; `memchr` finds the starts of a match after a `%`.
+   - **money moved (2026-11-21), unattended.** `ty_money.h`:
+     the text in and out, the arithmetic, the words, and the
+     conversions to and from integers' scale. The locale is
+     passed in as a `ty_money_fmt_t`, the fields of `lconv`
+     that PostgreSQL reads (the second kind of hook of
+     section 8, a value passed in). The casts with `numeric`
+     stay in digres. The tests: vectors from Python integers
+     and a Python port of `cash_out` over six made-up locales,
+     known answers from the old digres for the C locale, and
+     `dg/test/select_money.sql`, which prints the same as the
+     digres before the move. Found: the words of the smallest
+     money value were wrong in the old digres, a signed
+     overflow that the compiler used. Measured by callgrind
+     (old, new): arithmetic and compares +0.32%; text out
+     -16.55%; text in +0.74%. The first version was +14.0% on
+     the text out: glibc's `snprintf` is slower than
+     PostgreSQL's.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,
