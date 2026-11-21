@@ -57,7 +57,6 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty_money.h` | the money operations |
 | `include/ty_interval.h` | the arithmetic of interval |
 | `include/ty_datetime.h` | the calendar, date, time and timestamp arithmetic |
-| `include/ty_geo.h` | point and box, and the fuzzy float compares |
 | `include/ty_error.h` | the error codes |
 | `src/` | the library |
 | `test/` | the unit tests, in doctest, and the vectors |

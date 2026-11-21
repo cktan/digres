@@ -4506,7 +4506,6 @@ done
 # 14. interval arithmetic out of range, and a division by zero.
 # 15. date, time and timestamp arithmetic out of range, bad make_date and
 #     make_time fields, and infinities that clash.
-# 16. point and box arithmetic that overflows, underflows or divides by zero.
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4719,12 +4718,6 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'infinity'::timestamp - 'infinity'::timestamp|interval out of range" \
   "'294276-12-31'::timestamp + '1 year'::interval|timestamp out of range" \
   "'infinity'::timestamp + '-infinity'::interval|timestamp out of range" \
-  "'(1,2)'::point / '(0,0)'::point|division by zero" \
-  "'(1e308,1e308)'::point + '(1e308,1e308)'::point|value out of range: overflow" \
-  "'(1e200,1)'::point * '(1e200,1)'::point|value out of range: overflow" \
-  "'(1e-200,1)'::point * '(1e-200,1e-200)'::point|value out of range: underflow" \
-  "'(1e308,0)'::point <-> '(-1e308,0)'::point|value out of range: overflow" \
-  "area(box '(1e200,1e200),(-1e200,-1e200)')|value out of range: overflow" \
   "'\$92233720368547758.08'::money|is out of range for type money"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"

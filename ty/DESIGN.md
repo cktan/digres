@@ -730,38 +730,3 @@ formulation of the Julian day (the Wikipedia formula and
 Richards' inverse, not PostgreSQL's), about 3,500;
 `test/test_datetime.cc`; and `dg/test/select_datetime_ops.sql`,
 which prints the same as the digres before the move.
-
-
-
-## 20. point and box
-
-`ty_geo.h` holds the operations of the geometric types `point`
-and `box`, and the fuzzy compares that all the geometric types
-use. A float is the same as another if they are within `EPSILON`
-(1.0e-6) of each other, and below another only if it is below by
-more than `EPSILON`. The structs have PostgreSQL's layout.
-
-The functions for a point are the compares (the same, left,
-right, above, below, vertical, horizontal), the distance (a
-hypotenuse that cannot overflow unless its result does), the
-slopes, and the sum, difference, product and quotient, as complex
-numbers. For a box they are the construction from two points, the
-order of the corners, the same and overlap and contain, the
-position operators, the width, the height, the area, the center,
-the intersection, the distance of the centers, `+`, `-`, `*` and
-`/` with a point, and the order by area. The float arithmetic is
-that of `ty_float.h`, so an overflow, an underflow and a division
-by zero come back as ty's errors.
-
-The text, the binary forms, and the types `lseg`, `line`, `path`,
-`polygon` and `circle`, with the functions between types, stay in
-digres: they call these functions for the points and boxes they
-hold.
-
-The tests: the vectors (about 13,500), from the rules of the
-fuzzy compares and of PostgreSQL's float arithmetic in Python
-floats, with NaN, infinities, ties at `EPSILON` and values near
-overflow; `dg/test/select_geo_ops.sql`, which prints the same as
-the digres before the move.
-
-
