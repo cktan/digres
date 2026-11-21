@@ -1979,6 +1979,7 @@ struct geo_arg_t {
   ty_line_t l;
   ty_lseg_t s;
   ty_box_t b;
+  ty_circle_t c;
 };
 
 struct geo_res_t {
@@ -1996,6 +1997,14 @@ std::string geo_num(double d) {
 
 std::string geo_point_text(const ty_point_t &p) {
   return "(" + geo_num(p.x) + "," + geo_num(p.y) + ")";
+}
+
+std::string geo_circle_text(const ty_circle_t &c) {
+  return "<" + geo_point_text(c.center) + "," + geo_num(c.radius) + ">";
+}
+
+std::string geo_box_text(const ty_box_t &b) {
+  return geo_point_text(b.high) + "," + geo_point_text(b.low);
 }
 
 /* A number up to one of ",)]}" or the end: NaN, Infinity or a decimal. */
@@ -2047,6 +2056,11 @@ void geo_read(char kind, const std::string &text, geo_arg_t &a) {
     geo_read_point(c, a.s.p[0]);
     c++;
     geo_read_point(c, a.s.p[1]);
+  } else if (kind == 'C') {
+    c++;
+    geo_read_point(c, a.c.center);
+    c++;
+    a.c.radius = geo_read_num(c);
   } else {
     geo_read_point(c, a.b.high);
     c++;
@@ -2104,6 +2118,19 @@ struct geo_op_t {
      if (rc == 0) {                                                         \
        r.null = !hit;                                                       \
        r.text = geo_point_text(pt);                                         \
+     }                                                                      \
+     return rc;                                                             \
+   }}
+
+/* A circle result. */
+#define GEO_CIRCLE(NAME, K, CALL)                                           \
+  {NAME, K, [](const geo_arg_t &x, const geo_arg_t &y, geo_res_t &r) -> int { \
+     (void)x;                                                               \
+     (void)y;                                                               \
+     ty_circle_t c;                                                         \
+     int rc = CALL;                                                         \
+     if (rc == 0) {                                                         \
+       r.text = geo_circle_text(c);                                         \
      }                                                                      \
      return rc;                                                             \
    }}
@@ -2187,6 +2214,48 @@ const geo_op_t geo_ops[] = {
     GEO_BOOL("inter_sl", "SL", ty_lseg_interpt_line(&x.s, &y.l, nullptr, &v)),
     GEO_BOOL("inter_sb", "SB", ty_box_interpt_lseg(&y.b, &x.s, nullptr, &v)),
     GEO_BOOL("inter_lb", "LB", ty_box_interpt_line(&y.b, &x.l, &v)),
+    GEO_PURE("circle_same", "CC", ty_circle_same(&x.c, &y.c)),
+    GEO_BOOL("circle_overlap", "CC", ty_circle_overlap(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_overleft", "CC", ty_circle_overleft(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_left", "CC", ty_circle_left(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_right", "CC", ty_circle_right(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_overright", "CC", ty_circle_overright(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_contained", "CC", ty_circle_contained(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_contain", "CC", ty_circle_contain(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_below", "CC", ty_circle_below(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_above", "CC", ty_circle_above(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_overbelow", "CC", ty_circle_overbelow(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_overabove", "CC", ty_circle_overabove(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_eq", "CC", ty_circle_eq(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_ne", "CC", ty_circle_ne(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_lt", "CC", ty_circle_lt(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_gt", "CC", ty_circle_gt(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_le", "CC", ty_circle_le(&x.c, &y.c, &v)),
+    GEO_BOOL("circle_ge", "CC", ty_circle_ge(&x.c, &y.c, &v)),
+    GEO_CIRCLE("circle_add_pt", "CP", ty_circle_add(&x.c, &y.p, &c)),
+    GEO_CIRCLE("circle_sub_pt", "CP", ty_circle_sub(&x.c, &y.p, &c)),
+    GEO_CIRCLE("circle_mul_pt", "CP", ty_circle_mul(&x.c, &y.p, &c)),
+    GEO_CIRCLE("circle_div_pt", "CP", ty_circle_div(&x.c, &y.p, &c)),
+    GEO_FLOAT("circle_area", "C", ty_circle_area(&x.c, &d)),
+    GEO_FLOAT("circle_diameter", "C", ty_circle_diameter(&x.c, &d)),
+    GEO_FLOAT("circle_distance", "CC", ty_circle_distance(&x.c, &y.c, &d)),
+    GEO_BOOL("circle_contain_pt", "CP",
+             ty_circle_contain_point(&x.c, &y.p, &v)),
+    GEO_BOOL("pt_contained_circle", "PC",
+             ty_circle_contain_point(&y.c, &x.p, &v)),
+    GEO_FLOAT("dist_pc", "PC", ty_point_circle_distance(&x.p, &y.c, &d)),
+    GEO_FLOAT("dist_cpoint", "CP", ty_point_circle_distance(&y.p, &x.c, &d)),
+    GEO_CIRCLE("box_circle", "B", ty_box_to_circle(&x.b, &c)),
+    {"circle_box", "C",
+     [](const geo_arg_t &x, const geo_arg_t &, geo_res_t &r) -> int {
+       ty_box_t b;
+       int rc = ty_circle_to_box(&x.c, &b);
+
+       if (rc == 0) {
+         r.text = geo_box_text(b);
+       }
+       return rc;
+     }},
 };
 
 /*

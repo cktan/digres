@@ -440,11 +440,14 @@ GEO_POOL = {
           "[(-1,-1),(3,3)]", "[(2,2),(4,4)]", "[(0,3),(3,0)]", "[(0,0),(3,4)]", "[(1,2),(3,4)]", "[(NaN,0),(1,1)]",
           "[(0,0),(Infinity,1)]", "[(1e308,0),(-1e308,0)]", "[(0,0),(1e-300,1e-300)]", "[(5,5),(6,5)]", "[(2,-1),(2,5)]",
           "[(0,0),(1e-7,1)]"],
+    "C": ["<(0,0),1>", "<(1,1),2>", "<(0,0),0>", "<(5,5),1>", "<(2,0),3>", "<(-1,-1),0.5>", "<(0,0),1e-7>",
+          "<(NaN,0),1>", "<(0,0),NaN>", "<(Infinity,0),1>", "<(0,0),Infinity>", "<(1e308,1e308),1>", "<(0,0),1e308>",
+          "<(1e-300,1e-300),1e-300>", "<(3,4),5>", "<(10,10),10>", "<(0,3),1>", "<(2.5,2.5),0.5>"],
     "B": ["(1,1),(0,0)", "(2,2),(1,1)", "(4,4),(-1,-1)", "(10,10),(5,5)", "(3,2),(0,0)", "(NaN,NaN),(NaN,NaN)",
           "(Infinity,Infinity),(0,0)", "(1e308,1e308),(-1e308,-1e308)", "(0,0),(0,0)", "(1,3),(1,3)", "(2,1),(1,0)",
           "(3,3),(2,2)"],
 }
-GEO_TYPE = {"P": "point", "L": "line", "S": "lseg", "B": "box"}
+GEO_TYPE = {"P": "point", "L": "line", "S": "lseg", "B": "box", "C": "circle"}
 
 # name: (kinds, template). {0} and {1} are the arguments.
 GEO_OPS = {
@@ -466,6 +469,17 @@ GEO_OPS = {
     "close_pb": ("PB", "{0} ## {1}"), "close_ls": ("LS", "{0} ## {1}"), "close_sb": ("SB", "{0} ## {1}"),
     "on_pl": ("PL", "{0} <@ {1}"), "on_ps": ("PS", "{0} <@ {1}"), "on_pb": ("PB", "{0} <@ {1}"),
     "on_sl": ("SL", "{0} <@ {1}"), "on_sb": ("SB", "{0} <@ {1}"), "box_contain_pt": ("BP", "{0} @> {1}"),
+    "circle_same": ("CC", "{0} ~= {1}"), "circle_overlap": ("CC", "{0} && {1}"), "circle_overleft": ("CC", "{0} &< {1}"),
+    "circle_left": ("CC", "{0} << {1}"), "circle_right": ("CC", "{0} >> {1}"), "circle_overright": ("CC", "{0} &> {1}"),
+    "circle_contained": ("CC", "{0} <@ {1}"), "circle_contain": ("CC", "{0} @> {1}"), "circle_below": ("CC", "{0} <<| {1}"),
+    "circle_above": ("CC", "{0} |>> {1}"), "circle_overbelow": ("CC", "{0} &<| {1}"), "circle_overabove": ("CC", "{0} |&> {1}"),
+    "circle_eq": ("CC", "{0} = {1}"), "circle_ne": ("CC", "{0} <> {1}"), "circle_lt": ("CC", "{0} < {1}"),
+    "circle_gt": ("CC", "{0} > {1}"), "circle_le": ("CC", "{0} <= {1}"), "circle_ge": ("CC", "{0} >= {1}"),
+    "circle_add_pt": ("CP", "{0} + {1}"), "circle_sub_pt": ("CP", "{0} - {1}"), "circle_mul_pt": ("CP", "{0} * {1}"),
+    "circle_div_pt": ("CP", "{0} / {1}"), "circle_area": ("C", "area({0})"), "circle_diameter": ("C", "diameter({0})"),
+    "circle_distance": ("CC", "{0} <-> {1}"), "circle_contain_pt": ("CP", "{0} @> {1}"),
+    "pt_contained_circle": ("PC", "{0} <@ {1}"), "dist_pc": ("PC", "{0} <-> {1}"), "dist_cpoint": ("CP", "{0} <-> {1}"),
+    "circle_box": ("C", "box({0})"), "box_circle": ("B", "circle({0})"),
     "inter_sl": ("SL", "{0} ?# {1}"), "inter_sb": ("SB", "{0} ?# {1}"), "inter_lb": ("LB", "{0} ?# {1}"),
 }
 

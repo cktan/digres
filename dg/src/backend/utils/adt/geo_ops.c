@@ -86,6 +86,7 @@ enum path_delim { PATH_NONE, PATH_OPEN, PATH_CLOSED };
 #define TYL(p) ((ty_line_t *)(p))
 #define TYS(p) ((ty_lseg_t *)(p))
 #define TYB(p) ((ty_box_t *)(p))
+#define TYC(p) ((ty_circle_t *)(p))
 
 /* Routines for points */
 static inline void point_construct(Point *result, float8 x, float8 y);
@@ -3521,7 +3522,7 @@ Datum circle_in(PG_FUNCTION_ARGS) {
     PG_RETURN_NULL();
 
   /* We have to accept NaN. */
-  if (circle->radius < 0.0)
+  if (!ty_circle_valid(TYC(circle)))
     ereturn(
         escontext, (Datum)0,
         (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
@@ -3584,7 +3585,7 @@ Datum circle_recv(PG_FUNCTION_ARGS) {
   circle->radius = pq_getmsgfloat8(buf);
 
   /* We have to accept NaN. */
-  if (circle->radius < 0.0)
+  if (!ty_circle_valid(TYC(circle)))
     ereport(ERROR, (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
                     errmsg("invalid radius in external \"circle\" value")));
 
@@ -3616,177 +3617,215 @@ Datum circle_send(PG_FUNCTION_ARGS) {
  * We consider NaNs values to be equal to each other to let those circles
  * to be found.
  */
-Datum circle_same(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_same(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
 
-  PG_RETURN_BOOL(((isnan(circle1->radius) && isnan(circle2->radius)) ||
-                  FPeq(circle1->radius, circle2->radius)) &&
-                 point_eq_point(&circle1->center, &circle2->center));
+  PG_RETURN_BOOL(ty_circle_same(TYC(a0), TYC(a1)));
 }
 
 /*		circle_overlap	-		does circle1 overlap circle2?
  */
-Datum circle_overlap(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_overlap(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPle(point_dt(&circle1->center, &circle2->center),
-                      float8_pl(circle1->radius, circle2->radius)));
+  if (ty_circle_overlap(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_overleft -		is the right edge of circle1 at
  *or left of the right edge of circle2?
  */
-Datum circle_overleft(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_overleft(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPle(float8_pl(circle1->center.x, circle1->radius),
-                      float8_pl(circle2->center.x, circle2->radius)));
+  if (ty_circle_overleft(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_left		-		is circle1 strictly left
  * of circle2?
  */
-Datum circle_left(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_left(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPlt(float8_pl(circle1->center.x, circle1->radius),
-                      float8_mi(circle2->center.x, circle2->radius)));
+  if (ty_circle_left(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_right	-		is circle1 strictly right of
  * circle2?
  */
-Datum circle_right(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_right(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPgt(float8_mi(circle1->center.x, circle1->radius),
-                      float8_pl(circle2->center.x, circle2->radius)));
+  if (ty_circle_right(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_overright	-	is the left edge of circle1 at
  *or right of the left edge of circle2?
  */
-Datum circle_overright(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_overright(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPge(float8_mi(circle1->center.x, circle1->radius),
-                      float8_mi(circle2->center.x, circle2->radius)));
+  if (ty_circle_overright(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_contained		-		is circle1
  * contained by circle2?
  */
-Datum circle_contained(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_contained(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPle(point_dt(&circle1->center, &circle2->center),
-                      float8_mi(circle2->radius, circle1->radius)));
+  if (ty_circle_contained(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_contain	-		does circle1 contain circle2?
  */
-Datum circle_contain(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_contain(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPle(point_dt(&circle1->center, &circle2->center),
-                      float8_mi(circle1->radius, circle2->radius)));
+  if (ty_circle_contain(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_below		-		is circle1 strictly
  * below circle2?
  */
-Datum circle_below(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_below(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPlt(float8_pl(circle1->center.y, circle1->radius),
-                      float8_mi(circle2->center.y, circle2->radius)));
+  if (ty_circle_below(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_above	-		is circle1 strictly above
  * circle2?
  */
-Datum circle_above(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_above(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPgt(float8_mi(circle1->center.y, circle1->radius),
-                      float8_pl(circle2->center.y, circle2->radius)));
+  if (ty_circle_above(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_overbelow -		is the upper edge of circle1 at
  *or below the upper edge of circle2?
  */
-Datum circle_overbelow(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_overbelow(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPle(float8_pl(circle1->center.y, circle1->radius),
-                      float8_pl(circle2->center.y, circle2->radius)));
+  if (ty_circle_overbelow(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_overabove	-	is the lower edge of circle1 at
  *or above the lower edge of circle2?
  */
-Datum circle_overabove(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_overabove(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPge(float8_mi(circle1->center.y, circle1->radius),
-                      float8_mi(circle2->center.y, circle2->radius)));
+  if (ty_circle_overabove(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		circle_relop	-		is area(circle1) relop
  *area(circle2), within our accuracy constraint?
  */
-Datum circle_eq(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_eq(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPeq(circle_ar(circle1), circle_ar(circle2)));
+  if (ty_circle_eq(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
-Datum circle_ne(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_ne(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPne(circle_ar(circle1), circle_ar(circle2)));
+  if (ty_circle_ne(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
-Datum circle_lt(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_lt(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPlt(circle_ar(circle1), circle_ar(circle2)));
+  if (ty_circle_lt(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
-Datum circle_gt(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_gt(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPgt(circle_ar(circle1), circle_ar(circle2)));
+  if (ty_circle_gt(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
-Datum circle_le(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_le(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPle(circle_ar(circle1), circle_ar(circle2)));
+  if (ty_circle_le(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
-Datum circle_ge(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
+GEO_NO_CANARY Datum circle_ge(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  PG_RETURN_BOOL(FPge(circle_ar(circle1), circle_ar(circle2)));
+  if (ty_circle_ge(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*----------------------------------------------------------
@@ -3796,28 +3835,24 @@ Datum circle_ge(PG_FUNCTION_ARGS) {
 /* circle_add_pt()
  * Translation operator.
  */
-Datum circle_add_pt(PG_FUNCTION_ARGS) {
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(0);
-  Point *point = PG_GETARG_POINT_P(1);
-  CIRCLE *result;
+GEO_NO_CANARY Datum circle_add_pt(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  Point *a1 = PG_GETARG_POINT_P(1);
+  CIRCLE *result = (CIRCLE *)palloc(sizeof(CIRCLE));
 
-  result = (CIRCLE *)palloc(sizeof(CIRCLE));
-
-  point_add_point(&result->center, &circle->center, point);
-  result->radius = circle->radius;
+  if (ty_circle_add(TYC(a0), TYP(a1), TYC(result)))
+    float_raise_ty();
 
   PG_RETURN_CIRCLE_P(result);
 }
 
-Datum circle_sub_pt(PG_FUNCTION_ARGS) {
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(0);
-  Point *point = PG_GETARG_POINT_P(1);
-  CIRCLE *result;
+GEO_NO_CANARY Datum circle_sub_pt(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  Point *a1 = PG_GETARG_POINT_P(1);
+  CIRCLE *result = (CIRCLE *)palloc(sizeof(CIRCLE));
 
-  result = (CIRCLE *)palloc(sizeof(CIRCLE));
-
-  point_sub_point(&result->center, &circle->center, point);
-  result->radius = circle->radius;
+  if (ty_circle_sub(TYC(a0), TYP(a1), TYC(result)))
+    float_raise_ty();
 
   PG_RETURN_CIRCLE_P(result);
 }
@@ -3825,28 +3860,24 @@ Datum circle_sub_pt(PG_FUNCTION_ARGS) {
 /* circle_mul_pt()
  * Rotation and scaling operators.
  */
-Datum circle_mul_pt(PG_FUNCTION_ARGS) {
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(0);
-  Point *point = PG_GETARG_POINT_P(1);
-  CIRCLE *result;
+GEO_NO_CANARY Datum circle_mul_pt(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  Point *a1 = PG_GETARG_POINT_P(1);
+  CIRCLE *result = (CIRCLE *)palloc(sizeof(CIRCLE));
 
-  result = (CIRCLE *)palloc(sizeof(CIRCLE));
-
-  point_mul_point(&result->center, &circle->center, point);
-  result->radius = float8_mul(circle->radius, HYPOT(point->x, point->y));
+  if (ty_circle_mul(TYC(a0), TYP(a1), TYC(result)))
+    float_raise_ty();
 
   PG_RETURN_CIRCLE_P(result);
 }
 
-Datum circle_div_pt(PG_FUNCTION_ARGS) {
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(0);
-  Point *point = PG_GETARG_POINT_P(1);
-  CIRCLE *result;
+GEO_NO_CANARY Datum circle_div_pt(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  Point *a1 = PG_GETARG_POINT_P(1);
+  CIRCLE *result = (CIRCLE *)palloc(sizeof(CIRCLE));
 
-  result = (CIRCLE *)palloc(sizeof(CIRCLE));
-
-  point_div_point(&result->center, &circle->center, point);
-  result->radius = float8_div(circle->radius, HYPOT(point->x, point->y));
+  if (ty_circle_div(TYC(a0), TYP(a1), TYC(result)))
+    float_raise_ty();
 
   PG_RETURN_CIRCLE_P(result);
 }
@@ -3854,19 +3885,25 @@ Datum circle_div_pt(PG_FUNCTION_ARGS) {
 /*		circle_area		-		returns the area of the
  * circle.
  */
-Datum circle_area(PG_FUNCTION_ARGS) {
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(0);
+GEO_NO_CANARY Datum circle_area(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  float8 r;
 
-  PG_RETURN_FLOAT8(circle_ar(circle));
+  if (ty_circle_area(TYC(a0), &r))
+    float_raise_ty();
+  PG_RETURN_FLOAT8(r);
 }
 
 /*		circle_diameter -		returns the diameter of the
  * circle.
  */
-Datum circle_diameter(PG_FUNCTION_ARGS) {
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(0);
+GEO_NO_CANARY Datum circle_diameter(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  float8 r;
 
-  PG_RETURN_FLOAT8(float8_mul(circle->radius, 2.0));
+  if (ty_circle_diameter(TYC(a0), &r))
+    float_raise_ty();
+  PG_RETURN_FLOAT8(r);
 }
 
 /*		circle_radius	-		returns the radius of the
@@ -3881,65 +3918,60 @@ Datum circle_radius(PG_FUNCTION_ARGS) {
 /*		circle_distance -		returns the distance between
  *								  two circles.
  */
-Datum circle_distance(PG_FUNCTION_ARGS) {
-  CIRCLE *circle1 = PG_GETARG_CIRCLE_P(0);
-  CIRCLE *circle2 = PG_GETARG_CIRCLE_P(1);
-  float8 result;
+GEO_NO_CANARY Datum circle_distance(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  float8 r;
 
-  result = float8_mi(point_dt(&circle1->center, &circle2->center),
-                     float8_pl(circle1->radius, circle2->radius));
-  if (result < 0.0)
-    result = 0.0;
-
-  PG_RETURN_FLOAT8(result);
+  if (ty_circle_distance(TYC(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_FLOAT8(r);
 }
 
-Datum circle_contain_pt(PG_FUNCTION_ARGS) {
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(0);
-  Point *point = PG_GETARG_POINT_P(1);
-  float8 d;
+GEO_NO_CANARY Datum circle_contain_pt(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  Point *a1 = PG_GETARG_POINT_P(1);
+  int r;
 
-  d = point_dt(&circle->center, point);
-  PG_RETURN_BOOL(d <= circle->radius);
+  if (ty_circle_contain_point(TYC(a0), TYP(a1), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
-Datum pt_contained_circle(PG_FUNCTION_ARGS) {
-  Point *point = PG_GETARG_POINT_P(0);
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(1);
-  float8 d;
+GEO_NO_CANARY Datum pt_contained_circle(PG_FUNCTION_ARGS) {
+  Point *a0 = PG_GETARG_POINT_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  int r;
 
-  d = point_dt(&circle->center, point);
-  PG_RETURN_BOOL(d <= circle->radius);
+  if (ty_circle_contain_point(TYC(a1), TYP(a0), &r))
+    float_raise_ty();
+  PG_RETURN_BOOL(r);
 }
 
 /*		dist_pc -		returns the distance between
  *						  a point and a circle.
  */
-Datum dist_pc(PG_FUNCTION_ARGS) {
-  Point *point = PG_GETARG_POINT_P(0);
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(1);
-  float8 result;
+GEO_NO_CANARY Datum dist_pc(PG_FUNCTION_ARGS) {
+  Point *a0 = PG_GETARG_POINT_P(0);
+  CIRCLE *a1 = PG_GETARG_CIRCLE_P(1);
+  float8 r;
 
-  result = float8_mi(point_dt(point, &circle->center), circle->radius);
-  if (result < 0.0)
-    result = 0.0;
-
-  PG_RETURN_FLOAT8(result);
+  if (ty_point_circle_distance(TYP(a0), TYC(a1), &r))
+    float_raise_ty();
+  PG_RETURN_FLOAT8(r);
 }
 
 /*
  * Distance from a circle to a point
  */
-Datum dist_cpoint(PG_FUNCTION_ARGS) {
-  CIRCLE *circle = PG_GETARG_CIRCLE_P(0);
-  Point *point = PG_GETARG_POINT_P(1);
-  float8 result;
+GEO_NO_CANARY Datum dist_cpoint(PG_FUNCTION_ARGS) {
+  CIRCLE *a0 = PG_GETARG_CIRCLE_P(0);
+  Point *a1 = PG_GETARG_POINT_P(1);
+  float8 r;
 
-  result = float8_mi(point_dt(point, &circle->center), circle->radius);
-  if (result < 0.0)
-    result = 0.0;
-
-  PG_RETURN_FLOAT8(result);
+  if (ty_point_circle_distance(TYP(a1), TYC(a0), &r))
+    float_raise_ty();
+  PG_RETURN_FLOAT8(r);
 }
 
 /*		circle_center	-		returns the center point of the
@@ -3956,11 +3988,12 @@ Datum circle_center(PG_FUNCTION_ARGS) {
   PG_RETURN_POINT_P(result);
 }
 
-/*		circle_ar		-		returns the area of the
- * circle.
- */
 static float8 circle_ar(CIRCLE *circle) {
-  return float8_mul(float8_mul(circle->radius, circle->radius), M_PI);
+  float8 r;
+
+  if (ty_circle_area(TYC(circle), &r))
+    float_raise_ty();
+  return r;
 }
 
 /*----------------------------------------------------------
@@ -3981,19 +4014,12 @@ Datum cr_circle(PG_FUNCTION_ARGS) {
   PG_RETURN_CIRCLE_P(result);
 }
 
-Datum circle_box(PG_FUNCTION_ARGS) {
+GEO_NO_CANARY Datum circle_box(PG_FUNCTION_ARGS) {
   CIRCLE *circle = PG_GETARG_CIRCLE_P(0);
-  BOX *box;
-  float8 delta;
+  BOX *box = (BOX *)palloc(sizeof(BOX));
 
-  box = (BOX *)palloc(sizeof(BOX));
-
-  delta = float8_div(circle->radius, sqrt(2.0));
-
-  box->high.x = float8_pl(circle->center.x, delta);
-  box->low.x = float8_mi(circle->center.x, delta);
-  box->high.y = float8_pl(circle->center.y, delta);
-  box->low.y = float8_mi(circle->center.y, delta);
+  if (ty_circle_to_box(TYC(circle), TYB(box)))
+    float_raise_ty();
 
   PG_RETURN_BOX_P(box);
 }
@@ -4001,16 +4027,12 @@ Datum circle_box(PG_FUNCTION_ARGS) {
 /* box_circle()
  * Convert a box to a circle.
  */
-Datum box_circle(PG_FUNCTION_ARGS) {
+GEO_NO_CANARY Datum box_circle(PG_FUNCTION_ARGS) {
   BOX *box = PG_GETARG_BOX_P(0);
-  CIRCLE *circle;
+  CIRCLE *circle = (CIRCLE *)palloc(sizeof(CIRCLE));
 
-  circle = (CIRCLE *)palloc(sizeof(CIRCLE));
-
-  circle->center.x = float8_div(float8_pl(box->high.x, box->low.x), 2.0);
-  circle->center.y = float8_div(float8_pl(box->high.y, box->low.y), 2.0);
-
-  circle->radius = point_dt(&circle->center, &box->high);
+  if (ty_box_to_circle(TYB(box), TYC(circle)))
+    float_raise_ty();
 
   PG_RETURN_CIRCLE_P(circle);
 }
