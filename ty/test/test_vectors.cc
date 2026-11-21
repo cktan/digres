@@ -9,6 +9,7 @@
  * rules of DESIGN.md and not ty's code. Each line is "OP ARGS => RESULT";
  * RESULT is "V S", a number, or "E NAME" for an error.
  */
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -16,6 +17,7 @@
 
 #include "doctest.h"
 #include "ty_decimal.h"
+#include "ty_int.h"
 
 namespace {
 
@@ -231,13 +233,110 @@ bool run128(const vec_t &v) {
   return true;
 }
 
+/*
+ * Run one vector of the integer width N, of type T, named "iN.op"; false
+ * if it is not of that width. A value is a long long in the vector, and
+ * a result is checked as a long long.
+ */
+#define RUN_INT(N, T)                                                         \
+  bool run_i##N(const vec_t &v) {                                             \
+    const std::string p = "i" #N ".";                                         \
+    if (v.op.compare(0, p.size(), p) != 0) {                                  \
+      return false;                                                           \
+    }                                                                         \
+    const std::string name = v.op.substr(p.size());                           \
+    T a = (T)std::stoll(v.args[0]);                                           \
+    T b = v.args.size() > 1 ? (T)std::stoll(v.args[1]) : 0;                   \
+    int n = v.args.size() > 1 ? (int)std::stoll(v.args[1]) : 0;               \
+    T r = 0;                                                                  \
+    if (name == "add") {                                                      \
+      check_int(v, ty_int##N##_add(a, b, &r), r);                             \
+    } else if (name == "sub") {                                               \
+      check_int(v, ty_int##N##_sub(a, b, &r), r);                             \
+    } else if (name == "mul") {                                               \
+      check_int(v, ty_int##N##_mul(a, b, &r), r);                             \
+    } else if (name == "div") {                                               \
+      check_int(v, ty_int##N##_div(a, b, &r), r);                             \
+    } else if (name == "mod") {                                               \
+      check_int(v, ty_int##N##_mod(a, b, &r), r);                             \
+    } else if (name == "gcd") {                                               \
+      check_int(v, ty_int##N##_gcd(a, b, &r), r);                             \
+    } else if (name == "lcm") {                                               \
+      check_int(v, ty_int##N##_lcm(a, b, &r), r);                             \
+    } else if (name == "neg") {                                               \
+      check_int(v, ty_int##N##_neg(a, &r), r);                                \
+    } else if (name == "abs") {                                               \
+      check_int(v, ty_int##N##_abs(a, &r), r);                                \
+    } else if (name == "inc") {                                               \
+      check_int(v, ty_int##N##_inc(a, &r), r);                                \
+    } else if (name == "dec") {                                               \
+      check_int(v, ty_int##N##_dec(a, &r), r);                                \
+    } else if (name == "shl") {                                               \
+      check_int(v, ty_int##N##_shl(a, n, &r), r);                             \
+    } else if (name == "shr") {                                               \
+      check_int(v, ty_int##N##_shr(a, n, &r), r);                             \
+    } else if (name == "larger") {                                            \
+      check_int(v, 0, ty_int##N##_larger(a, b));                              \
+    } else if (name == "smaller") {                                           \
+      check_int(v, 0, ty_int##N##_smaller(a, b));                             \
+    } else if (name == "and") {                                               \
+      check_int(v, 0, ty_int##N##_and(a, b));                                 \
+    } else if (name == "or") {                                                \
+      check_int(v, 0, ty_int##N##_or(a, b));                                  \
+    } else if (name == "xor") {                                               \
+      check_int(v, 0, ty_int##N##_xor(a, b));                                 \
+    } else if (name == "not") {                                               \
+      check_int(v, 0, ty_int##N##_not(a));                                    \
+    } else {                                                                  \
+      return false;                                                           \
+    }                                                                         \
+    return true;                                                              \
+  }
+
+RUN_INT(16, int16_t)
+RUN_INT(32, int32_t)
+RUN_INT(64, int64_t)
+#undef RUN_INT
+
+/* Run a narrowing and a double vector of the integers; false if neither. */
+bool run_int_convert(const vec_t &v) {
+  const std::string &op = v.op;
+  int rc;
+
+  if (op == "i32.to16") {
+    int16_t r = 0;
+    rc = ty_int32_to_int16((int32_t)std::stoll(v.args[0]), &r);
+    check_int(v, rc, r);
+  } else if (op == "i64.to32") {
+    int32_t r = 0;
+    rc = ty_int64_to_int32(std::stoll(v.args[0]), &r);
+    check_int(v, rc, r);
+  } else if (op == "i64.to16") {
+    int16_t r = 0;
+    rc = ty_int64_to_int16(std::stoll(v.args[0]), &r);
+    check_int(v, rc, r);
+  } else if (op == "i64.todouble") {
+    INFO(v.line);
+    CHECK(std::strtod(v.res[0].c_str(), nullptr) ==
+          ty_int64_to_double(std::stoll(v.args[0])));
+  } else if (op == "i64.fromdouble") {
+    int64_t r = 0;
+    rc = ty_int64_from_double(std::strtod(v.args[0].c_str(), nullptr), &r);
+    check_int(v, rc, r);
+  } else {
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 // Verify every decimal operation of ty against a reference of plain integers.
 // 1. Read the vectors of test/vectors.txt: a line each, with its result.
 // 2. Run each through ty, by its operation.
 // 3. Check the number and its scale, or the integer, or the error kind.
-TEST_CASE("ty's decimal operations agree with the reference vectors") {
+TEST_CASE(
+    "ty's decimal and integer operations agree with the reference vectors") {
   const char *path = getenv("TY_VECTORS");
   std::vector<vec_t> vecs = read_vectors(path ? path : "test/vectors.txt");
 
@@ -246,7 +345,8 @@ TEST_CASE("ty's decimal operations agree with the reference vectors") {
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run64(v) || run128(v);
+    bool known = run_int_convert(v) || run64(v) || run128(v) || run_i16(v) ||
+                 run_i32(v) || run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

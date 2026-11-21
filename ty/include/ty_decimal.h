@@ -35,20 +35,10 @@ typedef struct ty_dec128_t {
     int         scale;
 } ty_dec128_t;
 
-/*
- * Records TY_ERR_RANGE as the thread's error, and returns -1. It is out of
- * line: an inline operation calls it on the rare failure, and costs no
- * more.
- */
-int ty_err_range(void);
-
 /* The largest value of a decimal64: 10^17 - 1; of a decimal128: 10^36 - 1. */
 #define TY_DEC64_MAX_VALUE 99999999999999999LL
 #define TY_DEC128_MAX_VALUE \
     ((ty_int128_t)1000000000000000000LL * 1000000000000000000LL - 1)
-
-/* A branch that is taken on the rare failure. */
-#define TY_UNLIKELY(x) __builtin_expect((x) != 0, 0)
 
 /*
  * A call that cannot fail returns its result, and is inline: the host's

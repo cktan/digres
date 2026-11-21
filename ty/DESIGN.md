@@ -148,5 +148,46 @@ Why per thread, and not per process:
 ## 5. Copyright
 
 Code copied from PostgreSQL keeps its copyright notice
-([`../CLAUDE.md`](../CLAUDE.md)). The decimal code is new code,
-and has none.
+([`../CLAUDE.md`](../CLAUDE.md)). The decimal code and the
+integer code are new code, written for ty, and have none. The
+integer code takes the cases and the errors of PostgreSQL's
+`int.c` and `int8.c`, and none of their text.
+
+## 6. The integers
+
+`ty_int.h` holds the operations of `int16`, `int32` and
+`int64`, as `ty_decimal.h` holds those of the decimals. The
+rule is the same: an operation on two values of one width gives
+that width, exact or an error, and a caller who wants a wider
+result widens an operand first. The mixed widths of SQL
+(`int2 + int4`) are a wrapper's job: it passes the narrow
+operand to the wider function.
+
+- **Add, subtract, multiply, negate, abs, increment and
+  decrement** fail with `TY_ERR_RANGE` on overflow.
+- **Divide and remainder** fail with `TY_ERR_DIVZERO` for a zero
+  divisor. The quotient cuts toward zero; the remainder has the
+  sign of the dividend. `MIN / -1` is `TY_ERR_RANGE`; `x % -1`
+  is 0 for every `x`.
+- **`gcd` and `lcm`** are never negative. `gcd(MIN, 0)` and
+  `gcd(MIN, MIN)` are `TY_ERR_RANGE`, as the answer is -`MIN`.
+- **A shift** is by 0 to the width less one. Another count is
+  `TY_ERR_RANGE`: C leaves it undefined, and PostgreSQL gave
+  what the machine gave. This is a change for `int2`: its
+  shifts went through `int`, so a count of 16 to 31 gave 0 or
+  the sign.
+- **A narrowing** (`int32` to `int16`, and so on) fails with
+  `TY_ERR_RANGE` if the value does not fit.
+- **A double to `int64`** rounds to the nearest, a tie to the
+  even, and fails with `TY_ERR_RANGE` for NaN or a value that
+  does not fit.
+- **A compare is not here.** C's operators do it, and a wrapper
+  uses them.
+- **The small functions are in line**: `add`, `sub`, `mul`,
+  `div`, `mod`, `neg`, `abs`, the bit operations and the
+  shifts. Only `gcd`, `lcm` and the double conversion are out
+  of line, in `src/int.cc`.
+
+The tests are in `test/test_int.cc`, by hand, and in
+`test/vectors.txt`, about 25,000 lines of a reference in plain
+Python integers for the three widths.

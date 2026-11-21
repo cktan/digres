@@ -13,6 +13,11 @@
 # and a scale an integer. RESULT is "V S", a number, or "E NAME" for an
 # error: RANGE, DIVZERO or INVALID.
 #
+# The integer operations (i16, i32 and i64) are at the end: "OP A B => V",
+# or "E RANGE" or "E DIVZERO". They follow ../include/ty_int.h: exact or
+# an error; a quotient cuts toward zero; the remainder has the sign of the
+# dividend; a shift is by 0 to N-1 bits, or RANGE.
+#
 # The rules, as the operations of two values of one type give them:
 # exact, or an error if the result does not fit; a quotient, a round and
 # a fit round half away from zero; trunc and a cut cut toward zero.
@@ -38,6 +43,8 @@ def emit(op, args, res):
         r = "E " + res[1]
     elif isinstance(res, tuple):
         r = "%d %d" % res
+    elif isinstance(res, str):
+        r = res
     else:
         r = "%d" % res
     out.append("%s %s => %s" % (op, " ".join(str(a) for a in args), r))
@@ -391,7 +398,96 @@ def main():
         cnt = random.choice([1, 2, 5, 10, 100, 1000, 2147483647, 0, -3])
         r = do_width_bucket(op, ops_, lo, los, hi, his, cnt)
         emit("d128.wb", (op, ops_, lo, los, hi, his, cnt), r)
+    gen_ints()
     sys.stdout.write("\n".join(out) + "\n")
+
+
+def trunc_div(a, b):
+    """a / b cut toward zero, b not zero."""
+    q = abs(a) // abs(b)
+    return q if (a >= 0) == (b >= 0) else -q
+
+
+def wrap(v, bits):
+    """v as a signed integer of that many bits, the high bits lost."""
+    v &= (1 << bits) - 1
+    return v - (1 << bits) if v >> (bits - 1) else v
+
+
+def int_values(bits):
+    """Edges, small values, and random ones of every length."""
+    lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+    vals = {0, 1, -1, 2, -2, 3, -3, 10, -10, lo, lo + 1, hi, hi - 1,
+            hi // 2, lo // 2, 1 << (bits // 2), -(1 << (bits // 2))}
+    for _ in range(40):
+        nb = random.randint(1, bits - 1)
+        vals.add(random.randint(-(1 << nb), (1 << nb) - 1))
+    return sorted(v for v in vals if lo <= v <= hi)
+
+
+def gen_ints():
+    """The vectors of the integer operations, for each width."""
+    for bits in (16, 32, 64):
+        p = "i%d" % bits
+        lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+        vals = int_values(bits)
+
+        def fit(v):
+            return v if lo <= v <= hi else ("E", "RANGE")
+
+        pairs = [(a, b) for a in vals for b in vals]
+        random.shuffle(pairs)
+        for a, b in pairs[:600]:
+            emit(p + ".add", (a, b), fit(a + b))
+            emit(p + ".sub", (a, b), fit(a - b))
+            emit(p + ".mul", (a, b), fit(a * b))
+            emit(p + ".div", (a, b), ("E", "DIVZERO") if b == 0
+                 else fit(trunc_div(a, b)))
+            emit(p + ".mod", (a, b), ("E", "DIVZERO") if b == 0
+                 else a - b * trunc_div(a, b))
+            emit(p + ".gcd", (a, b), fit(math.gcd(a, b)))
+            emit(p + ".lcm", (a, b), fit(0 if a == 0 or b == 0
+                                         else abs(a * b) // math.gcd(a, b)))
+            emit(p + ".larger", (a, b), max(a, b))
+            emit(p + ".smaller", (a, b), min(a, b))
+            emit(p + ".and", (a, b), a & b)
+            emit(p + ".or", (a, b), a | b)
+            emit(p + ".xor", (a, b), a ^ b)
+        for a in vals:
+            emit(p + ".neg", (a,), fit(-a))
+            emit(p + ".abs", (a,), fit(abs(a)))
+            emit(p + ".inc", (a,), fit(a + 1))
+            emit(p + ".dec", (a,), fit(a - 1))
+            emit(p + ".not", (a,), ~a)
+            for n in (-1, 0, 1, 2, bits // 2, bits - 1, bits, bits + 1):
+                ok = 0 <= n < bits
+                emit(p + ".shl", (a, n), wrap(a << n, bits) if ok else ("E", "RANGE"))
+                emit(p + ".shr", (a, n), (a >> n) if ok else ("E", "RANGE"))
+    # Narrowing.
+    for src, dst in ((32, 16), (64, 32), (64, 16)):
+        dlo, dhi = -(1 << (dst - 1)), (1 << (dst - 1)) - 1
+        for a in int_values(src) + [dlo - 1, dhi + 1, dlo, dhi]:
+            if -(1 << (src - 1)) <= a < (1 << (src - 1)):
+                emit("i%d.to%d" % (src, dst), (a,),
+                     a if dlo <= a <= dhi else ("E", "RANGE"))
+    # An int64 from and to a double.
+    for a in int_values(64):
+        emit("i64.todouble", (a,), repr(float(a)))
+    doubles = [0.0, 0.5, 1.5, 2.5, -0.5, -1.5, -2.5, 0.49999999999999994,
+               9223372036854775807.0, 9223372036854775808.0,
+               -9223372036854775808.0, -9223372036854777856.0, 1e19, -1e19,
+               float("inf"), float("-inf"), float("nan"), 4503599627370497.5,
+               123456789.5, -123456789.5]
+    for _ in range(60):
+        doubles.append(random.uniform(-1e19, 1e19))
+        doubles.append(random.uniform(-1e5, 1e5))
+    for d in doubles:
+        if d != d or d in (float("inf"), float("-inf")):
+            res = ("E", "RANGE")
+        else:
+            n = round(d)
+            res = n if -(1 << 63) <= n < (1 << 63) else ("E", "RANGE")
+        emit("i64.fromdouble", (repr(d),), res)
 
 
 main()

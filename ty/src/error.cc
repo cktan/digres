@@ -62,3 +62,13 @@ int ty_internal::set_error(ty_errnum_t code, const char *msg) {
   t_errmsg[n] = '\0';
   return -1;
 }
+
+/* Record the range error that an inline operation found; returns -1. */
+int ty_err_range(void) {
+  return ty_internal::set_error(TY_ERR_RANGE, "result out of range");
+}
+
+/* Record the division by zero that an inline operation found; returns -1. */
+int ty_err_divzero(void) {
+  return ty_internal::set_error(TY_ERR_DIVZERO, "division by zero");
+}

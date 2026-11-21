@@ -879,8 +879,3 @@ uint64_t ty_dec64_hash(const ty_dec64_t *a, uint64_t seed) {
   ty_dec128_t x = {a->value, a->scale};
   return ty_dec128_hash(&x, seed);
 }
-
-/* Record the range error that an inline operation found; returns -1. */
-int ty_err_range(void) {
-  return ty_internal::set_error(TY_ERR_RANGE, "result out of range");
-}

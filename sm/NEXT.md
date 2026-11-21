@@ -229,8 +229,9 @@ are the catalog tables psql reads
     ranges, arrays, `jsonb`, text search) stay in digres. In
     order:
     1. **decimal**: done (2026-11-21), as above.
-    2. **Types with no session state**: integers, bool, uuid,
-       bytea. **This is next.** See below.
+    2. **Types with no session state**: integers (done,
+       2026-11-21, in `ty_int.h`), bool, uuid, bytea. **bool,
+       uuid and bytea are next.** See below.
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.

@@ -43,6 +43,17 @@ const char* ty_errmsg(void);
 /* The name of code, such as "TY_ERR_NOMEM". */
 const char* ty_errname(ty_errnum_t code);
 
+/*
+ * Record TY_ERR_RANGE, or TY_ERR_DIVZERO, as the thread's error, and
+ * return -1. They are out of line: an inline operation calls one on the
+ * rare failure, and costs no more.
+ */
+int ty_err_range(void);
+int ty_err_divzero(void);
+
+/* A branch that is taken on the rare failure. */
+#define TY_UNLIKELY(x) __builtin_expect((x) != 0, 0)
+
 /* ---- memory ---- */
 
 /*

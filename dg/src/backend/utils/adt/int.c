@@ -43,6 +43,7 @@
 #include "optimizer/optimizer.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/ty_int_glue.h"
 
 #define Int2VectorSize(n)	(offsetof(int2vector, values) + (n) * sizeof(int16))
 
@@ -341,13 +342,11 @@ Datum i2toi4(PG_FUNCTION_ARGS) {
 }
 
 Datum i4toi2(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
+  int16 r;
 
-  if (unlikely(arg1 < SHRT_MIN) || unlikely(arg1 > SHRT_MAX))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("smallint out of range")));
-
-  PG_RETURN_INT16((int16)arg1);
+  if (ty_int32_to_int16(PG_GETARG_INT32(0), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 /* Cast int4 -> bool */
@@ -686,12 +685,11 @@ Datum in_range_int2_int8(PG_FUNCTION_ARGS) {
  */
 
 Datum int4um(PG_FUNCTION_ARGS) {
-  int32 arg = PG_GETARG_INT32(0);
+  int32 r;
 
-  if (unlikely(arg == PG_INT32_MIN))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(-arg);
+  if (ty_int32_neg(PG_GETARG_INT32(0), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int4up(PG_FUNCTION_ARGS) {
@@ -701,89 +699,51 @@ Datum int4up(PG_FUNCTION_ARGS) {
 }
 
 Datum int4pl(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_add_s32_overflow(arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(result);
+  if (ty_int32_add(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int4mi(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_sub_s32_overflow(arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(result);
+  if (ty_int32_sub(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int4mul(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_mul_s32_overflow(arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(result);
+  if (ty_int32_mul(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int4div(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-  int32 result;
+  int32 r;
 
-  if (arg2 == 0) {
-    ereport(ERROR,
-            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
-    /* ensure compiler realizes we mustn't reach the division (gcc bug) */
-    PG_RETURN_NULL();
-  }
-
-  /*
-   * INT_MIN / -1 is problematic, since the result can't be represented on a
-   * two's-complement machine.  Some machines produce INT_MIN, some produce
-   * zero, some throw an exception.  We can dodge the problem by recognizing
-   * that division by -1 is the same as negation.
-   */
-  if (arg2 == -1) {
-    if (unlikely(arg1 == PG_INT32_MIN))
-      ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                      errmsg("integer out of range")));
-    result = -arg1;
-    PG_RETURN_INT32(result);
-  }
-
-  /* No overflow is possible */
-
-  result = arg1 / arg2;
-
-  PG_RETURN_INT32(result);
+  if (ty_int32_div(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int4inc(PG_FUNCTION_ARGS) {
-  int32 arg = PG_GETARG_INT32(0);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_add_s32_overflow(arg, 1, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-
-  PG_RETURN_INT32(result);
+  if (ty_int32_inc(PG_GETARG_INT32(0), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int2um(PG_FUNCTION_ARGS) {
-  int16 arg = PG_GETARG_INT16(0);
+  int16 r;
 
-  if (unlikely(arg == PG_INT16_MIN))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("smallint out of range")));
-  PG_RETURN_INT16(-arg);
+  if (ty_int16_neg(PG_GETARG_INT16(0), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 Datum int2up(PG_FUNCTION_ARGS) {
@@ -793,400 +753,169 @@ Datum int2up(PG_FUNCTION_ARGS) {
 }
 
 Datum int2pl(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-  int16 result;
+  int16 r;
 
-  if (unlikely(pg_add_s16_overflow(arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("smallint out of range")));
-  PG_RETURN_INT16(result);
+  if (ty_int16_add(PG_GETARG_INT16(0), PG_GETARG_INT16(1), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 Datum int2mi(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-  int16 result;
+  int16 r;
 
-  if (unlikely(pg_sub_s16_overflow(arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("smallint out of range")));
-  PG_RETURN_INT16(result);
+  if (ty_int16_sub(PG_GETARG_INT16(0), PG_GETARG_INT16(1), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 Datum int2mul(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-  int16 result;
+  int16 r;
 
-  if (unlikely(pg_mul_s16_overflow(arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("smallint out of range")));
-
-  PG_RETURN_INT16(result);
+  if (ty_int16_mul(PG_GETARG_INT16(0), PG_GETARG_INT16(1), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 Datum int2div(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-  int16 result;
+  int16 r;
 
-  if (arg2 == 0) {
-    ereport(ERROR,
-            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
-    /* ensure compiler realizes we mustn't reach the division (gcc bug) */
-    PG_RETURN_NULL();
-  }
-
-  /*
-   * SHRT_MIN / -1 is problematic, since the result can't be represented on
-   * a two's-complement machine.  Some machines produce SHRT_MIN, some
-   * produce zero, some throw an exception.  We can dodge the problem by
-   * recognizing that division by -1 is the same as negation.
-   */
-  if (arg2 == -1) {
-    if (unlikely(arg1 == PG_INT16_MIN))
-      ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                      errmsg("smallint out of range")));
-    result = -arg1;
-    PG_RETURN_INT16(result);
-  }
-
-  /* No overflow is possible */
-
-  result = arg1 / arg2;
-
-  PG_RETURN_INT16(result);
+  if (ty_int16_div(PG_GETARG_INT16(0), PG_GETARG_INT16(1), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 Datum int24pl(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_add_s32_overflow((int32)arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(result);
+  if (ty_int32_add(PG_GETARG_INT16(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int24mi(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_sub_s32_overflow((int32)arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(result);
+  if (ty_int32_sub(PG_GETARG_INT16(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int24mul(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_mul_s32_overflow((int32)arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(result);
+  if (ty_int32_mul(PG_GETARG_INT16(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int24div(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
+  int32 r;
 
-  if (unlikely(arg2 == 0)) {
-    ereport(ERROR,
-            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
-    /* ensure compiler realizes we mustn't reach the division (gcc bug) */
-    PG_RETURN_NULL();
-  }
-
-  /* No overflow is possible */
-  PG_RETURN_INT32((int32)arg1 / arg2);
+  if (ty_int32_div(PG_GETARG_INT16(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int42pl(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_add_s32_overflow(arg1, (int32)arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(result);
+  if (ty_int32_add(PG_GETARG_INT32(0), PG_GETARG_INT16(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int42mi(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_sub_s32_overflow(arg1, (int32)arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(result);
+  if (ty_int32_sub(PG_GETARG_INT32(0), PG_GETARG_INT16(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int42mul(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(pg_mul_s32_overflow(arg1, (int32)arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  PG_RETURN_INT32(result);
+  if (ty_int32_mul(PG_GETARG_INT32(0), PG_GETARG_INT16(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int42div(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-  int32 result;
+  int32 r;
 
-  if (unlikely(arg2 == 0)) {
-    ereport(ERROR,
-            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
-    /* ensure compiler realizes we mustn't reach the division (gcc bug) */
-    PG_RETURN_NULL();
-  }
-
-  /*
-   * INT_MIN / -1 is problematic, since the result can't be represented on a
-   * two's-complement machine.  Some machines produce INT_MIN, some produce
-   * zero, some throw an exception.  We can dodge the problem by recognizing
-   * that division by -1 is the same as negation.
-   */
-  if (arg2 == -1) {
-    if (unlikely(arg1 == PG_INT32_MIN))
-      ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                      errmsg("integer out of range")));
-    result = -arg1;
-    PG_RETURN_INT32(result);
-  }
-
-  /* No overflow is possible */
-
-  result = arg1 / arg2;
-
-  PG_RETURN_INT32(result);
+  if (ty_int32_div(PG_GETARG_INT32(0), PG_GETARG_INT16(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int4mod(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
+  int32 r;
 
-  if (unlikely(arg2 == 0)) {
-    ereport(ERROR,
-            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
-    /* ensure compiler realizes we mustn't reach the division (gcc bug) */
-    PG_RETURN_NULL();
-  }
-
-  /*
-   * Some machines throw a floating-point exception for INT_MIN % -1, which
-   * is a bit silly since the correct answer is perfectly well-defined,
-   * namely zero.
-   */
-  if (arg2 == -1)
-    PG_RETURN_INT32(0);
-
-  /* No overflow is possible */
-
-  PG_RETURN_INT32(arg1 % arg2);
+  if (ty_int32_mod(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int2mod(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
+  int16 r;
 
-  if (unlikely(arg2 == 0)) {
-    ereport(ERROR,
-            (errcode(ERRCODE_DIVISION_BY_ZERO), errmsg("division by zero")));
-    /* ensure compiler realizes we mustn't reach the division (gcc bug) */
-    PG_RETURN_NULL();
-  }
-
-  /*
-   * Some machines throw a floating-point exception for INT_MIN % -1, which
-   * is a bit silly since the correct answer is perfectly well-defined,
-   * namely zero.  (It's not clear this ever happens when dealing with
-   * int16, but we might as well have the test for safety.)
-   */
-  if (arg2 == -1)
-    PG_RETURN_INT16(0);
-
-  /* No overflow is possible */
-
-  PG_RETURN_INT16(arg1 % arg2);
+  if (ty_int16_mod(PG_GETARG_INT16(0), PG_GETARG_INT16(1), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 /* int[24]abs()
  * Absolute value
  */
 Datum int4abs(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 result;
+  int32 r;
 
-  if (unlikely(arg1 == PG_INT32_MIN))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-  result = (arg1 < 0) ? -arg1 : arg1;
-  PG_RETURN_INT32(result);
+  if (ty_int32_abs(PG_GETARG_INT32(0), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int2abs(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 result;
+  int16 r;
 
-  if (unlikely(arg1 == PG_INT16_MIN))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("smallint out of range")));
-  result = (arg1 < 0) ? -arg1 : arg1;
-  PG_RETURN_INT16(result);
-}
-
-/*
- * Greatest Common Divisor
- *
- * Returns the largest positive integer that exactly divides both inputs.
- * Special cases:
- *   - gcd(x, 0) = gcd(0, x) = abs(x)
- *   		because 0 is divisible by anything
- *   - gcd(0, 0) = 0
- *   		complies with the previous definition and is a common convention
- *
- * Special care must be taken if either input is INT_MIN --- gcd(0, INT_MIN),
- * gcd(INT_MIN, 0) and gcd(INT_MIN, INT_MIN) are all equal to abs(INT_MIN),
- * which cannot be represented as a 32-bit signed integer.
- */
-static int32 int4gcd_internal(int32 arg1, int32 arg2) {
-  int32 swap;
-  int32 a1, a2;
-
-  /*
-   * Put the greater absolute value in arg1.
-   *
-   * This would happen automatically in the loop below, but avoids an
-   * expensive modulo operation, and simplifies the special-case handling
-   * for INT_MIN below.
-   *
-   * We do this in negative space in order to handle INT_MIN.
-   */
-  a1 = (arg1 < 0) ? arg1 : -arg1;
-  a2 = (arg2 < 0) ? arg2 : -arg2;
-  if (a1 > a2) {
-    swap = arg1;
-    arg1 = arg2;
-    arg2 = swap;
-  }
-
-  /* Special care needs to be taken with INT_MIN.  See comments above. */
-  if (arg1 == PG_INT32_MIN) {
-    if (arg2 == 0 || arg2 == PG_INT32_MIN)
-      ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                      errmsg("integer out of range")));
-
-    /*
-     * Some machines throw a floating-point exception for INT_MIN % -1,
-     * which is a bit silly since the correct answer is perfectly
-     * well-defined, namely zero.  Guard against this and just return the
-     * result, gcd(INT_MIN, -1) = 1.
-     */
-    if (arg2 == -1)
-      return 1;
-  }
-
-  /* Use the Euclidean algorithm to find the GCD */
-  while (arg2 != 0) {
-    swap = arg2;
-    arg2 = arg1 % arg2;
-    arg1 = swap;
-  }
-
-  /*
-   * Make sure the result is positive. (We know we don't have INT_MIN
-   * anymore).
-   */
-  if (arg1 < 0)
-    arg1 = -arg1;
-
-  return arg1;
+  if (ty_int16_abs(PG_GETARG_INT16(0), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 Datum int4gcd(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-  int32 result;
+  int32 r;
 
-  result = int4gcd_internal(arg1, arg2);
-
-  PG_RETURN_INT32(result);
+  if (ty_int32_gcd(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 /*
  * Least Common Multiple
  */
 Datum int4lcm(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-  int32 gcd;
-  int32 result;
+  int32 r;
 
-  /*
-   * Handle lcm(x, 0) = lcm(0, x) = 0 as a special case.  This prevents a
-   * division-by-zero error below when x is zero, and an overflow error from
-   * the GCD computation when x = INT_MIN.
-   */
-  if (arg1 == 0 || arg2 == 0)
-    PG_RETURN_INT32(0);
-
-  /* lcm(x, y) = abs(x / gcd(x, y) * y) */
-  gcd = int4gcd_internal(arg1, arg2);
-  arg1 = arg1 / gcd;
-
-  if (unlikely(pg_mul_s32_overflow(arg1, arg2, &result)))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-
-  /* If the result is INT_MIN, it cannot be represented. */
-  if (unlikely(result == PG_INT32_MIN))
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("integer out of range")));
-
-  if (result < 0)
-    result = -result;
-
-  PG_RETURN_INT32(result);
+  if (ty_int32_lcm(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int2larger(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_INT16((arg1 > arg2) ? arg1 : arg2);
+  PG_RETURN_INT16(ty_int16_larger(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int2smaller(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_INT16((arg1 < arg2) ? arg1 : arg2);
+  PG_RETURN_INT16(ty_int16_smaller(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int4larger(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_INT32((arg1 > arg2) ? arg1 : arg2);
+  PG_RETURN_INT32(ty_int32_larger(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int4smaller(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_INT32((arg1 < arg2) ? arg1 : arg2);
+  PG_RETURN_INT32(ty_int32_smaller(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 /*
@@ -1201,85 +930,67 @@ Datum int4smaller(PG_FUNCTION_ARGS) {
  */
 
 Datum int4and(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_INT32(arg1 & arg2);
+  PG_RETURN_INT32(ty_int32_and(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int4or(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_INT32(arg1 | arg2);
+  PG_RETURN_INT32(ty_int32_or(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int4xor(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_INT32(arg1 ^ arg2);
+  PG_RETURN_INT32(ty_int32_xor(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int4shl(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
+  int32 r;
 
-  PG_RETURN_INT32(arg1 << arg2);
+  if (ty_int32_shl(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int4shr(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
+  int32 r;
 
-  PG_RETURN_INT32(arg1 >> arg2);
+  if (ty_int32_shr(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("integer");
+  PG_RETURN_INT32(r);
 }
 
 Datum int4not(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-
-  PG_RETURN_INT32(~arg1);
+  PG_RETURN_INT32(ty_int32_not(PG_GETARG_INT32(0)));
 }
 
 Datum int2and(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_INT16(arg1 & arg2);
+  PG_RETURN_INT16(ty_int16_and(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int2or(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_INT16(arg1 | arg2);
+  PG_RETURN_INT16(ty_int16_or(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int2xor(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_INT16(arg1 ^ arg2);
+  PG_RETURN_INT16(ty_int16_xor(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int2not(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-
-  PG_RETURN_INT16(~arg1);
+  PG_RETURN_INT16(ty_int16_not(PG_GETARG_INT16(0)));
 }
 
 Datum int2shl(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
+  int16 r;
 
-  PG_RETURN_INT16(arg1 << arg2);
+  if (ty_int16_shl(PG_GETARG_INT16(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 Datum int2shr(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
+  int16 r;
 
-  PG_RETURN_INT16(arg1 >> arg2);
+  if (ty_int16_shr(PG_GETARG_INT16(0), PG_GETARG_INT32(1), &r))
+    ty_int_raise("smallint");
+  PG_RETURN_INT16(r);
 }
 
 /*

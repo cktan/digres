@@ -383,11 +383,30 @@ copied from PostgreSQL keeps its copyright notice
    nothing; an index build on sm's own thread never calls the
    host's functions.
 5. **The next group**, after decimal: integers, bool, uuid and
-   bytea, as [`NEXT.md`](NEXT.md) item 11 says. Not begun. For
-   each type: a baseline, the operations in ty, then the tests
-   of every layer, as for decimal; `bytea`'s results go through
-   the allocator of §3. → verify: the regression files pass,
-   and no statement rises by more than 1%.
+   bytea, as [`NEXT.md`](NEXT.md) item 11 says. For each type: a
+   baseline, the operations in ty, then the tests of every
+   layer, as for decimal; `bytea`'s results go through the
+   allocator of §3. → verify: the regression files pass, and no
+   statement rises by more than 1%.
+   - **Integers: done (2026-11-21).** `ty_int.h` and
+     `src/int.cc`: add, sub, mul, div, mod, neg, abs, inc, dec,
+     gcd, lcm, larger, smaller, the bit operations, shifts,
+     the narrowings and the `int64`-double conversions, for
+     `int16`, `int32` and `int64`. digres's `int.c` and `int8.c`
+     call them. The tests: 5 hand cases and about 25,000
+     vectors; digres `all 231 ok`. One change: a shift count
+     outside 0 to the width less one is `TY_ERR_RANGE`
+     (`ty/DESIGN.md` §6). The aggregate transitions
+     (`int8inc` and the like), the compares, the text and
+     binary forms, `generate_series` and the window `in_range`
+     stay in digres.
+   - **Integers, measured by callgrind**, instructions a
+     statement over 100,000 rows, old and new: `int4`
+     arithmetic 257,250,549 and 257,251,274 (+0.00%); `int8`
+     247,138,294 and 247,420,911 (+0.11%); `int2` 281,683,442
+     and 282,185,798 (+0.18%); bit operations, `abs` and `gcd`
+     296,682,450 and 298,764,434 (+0.70%).
+   - bool, uuid and bytea: not begun.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and
@@ -405,7 +424,9 @@ copied from PostgreSQL keeps its copyright notice
    of each ty kind to an `SM_ERR_` code.
 5. The header names for the operations inside ty: one header
    for a type, `ty_decimal.h`, with `ty_dec64_t` and
-   `ty_dec128_t`. Is that the pattern for the next types?
+   `ty_dec128_t`. Settled by the integers: one header for the
+   family, `ty_int.h`, with functions `ty_int16_*`,
+   `ty_int32_*` and `ty_int64_*` on the C types, and no struct.
 6. Does `sm_toast_fetch` change to return a datum from the
    thread's alloc function, or does a new call do it, so that
    `std::string` callers stay as they are?
