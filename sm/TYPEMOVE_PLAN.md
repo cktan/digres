@@ -609,6 +609,19 @@ copied from PostgreSQL keeps its copyright notice
      prints the same as before. Measured by callgrind (old,
      new): timestamp text -7.43%; date text -6.73%; interval
      text -52.84%; timestamptz text -7.81%.
+   - **The text in of interval moved (2026-11-21).**
+     `ty_interval_parse`: the tokenizer, the decoders of the
+     postgres, sql and ISO 8601 forms, and the tables of words.
+     The code is PostgreSQL's, moved from `datetime.c` with its
+     notice into `ty/src/interval_in.cc`; the interval style is
+     passed in. The typmod and the messages stay in digres. Not
+     yet moved: the tokenizer and the tables are also still in
+     `datetime.c`, for the text in of dates, times and
+     timestamps, which moves next. The tests: about 1,070
+     texts in `known.txt` from the old digres, with the codes
+     of the errors, and `dg/test/select_interval_in.sql`.
+     Measured by callgrind (old, new): the postgres form
+     -14.08%; the ISO 8601 form +0.30%; the clock form +0.21%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

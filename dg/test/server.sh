@@ -4667,6 +4667,11 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'2147483647 months'::interval + '1 month'|interval out of range" \
   "'2147483647 days'::interval * 2|interval out of range" \
   "'infinity'::interval * 0|interval out of range" \
+  "'x'::interval|invalid input syntax for type interval" \
+  "''::interval|invalid input syntax for type interval" \
+  "'2147483648 months'::interval|interval field value out of range" \
+  "'9223372036854775808 microseconds'::interval|interval field value out of range" \
+  "'178956971 years'::interval|interval out of range" \
   "date '2000-01-01' + 2147483647|date out of range" \
   "date '5874897-12-31' + 1|date out of range" \
   "'infinity'::date - '2000-01-01'::date|cannot subtract infinite dates" \

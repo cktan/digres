@@ -116,4 +116,16 @@ int ty_interval_justify_hours(const ty_interval_t* a, ty_interval_t* r);
 int ty_interval_justify_days(const ty_interval_t* a, ty_interval_t* r);
 int ty_interval_justify(const ty_interval_t* a, ty_interval_t* r);
 
+/*
+ * Read the text of an interval, as interval_in does, up to the typmod:
+ * range is the interval typmod's range (0x7FFF for none), intervalstyle the
+ * session's (TY_INTSTYLE_* of ty_datetime.h). On an error, -1, with
+ * PostgreSQL's code for the error in *dterr: -1 bad format, -2 field
+ * overflow, -3 field overflow with a hint, -4 interval overflow, and 1 for a
+ * count of months that does not fit. The text is cut to its fields as the
+ * host's date parser does it.
+ */
+int ty_interval_parse(const char* str, int range, int intervalstyle,
+                      ty_interval_t* out, int* dterr);
+
 #endif

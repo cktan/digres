@@ -910,7 +910,7 @@ bool run_interval(const vec_t &v) {
   const std::string name = op.substr(3);
 
   /* the text of an interval is in known.txt, run by run_known */
-  if (name == "out") {
+  if (name == "out" || name == "parse") {
     return false;
   }
   ty_interval_t a = iv_of(v.args[0]), b, r;
@@ -1644,6 +1644,38 @@ bool run_known(const vec_t &v) {
       REQUIRE(0 == rc);
       ty_money_format(r, &ty_money_fmt_c, out, sizeof out);
       CHECK(v.res[0] == std::string(out));
+    }
+    return true;
+  }
+  if (op == "iv.parse") {
+    std::vector<uint8_t> tb = bytes_of(v.args[1]);
+    std::string z(reinterpret_cast<const char *>(tb.data()), tb.size());
+    int style = std::stoi(v.args[0]), dterr = 0;
+    ty_interval_t iv;
+    int rc = ty_interval_parse(z.c_str(), 0x7FFF, style, &iv, &dterr);
+
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(std::stoi(v.res[1]) == dterr);
+    } else {
+      REQUIRE(0 == rc);
+      std::string text;
+
+      if (ty_interval_is_noend(&iv)) {
+        text = "infinity";
+      } else if (ty_interval_is_nobegin(&iv)) {
+        text = "-infinity";
+      } else {
+        ty_itm_t itm;
+        char out[TY_DATETIME_TEXT_MAX];
+
+        ty_interval_to_itm(&iv, &itm);
+        ty_interval_format(&itm, style, out);
+        text = out;
+      }
+      CHECK(v.res[0] == token_of(reinterpret_cast<const uint8_t *>(text.data()),
+                                 text.size()));
     }
     return true;
   }

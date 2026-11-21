@@ -307,10 +307,6 @@ extern int DecodeTimezone(const char *str, int *tzp);
 extern int DecodeTimeOnly(char **field, int *ftype, int nf, int *dtype,
                           struct pg_tm *tm, fsec_t *fsec, int *tzp,
                           DateTimeErrorExtra *extra);
-extern int DecodeInterval(char **field, int *ftype, int nf, int range,
-                          int *dtype, struct pg_itm_in *itm_in);
-extern int DecodeISO8601Interval(char *str, int *dtype,
-                                 struct pg_itm_in *itm_in);
 
 extern void DateTimeParseError(int dterr, DateTimeErrorExtra *extra,
                                const char *str, const char *datatype,

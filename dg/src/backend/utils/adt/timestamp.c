@@ -783,63 +783,26 @@ Datum interval_in(PG_FUNCTION_ARGS) {
   int32 typmod = PG_GETARG_INT32(2);
   Node *escontext = fcinfo->context;
   Interval *result;
-  struct pg_itm_in tt, *itm_in = &tt;
-  int dtype;
-  int nf;
   int range;
   int dterr;
-  char *field[MAXDATEFIELDS];
-  int ftype[MAXDATEFIELDS];
-  char workbuf[256];
   DateTimeErrorExtra extra;
-
-  itm_in->tm_year = 0;
-  itm_in->tm_mon = 0;
-  itm_in->tm_mday = 0;
-  itm_in->tm_usec = 0;
 
   if (typmod >= 0)
     range = INTERVAL_RANGE(typmod);
   else
     range = INTERVAL_FULL_RANGE;
 
-  dterr = ParseDateTime(str, workbuf, sizeof(workbuf), field, ftype,
-                        MAXDATEFIELDS, &nf);
-  if (dterr == 0)
-    dterr = DecodeInterval(field, ftype, nf, range, &dtype, itm_in);
-
-  /* if those functions think it's a bad format, try ISO8601 style */
-  if (dterr == DTERR_BAD_FORMAT)
-    dterr = DecodeISO8601Interval(str, &dtype, itm_in);
-
-  if (dterr != 0) {
-    if (dterr == DTERR_FIELD_OVERFLOW)
-      dterr = DTERR_INTERVAL_OVERFLOW;
-    DateTimeParseError(dterr, &extra, str, "interval", escontext);
-    PG_RETURN_NULL();
-  }
-
   result = (Interval *)palloc(sizeof(Interval));
 
-  switch (dtype) {
-  case DTK_DELTA:
-    if (itmin2interval(itm_in, result) != 0)
+  /* ty reads the text, in the postgres, sql and ISO 8601 forms */
+  if (ty_interval_parse(str, range, tcb->guc.IntervalStyle,
+                        (ty_interval_t *)result, &dterr)) {
+    if (dterr == 1)
       ereturn(escontext, (Datum)0,
               (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
                errmsg("interval out of range")));
-    break;
-
-  case DTK_LATE:
-    INTERVAL_NOEND(result);
-    break;
-
-  case DTK_EARLY:
-    INTERVAL_NOBEGIN(result);
-    break;
-
-  default:
-    elog(ERROR, "unexpected dtype %d while parsing interval \"%s\"", dtype,
-         str);
+    DateTimeParseError(dterr, &extra, str, "interval", escontext);
+    PG_RETURN_NULL();
   }
 
   AdjustIntervalForTypmod(result, typmod, escontext);

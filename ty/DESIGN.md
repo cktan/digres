@@ -627,16 +627,25 @@ infinity and plus infinity are the values with the smallest and
 the largest value in all three fields; the cases of an operand
 that is infinite are PostgreSQL's.
 
-The text in and out depend on `DateStyle` and `IntervalStyle` and
-are still in digres, as are `extract`, `date_trunc`, `age` and
-the arithmetic with a date or a timestamp.
+The text in is `ty_interval_parse`: the tokenizer, the decoder of
+the postgres and sql forms (the words `ago`, `@`, the units and
+their abbreviations, signs, fractions), and the decoder of the
+ISO 8601 form, with the interval style passed in. The code is
+PostgreSQL's (`datetime.c`), moved with its notice into
+`src/interval_in.cc`, and is checked against what the old digres
+did with about 1,070 texts; the codes of the errors are
+PostgreSQL's, and the host words them. The text out is in section
+19; `extract`, `date_trunc` and `age`, and the typmod
+(`interval(2)`, `day to second`), are still in digres.
 
 The tests: the vectors, from Python integers for the order and
 the sum, and from a port of the steps of PostgreSQL's code in
 Python floats for the product, the quotient and the justify
 functions (about 4,300); `test/test_interval.cc`; and
-`dg/test/select_interval_ops.sql`, which prints the same as the
-digres before the move.
+`dg/test/select_interval_ops.sql` and `select_interval_in.sql`,
+which print the same as the digres before the move.
+
+
 
 ## 19. date, time and timestamp
 

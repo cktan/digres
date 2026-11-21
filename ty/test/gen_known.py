@@ -266,7 +266,68 @@ def main_datetime(args):
             print("iv.out %d %d:%d:%d => %s" % (sty, v[0], v[1], v[2], o.encode().hex()))
 
 
+def interval_inputs():
+    """Interval text: the postgres, sql and ISO 8601 forms, the units and
+    their abbreviations, signs, fractions, ago, and many bad ones."""
+    random.seed(20261123)
+    out = ["1 day", "1 year 2 months 3 days 04:05:06", "@ 1 minute", "-1 days +02:03:04", "1:30", "1:30:45.5", "P1Y2M3DT4H5M6S",
+           "P0001-02-03T04:05:06", "1-2", "-1-2", "1 day ago", "ago", "infinity", "-infinity", "+infinity", "1.5 years", "0.5 months",
+           "1.2 weeks", "1e3 seconds", "1,000 days", "", " ", "x", "1", "1 2", "1 day 2", "00:00:00", "-00:00:01", "100:00:00", "1:2:3:4",
+           "04:05:06.789", "04:05:06,789", "1 microsecond", "1 usec", "1 us", "1 millisecond", "2 ms", "3 msec", "1 second", "1 s", "1 sec", "2 secs",
+           "1 minute", "1 m", "1 min", "2 mins", "1 hour", "1 h", "1 hr", "2 hrs", "1 day", "1 d", "2 days", "1 week", "1 w", "2 weeks",
+           "1 month", "1 mon", "2 mons", "3 months", "1 year", "1 y", "1 yr", "2 yrs", "3 years", "1 decade", "2 decades", "1 dec", "1 century", "1 c",
+           "1 cent", "2 centuries", "1 millennium", "1 mil", "2 millennia", "1 ms 1 us", "1 year 1 year", "-1 year +2 months", "1 year -2 months",
+           "+1 day", "- 1 day", "1 day -", "1.5 days", "1.5 hours", "0.000001 seconds", "0.0000005 seconds", "9223372036854775807 microseconds",
+           "9223372036854775808 microseconds", "2147483647 months", "2147483648 months", "178000000 years", "178956970 years", "-178956970 years",
+           "178956971 years", "2147483647 days", "2147483648 days", "596523 hours", "2562047788 hours", "2562047789 hours",
+           "1 day 1 hour ago", "ago 1 day", "@ 1 day ago", "@ 1 day", "@ -1 day", "1 day at", "P", "PT", "P1D", "PT1H", "P1W", "P1Y", "P-1Y", "P1.5Y", "PT0.5S", "P1M", "PT1M", "P1Y2M3W4DT5H6M7.5S",
+           "P0001-02-03", "P0001-02-03T04:05:06.5", "P00010203T040506", "P1Y2M", "PT1H30M", "p1d", "P 1D", "P1D ", "PT1H1H", "1-2 3 4:5:6", "-1-2 +3 -4:5:6",
+           "1 year 2 months 3 days 4 hours 5 minutes 6 seconds", "1 day 25:00:00", "1 day 00:60:00", "00:00:60", "24:00:00", "1:00", "1::", ":1", "1:", "::",
+           "1 hour 1:00", "1 mon 1 mons", "01:02", "01:02:03.123456", "01:02:03.1234567", "-01:02", "+01:02:03", "1 +", "1 -", "+-1 day", "--1 day", "1\tday", "1\nday",
+           "1 DAY", "1 Day", "INFINITY", "Ago"]
+    units = ["microsecond", "usec", "us", "millisecond", "ms", "second", "sec", "s", "minute", "min", "m", "hour", "hr", "h", "day", "d", "week", "w",
+             "month", "mon", "year", "yr", "y", "decade", "century", "millennium", "days", "hours", "months", "years", "foo", "mil"]
+    for _ in range(300):
+        parts = []
+        for _ in range(random.randint(1, 4)):
+            sign = random.choice(["", "", "-", "+"])
+            num = random.choice([str(random.randint(0, 100)), "%d.%d" % (random.randint(0, 20), random.randint(0, 99)), str(random.randint(0, 3000000)), "0"])
+            parts.append("%s%s %s" % (sign, num, random.choice(units)))
+        t = " ".join(parts)
+        if random.random() < 0.15:
+            t += " ago"
+        if random.random() < 0.15:
+            t += " %02d:%02d:%02d" % (random.randint(0, 30), random.randint(0, 70), random.randint(0, 70))
+        if random.random() < 0.1:
+            t = "@ " + t
+        out.append(t)
+    for _ in range(80):
+        out.append("P%s%s%s%s" % (random.choice(["", "1Y", "-2Y", "1.5Y"]), random.choice(["", "3M", "-1M"]), random.choice(["", "4D", "2W"]),
+                                  random.choice(["", "T5H", "T6M", "T7.25S", "T1H2M3S", "T-1H"])))
+    return out
+
+
+def main_interval(args):
+    inputs = interval_inputs()
+    for name, sty in (("postgres", 0), ("sql_standard", 2)):
+        sets = ["set intervalstyle = '%s';\n" % name]
+        for t in inputs:
+            lit = t.replace("'", "''").replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n")
+            script = "".join(sets) + "select ((E'%s')::interval)::text;\n" % lit
+            r = subprocess.run(["psql", "-X", "-A", "-t", "-q", "-v", "VERBOSITY=sqlstate"] + args, input=script, capture_output=True, text=True)
+            if r.returncode == 0 and "ERROR" not in r.stderr:
+                res = r.stdout.strip().encode().hex() or "-"
+            else:
+                err = r.stderr
+                res = "E 1" if "22008" in err else "E -4" if "22015" in err else "E -1" if "22007" in err else "E ?" + err.strip().replace(" ", "_")[:30]
+            print("iv.parse %d %s => %s" % (sty, t.encode().hex() or "-", res))
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--interval":
+        sys.argv.pop(1)
+        main_interval(sys.argv[1:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--datetime":
         sys.argv.pop(1)
         main_datetime(sys.argv[1:])
