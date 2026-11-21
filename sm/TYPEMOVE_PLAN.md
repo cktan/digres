@@ -406,7 +406,18 @@ copied from PostgreSQL keeps its copyright notice
      247,138,294 and 247,420,911 (+0.11%); `int2` 281,683,442
      and 282,185,798 (+0.18%); bit operations, `abs` and `gcd`
      296,682,450 and 298,764,434 (+0.70%).
-   - bool, uuid and bytea: not begun.
+   - **bool: done (2026-11-21).** `ty_bool.h`: `ty_bool_parse`,
+     the words of PostgreSQL's boolean input, cut short, in any
+     case. digres's `parse_bool_with_len` calls it, and so do
+     `boolin` and the GUC parse. The compares, the output (`t`
+     and `f`, `true` and `false`), the hash and the aggregate
+     states stay in digres.
+   - **The hash of the integers and of bool is not moved.**
+     PostgreSQL's hash of an integer decides which partition a
+     row of a hash-partitioned table goes to, and many regression
+     files print that. A move changes them all. Open: move the
+     hash and accept the new files, or keep it.
+   - uuid and bytea: not begun.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

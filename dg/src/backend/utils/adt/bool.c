@@ -22,6 +22,7 @@
 #include "common/hashfn.h"
 #include "libpq/pqformat.h"
 #include "utils/builtins.h"
+#include "ty_bool.h"
 
 /*
  * Try to interpret value as boolean value.  Valid values are: true,
@@ -34,74 +35,17 @@ bool parse_bool(const char *value, bool *result) {
 }
 
 bool parse_bool_with_len(const char *value, size_t len, bool *result) {
-  /* Check the most-used possibilities first. */
-  switch (*value) {
-  case 't':
-  case 'T':
-    if (pg_strncasecmp(value, "true", len) == 0) {
-      if (result)
-        *result = true;
-      return true;
-    }
-    break;
-  case 'f':
-  case 'F':
-    if (pg_strncasecmp(value, "false", len) == 0) {
-      if (result)
-        *result = false;
-      return true;
-    }
-    break;
-  case 'y':
-  case 'Y':
-    if (pg_strncasecmp(value, "yes", len) == 0) {
-      if (result)
-        *result = true;
-      return true;
-    }
-    break;
-  case 'n':
-  case 'N':
-    if (pg_strncasecmp(value, "no", len) == 0) {
-      if (result)
-        *result = false;
-      return true;
-    }
-    break;
-  case 'o':
-  case 'O':
-    /* 'o' is not unique enough */
-    if (pg_strncasecmp(value, "on", (len > 2 ? len : 2)) == 0) {
-      if (result)
-        *result = true;
-      return true;
-    } else if (pg_strncasecmp(value, "off", (len > 2 ? len : 2)) == 0) {
-      if (result)
-        *result = false;
-      return true;
-    }
-    break;
-  case '1':
-    if (len == 1) {
-      if (result)
-        *result = true;
-      return true;
-    }
-    break;
-  case '0':
-    if (len == 1) {
-      if (result)
-        *result = false;
-      return true;
-    }
-    break;
-  default:
-    break;
-  }
+  bool parsed;
 
+  /* ty does the parse; a failure is its TY_ERR_INVALID, not an error here. */
+  if (ty_bool_parse(value, len, &parsed) != 0) {
+    if (result)
+      *result = false; /* suppress compiler warning */
+    return false;
+  }
   if (result)
-    *result = false; /* suppress compiler warning */
-  return false;
+    *result = parsed;
+  return true;
 }
 
 /*****************************************************************************

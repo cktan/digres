@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "doctest.h"
+#include "ty_bool.h"
 #include "ty_decimal.h"
 #include "ty_int.h"
 
@@ -315,6 +316,10 @@ bool run_int_convert(const vec_t &v) {
     int16_t r = 0;
     rc = ty_int64_to_int16(std::stoll(v.args[0]), &r);
     check_int(v, rc, r);
+  } else if (op == "bool.parse") {
+    bool b = false;
+    rc = ty_bool_parse(v.args[0].data(), v.args[0].size(), &b);
+    check_int(v, rc, b ? 1 : 0);
   } else if (op == "i64.todouble") {
     INFO(v.line);
     CHECK(std::strtod(v.res[0].c_str(), nullptr) ==

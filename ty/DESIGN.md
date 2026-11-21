@@ -188,6 +188,16 @@ operand to the wider function.
   shifts. Only `gcd`, `lcm` and the double conversion are out
   of line, in `src/int.cc`.
 
-The tests are in `test/test_int.cc`, by hand, and in
+The tests of the integers are in `test/test_int.cc`, by hand, and in
 `test/vectors.txt`, about 25,000 lines of a reference in plain
-Python integers for the three widths.
+Python integers for the three widths. Those of bool are in
+`test/test_bool.cc` and 87 vectors.
+
+## 7. bool
+
+`ty_bool.h` holds `ty_bool_parse`. It takes the words of
+PostgreSQL's boolean input: `true`, `yes`, `on`, `1` and `false`,
+`no`, `off`, `0`, any case, and each cut short but `on` and `1`
+and `0`, which are whole. `o` fails, as both `on` and `off` begin
+with it. It skips no space: a caller that allows one trims first.
+A compare of two bools is C's, and a wrapper uses it.

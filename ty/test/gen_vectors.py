@@ -13,7 +13,8 @@
 # and a scale an integer. RESULT is "V S", a number, or "E NAME" for an
 # error: RANGE, DIVZERO or INVALID.
 #
-# The integer operations (i16, i32 and i64) are at the end: "OP A B => V",
+# The boolean parse (bool.parse TEXT => 1, 0 or E INVALID) follows the
+# integers. The integer operations (i16, i32 and i64) are at the end: "OP A B => V",
 # or "E RANGE" or "E DIVZERO". They follow ../include/ty_int.h: exact or
 # an error; a quotient cuts toward zero; the remainder has the sign of the
 # dividend; a shift is by 0 to N-1 bits, or RANGE.
@@ -399,6 +400,7 @@ def main():
         r = do_width_bucket(op, ops_, lo, los, hi, his, cnt)
         emit("d128.wb", (op, ops_, lo, los, hi, his, cnt), r)
     gen_ints()
+    gen_bools()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -423,6 +425,42 @@ def int_values(bits):
         nb = random.randint(1, bits - 1)
         vals.add(random.randint(-(1 << nb), (1 << nb) - 1))
     return sorted(v for v in vals if lo <= v <= hi)
+
+
+def bool_of(t):
+    """True, False, or None, for a text with no space in it: the rule of
+    ty_bool.h, written from its words."""
+    t = t.lower()
+    n = len(t)
+    if n == 0:
+        return None
+    for word, val in (("true", True), ("yes", True), ("false", False),
+                      ("no", False)):
+        if n <= len(word) and word.startswith(t):
+            return val
+    if t == "on":
+        return True
+    if n >= 2 and n <= 3 and "off".startswith(t):
+        return False
+    if t == "1":
+        return True
+    if t == "0":
+        return False
+    return None
+
+
+def gen_bools():
+    """The vectors of the boolean parse: the words, their cut-short forms,
+    and near misses, in both cases."""
+    texts = []
+    for w in ("true", "false", "yes", "no", "on", "off", "1", "0", "t", "f",
+              "y", "n", "o", "tru", "tr", "fals", "fal", "ye", "of", "truee",
+              "yess", "noo", "onn", "offf", "10", "01", "00", "2", "x", "tx",
+              "ono", "nop", "fa1", "-1", "+1", "1.0", "ofx"):
+        texts += [w, w.upper(), w.capitalize()]
+    for t in sorted(set(texts)):
+        v = bool_of(t)
+        emit("bool.parse", (t,), ("E", "INVALID") if v is None else int(v))
 
 
 def gen_ints():
