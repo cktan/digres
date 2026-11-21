@@ -753,10 +753,10 @@ the intersection, the distance of the centers, `+`, `-`, `*` and
 that of `ty_float.h`, so an overflow, an underflow and a division
 by zero come back as ty's errors.
 
-The text, the binary forms, and the types `path` and `polygon`,
-with the functions between types, stay in digres: they call these
-functions for the points and boxes they hold. The types `line`
-and `lseg` are in section 21, and `circle` in section 22.
+The text, the binary forms, and the types `path`, `polygon` and
+`circle`, with the functions between types, stay in digres: they
+call these functions for the points and boxes they hold. The types
+`line` and `lseg` are in section 21.
 
 The tests: the vectors (about 13,500), from the rules of the
 fuzzy compares and of PostgreSQL's float arithmetic in Python
@@ -775,13 +775,13 @@ cases of PostgreSQL's `geo_ops.c`, with the float steps of
 come back as ty's errors.
 
 The functions for a line are the construction from a point and a
-slope, from two points (the error `TY_ERR_INVALID` if they are
-the same point) and from a segment, the slope, the tests of
-direction (vertical, horizontal, parallel, perpendicular, the
-same), the distance of two lines and the point where they meet.
-For a segment they are the length, the center, the slopes, the
-same, the order by length, the tests of direction, the distance
-and the meeting point.
+slope, from two points (the error `TY_ERR_INVALID` if they are the
+same point) and from a segment, the slope, the tests of direction
+(vertical, horizontal, parallel, perpendicular, the same), the
+distance of two lines and the point where they meet. For a
+segment they are the length, the center, the slopes, the same,
+the order by length, the tests of direction, the distance and the
+meeting point.
 
 Between types they are the distance, the closest point, "on"
 and "intersect" for these pairs: point and line, point and
@@ -813,28 +813,3 @@ infinities, values near overflow and near zero), and
 digres before the move. The floats are exact to the last bit:
 build the tests with `DEBUG=1`, as a fused multiply-add in an
 optimized build changes the last bit of a hypotenuse.
-
-## 22. circle
-
-`ty_geo.h` holds the operations of `circle`: a center and a
-radius, which is not below zero (a NaN is allowed). All are in
-line, as those of point are, for they are short. The functions
-are the same, the position operators (the edge of one circle by
-the edge of the other, with the fuzzy compares), overlap, contain
-and contained, the order by area, the area, the diameter, `+`,
-`-`, `*` and `/` with a point (the radius times, or over, the
-length of the point), the distance of two circles and of a point
-from a circle, the test that a point is in a circle (a plain
-compare), and the conversions to and from a box. The float
-arithmetic is that of `ty_float.h`, so an overflow and a division
-by zero come back as ty's errors.
-
-The text, the binary forms, `radius`, `center`, the constructor
-from a point and a radius, and the conversions to and from a
-polygon stay in digres.
-
-The tests: about 8,800 known answers in `known.txt`, from the
-digres before the move (every pair of a pool of values with NaN,
-infinities, values near overflow and near zero), and
-`dg/test/select_geo_circle_ops.sql`, which prints the same as the
-digres before the move.

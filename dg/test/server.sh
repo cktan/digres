@@ -4733,12 +4733,6 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "point '(-3,4)' <@ line '{1e308,1,1}'|value out of range: overflow" \
   "line '{1,2,3}' ?# box '(1e308,1e308),(-1e308,-1e308)'|value out of range: overflow" \
   "lseg '[(0,0),(1,1)]' ## lseg '[(1e308,0),(-1e308,0)]'|value out of range: overflow" \
-  "area(circle '<(0,0),1e308>')|value out of range: overflow" \
-  "diameter(circle '<(0,0),1e308>')|value out of range: overflow" \
-  "circle '<(0,0),1>' / point '(0,0)'|division by zero" \
-  "circle '<(1e308,1e308),1>' + point '(1e308,1e308)'|value out of range: overflow" \
-  "circle '<(0,0),1e308>' * point '(1e200,1e200)'|value out of range: overflow" \
-  "circle '<(0,0),1e308>' <-> circle '<(1e308,0),1e308>'|value out of range: overflow" \
   "'\$92233720368547758.08'::money|is out of range for type money"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"

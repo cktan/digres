@@ -630,20 +630,6 @@ copied from PostgreSQL keeps its copyright notice
      had a stack canary, so those entry points have
      `no_stack_protector` (nothing on their stack can be
      overrun).
-   - **circle moved (2026-11-21).** `ty_geo.h`, all in line:
-     the same, the position operators, overlap, contain and
-     contained, the order by area, the area, the diameter, `+`,
-     `-`, `*` and `/` with a point, the distance of two circles
-     and of a point from a circle, the test that a point is in
-     a circle, and the conversions to and from a box. The text,
-     the binary forms, `radius`, `center`, the constructor and
-     the conversions to and from a polygon stay in digres. The
-     tests: about 8,800 known answers from the old digres, and
-     `dg/test/select_geo_circle_ops.sql`, which prints the same
-     as the digres before the move. Measured by callgrind (old,
-     new): overlap -1.24%; position operators -0.22%; distance
-     -1.01%; area and order +0.76%; point in a circle and its
-     distance -1.56%; `+` and `*` with a point -0.17%.
    - **The conversions of date, timestamp, time and interval,
      and the earlier arithmetic, measured again on tables
      (2026-11-21).** `max()` over the values, instructions a
