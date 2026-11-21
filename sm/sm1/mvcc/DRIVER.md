@@ -1,6 +1,6 @@
 # The scenario driver
 
-`build/driver` runs one scenario script and prints a
+`build/mvcc_driver` runs one scenario script and prints a
 transcript of what the engine did. The scripts live in `in/`,
 the transcript each must produce lives in `good/`, and a run
 writes `out/`, which is transient. `make test` runs every
@@ -67,7 +67,7 @@ four pairings is reported as four.
 A malformed script names the line it died on:
 
 ```
-$ build/driver mvcc/in/broken.t
+$ build/mvcc_driver mvcc/in/broken.t
 mvcc/in/broken.t:7: unknown verb: frobnicate
 ```
 
@@ -91,7 +91,7 @@ behaviour: read the diff first.
 
 1. Write `in/<id>_<name>.t`, opening with a comment that says
    what the scenario proves.
-2. Run `build/driver in/<id>_<name>.t` and read the
+2. Run `build/mvcc_driver in/<id>_<name>.t` and read the
    transcript. It is the scenario's behaviour: check it
    against what the design claims before believing it.
 3. `make accept` to record it, then commit the script and its

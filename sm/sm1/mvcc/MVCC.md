@@ -170,7 +170,7 @@ make scenarios                # just the scripts, with diffs
 make accept                   # take the current transcripts as
                               #   expected -- a deliberate act,
                               #   never run by make test
-build/driver mvcc/in/c02_write_skew_point_reads.t
+build/mvcc_driver mvcc/in/c02_write_skew_point_reads.t
 ```
 
 Comments in a script are echoed into the transcript, so the
