@@ -227,11 +227,11 @@ Results are exact or an error, never silently wrong.
   implicit cast.
   - `+`, `-` and `*` are exact or an error: past 17 digits, or
     for `*` past 17 places, it is "numeric field overflow".
-    They are `ty_decimal64_add`, `_sub` and `_mul`, in ty. A
+    They are `ty_dec64_add`, `_sub` and `_mul`, in ty. A
     sum of two 17-digit values may need 18, so it is an error
     where PostgreSQL's is not; this is the cost of a result
     with no `palloc`.
-  - `%`, `gcd` and `lcm` are `ty_decimal64_mod`, `_gcd` and
+  - `%`, `gcd` and `lcm` are `ty_dec64_mod`, `_gcd` and
     `_lcm`. `%` by zero is "division by zero". `lcm` is exact
     or an error past 17 digits, as `*` is; `gcd` can pass 17
     digits only for `gcd(0, x)` at a scale that puts `x` past
@@ -239,7 +239,7 @@ Results are exact or an error, never silently wrong.
   - `/` is not exact in any decimal, so its places past 17
     digits are rounded away, half away from zero, as a cast to
     `decimal64` rounds them. It is an error only if the integer
-    part has more than 17 digits. It is `ty_decimal64_div`, in
+    part has more than 17 digits. It is `ty_dec64_div`, in
     128 bits. So `70.0 / 70` prints `1.0000000000000000`, where
     PostgreSQL prints 20 places; the ported `numeric` file marks
     it `--dg-differs`.
@@ -259,12 +259,12 @@ Results are exact or an error, never silently wrong.
   `int32` and `int64`. A `decimal64` with a `decimal128` is a
   `decimal128`, by the implicit cast. In ty, in 128 bits, with
   no 512-bit path:
-  - `+`, `-` and `*`: `ty_decimal128_add`, `_sub` and `_mul`.
-  - `%`, `gcd` and `lcm`: `ty_decimal128_mod`, `_gcd` and `_lcm`.
+  - `+`, `-` and `*`: `ty_dec128_add`, `_sub` and `_mul`.
+  - `%`, `gcd` and `lcm`: `ty_dec128_mod`, `_gcd` and `_lcm`.
     Where a value does not fit 128 bits at the larger scale, `%`
     and `gcd` take the remainder a place at a time; an `lcm` of
     large coprime values is an error, not rounded to fit.
-  - `/` and `div()`: `ty_decimal128_div`, a place or a chunk of
+  - `/` and `div()`: `ty_dec128_div`, a place or a chunk of
     places at a time, so that no step passes 128 bits. An error
     if the quotient passes 36 digits.
   - `neg`, `abs`, `sign`, the compare of two scales, `round`,
@@ -281,7 +281,7 @@ Results are exact or an error, never silently wrong.
   arbitrary precision (`exp_var`, `ln_var`, `power_var`): the
   digits past the 15th of a result are the binary expansion of
   the double. DuckDB computes in `double` too (§4.3). They are
-  in ty, in 128 bits (`ty_decimal128_sqrt`, `_exp`, `_ln`,
+  in ty, in 128 bits (`ty_dec128_sqrt`, `_exp`, `_ln`,
   `_log`, `_pow_int`, `_pow_real`). PostgreSQL's choice of scale
   and its errors stay in `decimal.c`.
   - **Overflow and underflow are errors**: a result the double
@@ -295,7 +295,7 @@ Results are exact or an error, never silently wrong.
     fits 128 bits, and past that it is in `double`; it was exact
     to about 150 digits.
   `generate_series` (it ends when its next value would pass 36
-  digits), `width_bucket` (`ty_decimal128_width_bucket`, one bit
+  digits), `width_bucket` (`ty_dec128_width_bucket`, one bit
   of the count at a time), `inc`, the factorial and the window
   `in_range` are in ty too. The sums of the aggregates and the
   text and binary forms still use the 512-bit magnitude (`mag_t`,
@@ -361,12 +361,12 @@ column, which holds no value of more than 17 digits anyway.
 | --- | --- | --- |
 | `=`, `<>`, `<`, `<=`, `>`, `>=`, btree and hash opclasses, sort support | `bool`, `int4` | the words at one scale, else rescaled in 128 bits |
 | `min`, `max`, unary `-`, `abs`, `sign` | `decimal64` | in 64 bits |
-| `ceil`, `ceiling`, `floor` | `decimal64` | `ty_decimal64_ceil` and `_floor`, in 64 bits; a value with places has at most 16 digits before the point, so never past 17 |
-| `%`, `mod`, `gcd` | `decimal64` | `ty_decimal64_mod` and `_gcd`, in 128 bits at the larger scale; no more digits than the smaller operand's before the point, nor places than the larger scale |
-| `round(x)`, `round(x, n)`, `trunc(x)`, `trunc(x, n)` | `decimal64` | `ty_decimal64_round` and `_trunc`, in 64 bits, half away from zero; past 17 digits or places, as a carry or `n` past 17 makes, an error, not a `decimal128` |
-| `+`, `-`, `*` | `decimal64` | `ty_decimal64_add`, `_sub` and `_mul`, in 64 bits (the product in 128); past 17 digits, an error, not a `decimal128` |
-| `/` | `decimal64` | `ty_decimal64_div`, in 128 bits, without casting either side; places past 17 digits rounded away |
-| `lcm` | `decimal64` | `ty_decimal64_lcm`, in 128 bits; past 17 digits, an error |
+| `ceil`, `ceiling`, `floor` | `decimal64` | `ty_dec64_ceil` and `_floor`, in 64 bits; a value with places has at most 16 digits before the point, so never past 17 |
+| `%`, `mod`, `gcd` | `decimal64` | `ty_dec64_mod` and `_gcd`, in 128 bits at the larger scale; no more digits than the smaller operand's before the point, nor places than the larger scale |
+| `round(x)`, `round(x, n)`, `trunc(x)`, `trunc(x, n)` | `decimal64` | `ty_dec64_round` and `_trunc`, in 64 bits, half away from zero; past 17 digits or places, as a carry or `n` past 17 makes, an error, not a `decimal128` |
+| `+`, `-`, `*` | `decimal64` | `ty_dec64_add`, `_sub` and `_mul`, in 64 bits (the product in 128); past 17 digits, an error, not a `decimal128` |
+| `/` | `decimal64` | `ty_dec64_div`, in 128 bits, without casting either side; places past 17 digits rounded away |
+| `lcm` | `decimal64` | `ty_dec64_lcm`, in 128 bits; past 17 digits, an error |
 | `sum`, `avg` | `decimal128` | a 128-bit sum in the state, no palloc a row |
 | `to_char(x, fmt)` | `text` | numeric's, on a `decimal128` built on the stack |
 | casts to and from the integers, `float4`, `float8`, `money`, `jsonb` | | §2.4 |

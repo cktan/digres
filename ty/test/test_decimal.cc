@@ -15,40 +15,40 @@
 // 3. Add a negative: 1.5 + -2.
 // 4. Add up to the largest value, 17 digits, which fits.
 TEST_CASE("decimal64 add is exact, at the larger scale") {
-  ty_decimal64_t r;
+  ty_dec64_t r;
 
   // 1. Add two values of one scale: 1.25 + 2.50.
-  ty_decimal64_t a = {125, 2};
-  ty_decimal64_t b = {250, 2};
-  CHECK(0 == ty_decimal64_add(&a, &b, &r));
+  ty_dec64_t a = {125, 2};
+  ty_dec64_t b = {250, 2};
+  CHECK(0 == ty_dec64_add(&a, &b, &r));
   CHECK(375 == r.value);
   CHECK(2 == r.scale);
 
   // 2. Add two of different scales, in both orders: 1.5 + 0.025.
   a = {15, 1};
   b = {25, 3};
-  CHECK(0 == ty_decimal64_add(&a, &b, &r));
+  CHECK(0 == ty_dec64_add(&a, &b, &r));
   CHECK(1525 == r.value);
   CHECK(3 == r.scale);
-  CHECK(0 == ty_decimal64_add(&b, &a, &r));
+  CHECK(0 == ty_dec64_add(&b, &a, &r));
   CHECK(1525 == r.value);
   CHECK(3 == r.scale);
 
   // 3. Add a negative: 1.5 + -2.
   a = {15, 1};
   b = {-2, 0};
-  CHECK(0 == ty_decimal64_add(&a, &b, &r));
+  CHECK(0 == ty_dec64_add(&a, &b, &r));
   CHECK(-5 == r.value);
   CHECK(1 == r.scale);
 
   // 4. Add up to the largest value, 17 digits, which fits.
   a = {99999999999999998, 0};
   b = {1, 0};
-  CHECK(0 == ty_decimal64_add(&a, &b, &r));
+  CHECK(0 == ty_dec64_add(&a, &b, &r));
   CHECK(99999999999999999 == r.value);
   a = {-99999999999999998, 0};
   b = {-1, 0};
-  CHECK(0 == ty_decimal64_add(&a, &b, &r));
+  CHECK(0 == ty_dec64_add(&a, &b, &r));
   CHECK(-99999999999999999 == r.value);
 }
 
@@ -58,28 +58,28 @@ TEST_CASE("decimal64 add is exact, at the larger scale") {
 // 3. Add values whose scales do not align in 64 bits.
 // 4. Check that the result was not set by any of them.
 TEST_CASE("decimal64 add fails past 17 digits, and sets no result") {
-  ty_decimal64_t r = {7, 7};
+  ty_dec64_t r = {7, 7};
 
   // 1. Add 1 to the largest value: it fails with TY_ERR_RANGE.
-  ty_decimal64_t a = {99999999999999999, 0};
-  ty_decimal64_t b = {1, 0};
-  CHECK(-1 == ty_decimal64_add(&a, &b, &r));
+  ty_dec64_t a = {99999999999999999, 0};
+  ty_dec64_t b = {1, 0};
+  CHECK(-1 == ty_dec64_add(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 
   // 2. Add the same on the negative side.
   a = {-99999999999999999, 0};
   b = {-1, 0};
-  CHECK(-1 == ty_decimal64_add(&a, &b, &r));
+  CHECK(-1 == ty_dec64_add(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 
   // 3. Add values whose scales do not align in 64 bits.
   a = {99999999999999999, 0};
   b = {1, 5};
-  CHECK(-1 == ty_decimal64_add(&a, &b, &r));
+  CHECK(-1 == ty_dec64_add(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
   a = {1, 0};
   b = {1, 31};
-  CHECK(-1 == ty_decimal64_add(&a, &b, &r));
+  CHECK(-1 == ty_dec64_add(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 
   // 4. Check that the result was not set by any of them.
@@ -92,30 +92,30 @@ TEST_CASE("decimal64 add fails past 17 digits, and sets no result") {
 // 2. Subtract to a negative: 1 - 3.
 // 3. Subtract past 17 digits: it fails with TY_ERR_RANGE.
 TEST_CASE("decimal64 sub is exact, at the larger scale, and fails past 17") {
-  ty_decimal64_t r;
+  ty_dec64_t r;
 
   // 1. Subtract at one scale, and at two: 2.50 - 1.25, and 1.5 - 0.025.
-  ty_decimal64_t a = {250, 2};
-  ty_decimal64_t b = {125, 2};
-  CHECK(0 == ty_decimal64_sub(&a, &b, &r));
+  ty_dec64_t a = {250, 2};
+  ty_dec64_t b = {125, 2};
+  CHECK(0 == ty_dec64_sub(&a, &b, &r));
   CHECK(125 == r.value);
   CHECK(2 == r.scale);
   a = {15, 1};
   b = {25, 3};
-  CHECK(0 == ty_decimal64_sub(&a, &b, &r));
+  CHECK(0 == ty_dec64_sub(&a, &b, &r));
   CHECK(1475 == r.value);
   CHECK(3 == r.scale);
 
   // 2. Subtract to a negative: 1 - 3.
   a = {1, 0};
   b = {3, 0};
-  CHECK(0 == ty_decimal64_sub(&a, &b, &r));
+  CHECK(0 == ty_dec64_sub(&a, &b, &r));
   CHECK(-2 == r.value);
 
   // 3. Subtract past 17 digits: it fails with TY_ERR_RANGE.
   a = {-99999999999999999, 0};
   b = {1, 0};
-  CHECK(-1 == ty_decimal64_sub(&a, &b, &r));
+  CHECK(-1 == ty_dec64_sub(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 }
 
@@ -126,22 +126,22 @@ TEST_CASE("decimal64 sub is exact, at the larger scale, and fails past 17") {
 // 4. Multiply to 18 places: it fails with TY_ERR_RANGE.
 // 5. Check that a failure sets no result.
 TEST_CASE("decimal64 mul is exact, and fails past 17 digits or places") {
-  ty_decimal64_t r = {7, 7};
+  ty_dec64_t r = {7, 7};
 
   // 1. Multiply at the sum of the scales: 1.5 * 2.25, and with a negative.
-  ty_decimal64_t a = {15, 1};
-  ty_decimal64_t b = {225, 2};
-  CHECK(0 == ty_decimal64_mul(&a, &b, &r));
+  ty_dec64_t a = {15, 1};
+  ty_dec64_t b = {225, 2};
+  CHECK(0 == ty_dec64_mul(&a, &b, &r));
   CHECK(3375 == r.value);
   CHECK(3 == r.scale);
   a = {-15, 1};
-  CHECK(0 == ty_decimal64_mul(&a, &b, &r));
+  CHECK(0 == ty_dec64_mul(&a, &b, &r));
   CHECK(-3375 == r.value);
 
   // 2. Multiply to the largest value, 17 digits, which fits.
   a = {99999999999999999, 0};
   b = {1, 0};
-  CHECK(0 == ty_decimal64_mul(&a, &b, &r));
+  CHECK(0 == ty_dec64_mul(&a, &b, &r));
   CHECK(99999999999999999 == r.value);
   CHECK(0 == r.scale);
 
@@ -149,13 +149,13 @@ TEST_CASE("decimal64 mul is exact, and fails past 17 digits or places") {
   // 3. Multiply to 18 digits: it fails with TY_ERR_RANGE.
   a = {99999999999999999, 0};
   b = {10, 0};
-  CHECK(-1 == ty_decimal64_mul(&a, &b, &r));
+  CHECK(-1 == ty_dec64_mul(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 
   // 4. Multiply to 18 places: it fails with TY_ERR_RANGE.
   a = {1, 9};
   b = {1, 9};
-  CHECK(-1 == ty_decimal64_mul(&a, &b, &r));
+  CHECK(-1 == ty_dec64_mul(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 
   // 5. Check that a failure sets no result.
@@ -168,27 +168,27 @@ TEST_CASE("decimal64 mul is exact, and fails past 17 digits or places") {
 // 2. Take the absolute value of a positive, a negative, and zero.
 // 3. Take the sign of each: 1, -1 and 0, at any scale.
 TEST_CASE("decimal64 neg, abs and sign keep the scale") {
-  ty_decimal64_t pos = {125, 2};
-  ty_decimal64_t neg = {-125, 2};
-  ty_decimal64_t zero = {0, 5};
+  ty_dec64_t pos = {125, 2};
+  ty_dec64_t neg = {-125, 2};
+  ty_dec64_t zero = {0, 5};
 
   // 1. Negate a positive, a negative, and zero.
-  CHECK(-125 == ty_decimal64_neg(pos).value);
-  CHECK(2 == ty_decimal64_neg(pos).scale);
-  CHECK(125 == ty_decimal64_neg(neg).value);
-  CHECK(0 == ty_decimal64_neg(zero).value);
-  CHECK(5 == ty_decimal64_neg(zero).scale);
+  CHECK(-125 == ty_dec64_neg(pos).value);
+  CHECK(2 == ty_dec64_neg(pos).scale);
+  CHECK(125 == ty_dec64_neg(neg).value);
+  CHECK(0 == ty_dec64_neg(zero).value);
+  CHECK(5 == ty_dec64_neg(zero).scale);
 
   // 2. Take the absolute value of a positive, a negative, and zero.
-  CHECK(125 == ty_decimal64_abs(pos).value);
-  CHECK(125 == ty_decimal64_abs(neg).value);
-  CHECK(2 == ty_decimal64_abs(neg).scale);
-  CHECK(0 == ty_decimal64_abs(zero).value);
+  CHECK(125 == ty_dec64_abs(pos).value);
+  CHECK(125 == ty_dec64_abs(neg).value);
+  CHECK(2 == ty_dec64_abs(neg).scale);
+  CHECK(0 == ty_dec64_abs(zero).value);
 
   // 3. Take the sign of each: 1, -1 and 0, at any scale.
-  CHECK(1 == ty_decimal64_sign(pos));
-  CHECK(-1 == ty_decimal64_sign(neg));
-  CHECK(0 == ty_decimal64_sign(zero));
+  CHECK(1 == ty_dec64_sign(pos));
+  CHECK(-1 == ty_dec64_sign(neg));
+  CHECK(0 == ty_dec64_sign(zero));
 }
 
 // Verify decimal64 remainder: the sign of a, at the larger scale.
@@ -196,32 +196,32 @@ TEST_CASE("decimal64 neg, abs and sign keep the scale") {
 // 2. Take 7.5 % 2.25, at two scales.
 // 3. Take a % 0: it fails with TY_ERR_DIVZERO, and sets no result.
 TEST_CASE("decimal64 mod has the sign of a, and fails on zero") {
-  ty_decimal64_t r = {7, 7};
+  ty_dec64_t r = {7, 7};
 
   // 1. Take 7 % 3, and -7 % 3, and 7 % -3.
-  ty_decimal64_t a = {7, 0};
-  ty_decimal64_t b = {3, 0};
-  CHECK(0 == ty_decimal64_mod(&a, &b, &r));
+  ty_dec64_t a = {7, 0};
+  ty_dec64_t b = {3, 0};
+  CHECK(0 == ty_dec64_mod(&a, &b, &r));
   CHECK(1 == r.value);
   a = {-7, 0};
-  CHECK(0 == ty_decimal64_mod(&a, &b, &r));
+  CHECK(0 == ty_dec64_mod(&a, &b, &r));
   CHECK(-1 == r.value);
   a = {7, 0};
   b = {-3, 0};
-  CHECK(0 == ty_decimal64_mod(&a, &b, &r));
+  CHECK(0 == ty_dec64_mod(&a, &b, &r));
   CHECK(1 == r.value);
 
   // 2. Take 7.5 % 2.25, at two scales.
   a = {75, 1};
   b = {225, 2};
-  CHECK(0 == ty_decimal64_mod(&a, &b, &r));
+  CHECK(0 == ty_dec64_mod(&a, &b, &r));
   CHECK(75 == r.value);
   CHECK(2 == r.scale);
 
   // 3. Take a % 0: it fails with TY_ERR_DIVZERO, and sets no result.
   r = {7, 7};
   b = {0, 3};
-  CHECK(-1 == ty_decimal64_mod(&a, &b, &r));
+  CHECK(-1 == ty_dec64_mod(&a, &b, &r));
   CHECK(TY_ERR_DIVZERO == ty_errnum());
   CHECK(7 == r.value);
 }
@@ -233,37 +233,37 @@ TEST_CASE("decimal64 mod has the sign of a, and fails on zero") {
 // 4. Take gcd(0, a large value) at a scale that makes it 34 digits: it
 //    fails with TY_ERR_RANGE.
 TEST_CASE("decimal64 gcd is at the larger scale") {
-  ty_decimal64_t r;
+  ty_dec64_t r;
 
   // 1. Take gcd(12, 18), and with a negative.
-  ty_decimal64_t a = {12, 0};
-  ty_decimal64_t b = {18, 0};
-  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  ty_dec64_t a = {12, 0};
+  ty_dec64_t b = {18, 0};
+  CHECK(0 == ty_dec64_gcd(&a, &b, &r));
   CHECK(6 == r.value);
   a = {-12, 0};
-  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(0 == ty_dec64_gcd(&a, &b, &r));
   CHECK(6 == r.value);
 
   // 2. Take gcd(1.5, 0.25), at two scales.
   a = {15, 1};
   b = {25, 2};
-  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(0 == ty_dec64_gcd(&a, &b, &r));
   CHECK(25 == r.value);
   CHECK(2 == r.scale);
 
   // 3. Take gcd(0, 5) and gcd(0, 0).
   a = {0, 0};
   b = {5, 0};
-  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(0 == ty_dec64_gcd(&a, &b, &r));
   CHECK(5 == r.value);
   b = {0, 0};
-  CHECK(0 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(0 == ty_dec64_gcd(&a, &b, &r));
   CHECK(0 == r.value);
 
   // 4. Take gcd(0, a large value) at a scale that makes it 34 digits.
   a = {0, 17};
   b = {99999999999999999, 0};
-  CHECK(-1 == ty_decimal64_gcd(&a, &b, &r));
+  CHECK(-1 == ty_dec64_gcd(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 }
 
@@ -274,28 +274,28 @@ TEST_CASE("decimal64 gcd is at the larger scale") {
 // 4. Take lcm of two large coprime values: it fails with TY_ERR_RANGE,
 //    and sets no result.
 TEST_CASE("decimal64 lcm is at the larger scale, and fails past 17 digits") {
-  ty_decimal64_t r = {7, 7};
+  ty_dec64_t r = {7, 7};
 
   // 1. Take lcm(4, 6), and with a negative.
-  ty_decimal64_t a = {4, 0};
-  ty_decimal64_t b = {6, 0};
-  CHECK(0 == ty_decimal64_lcm(&a, &b, &r));
+  ty_dec64_t a = {4, 0};
+  ty_dec64_t b = {6, 0};
+  CHECK(0 == ty_dec64_lcm(&a, &b, &r));
   CHECK(12 == r.value);
   a = {-4, 0};
-  CHECK(0 == ty_decimal64_lcm(&a, &b, &r));
+  CHECK(0 == ty_dec64_lcm(&a, &b, &r));
   CHECK(12 == r.value);
 
   // 2. Take lcm(1.5, 0.25), at two scales.
   a = {15, 1};
   b = {25, 2};
-  CHECK(0 == ty_decimal64_lcm(&a, &b, &r));
+  CHECK(0 == ty_dec64_lcm(&a, &b, &r));
   CHECK(150 == r.value);
   CHECK(2 == r.scale);
 
   // 3. Take lcm(0, 5): zero.
   a = {0, 0};
   b = {5, 0};
-  CHECK(0 == ty_decimal64_lcm(&a, &b, &r));
+  CHECK(0 == ty_dec64_lcm(&a, &b, &r));
   CHECK(0 == r.value);
 
   // 4. Take lcm of two large coprime values: it fails with TY_ERR_RANGE,
@@ -303,7 +303,7 @@ TEST_CASE("decimal64 lcm is at the larger scale, and fails past 17 digits") {
   r = {7, 7};
   a = {99999999999999999, 0};
   b = {99999999999999998, 0};
-  CHECK(-1 == ty_decimal64_lcm(&a, &b, &r));
+  CHECK(-1 == ty_dec64_lcm(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
   CHECK(7 == r.value);
 }
@@ -315,35 +315,35 @@ TEST_CASE("decimal64 lcm is at the larger scale, and fails past 17 digits") {
 // 4. Compare negatives, and the largest values at the farthest scales.
 TEST_CASE("decimal64 cmp is exact at any scales") {
   // 1. Compare values of one scale: less, equal, greater.
-  CHECK(-1 == ty_decimal64_cmp({1, 2}, {2, 2}));
-  CHECK(0 == ty_decimal64_cmp({2, 2}, {2, 2}));
-  CHECK(1 == ty_decimal64_cmp({3, 2}, {2, 2}));
+  CHECK(-1 == ty_dec64_cmp({1, 2}, {2, 2}));
+  CHECK(0 == ty_dec64_cmp({2, 2}, {2, 2}));
+  CHECK(1 == ty_dec64_cmp({3, 2}, {2, 2}));
 
   // 2. Compare values of two scales that are equal: 1.5 and 1.50.
-  CHECK(0 == ty_decimal64_cmp({15, 1}, {150, 2}));
+  CHECK(0 == ty_dec64_cmp({15, 1}, {150, 2}));
 
   // 3. Compare values of two scales that differ, in both orders.
-  CHECK(-1 == ty_decimal64_cmp({15, 1}, {151, 2}));
-  CHECK(1 == ty_decimal64_cmp({151, 2}, {15, 1}));
+  CHECK(-1 == ty_dec64_cmp({15, 1}, {151, 2}));
+  CHECK(1 == ty_dec64_cmp({151, 2}, {15, 1}));
 
   // 4. Compare negatives, and the largest values at the farthest scales.
-  CHECK(-1 == ty_decimal64_cmp({-151, 2}, {-15, 1}));
-  CHECK(1 == ty_decimal64_cmp({99999999999999999, 0}, {99999999999999999, 17}));
-  CHECK(-1 == ty_decimal64_cmp({-99999999999999999, 0}, {0, 17}));
+  CHECK(-1 == ty_dec64_cmp({-151, 2}, {-15, 1}));
+  CHECK(1 == ty_dec64_cmp({99999999999999999, 0}, {99999999999999999, 17}));
+  CHECK(-1 == ty_dec64_cmp({-99999999999999999, 0}, {0, 17}));
 }
 
 namespace {
 
-/* ty_decimal64_round of the decimal64 {v, s} to n places. */
-int round_of(int64_t v, int s, int n, ty_decimal64_t *r) {
-  ty_decimal64_t a = {v, s};
-  return ty_decimal64_round(&a, n, r);
+/* ty_dec64_round of the decimal64 {v, s} to n places. */
+int round_of(int64_t v, int s, int n, ty_dec64_t *r) {
+  ty_dec64_t a = {v, s};
+  return ty_dec64_round(&a, n, r);
 }
 
-/* ty_decimal64_trunc of the decimal64 {v, s} to n places. */
-int trunc_of(int64_t v, int s, int n, ty_decimal64_t *r) {
-  ty_decimal64_t a = {v, s};
-  return ty_decimal64_trunc(&a, n, r);
+/* ty_dec64_trunc of the decimal64 {v, s} to n places. */
+int trunc_of(int64_t v, int s, int n, ty_dec64_t *r) {
+  ty_dec64_t a = {v, s};
+  return ty_dec64_trunc(&a, n, r);
 }
 
 } // namespace
@@ -356,7 +356,7 @@ int trunc_of(int64_t v, int s, int n, ty_decimal64_t *r) {
 //    digits fails with TY_ERR_RANGE.
 // 5. Round to tens past the value: zero.
 TEST_CASE("decimal64 round and trunc") {
-  ty_decimal64_t r;
+  ty_dec64_t r;
 
   // 1. Round to fewer places, half away from zero, both signs.
   CHECK(0 == round_of(1235, 3, 2, &r));
@@ -408,16 +408,16 @@ TEST_CASE("decimal64 round and trunc") {
 // 2. Take them of a whole number: it is itself.
 TEST_CASE("decimal64 ceil and floor give a whole number") {
   // 1. Take them of a value with places, positive and negative.
-  CHECK(2 == ty_decimal64_ceil({15, 1}).value);
-  CHECK(1 == ty_decimal64_floor({15, 1}).value);
-  CHECK(-1 == ty_decimal64_ceil({-15, 1}).value);
-  CHECK(-2 == ty_decimal64_floor({-15, 1}).value);
-  CHECK(0 == ty_decimal64_ceil({15, 1}).scale);
+  CHECK(2 == ty_dec64_ceil({15, 1}).value);
+  CHECK(1 == ty_dec64_floor({15, 1}).value);
+  CHECK(-1 == ty_dec64_ceil({-15, 1}).value);
+  CHECK(-2 == ty_dec64_floor({-15, 1}).value);
+  CHECK(0 == ty_dec64_ceil({15, 1}).scale);
 
   // 2. Take them of a whole number: it is itself.
-  CHECK(7 == ty_decimal64_ceil({700, 2}).value);
-  CHECK(7 == ty_decimal64_floor({700, 2}).value);
-  CHECK(7 == ty_decimal64_ceil({7, 0}).value);
+  CHECK(7 == ty_dec64_ceil({700, 2}).value);
+  CHECK(7 == ty_dec64_floor({700, 2}).value);
+  CHECK(7 == ty_dec64_ceil({7, 0}).value);
 }
 
 namespace {
@@ -441,75 +441,75 @@ ty_int128_t ten_to(int n) {
 // 5. Multiply past 36 digits, and past 128 bits, and to 37 places: each
 //    fails with TY_ERR_RANGE and sets no result.
 TEST_CASE("decimal128 add, sub and mul are exact, or fail past 36 digits") {
-  ty_decimal128_t r = {7, 7};
+  ty_dec128_t r = {7, 7};
   ty_int128_t big = ten_to(36) - 1;
 
   // 1. Add and subtract at one scale and at two.
-  ty_decimal128_t a = {125, 2};
-  ty_decimal128_t b = {250, 2};
-  CHECK(0 == ty_decimal128_add(&a, &b, &r));
+  ty_dec128_t a = {125, 2};
+  ty_dec128_t b = {250, 2};
+  CHECK(0 == ty_dec128_add(&a, &b, &r));
   CHECK(375 == r.value);
   a = {15, 1};
   b = {25, 3};
-  CHECK(0 == ty_decimal128_sub(&a, &b, &r));
+  CHECK(0 == ty_dec128_sub(&a, &b, &r));
   CHECK(1475 == r.value);
   CHECK(3 == r.scale);
 
   // 2. Add up to the largest value, 36 digits, which fits; one more fails.
   a = {big - 1, 0};
   b = {1, 0};
-  CHECK(0 == ty_decimal128_add(&a, &b, &r));
+  CHECK(0 == ty_dec128_add(&a, &b, &r));
   CHECK(big == r.value);
   r = {7, 7};
   a = {big, 0};
-  CHECK(-1 == ty_decimal128_add(&a, &b, &r));
+  CHECK(-1 == ty_dec128_add(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 
   // 3. Add where aligning the scales passes 128 bits: it fails.
   a = {big, 0};
   b = {1, 36};
-  CHECK(-1 == ty_decimal128_add(&a, &b, &r));
+  CHECK(-1 == ty_dec128_add(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 
   // 4. Multiply, with a negative; to the largest value, which fits.
   a = {-15, 1};
   b = {225, 2};
-  CHECK(0 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(0 == ty_dec128_mul(&a, &b, &r));
   CHECK(-3375 == r.value);
   CHECK(3 == r.scale);
   a = {big, 0};
   b = {1, 0};
-  CHECK(0 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(0 == ty_dec128_mul(&a, &b, &r));
   CHECK(big == r.value);
 
   // 5. Multiply past 36 digits, and past 128 bits, and to 37 places.
   r = {7, 7};
   b = {10, 0};
-  CHECK(-1 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(-1 == ty_dec128_mul(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
   a = {big, 0};
   b = {big, 0};
-  CHECK(-1 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(-1 == ty_dec128_mul(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
   a = {1, 20};
   b = {1, 17};
-  CHECK(-1 == ty_decimal128_mul(&a, &b, &r));
+  CHECK(-1 == ty_dec128_mul(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
   CHECK(7 == r.value);
 }
 
 namespace {
 
-/* ty_decimal128_round of {v, s} to n places. */
-int round128_of(ty_int128_t v, int s, int n, ty_decimal128_t *r) {
-  ty_decimal128_t a = {v, s};
-  return ty_decimal128_round(&a, n, r);
+/* ty_dec128_round of {v, s} to n places. */
+int round128_of(ty_int128_t v, int s, int n, ty_dec128_t *r) {
+  ty_dec128_t a = {v, s};
+  return ty_dec128_round(&a, n, r);
 }
 
-/* ty_decimal128_trunc of {v, s} to n places. */
-int trunc128_of(ty_int128_t v, int s, int n, ty_decimal128_t *r) {
-  ty_decimal128_t a = {v, s};
-  return ty_decimal128_trunc(&a, n, r);
+/* ty_dec128_trunc of {v, s} to n places. */
+int trunc128_of(ty_int128_t v, int s, int n, ty_dec128_t *r) {
+  ty_dec128_t a = {v, s};
+  return ty_dec128_trunc(&a, n, r);
 }
 
 } // namespace
@@ -522,28 +522,28 @@ TEST_CASE("decimal128 neg, abs, sign, ceil, floor and cmp") {
   ty_int128_t big = ten_to(36) - 1;
 
   // 1. Negate, take the absolute value and the sign of both signs and zero.
-  CHECK(-125 == ty_decimal128_neg({125, 2}).value);
-  CHECK(125 == ty_decimal128_abs({-125, 2}).value);
-  CHECK(2 == ty_decimal128_abs({-125, 2}).scale);
-  CHECK(1 == ty_decimal128_sign({125, 2}));
-  CHECK(-1 == ty_decimal128_sign({-125, 2}));
-  CHECK(0 == ty_decimal128_sign({0, 9}));
+  CHECK(-125 == ty_dec128_neg({125, 2}).value);
+  CHECK(125 == ty_dec128_abs({-125, 2}).value);
+  CHECK(2 == ty_dec128_abs({-125, 2}).scale);
+  CHECK(1 == ty_dec128_sign({125, 2}));
+  CHECK(-1 == ty_dec128_sign({-125, 2}));
+  CHECK(0 == ty_dec128_sign({0, 9}));
 
   // 2. Take ceil and floor of values with places, and of a whole number.
-  CHECK(2 == ty_decimal128_ceil({15, 1}).value);
-  CHECK(1 == ty_decimal128_floor({15, 1}).value);
-  CHECK(-1 == ty_decimal128_ceil({-15, 1}).value);
-  CHECK(-2 == ty_decimal128_floor({-15, 1}).value);
-  CHECK(7 == ty_decimal128_ceil({7, 0}).value);
-  CHECK(big == ty_decimal128_floor({big * 10 + 5 > 0 ? big : 0, 0}).value);
+  CHECK(2 == ty_dec128_ceil({15, 1}).value);
+  CHECK(1 == ty_dec128_floor({15, 1}).value);
+  CHECK(-1 == ty_dec128_ceil({-15, 1}).value);
+  CHECK(-2 == ty_dec128_floor({-15, 1}).value);
+  CHECK(7 == ty_dec128_ceil({7, 0}).value);
+  CHECK(big == ty_dec128_floor({big * 10 + 5 > 0 ? big : 0, 0}).value);
 
   // 3. Compare at one scale, at two, and where aligning passes 128 bits.
-  CHECK(-1 == ty_decimal128_cmp({1, 2}, {2, 2}));
-  CHECK(0 == ty_decimal128_cmp({15, 1}, {150, 2}));
-  CHECK(1 == ty_decimal128_cmp({151, 2}, {15, 1}));
-  CHECK(1 == ty_decimal128_cmp({big, 0}, {big, 36}));
-  CHECK(-1 == ty_decimal128_cmp({-big, 0}, {big, 36}));
-  CHECK(-1 == ty_decimal128_cmp({big, 36}, {big, 0}));
+  CHECK(-1 == ty_dec128_cmp({1, 2}, {2, 2}));
+  CHECK(0 == ty_dec128_cmp({15, 1}, {150, 2}));
+  CHECK(1 == ty_dec128_cmp({151, 2}, {15, 1}));
+  CHECK(1 == ty_dec128_cmp({big, 0}, {big, 36}));
+  CHECK(-1 == ty_dec128_cmp({-big, 0}, {big, 36}));
+  CHECK(-1 == ty_dec128_cmp({big, 36}, {big, 0}));
 }
 
 // Verify decimal128 round and trunc.
@@ -552,7 +552,7 @@ TEST_CASE("decimal128 neg, abs, sign, ceil, floor and cmp") {
 // 3. Round to tens and hundreds: the scale is 0.
 // 4. Round past 36 digits: it fails with TY_ERR_RANGE.
 TEST_CASE("decimal128 round and trunc") {
-  ty_decimal128_t r;
+  ty_dec128_t r;
   ty_int128_t big = ten_to(36) - 1;
 
   // 1. Round to fewer places, half away from zero, both signs; and cut.
@@ -593,24 +593,24 @@ TEST_CASE("decimal128 round and trunc") {
 // 3. Take gcd, at two scales, with zero, and where aligning passes 128 bits.
 // 4. Take lcm, with zero, at two scales; of large coprimes it fails.
 TEST_CASE("decimal128 mod, gcd and lcm") {
-  ty_decimal128_t r;
+  ty_dec128_t r;
   ty_int128_t big = ten_to(36) - 1;
 
   // 1. Take % at one scale, with signs, and at two scales; by zero it fails.
-  ty_decimal128_t a = {7, 0};
-  ty_decimal128_t b = {3, 0};
-  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  ty_dec128_t a = {7, 0};
+  ty_dec128_t b = {3, 0};
+  CHECK(0 == ty_dec128_mod(&a, &b, &r));
   CHECK(1 == r.value);
   a = {-7, 0};
-  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(0 == ty_dec128_mod(&a, &b, &r));
   CHECK(-1 == r.value);
   a = {75, 1};
   b = {225, 2};
-  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(0 == ty_dec128_mod(&a, &b, &r));
   CHECK(75 == r.value);
   CHECK(2 == r.scale);
   b = {0, 5};
-  CHECK(-1 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(-1 == ty_dec128_mod(&a, &b, &r));
   CHECK(TY_ERR_DIVZERO == ty_errnum());
 
   // 2. Take % where aligning a passes 128 bits, and where aligning b does.
@@ -618,73 +618,73 @@ TEST_CASE("decimal128 mod, gcd and lcm") {
   //    with a at 10^36 scale: (5 * 10^0 at scale 36 vs 11 at scale 0).
   a = {big, 0};
   b = {7, 36};
-  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(0 == ty_dec128_mod(&a, &b, &r));
   CHECK(0 == r.value);
   CHECK(36 == r.scale);
   a = {big - 1, 0};
   b = {11, 36};
-  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(0 == ty_dec128_mod(&a, &b, &r));
   CHECK(((big - 1) % 11 * ten_to(36) % 11) == r.value);
   a = {5, 36};
   b = {big, 0};
-  CHECK(0 == ty_decimal128_mod(&a, &b, &r));
+  CHECK(0 == ty_dec128_mod(&a, &b, &r));
   CHECK(5 == r.value);
 
   // 3. Take gcd, at two scales, with zero, and where aligning passes 128
   //    bits: big * 10^36 is a multiple of 14, so the gcd with 14 is 14.
   a = {15, 1};
   b = {25, 2};
-  CHECK(0 == ty_decimal128_gcd(&a, &b, &r));
+  CHECK(0 == ty_dec128_gcd(&a, &b, &r));
   CHECK(25 == r.value);
   a = {0, 0};
   b = {5, 0};
-  CHECK(0 == ty_decimal128_gcd(&a, &b, &r));
+  CHECK(0 == ty_dec128_gcd(&a, &b, &r));
   CHECK(5 == r.value);
   a = {big, 0};
   b = {14, 36};
-  CHECK(0 == ty_decimal128_gcd(&a, &b, &r));
+  CHECK(0 == ty_dec128_gcd(&a, &b, &r));
   CHECK(14 == r.value);
   a = {0, 36};
   b = {big, 0};
-  CHECK(-1 == ty_decimal128_gcd(&a, &b, &r));
+  CHECK(-1 == ty_dec128_gcd(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 
   // 4. Take lcm, with zero, at two scales; of large coprimes it fails.
   a = {4, 0};
   b = {6, 0};
-  CHECK(0 == ty_decimal128_lcm(&a, &b, &r));
+  CHECK(0 == ty_dec128_lcm(&a, &b, &r));
   CHECK(12 == r.value);
   a = {15, 1};
   b = {25, 2};
-  CHECK(0 == ty_decimal128_lcm(&a, &b, &r));
+  CHECK(0 == ty_dec128_lcm(&a, &b, &r));
   CHECK(150 == r.value);
   a = {0, 3};
-  CHECK(0 == ty_decimal128_lcm(&a, &b, &r));
+  CHECK(0 == ty_dec128_lcm(&a, &b, &r));
   CHECK(0 == r.value);
   r = {7, 7};
   a = {big, 0};
   b = {big - 1, 0};
-  CHECK(-1 == ty_decimal128_lcm(&a, &b, &r));
+  CHECK(-1 == ty_dec128_lcm(&a, &b, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
   CHECK(7 == r.value);
 }
 
 namespace {
 
-/* ty_decimal128_div of {v1, s1} by {v2, s2} at rscale places. */
+/* ty_dec128_div of {v1, s1} by {v2, s2} at rscale places. */
 int div128_of(ty_int128_t v1, int s1, ty_int128_t v2, int s2, int rscale,
-              bool cut, ty_decimal128_t *r) {
-  ty_decimal128_t a = {v1, s1};
-  ty_decimal128_t b = {v2, s2};
-  return ty_decimal128_div(&a, &b, rscale, cut, r);
+              bool cut, ty_dec128_t *r) {
+  ty_dec128_t a = {v1, s1};
+  ty_dec128_t b = {v2, s2};
+  return ty_dec128_div(&a, &b, rscale, cut, r);
 }
 
-/* ty_decimal64_div of {v1, s1} by {v2, s2} at rscale places. */
+/* ty_dec64_div of {v1, s1} by {v2, s2} at rscale places. */
 int div64_of(int64_t v1, int s1, int64_t v2, int s2, int rscale,
-             ty_decimal64_t *r) {
-  ty_decimal64_t a = {v1, s1};
-  ty_decimal64_t b = {v2, s2};
-  return ty_decimal64_div(&a, &b, rscale, r);
+             ty_dec64_t *r) {
+  ty_dec64_t a = {v1, s1};
+  ty_dec64_t b = {v2, s2};
+  return ty_dec64_div(&a, &b, rscale, r);
 }
 
 } // namespace
@@ -698,7 +698,7 @@ int div64_of(int64_t v1, int s1, int64_t v2, int s2, int rscale,
 // 5. Divide by zero: TY_ERR_DIVZERO. Divide to more than 36 digits:
 //    TY_ERR_RANGE.
 TEST_CASE("decimal128 div is made a place at a time, in 128 bits") {
-  ty_decimal128_t r;
+  ty_dec128_t r;
   ty_int128_t big = ten_to(36) - 1;
 
   // 1. Divide 1 by 3 at 20 places, and 2 by 3: rounded half away from zero.
@@ -742,7 +742,7 @@ TEST_CASE("decimal128 div is made a place at a time, in 128 bits") {
 // 3. Divide 100 by 3 at 20 places: 33.333333333333333, 17 digits.
 // 4. Divide by zero: TY_ERR_DIVZERO.
 TEST_CASE("decimal64 div is rounded to fit 17 digits") {
-  ty_decimal64_t r;
+  ty_dec64_t r;
 
   // 1. Divide 1 by 3 at 20 places: it is 17 places.
   CHECK(0 == div64_of(1, 0, 3, 0, 20, &r));
@@ -769,34 +769,34 @@ TEST_CASE("decimal64 div is rounded to fit 17 digits") {
 // 2. Take it of a value at a scale, and round: sqrt(3) at 1 place.
 // 3. Take it of a negative: TY_ERR_INVALID.
 TEST_CASE("decimal128 sqrt is made a digit at a time") {
-  ty_decimal128_t r;
+  ty_dec128_t r;
 
   // 1. Take sqrt(2) at 20 places, and of a square, and of zero.
-  ty_decimal128_t a = {2, 0};
-  CHECK(0 == ty_decimal128_sqrt(&a, 20, &r));
+  ty_dec128_t a = {2, 0};
+  CHECK(0 == ty_dec128_sqrt(&a, 20, &r));
   CHECK((ty_int128_t)141421356237309 * ten_to(6) + 504880 == r.value);
   CHECK(20 == r.scale);
   a = {1600, 2};
-  CHECK(0 == ty_decimal128_sqrt(&a, 2, &r));
+  CHECK(0 == ty_dec128_sqrt(&a, 2, &r));
   CHECK(400 == r.value);
   a = {0, 3};
-  CHECK(0 == ty_decimal128_sqrt(&a, 3, &r));
+  CHECK(0 == ty_dec128_sqrt(&a, 3, &r));
   CHECK(0 == r.value);
 
   // 2. Take it of a value at a scale, and round: sqrt(3) at 1 place.
   a = {1, 4};
-  CHECK(0 == ty_decimal128_sqrt(&a, 4, &r));
+  CHECK(0 == ty_dec128_sqrt(&a, 4, &r));
   CHECK(100 == r.value);
   a = {3, 0};
-  CHECK(0 == ty_decimal128_sqrt(&a, 1, &r));
+  CHECK(0 == ty_dec128_sqrt(&a, 1, &r));
   CHECK(17 == r.value);
   a = {2, 0};
-  CHECK(0 == ty_decimal128_sqrt(&a, 1, &r));
+  CHECK(0 == ty_dec128_sqrt(&a, 1, &r));
   CHECK(14 == r.value);
 
   // 3. Take it of a negative: TY_ERR_INVALID.
   a = {-4, 0};
-  CHECK(-1 == ty_decimal128_sqrt(&a, 2, &r));
+  CHECK(-1 == ty_dec128_sqrt(&a, 2, &r));
   CHECK(TY_ERR_INVALID == ty_errnum());
 }
 
@@ -808,26 +808,26 @@ TEST_CASE("decimal128 sqrt is made a digit at a time") {
 // 4. Take a real power: 2^0.5; and (-2)^3 by its sign.
 // 5. Take an overflow and an underflow of a double: errors.
 TEST_CASE("decimal128 exp, ln, log and powers") {
-  ty_decimal128_t r;
+  ty_dec128_t r;
 
   // 1. Take exp(1) and ln(10) at 12 places; log(2, 8) at 10 places.
-  ty_decimal128_t a = {1, 0};
-  CHECK(0 == ty_decimal128_exp(&a, 12, &r));
+  ty_dec128_t a = {1, 0};
+  CHECK(0 == ty_dec128_exp(&a, 12, &r));
   CHECK(2718281828459 == r.value);
   a = {10, 0};
-  CHECK(0 == ty_decimal128_ln(&a, 12, &r));
+  CHECK(0 == ty_dec128_ln(&a, 12, &r));
   CHECK(2302585092994 == r.value);
-  ty_decimal128_t base = {2, 0};
-  ty_decimal128_t eight = {8, 0};
-  CHECK(0 == ty_decimal128_log(&base, &eight, 10, &r));
+  ty_dec128_t base = {2, 0};
+  ty_dec128_t eight = {8, 0};
+  CHECK(0 == ty_dec128_log(&base, &eight, 10, &r));
   CHECK(30000000000 == r.value);
 
   // 2. Take a zero base's log, and a base of 1: TY_ERR_INVALID, DIVZERO.
-  ty_decimal128_t zero = {0, 0};
-  CHECK(-1 == ty_decimal128_ln(&zero, 5, &r));
+  ty_dec128_t zero = {0, 0};
+  CHECK(-1 == ty_dec128_ln(&zero, 5, &r));
   CHECK(TY_ERR_INVALID == ty_errnum());
-  ty_decimal128_t one = {1, 0};
-  CHECK(-1 == ty_decimal128_log(&one, &eight, 5, &r));
+  ty_dec128_t one = {1, 0};
+  CHECK(-1 == ty_dec128_log(&one, &eight, 5, &r));
   CHECK(TY_ERR_DIVZERO == ty_errnum());
 
   // 3. Take integer powers: 2^100 exactly, 2^-3, and a power too large for
@@ -836,33 +836,33 @@ TEST_CASE("decimal128 exp, ln, log and powers") {
   for (int i = 0; i < 100; i++) {
     p2 *= 2;
   }
-  CHECK(0 == ty_decimal128_pow_int(&base, 100, 0, &r));
+  CHECK(0 == ty_dec128_pow_int(&base, 100, 0, &r));
   CHECK(p2 == r.value);
-  CHECK(0 == ty_decimal128_pow_int(&base, -3, 4, &r));
+  CHECK(0 == ty_dec128_pow_int(&base, -3, 4, &r));
   CHECK(1250 == r.value);
   CHECK(4 == r.scale);
-  ty_decimal128_t b = {3789, 3};
-  CHECK(0 == ty_decimal128_pow_int(&b, 21, 5, &r));
+  ty_dec128_t b = {3789, 3};
+  CHECK(0 == ty_dec128_pow_int(&b, 21, 5, &r));
   CHECK(1409343026052 == r.value / ten_to(5));
 
   // 4. Take a real power: 2^0.5; and (-2)^3 by its sign.
-  ty_decimal128_t half = {5, 1};
-  CHECK(0 == ty_decimal128_pow_real(&base, &half, 10, &r));
+  ty_dec128_t half = {5, 1};
+  CHECK(0 == ty_dec128_pow_real(&base, &half, 10, &r));
   CHECK(14142135624 == r.value);
-  ty_decimal128_t neg2 = {-2, 0};
-  ty_decimal128_t three = {3, 0};
-  CHECK(0 == ty_decimal128_pow_real(&neg2, &three, 3, &r));
+  ty_dec128_t neg2 = {-2, 0};
+  ty_dec128_t three = {3, 0};
+  CHECK(0 == ty_dec128_pow_real(&neg2, &three, 3, &r));
   CHECK(-8000 == r.value);
 
   // 5. Take an overflow and an underflow of a double: errors.
-  ty_decimal128_t big = {1000, 0};
-  ty_decimal128_t small = {-1000, 0};
-  CHECK(-1 == ty_decimal128_exp(&big, 5, &r));
+  ty_dec128_t big = {1000, 0};
+  ty_dec128_t small = {-1000, 0};
+  CHECK(-1 == ty_dec128_exp(&big, 5, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
-  CHECK(-1 == ty_decimal128_exp(&small, 5, &r));
+  CHECK(-1 == ty_dec128_exp(&small, 5, &r));
   CHECK(TY_ERR_UNDERFLOW == ty_errnum());
-  ty_decimal128_t ten = {10, 0};
-  CHECK(-1 == ty_decimal128_pow_int(&ten, 400, 0, &r));
+  ty_dec128_t ten = {10, 0};
+  CHECK(-1 == ty_dec128_pow_int(&ten, 400, 0, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 }
 
@@ -872,46 +872,46 @@ TEST_CASE("decimal128 exp, ln, log and powers") {
 //    at the top is count + 1; a reversed range counts down.
 // 3. Take bad bounds and a bad count: TY_ERR_INVALID.
 TEST_CASE("decimal128 factorial and width_bucket") {
-  ty_decimal128_t r;
+  ty_dec128_t r;
   int64_t bucket = -1;
 
   // 1. Take 0!, 5! and 32!; 33! and a negative fail.
-  CHECK(0 == ty_decimal128_factorial(0, &r));
+  CHECK(0 == ty_dec128_factorial(0, &r));
   CHECK(1 == r.value);
-  CHECK(0 == ty_decimal128_factorial(5, &r));
+  CHECK(0 == ty_dec128_factorial(5, &r));
   CHECK(120 == r.value);
-  CHECK(0 == ty_decimal128_factorial(32, &r));
-  CHECK(-1 == ty_decimal128_factorial(33, &r));
+  CHECK(0 == ty_dec128_factorial(32, &r));
+  CHECK(-1 == ty_dec128_factorial(33, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
-  CHECK(-1 == ty_decimal128_factorial(-1, &r));
+  CHECK(-1 == ty_dec128_factorial(-1, &r));
   CHECK(TY_ERR_INVALID == ty_errnum());
 
   // 2. Take width_bucket: 5.35 in 0.024 to 10.06 in 5 is 3; before is 0;
   //    at the top is count + 1; a reversed range counts down.
-  ty_decimal128_t op = {535, 2};
-  ty_decimal128_t lo = {24, 3};
-  ty_decimal128_t hi = {1006, 2};
-  CHECK(0 == ty_decimal128_width_bucket(&op, &lo, &hi, 5, &bucket));
+  ty_dec128_t op = {535, 2};
+  ty_dec128_t lo = {24, 3};
+  ty_dec128_t hi = {1006, 2};
+  CHECK(0 == ty_dec128_width_bucket(&op, &lo, &hi, 5, &bucket));
   CHECK(3 == bucket);
   op = {0, 0};
-  CHECK(0 == ty_decimal128_width_bucket(&op, &lo, &hi, 5, &bucket));
+  CHECK(0 == ty_dec128_width_bucket(&op, &lo, &hi, 5, &bucket));
   CHECK(0 == bucket);
   op = {1006, 2};
-  CHECK(0 == ty_decimal128_width_bucket(&op, &lo, &hi, 5, &bucket));
+  CHECK(0 == ty_dec128_width_bucket(&op, &lo, &hi, 5, &bucket));
   CHECK(6 == bucket);
   op = {535, 2};
-  CHECK(0 == ty_decimal128_width_bucket(&op, &hi, &lo, 5, &bucket));
+  CHECK(0 == ty_dec128_width_bucket(&op, &hi, &lo, 5, &bucket));
   CHECK(3 == bucket);
-  ty_decimal128_t one = {1, 0};
-  ty_decimal128_t ten = {10, 0};
+  ty_dec128_t one = {1, 0};
+  ty_dec128_t ten = {10, 0};
   op = {55, 1};
-  CHECK(0 == ty_decimal128_width_bucket(&op, &one, &ten, 9, &bucket));
+  CHECK(0 == ty_dec128_width_bucket(&op, &one, &ten, 9, &bucket));
   CHECK(5 == bucket);
 
   // 3. Take bad bounds and a bad count: TY_ERR_INVALID.
-  CHECK(-1 == ty_decimal128_width_bucket(&op, &one, &one, 5, &bucket));
+  CHECK(-1 == ty_dec128_width_bucket(&op, &one, &one, 5, &bucket));
   CHECK(TY_ERR_INVALID == ty_errnum());
-  CHECK(-1 == ty_decimal128_width_bucket(&op, &one, &ten, 0, &bucket));
+  CHECK(-1 == ty_dec128_width_bucket(&op, &one, &ten, 0, &bucket));
   CHECK(TY_ERR_INVALID == ty_errnum());
 }
 
@@ -920,26 +920,26 @@ TEST_CASE("decimal128 factorial and width_bucket") {
 // 2. Places past 17 are rounded; digits past 17 push out places.
 // 3. An integer part of more than 17 digits fails with TY_ERR_RANGE.
 TEST_CASE("decimal64 from decimal128 rounds places to fit 17 digits") {
-  ty_decimal64_t r;
+  ty_dec64_t r;
   ty_int128_t big = ten_to(36) - 1;
 
   // 1. A value that fits is itself.
-  ty_decimal128_t a = {12345, 3};
-  CHECK(0 == ty_decimal64_from_decimal128(&a, &r));
+  ty_dec128_t a = {12345, 3};
+  CHECK(0 == ty_dec64_from_dec128(&a, &r));
   CHECK(12345 == r.value);
   CHECK(3 == r.scale);
 
   // 2. Places past 17 are rounded; digits past 17 push out places.
   a = {ten_to(19) + 5 * ten_to(2), 20};
-  CHECK(0 == ty_decimal64_from_decimal128(&a, &r));
+  CHECK(0 == ty_dec64_from_dec128(&a, &r));
   CHECK(0 <= r.scale);
   CHECK(r.scale <= 17);
   a = {big, 20};
-  CHECK(0 == ty_decimal64_from_decimal128(&a, &r));
+  CHECK(0 == ty_dec64_from_dec128(&a, &r));
   CHECK(10000000000000000 == r.value);
 
   // 3. An integer part of more than 17 digits fails with TY_ERR_RANGE.
   a = {ten_to(18), 0};
-  CHECK(-1 == ty_decimal64_from_decimal128(&a, &r));
+  CHECK(-1 == ty_dec64_from_dec128(&a, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
 }

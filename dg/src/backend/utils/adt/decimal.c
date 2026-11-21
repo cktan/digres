@@ -448,7 +448,7 @@ static Numeric dec_math_error(void) {
 }
 
 /* num's value and scale, as ty takes them. */
-static ty_decimal128_t dec_ty(const decimal_t *num) {
+static ty_dec128_t dec_ty(const decimal_t *num) {
   return {dec_value(num), dec_scale(num)};
 }
 
@@ -886,10 +886,10 @@ static bool apply_typmod(dec_in_t *d, int32 typmod, Node *escontext) {
  * assignment to numeric(p, s) does: ty rounds it; false with the error saved
  * in escontext if it has too many digits before the point.
  */
-static bool dec_apply_typmod(ty_decimal128_t *v, int32 typmod,
+static bool dec_apply_typmod(ty_dec128_t *v, int32 typmod,
                              Node *escontext) {
   int precision, scale, maxdigits;
-  ty_decimal128_t r;
+  ty_dec128_t r;
 
   if (!is_valid_numeric_typmod(typmod))
     return true;
@@ -897,7 +897,7 @@ static bool dec_apply_typmod(ty_decimal128_t *v, int32 typmod,
   scale = numeric_typmod_scale(typmod);
   maxdigits = precision - scale;
   /* If it cannot pass the zeros that scale needs, it has too many digits. */
-  if (ty_decimal128_round(v, scale, &r) == 0) {
+  if (ty_dec128_round(v, scale, &r) == 0) {
     *v = r;
     /* Digits before the point, of the rounded value. */
     if (u128_digits(r.value < 0 ? -(u128)r.value : (u128)r.value) -
@@ -1063,7 +1063,7 @@ char *numeric_out_sci(Numeric num, int scale) {
   char dig[48];
   int exponent =
       v == 0 ? 0 : dec_digits_text(v < 0 ? -(u128)v : (u128)v, dig) - 1 - s;
-  ty_decimal128_t sig = {v, s + exponent}, r;
+  ty_dec128_t sig = {v, s + exponent}, r;
   char *txt;
   char *str;
   size_t len;
@@ -1072,7 +1072,7 @@ char *numeric_out_sci(Numeric num, int scale) {
     scale = 0;
   /* The significand is v / 10^exponent: the point moves, the digits do not. */
   if (scale < sig.scale) {
-    ty_decimal128_round(&sig, scale, &r);
+    ty_dec128_round(&sig, scale, &r);
     txt = dec_text(r.value, r.scale);
   } else {
     char *t = dec_text(sig.value, sig.scale);
@@ -1266,7 +1266,7 @@ Datum numeric_support(PG_FUNCTION_ARGS) {
  *	checked against its precision.
  */
 Datum numeric(PG_FUNCTION_ARGS) {
-  ty_decimal128_t a = dec_ty(PG_GETARG_NUMERIC(0));
+  ty_dec128_t a = dec_ty(PG_GETARG_NUMERIC(0));
 
   (void)dec_apply_typmod(&a, PG_GETARG_INT32(1), NULL);
   PG_RETURN_NUMERIC(dec_make(a.value, a.scale));
@@ -1340,7 +1340,7 @@ bool numeric_is_inf(Numeric num) { return false; }
 /* |num|, at its scale. */
 Datum numeric_abs(PG_FUNCTION_ARGS) {
   Numeric n = PG_GETARG_NUMERIC(0);
-  ty_decimal128_t r = ty_decimal128_abs({dec_value(n), dec_scale(n)});
+  ty_dec128_t r = ty_dec128_abs({dec_value(n), dec_scale(n)});
 
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -1348,7 +1348,7 @@ Datum numeric_abs(PG_FUNCTION_ARGS) {
 /* -num, at its scale. */
 Datum numeric_uminus(PG_FUNCTION_ARGS) {
   Numeric n = PG_GETARG_NUMERIC(0);
-  ty_decimal128_t r = ty_decimal128_neg({dec_value(n), dec_scale(n)});
+  ty_dec128_t r = ty_dec128_neg({dec_value(n), dec_scale(n)});
 
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -1363,7 +1363,7 @@ Datum numeric_sign(PG_FUNCTION_ARGS) {
   Numeric n = PG_GETARG_NUMERIC(0);
 
   PG_RETURN_NUMERIC(
-      dec_make(ty_decimal128_sign({dec_value(n), dec_scale(n)}), 0));
+      dec_make(ty_dec128_sign({dec_value(n), dec_scale(n)}), 0));
 }
 
 
@@ -1372,10 +1372,10 @@ Datum numeric_sign(PG_FUNCTION_ARGS) {
  * error of a result past 36 digits.
  */
 static Datum dec_round_or_trunc(Numeric num, int n, bool trunc) {
-  ty_decimal128_t a = {dec_value(num), dec_scale(num)};
-  ty_decimal128_t r;
+  ty_dec128_t a = {dec_value(num), dec_scale(num)};
+  ty_dec128_t r;
 
-  if ((trunc ? ty_decimal128_trunc(&a, n, &r) : ty_decimal128_round(&a, n, &r)) !=
+  if ((trunc ? ty_dec128_trunc(&a, n, &r) : ty_dec128_round(&a, n, &r)) !=
       0)
     dec_range_error(NULL);
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
@@ -1397,7 +1397,7 @@ Datum numeric_trunc(PG_FUNCTION_ARGS) {
 /* The smallest integer not below num, at scale 0. */
 Datum numeric_ceil(PG_FUNCTION_ARGS) {
   Numeric n = PG_GETARG_NUMERIC(0);
-  ty_decimal128_t r = ty_decimal128_ceil({dec_value(n), dec_scale(n)});
+  ty_dec128_t r = ty_dec128_ceil({dec_value(n), dec_scale(n)});
 
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -1405,7 +1405,7 @@ Datum numeric_ceil(PG_FUNCTION_ARGS) {
 /* The largest integer not above num, at scale 0. */
 Datum numeric_floor(PG_FUNCTION_ARGS) {
   Numeric n = PG_GETARG_NUMERIC(0);
-  ty_decimal128_t r = ty_decimal128_floor({dec_value(n), dec_scale(n)});
+  ty_dec128_t r = ty_dec128_floor({dec_value(n), dec_scale(n)});
 
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -1448,9 +1448,9 @@ Datum numeric_trim_scale(PG_FUNCTION_ARGS) {
 
 /* Where a numeric generate_series stands. */
 typedef struct series_fctx_t {
-  ty_decimal128_t current;
-  ty_decimal128_t stop;
-  ty_decimal128_t step;
+  ty_dec128_t current;
+  ty_dec128_t stop;
+  ty_dec128_t step;
   bool done; /* the next value passed 36 digits, so it is past stop */
 } series_fctx_t;
 
@@ -1466,7 +1466,7 @@ Datum generate_series_step_numeric(PG_FUNCTION_ARGS) {
 
   if (SRF_IS_FIRSTCALL()) {
     MemoryContext oldcontext;
-    ty_decimal128_t step = {1, 0};
+    ty_dec128_t step = {1, 0};
 
     if (PG_NARGS() == 3) {
       step = dec_ty(PG_GETARG_NUMERIC(2));
@@ -1488,14 +1488,14 @@ Datum generate_series_step_numeric(PG_FUNCTION_ARGS) {
   fctx = (series_fctx_t *)funcctx->user_fctx;
   if (!fctx->done &&
       ((fctx->step.value > 0 &&
-        ty_decimal128_cmp(fctx->current, fctx->stop) <= 0) ||
+        ty_dec128_cmp(fctx->current, fctx->stop) <= 0) ||
        (fctx->step.value < 0 &&
-        ty_decimal128_cmp(fctx->current, fctx->stop) >= 0))) {
+        ty_dec128_cmp(fctx->current, fctx->stop) >= 0))) {
     Numeric result = dec_make(fctx->current.value, fctx->current.scale);
-    ty_decimal128_t next;
+    ty_dec128_t next;
 
     /* A next value of more than 36 digits is past stop: the last. */
-    if (ty_decimal128_add(&fctx->current, &fctx->step, &next) == 0)
+    if (ty_dec128_add(&fctx->current, &fctx->step, &next) == 0)
       fctx->current = next;
     else
       fctx->done = true;
@@ -1529,21 +1529,21 @@ Datum generate_series_numeric_support(PG_FUNCTION_ARGS) {
         ret = (Node *)req;
       } else if (IsA(arg1, Const) && IsA(arg2, Const) &&
                  (arg3 == NULL || IsA(arg3, Const))) {
-        ty_decimal128_t start =
+        ty_dec128_t start =
             dec_ty(DatumGetNumeric(((Const *)arg1)->constvalue));
-        ty_decimal128_t stop =
+        ty_dec128_t stop =
             dec_ty(DatumGetNumeric(((Const *)arg2)->constvalue));
-        ty_decimal128_t step =
+        ty_dec128_t step =
             arg3 ? dec_ty(DatumGetNumeric(((Const *)arg3)->constvalue))
-                 : ty_decimal128_t{1, 0};
-        ty_decimal128_t res, q;
+                 : ty_dec128_t{1, 0};
+        ty_dec128_t res, q;
 
         /* An estimate: if a difference passes 36 digits, there is none. */
-        if (step.value != 0 && ty_decimal128_sub(&stop, &start, &res) == 0) {
+        if (step.value != 0 && ty_dec128_sub(&stop, &start, &res) == 0) {
           if (res.value != 0 && (step.value < 0) != (res.value < 0)) {
             req->rows = 0;
             ret = (Node *)req;
-          } else if (ty_decimal128_div(&res, &step, 0, true, &q) == 0) {
+          } else if (ty_dec128_div(&res, &step, 0, true, &q) == 0) {
             req->rows = (double)q.value + 1;
             ret = (Node *)req;
           }
@@ -1560,20 +1560,20 @@ Datum generate_series_numeric_support(PG_FUNCTION_ARGS) {
  * after.
  */
 Datum width_bucket_numeric(PG_FUNCTION_ARGS) {
-  ty_decimal128_t operand = dec_ty(PG_GETARG_NUMERIC(0));
-  ty_decimal128_t bound1 = dec_ty(PG_GETARG_NUMERIC(1));
-  ty_decimal128_t bound2 = dec_ty(PG_GETARG_NUMERIC(2));
+  ty_dec128_t operand = dec_ty(PG_GETARG_NUMERIC(0));
+  ty_dec128_t bound1 = dec_ty(PG_GETARG_NUMERIC(1));
+  ty_dec128_t bound2 = dec_ty(PG_GETARG_NUMERIC(2));
   int32 count = PG_GETARG_INT32(3);
   int64 result;
 
   if (count <= 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),
                     errmsg("count must be greater than zero")));
-  if (ty_decimal128_cmp(bound1, bound2) == 0)
+  if (ty_dec128_cmp(bound1, bound2) == 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),
                     errmsg("lower bound cannot equal upper bound")));
   /* The bucket is ty's, made in 128 bits. */
-  if (ty_decimal128_width_bucket(&operand, &bound1, &bound2, count, &result) !=
+  if (ty_dec128_width_bucket(&operand, &bound1, &bound2, count, &result) !=
       0)
     dec_range_error(NULL);
   if (result > PG_INT32_MAX)
@@ -1593,7 +1593,7 @@ static int dec_cmp(const decimal_t *a, const decimal_t *b) {
 
   if (dec_scale(a) == dec_scale(b))
     return va < vb ? -1 : (va > vb ? 1 : 0);
-  return ty_decimal128_cmp_scaled({va, dec_scale(a)}, {vb, dec_scale(b)});
+  return ty_dec128_cmp_scaled({va, dec_scale(a)}, {vb, dec_scale(b)});
 }
 
 /* The comparator of a sort of numerics. */
@@ -1649,25 +1649,25 @@ Datum numeric_le(PG_FUNCTION_ARGS) {
  * offset before (sub) or after base, as less says.
  */
 Datum in_range_numeric_numeric(PG_FUNCTION_ARGS) {
-  ty_decimal128_t val = dec_ty(PG_GETARG_NUMERIC(0));
-  ty_decimal128_t base = dec_ty(PG_GETARG_NUMERIC(1));
-  ty_decimal128_t offset = dec_ty(PG_GETARG_NUMERIC(2));
+  ty_dec128_t val = dec_ty(PG_GETARG_NUMERIC(0));
+  ty_dec128_t base = dec_ty(PG_GETARG_NUMERIC(1));
+  ty_dec128_t offset = dec_ty(PG_GETARG_NUMERIC(2));
   bool sub = PG_GETARG_BOOL(3);
   bool less = PG_GETARG_BOOL(4);
-  ty_decimal128_t sum;
+  ty_dec128_t sum;
   int c;
 
   if (offset.value < 0)
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
              errmsg("invalid preceding or following size in window function")));
-  if ((sub ? ty_decimal128_sub(&base, &offset, &sum)
-           : ty_decimal128_add(&base, &offset, &sum)) == 0) {
-    c = ty_decimal128_cmp(val, sum);
+  if ((sub ? ty_dec128_sub(&base, &offset, &sum)
+           : ty_dec128_add(&base, &offset, &sum)) == 0) {
+    c = ty_dec128_cmp(val, sum);
   } else {
     /* The sum passes 36 digits, so val is on one side of it, by its sign. */
-    double lb = ty_decimal128_to_double(&base);
-    double lo = ty_decimal128_to_double(&offset);
+    double lb = ty_dec128_to_double(&base);
+    double lo = ty_dec128_to_double(&offset);
 
     c = (sub ? lb - lo : lb + lo) > 0 ? -1 : 1;
   }
@@ -1842,22 +1842,22 @@ static bool division_by_zero(bool *have_error) {
  * them exactly, or NULL with *have_error set past 36 digits.
  */
 Numeric numeric_add_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
-  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
-  ty_decimal128_t r;
+  ty_dec128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_dec128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_dec128_t r;
 
-  if (ty_decimal128_add(&a, &b, &r) != 0)
+  if (ty_dec128_add(&a, &b, &r) != 0)
     return dec_range_error(have_error);
   return dec_make(r.value, r.scale);
 }
 
 /* num1 - num2, as num1 + num2: exact, or NULL with *have_error set. */
 Numeric numeric_sub_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
-  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
-  ty_decimal128_t r;
+  ty_dec128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_dec128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_dec128_t r;
 
-  if (ty_decimal128_sub(&a, &b, &r) != 0)
+  if (ty_dec128_sub(&a, &b, &r) != 0)
     return dec_range_error(have_error);
   return dec_make(r.value, r.scale);
 }
@@ -1867,27 +1867,27 @@ Numeric numeric_sub_opt_error(Numeric num1, Numeric num2, bool *have_error) {
  * set if it has more than 36 digits or 36 places.
  */
 Numeric numeric_mul_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
-  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
-  ty_decimal128_t r;
+  ty_dec128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_dec128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_dec128_t r;
 
-  if (ty_decimal128_mul(&a, &b, &r) != 0)
+  if (ty_dec128_mul(&a, &b, &r) != 0)
     return dec_range_error(have_error);
   return dec_make(r.value, r.scale);
 }
 
 /* num1 / num2 at PostgreSQL's scale; NULL with *have_error on an error. */
 Numeric numeric_div_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
-  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
-  ty_decimal128_t r;
+  ty_dec128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_dec128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_dec128_t r;
 
   if (b.value == 0) {
     division_by_zero(have_error);
     return NULL;
   }
   /* The quotient is ty's, made in 128 bits, at PostgreSQL's scale. */
-  if (ty_decimal128_div(&a, &b,
+  if (ty_dec128_div(&a, &b,
                         select_div_scale128(a.value, a.scale, b.value, b.scale),
                         false, &r) != 0)
     return dec_range_error(have_error);
@@ -1896,12 +1896,12 @@ Numeric numeric_div_opt_error(Numeric num1, Numeric num2, bool *have_error) {
 
 /* num1 mod num2, at the larger scale, the sign of num1. */
 Numeric numeric_mod_opt_error(Numeric num1, Numeric num2, bool *have_error) {
-  ty_decimal128_t a = {dec_value(num1), dec_scale(num1)};
-  ty_decimal128_t b = {dec_value(num2), dec_scale(num2)};
-  ty_decimal128_t r;
+  ty_dec128_t a = {dec_value(num1), dec_scale(num1)};
+  ty_dec128_t b = {dec_value(num2), dec_scale(num2)};
+  ty_dec128_t r;
 
   /* The remainder is ty's; its one error is a zero num2. */
-  if (ty_decimal128_mod(&a, &b, &r) != 0) {
+  if (ty_dec128_mod(&a, &b, &r) != 0) {
     division_by_zero(have_error);
     return NULL;
   }
@@ -1935,13 +1935,13 @@ Datum numeric_div(PG_FUNCTION_ARGS) {
 /* div(num1, num2): the quotient truncated to an integer, scale 0. */
 Datum numeric_div_trunc(PG_FUNCTION_ARGS) {
   Numeric n1 = PG_GETARG_NUMERIC(0), n2 = PG_GETARG_NUMERIC(1);
-  ty_decimal128_t a = {dec_value(n1), dec_scale(n1)};
-  ty_decimal128_t b = {dec_value(n2), dec_scale(n2)};
-  ty_decimal128_t r;
+  ty_dec128_t a = {dec_value(n1), dec_scale(n1)};
+  ty_dec128_t b = {dec_value(n2), dec_scale(n2)};
+  ty_dec128_t r;
 
   if (b.value == 0)
     division_by_zero(NULL);
-  if (ty_decimal128_div(&a, &b, 0, true, &r) != 0)
+  if (ty_dec128_div(&a, &b, 0, true, &r) != 0)
     dec_range_error(NULL);
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -1954,9 +1954,9 @@ Datum numeric_mod(PG_FUNCTION_ARGS) {
 
 /* num + 1, at its scale. */
 Datum numeric_inc(PG_FUNCTION_ARGS) {
-  ty_decimal128_t a = dec_ty(PG_GETARG_NUMERIC(0)), one = {1, 0}, r;
+  ty_dec128_t a = dec_ty(PG_GETARG_NUMERIC(0)), one = {1, 0}, r;
 
-  if (ty_decimal128_add(&a, &one, &r) != 0)
+  if (ty_dec128_add(&a, &one, &r) != 0)
     dec_range_error(NULL);
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -1983,11 +1983,11 @@ Datum numeric_larger(PG_FUNCTION_ARGS) {
  */
 Datum numeric_gcd(PG_FUNCTION_ARGS) {
   Numeric n1 = PG_GETARG_NUMERIC(0), n2 = PG_GETARG_NUMERIC(1);
-  ty_decimal128_t a = {dec_value(n1), dec_scale(n1)};
-  ty_decimal128_t b = {dec_value(n2), dec_scale(n2)};
-  ty_decimal128_t r;
+  ty_dec128_t a = {dec_value(n1), dec_scale(n1)};
+  ty_dec128_t b = {dec_value(n2), dec_scale(n2)};
+  ty_dec128_t r;
 
-  if (ty_decimal128_gcd(&a, &b, &r) != 0)
+  if (ty_dec128_gcd(&a, &b, &r) != 0)
     dec_range_error(NULL);
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -1998,11 +1998,11 @@ Datum numeric_gcd(PG_FUNCTION_ARGS) {
  */
 Datum numeric_lcm(PG_FUNCTION_ARGS) {
   Numeric n1 = PG_GETARG_NUMERIC(0), n2 = PG_GETARG_NUMERIC(1);
-  ty_decimal128_t a = {dec_value(n1), dec_scale(n1)};
-  ty_decimal128_t b = {dec_value(n2), dec_scale(n2)};
-  ty_decimal128_t r;
+  ty_dec128_t a = {dec_value(n1), dec_scale(n1)};
+  ty_dec128_t b = {dec_value(n2), dec_scale(n2)};
+  ty_dec128_t r;
 
-  if (ty_decimal128_lcm(&a, &b, &r) != 0)
+  if (ty_dec128_lcm(&a, &b, &r) != 0)
     dec_range_error(NULL);
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -2010,7 +2010,7 @@ Datum numeric_lcm(PG_FUNCTION_ARGS) {
 /* factorial(n), for n of at most 33, the last whose factorial fits. */
 Datum numeric_fac(PG_FUNCTION_ARGS) {
   int64 num = PG_GETARG_INT64(0);
-  ty_decimal128_t r;
+  ty_dec128_t r;
 
   if (num < 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -2018,7 +2018,7 @@ Datum numeric_fac(PG_FUNCTION_ARGS) {
   if (num > 100)
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("value overflows numeric format")));
-  if (ty_decimal128_factorial(num, &r) != 0)
+  if (ty_dec128_factorial(num, &r) != 0)
     dec_range_error(NULL);
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -2030,7 +2030,7 @@ Datum numeric_fac(PG_FUNCTION_ARGS) {
 
 /* The square root of num, at PostgreSQL's scale for it, rounded. */
 Datum numeric_sqrt(PG_FUNCTION_ARGS) {
-  ty_decimal128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
+  ty_dec128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
   nbase_t nb = dec_nbase128(arg.value, arg.scale);
   int sweight, rscale;
 
@@ -2044,7 +2044,7 @@ Datum numeric_sqrt(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
   /* The root is ty's, made a digit at a time in 128 bits. */
-  if (ty_decimal128_sqrt(&arg, rscale, &r) != 0)
+  if (ty_dec128_sqrt(&arg, rscale, &r) != 0)
     dec_range_error(NULL);
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -2053,16 +2053,16 @@ Datum numeric_sqrt(PG_FUNCTION_ARGS) {
  * The decimal weight of ln(w), as PostgreSQL estimates it to choose a
  * result scale; w is positive.
  */
-static int estimate_ln_dweight(const ty_decimal128_t &w) {
-  ty_decimal128_t lo = {9, 1}, hi = {11, 1};
+static int estimate_ln_dweight(const ty_dec128_t &w) {
+  ty_dec128_t lo = {9, 1}, hi = {11, 1};
 
   if (w.value <= 0)
     return 0;
-  if (ty_decimal128_cmp(w, lo) >= 0 && ty_decimal128_cmp(w, hi) <= 0) {
+  if (ty_dec128_cmp(w, lo) >= 0 && ty_dec128_cmp(w, hi) <= 0) {
     /* 0.9 <= w <= 1.1: ln(w) is about w - 1. */
-    ty_decimal128_t one = {1, 0}, x;
+    ty_dec128_t one = {1, 0}, x;
 
-    ty_decimal128_sub(&w, &one, &x);
+    ty_dec128_sub(&w, &one, &x);
     if (x.value == 0)
       return 0;
     return u128_digits(x.value < 0 ? -(u128)x.value : (u128)x.value) - 1 -
@@ -2083,7 +2083,7 @@ static int estimate_ln_dweight(const ty_decimal128_t &w) {
 }
 
 /* The error of a logarithm of zero or a negative number, if w is one. */
-static void check_log_argument(const ty_decimal128_t &w) {
+static void check_log_argument(const ty_dec128_t &w) {
   if (w.value == 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_LOG),
                     errmsg("cannot take logarithm of zero")));
@@ -2094,8 +2094,8 @@ static void check_log_argument(const ty_decimal128_t &w) {
 
 /* e raised to num, at PostgreSQL's scale for it. */
 Datum numeric_exp(PG_FUNCTION_ARGS) {
-  ty_decimal128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
-  double x = ty_decimal128_to_double(&arg);
+  ty_dec128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
+  double x = ty_dec128_to_double(&arg);
   double val = (double)x * 0.434294481903252; /* the result's dweight */
   int rscale;
 
@@ -2105,14 +2105,14 @@ Datum numeric_exp(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, arg.scale);
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  if (ty_decimal128_exp(&arg, rscale, &r) != 0)
+  if (ty_dec128_exp(&arg, rscale, &r) != 0)
     dec_math_error();
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* The natural logarithm of num, at PostgreSQL's scale for it. */
 Datum numeric_ln(PG_FUNCTION_ARGS) {
-  ty_decimal128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
+  ty_dec128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
   int rscale;
 
   check_log_argument(arg);
@@ -2120,15 +2120,15 @@ Datum numeric_ln(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, arg.scale);
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  if (ty_decimal128_ln(&arg, rscale, &r) != 0)
+  if (ty_dec128_ln(&arg, rscale, &r) != 0)
     dec_math_error();
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* log(base, num): the logarithm of num to base, at PostgreSQL's scale. */
 Datum numeric_log(PG_FUNCTION_ARGS) {
-  ty_decimal128_t base = dec_ty(PG_GETARG_NUMERIC(0));
-  ty_decimal128_t num = dec_ty(PG_GETARG_NUMERIC(1)), r;
+  ty_dec128_t base = dec_ty(PG_GETARG_NUMERIC(0));
+  ty_dec128_t num = dec_ty(PG_GETARG_NUMERIC(1)), r;
   int result_dweight, rscale;
 
   check_log_argument(base);
@@ -2139,7 +2139,7 @@ Datum numeric_log(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, num.scale);
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  if (ty_decimal128_log(&base, &num, rscale, &r) != 0)
+  if (ty_dec128_log(&base, &num, rscale, &r) != 0)
     dec_math_error();
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -2149,12 +2149,12 @@ Datum numeric_log(PG_FUNCTION_ARGS) {
  * rounded to PostgreSQL's scale for it; past that, ty takes it in long
  * double.
  */
-static Numeric power_int(const ty_decimal128_t &base, int64 exp,
+static Numeric power_int(const ty_dec128_t &base, int64 exp,
                          int exp_scale) {
   nbase_t nb = dec_nbase128(base.value, base.scale);
   double f;
   int rscale;
-  ty_decimal128_t r;
+  ty_dec128_t r;
 
   /* The approximate decimal weight of the result, PostgreSQL's way. */
   if (base.value != 0) {
@@ -2184,21 +2184,21 @@ static Numeric power_int(const ty_decimal128_t &base, int64 exp,
       return dec_range_error(NULL);
     return dec_make(exp == 0 ? dec_pow10(rscale) : 0, rscale);
   }
-  if (ty_decimal128_pow_int(&base, exp, rscale, &r) != 0)
+  if (ty_dec128_pow_int(&base, exp, rscale, &r) != 0)
     return dec_math_error();
   return dec_make(r.value, r.scale);
 }
 
 /* num1 ^ num2, at PostgreSQL's scale for it. */
 Datum numeric_power(PG_FUNCTION_ARGS) {
-  ty_decimal128_t base = dec_ty(PG_GETARG_NUMERIC(0));
-  ty_decimal128_t exp = dec_ty(PG_GETARG_NUMERIC(1)), exp_int, r;
+  ty_dec128_t base = dec_ty(PG_GETARG_NUMERIC(0));
+  ty_dec128_t exp = dec_ty(PG_GETARG_NUMERIC(1)), exp_int, r;
   bool exp_is_int;
   double ln_num, val;
   int rscale;
 
-  ty_decimal128_trunc(&exp, 0, &exp_int);
-  exp_is_int = ty_decimal128_cmp(exp_int, exp) == 0;
+  ty_dec128_trunc(&exp, 0, &exp_int);
+  exp_is_int = ty_dec128_cmp(exp_int, exp) == 0;
   if (base.value == 0 && exp.value < 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
                     errmsg("zero raised to a negative power is undefined")));
@@ -2213,9 +2213,9 @@ Datum numeric_power(PG_FUNCTION_ARGS) {
   if (base.value == 0)
     PG_RETURN_NUMERIC(dec_make(0, NUMERIC_MIN_SIG_DIGITS));
   {
-    ty_decimal128_t abs_base = ty_decimal128_abs(base);
+    ty_dec128_t abs_base = ty_dec128_abs(base);
 
-    ln_num = log(ty_decimal128_to_double(&abs_base)) * ty_decimal128_to_double(&exp);
+    ln_num = log(ty_dec128_to_double(&abs_base)) * ty_dec128_to_double(&exp);
     if (fabs(ln_num) > NUMERIC_MAX_RESULT_SCALE * 3.01) {
       if (ln_num > 0)
         ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
@@ -2230,7 +2230,7 @@ Datum numeric_power(PG_FUNCTION_ARGS) {
     rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
     rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
     /* A negative base has an integer exponent: ty keeps its sign. */
-    if (ty_decimal128_pow_real(&base, &exp, rscale, &r) != 0)
+    if (ty_dec128_pow_real(&base, &exp, rscale, &r) != 0)
       dec_math_error();
     PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
   }
@@ -2279,9 +2279,9 @@ Datum int2_numeric(PG_FUNCTION_ARGS) {
  * hi; else false.
  */
 static bool dec_to_int(const decimal_t *num, i128 lo, i128 hi, i128 *out) {
-  ty_decimal128_t a = dec_ty(num), r;
+  ty_dec128_t a = dec_ty(num), r;
 
-  ty_decimal128_round(&a, 0, &r);
+  ty_dec128_round(&a, 0, &r);
   if (r.value < lo || r.value > hi)
     return false;
   *out = r.value;
@@ -2395,9 +2395,9 @@ Datum numeric_float4(PG_FUNCTION_ARGS) {
 
 /* numeric to pg_lsn: rounded to an integer, from 0 to 2^64 - 1. */
 Datum numeric_pg_lsn(PG_FUNCTION_ARGS) {
-  ty_decimal128_t a = dec_ty(PG_GETARG_NUMERIC(0)), r;
+  ty_dec128_t a = dec_ty(PG_GETARG_NUMERIC(0)), r;
 
-  ty_decimal128_round(&a, 0, &r);
+  ty_dec128_round(&a, 0, &r);
   if (r.value < 0 || r.value > (i128)UINT64_MAX)
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("pg_lsn out of range")));
@@ -2475,13 +2475,13 @@ typedef struct dec_agg_t {
 } dec_agg_t;
 
 /* state's sum. */
-static ty_decimal128_t agg_sumX(const dec_agg_t *state) {
+static ty_dec128_t agg_sumX(const dec_agg_t *state) {
   return {(i128)(((u128)(uint64)state->sx_hi << 64) | state->sx_lo),
           state->sx_scale};
 }
 
 /* Set state's sum to v. */
-static void agg_set_sumX(dec_agg_t *state, const ty_decimal128_t &v) {
+static void agg_set_sumX(dec_agg_t *state, const ty_dec128_t &v) {
   state->sx_lo = (uint64)(u128)v.value;
   state->sx_hi = (int64)((u128)v.value >> 64);
   state->sx_scale = v.scale;
@@ -2539,10 +2539,10 @@ static void agg_add_square(dec_agg_t *state, i128 v, int scale, bool sub) {
 }
 
 /* state's sum plus x, or less x if sub; past 36 digits is an error. */
-static void agg_add_sumX(dec_agg_t *state, const ty_decimal128_t &x, bool sub) {
-  ty_decimal128_t a = agg_sumX(state), r;
+static void agg_add_sumX(dec_agg_t *state, const ty_dec128_t &x, bool sub) {
+  ty_dec128_t a = agg_sumX(state), r;
 
-  if ((sub ? ty_decimal128_sub(&a, &x, &r) : ty_decimal128_add(&a, &x, &r)) !=
+  if ((sub ? ty_dec128_sub(&a, &x, &r) : ty_dec128_add(&a, &x, &r)) !=
       0)
     dec_range_error(NULL);
   agg_set_sumX(state, r);
@@ -2614,7 +2614,7 @@ static void agg_fast_accum(dec_agg_t *state, int64 v, int s) {
 }
 
 /* Count x into state. */
-static void agg_accum(dec_agg_t *state, const ty_decimal128_t &x) {
+static void agg_accum(dec_agg_t *state, const ty_dec128_t &x) {
   agg_count(state, x.scale);
   agg_add_sumX(state, x, false);
   if (state->calc_sumX2)
@@ -2626,7 +2626,7 @@ static void agg_accum(dec_agg_t *state, const ty_decimal128_t &x) {
  * longer say its sum's scale, the last value of the largest scale gone,
  * and the aggregate must be computed again.
  */
-static bool agg_discard(dec_agg_t *state, const ty_decimal128_t &x) {
+static bool agg_discard(dec_agg_t *state, const ty_dec128_t &x) {
   agg_flush(state);
   if (x.scale == state->max_scale) {
     if (state->max_scale_count > 1 || state->max_scale == 0)
@@ -2689,7 +2689,7 @@ static Datum int_accum(FunctionCallInfo fcinfo, int64 value, bool calc_sumX2) {
   dec_agg_t *state = agg_state_arg(fcinfo, calc_sumX2);
 
   if (!PG_ARGISNULL(1))
-    agg_accum(state, ty_decimal128_t{value, 0});
+    agg_accum(state, ty_dec128_t{value, 0});
   PG_RETURN_POINTER(state);
 }
 
@@ -2725,7 +2725,7 @@ static Datum int_accum_inv(FunctionCallInfo fcinfo, int64 value) {
     elog(ERROR, "integer accumulator inverse called with NULL state");
   state = (dec_agg_t *)PG_GETARG_POINTER(0);
   if (!PG_ARGISNULL(1))
-    (void)agg_discard(state, ty_decimal128_t{value, 0});
+    (void)agg_discard(state, ty_dec128_t{value, 0});
   PG_RETURN_POINTER(state);
 }
 
@@ -2891,7 +2891,7 @@ static Datum agg_sum(FunctionCallInfo fcinfo) {
 
   if (state == NULL || state->N == 0)
     PG_RETURN_NULL();
-  ty_decimal128_t sx = agg_sumX(state);
+  ty_dec128_t sx = agg_sumX(state);
 
   PG_RETURN_NUMERIC(dec_make(sx.value, sx.scale));
 }
@@ -2899,14 +2899,14 @@ static Datum agg_sum(FunctionCallInfo fcinfo) {
 /* avg: the sum over the count, at division's scale, or null. */
 static Datum agg_avg(FunctionCallInfo fcinfo) {
   dec_agg_t *state = final_state(fcinfo);
-  ty_decimal128_t sx, n, r;
+  ty_dec128_t sx, n, r;
 
   if (state == NULL || state->N == 0)
     PG_RETURN_NULL();
   sx = agg_sumX(state);
   n = {state->N, 0};
   /* The quotient is ty's, at PostgreSQL's scale for it. */
-  if (ty_decimal128_div(&sx, &n,
+  if (ty_dec128_div(&sx, &n,
                         select_div_scale128(sx.value, sx.scale, n.value, 0),
                         false, &r) != 0)
     dec_range_error(NULL);
@@ -2922,7 +2922,7 @@ static Datum agg_avg(FunctionCallInfo fcinfo) {
  */
 static Datum agg_stddev(FunctionCallInfo fcinfo, bool variance, bool sample) {
   dec_agg_t *state = final_state(fcinfo);
-  ty_decimal128_t sx, var, r;
+  ty_dec128_t sx, var, r;
   double n, sum, n_sumX2, num;
   i128 den;
   int rscale;
@@ -2931,7 +2931,7 @@ static Datum agg_stddev(FunctionCallInfo fcinfo, bool variance, bool sample) {
     PG_RETURN_NULL();
   sx = agg_sumX(state);
   n = (double)state->N;
-  sum = ty_decimal128_to_double(&sx);
+  sum = ty_dec128_to_double(&sx);
   n_sumX2 = n * agg_sumX2(state);
   num = n_sumX2 - sum * sum;
   if (!std::isfinite(n_sumX2) || !std::isfinite(num))
@@ -2942,11 +2942,11 @@ static Datum agg_stddev(FunctionCallInfo fcinfo, bool variance, bool sample) {
   /* num is at twice the sum's scale. */
   rscale = select_div_scale_nb(dec_nbase_d(num), 2 * sx.scale,
                                dec_nbase128(den, 0), 0);
-  if (ty_decimal128_from_double(num / (double)den, rscale, &var) != 0)
+  if (ty_dec128_from_double(num / (double)den, rscale, &var) != 0)
     dec_range_error(NULL);
   if (!variance) {
     /* The root of the rounded variance, rounded at the same scale. */
-    if (ty_decimal128_sqrt(&var, rscale, &r) != 0)
+    if (ty_dec128_sqrt(&var, rscale, &r) != 0)
       dec_range_error(NULL);
     var = r;
   }
@@ -3394,10 +3394,10 @@ static Numeric d64_numeric(Datum d) {
  * with the error saved in escontext, if its integer part has more than 17
  * digits.
  */
-static bool d64_of_dec(const ty_decimal128_t &a, Datum *out, Node *escontext) {
-  ty_decimal64_t r;
+static bool d64_of_dec(const ty_dec128_t &a, Datum *out, Node *escontext) {
+  ty_dec64_t r;
 
-  if (ty_decimal64_from_decimal128(&a, &r) != 0)
+  if (ty_dec64_from_dec128(&a, &r) != 0)
     ereturn(escontext, false,
             (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
              errmsg("value overflows numeric format"),
@@ -3409,7 +3409,7 @@ static bool d64_of_dec(const ty_decimal128_t &a, Datum *out, Node *escontext) {
 }
 
 /* a as a decimal64; more than 17 digits before the point is an error. */
-static Datum d64_from_dec(const ty_decimal128_t &a) {
+static Datum d64_from_dec(const ty_dec128_t &a) {
   Datum d;
 
   d64_of_dec(a, &d, NULL);
@@ -3421,7 +3421,7 @@ static Datum d64_from_dec(const ty_decimal128_t &a) {
  * or places.  What a literal is typed by (parse_node.c).
  */
 bool numeric_to_decimal64(Numeric num, Datum *out) {
-  ty_decimal128_t a = dec_ty(num);
+  ty_dec128_t a = dec_ty(num);
 
   if (a.scale > D64_MAX_DIGITS ||
       u128_digits(a.value < 0 ? -(u128)a.value : (u128)a.value) >
@@ -3478,7 +3478,7 @@ Datum decimal64typmodin(PG_FUNCTION_ARGS) {
 /* The length coercion: d rounded to typmod's scale, checked against it. */
 Datum decimal64(PG_FUNCTION_ARGS) {
   Datum d = PG_GETARG_DATUM(0);
-  ty_decimal128_t a = {d64_value(d), d64_scale(d)};
+  ty_dec128_t a = {d64_value(d), d64_scale(d)};
 
   (void)dec_apply_typmod(&a, PG_GETARG_INT32(1), NULL);
   return d64_from_dec(a);
@@ -3506,7 +3506,7 @@ Datum int4_decimal64(PG_FUNCTION_ARGS) {
 
 /* int8 to decimal64: past 17 digits is an error. */
 Datum int8_decimal64(PG_FUNCTION_ARGS) {
-  return d64_from_dec(ty_decimal128_t{PG_GETARG_INT64(0), 0});
+  return d64_from_dec(ty_dec128_t{PG_GETARG_INT64(0), 0});
 }
 
 /* float4 to decimal64, as to numeric. */
@@ -3559,7 +3559,7 @@ Datum decimal64_float8(PG_FUNCTION_ARGS) {
  * -1, 0 or 1 as a is below, equal to or above b. At one scale the order of
  * the words is the order of the values, as the scale is in their low bits:
  * that is digres's packing, so it stays here, and a sort pays no unpacking
- * (ty_decimal64_cmp in line cost a sort 3.8% more instructions). At two
+ * (ty_dec64_cmp in line cost a sort 3.8% more instructions). At two
  * scales ty puts both to one scale in 128 bits.
  */
 static int d64_cmp(Datum a, Datum b) {
@@ -3570,7 +3570,7 @@ static int d64_cmp(Datum a, Datum b) {
 
     return wa < wb ? -1 : (wa > wb ? 1 : 0);
   }
-  return ty_decimal64_cmp_scaled({d64_value(a), sa}, {d64_value(b), sb});
+  return ty_dec64_cmp_scaled({d64_value(a), sa}, {d64_value(b), sb});
 }
 
 /* The comparator of a sort of decimal64s. */
@@ -3695,12 +3695,12 @@ static void ty_error_raise(void) {
  */
 Datum decimal64_add(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
-  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
-  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
-  ty_decimal64_t r;
+  ty_dec64_t a = {d64_value(da), d64_scale(da)};
+  ty_dec64_t b = {d64_value(db), d64_scale(db)};
+  ty_dec64_t r;
 
   /* The addition is ty's: it takes the two parts of each decimal64. */
-  if (ty_decimal64_add(&a, &b, &r) != 0)
+  if (ty_dec64_add(&a, &b, &r) != 0)
     ty_error_raise();
   return d64_make(r.value, r.scale);
 }
@@ -3708,12 +3708,12 @@ Datum decimal64_add(PG_FUNCTION_ARGS) {
 /* a - b, a decimal64: past 17 digits it is an error, as a + b's is. */
 Datum decimal64_sub(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
-  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
-  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
-  ty_decimal64_t r;
+  ty_dec64_t a = {d64_value(da), d64_scale(da)};
+  ty_dec64_t b = {d64_value(db), d64_scale(db)};
+  ty_dec64_t r;
 
   /* The subtraction is ty's: it takes the two parts of each decimal64. */
-  if (ty_decimal64_sub(&a, &b, &r) != 0)
+  if (ty_dec64_sub(&a, &b, &r) != 0)
     ty_error_raise();
   return d64_make(r.value, r.scale);
 }
@@ -3724,12 +3724,12 @@ Datum decimal64_sub(PG_FUNCTION_ARGS) {
  */
 Datum decimal64_mul(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
-  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
-  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
-  ty_decimal64_t r;
+  ty_dec64_t a = {d64_value(da), d64_scale(da)};
+  ty_dec64_t b = {d64_value(db), d64_scale(db)};
+  ty_dec64_t r;
 
   /* The multiplication is ty's: it takes the two parts of each decimal64. */
-  if (ty_decimal64_mul(&a, &b, &r) != 0)
+  if (ty_dec64_mul(&a, &b, &r) != 0)
     ty_error_raise();
   return d64_make(r.value, r.scale);
 }
@@ -3741,14 +3741,14 @@ Datum decimal64_mul(PG_FUNCTION_ARGS) {
  */
 Datum decimal64_div(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
-  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
-  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
-  ty_decimal64_t r;
+  ty_dec64_t a = {d64_value(da), d64_scale(da)};
+  ty_dec64_t b = {d64_value(db), d64_scale(db)};
+  ty_dec64_t r;
 
   if (b.value == 0)
     division_by_zero(NULL);
   /* ty divides in 128 bits at PostgreSQL's scale, and fits 17 digits. */
-  if (ty_decimal64_div(&a, &b,
+  if (ty_dec64_div(&a, &b,
                        select_div_scale128(a.value, a.scale, b.value, b.scale),
                        &r) != 0)
     d64_format_overflow();
@@ -3758,7 +3758,7 @@ Datum decimal64_div(PG_FUNCTION_ARGS) {
 /* -a. */
 Datum decimal64_uminus(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0);
-  ty_decimal64_t r = ty_decimal64_neg({d64_value(da), d64_scale(da)});
+  ty_dec64_t r = ty_dec64_neg({d64_value(da), d64_scale(da)});
 
   return d64_make(r.value, r.scale);
 }
@@ -3766,7 +3766,7 @@ Datum decimal64_uminus(PG_FUNCTION_ARGS) {
 /* |a|. */
 Datum decimal64_abs(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0);
-  ty_decimal64_t r = ty_decimal64_abs({d64_value(da), d64_scale(da)});
+  ty_dec64_t r = ty_dec64_abs({d64_value(da), d64_scale(da)});
 
   return d64_make(r.value, r.scale);
 }
@@ -3788,7 +3788,7 @@ Datum decimal64_accum_inv(PG_FUNCTION_ARGS) {
   if (PG_ARGISNULL(0))
     elog(ERROR, "decimal64_accum_inv called with NULL state");
   state = (dec_agg_t *)PG_GETARG_POINTER(0);
-  if (!PG_ARGISNULL(1) && !agg_discard(state, ty_decimal128_t{d64_value(PG_GETARG_DATUM(1)), d64_scale(PG_GETARG_DATUM(1))}))
+  if (!PG_ARGISNULL(1) && !agg_discard(state, ty_dec128_t{d64_value(PG_GETARG_DATUM(1)), d64_scale(PG_GETARG_DATUM(1))}))
     PG_RETURN_NULL();
   PG_RETURN_POINTER(state);
 }
@@ -3798,10 +3798,10 @@ Datum decimal64_accum_inv(PG_FUNCTION_ARGS) {
  * past 17 digits or places, as PostgreSQL's message says it.
  */
 static Datum d64_round_or_trunc(Datum d, int n, bool trunc) {
-  ty_decimal64_t a = {d64_value(d), d64_scale(d)};
-  ty_decimal64_t r;
+  ty_dec64_t a = {d64_value(d), d64_scale(d)};
+  ty_dec64_t r;
 
-  if ((trunc ? ty_decimal64_trunc(&a, n, &r) : ty_decimal64_round(&a, n, &r)) !=
+  if ((trunc ? ty_dec64_trunc(&a, n, &r) : ty_dec64_round(&a, n, &r)) !=
       0)
     d64_format_overflow();
   return d64_make(r.value, r.scale);
@@ -3840,7 +3840,7 @@ Datum decimal64_to_char(PG_FUNCTION_ARGS) {
 /* ceil(decimal64) and ceiling(decimal64): the nearest integer >= it. */
 Datum decimal64_ceil(PG_FUNCTION_ARGS) {
   Datum d = PG_GETARG_DATUM(0);
-  ty_decimal64_t r = ty_decimal64_ceil({d64_value(d), d64_scale(d)});
+  ty_dec64_t r = ty_dec64_ceil({d64_value(d), d64_scale(d)});
 
   return d64_make(r.value, r.scale);
 }
@@ -3848,7 +3848,7 @@ Datum decimal64_ceil(PG_FUNCTION_ARGS) {
 /* floor(decimal64): the nearest integer <= it. */
 Datum decimal64_floor(PG_FUNCTION_ARGS) {
   Datum d = PG_GETARG_DATUM(0);
-  ty_decimal64_t r = ty_decimal64_floor({d64_value(d), d64_scale(d)});
+  ty_dec64_t r = ty_dec64_floor({d64_value(d), d64_scale(d)});
 
   return d64_make(r.value, r.scale);
 }
@@ -3860,12 +3860,12 @@ Datum decimal64_floor(PG_FUNCTION_ARGS) {
  */
 Datum decimal64_mod(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
-  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
-  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
-  ty_decimal64_t r;
+  ty_dec64_t a = {d64_value(da), d64_scale(da)};
+  ty_dec64_t b = {d64_value(db), d64_scale(db)};
+  ty_dec64_t r;
 
   /* The remainder is ty's; a zero b is its TY_ERR_DIVZERO. */
-  if (ty_decimal64_mod(&a, &b, &r) != 0)
+  if (ty_dec64_mod(&a, &b, &r) != 0)
     ty_error_raise();
   return d64_make(r.value, r.scale);
 }
@@ -3874,7 +3874,7 @@ Datum decimal64_mod(PG_FUNCTION_ARGS) {
 Datum decimal64_sign(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0);
 
-  return d64_make(ty_decimal64_sign({d64_value(da), d64_scale(da)}), 0);
+  return d64_make(ty_dec64_sign({d64_value(da), d64_scale(da)}), 0);
 }
 
 /*
@@ -3884,12 +3884,12 @@ Datum decimal64_sign(PG_FUNCTION_ARGS) {
  */
 Datum decimal64_gcd(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
-  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
-  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
-  ty_decimal64_t r;
+  ty_dec64_t a = {d64_value(da), d64_scale(da)};
+  ty_dec64_t b = {d64_value(db), d64_scale(db)};
+  ty_dec64_t r;
 
   /* The gcd is ty's; past 17 digits is its TY_ERR_RANGE. */
-  if (ty_decimal64_gcd(&a, &b, &r) != 0)
+  if (ty_dec64_gcd(&a, &b, &r) != 0)
     ty_error_raise();
   return d64_make(r.value, r.scale);
 }
@@ -3900,11 +3900,11 @@ Datum decimal64_gcd(PG_FUNCTION_ARGS) {
  */
 Datum decimal64_lcm(PG_FUNCTION_ARGS) {
   Datum da = PG_GETARG_DATUM(0), db = PG_GETARG_DATUM(1);
-  ty_decimal64_t a = {d64_value(da), d64_scale(da)};
-  ty_decimal64_t b = {d64_value(db), d64_scale(db)};
-  ty_decimal64_t r;
+  ty_dec64_t a = {d64_value(da), d64_scale(da)};
+  ty_dec64_t b = {d64_value(db), d64_scale(db)};
+  ty_dec64_t r;
 
-  if (ty_decimal64_lcm(&a, &b, &r) != 0)
+  if (ty_dec64_lcm(&a, &b, &r) != 0)
     ty_error_raise();
   return d64_make(r.value, r.scale);
 }

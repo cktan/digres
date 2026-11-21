@@ -212,8 +212,8 @@ session lookup, and a statement's instructions do not move.
 - The call is a C-style function in [`ty/include/ty.h`](
   ../ty/include/ty.h), or a header of ty's beside it: not in the
   2,103 lines of `sm.h`. Proposed name pattern:
-  `ty_decimal64_add(const ty_decimal64_t*, const ty_decimal64_t*,
-  ty_decimal64_t* result)`. A decimal is a value and a scale:
+  `ty_dec64_add(const ty_dec64_t*, const ty_dec64_t*,
+  ty_dec64_t* result)`. A decimal is a value and a scale:
   the host packs it into a Datum, as digres does, and ty takes
   the two parts.
 - sm2's `type_t` table stays for storage. The operations are
@@ -268,12 +268,12 @@ copied from PostgreSQL keeps its copyright notice
    than the next. Each point is now taken after a run to warm it
    up, and `a + b` was taken again; the other two did not move.
 2. **One function end to end.** Move `decimal64` add into ty
-   (`ty_decimal64_add`, in `ty/include/ty_decimal.h`). Its
+   (`ty_dec64_add`, in `ty/include/ty_decimal.h`). Its
    result is a `decimal64`, by value, and it fails with
    `TY_ERR_RANGE` past 17 digits, as decided on 2026-11-20: a
    by-reference `decimal128` result cost a `palloc` a row. A
    caller who wants more digits adds a `decimal128` to a
-   `decimal64`. `-` and `*` follow in ty (`ty_decimal64_sub`,
+   `decimal64`. `-` and `*` follow in ty (`ty_dec64_sub`,
    `_mul`), exact or an error; `/` stays in digres's wide path,
    rounded to 17 digits, until the 512-bit magnitude moves. This
    is decision 2's first error. → verify: the regression files
@@ -289,7 +289,7 @@ copied from PostgreSQL keeps its copyright notice
    `ty_decimal.h`: a call that cannot fail has no out-parameter;
    and `%` and `gcd`, with `TY_ERR_DIVZERO` as the second error
    kind; and `lcm`, a `decimal64` that is an error past 17
-   digits, as `*` is; and the compare, `ty_decimal64_cmp`. Next:
+   digits, as `*` is; and the compare, `ty_dec64_cmp`. Next:
    the hash, which waits for `decimal128`, as both hash alike.
    `decimal128` `+`, `-` and `*` moved too, under the rule that
    `decimal64` and `decimal128` work as `int32` and `int64` do:
@@ -353,7 +353,7 @@ copied from PostgreSQL keeps its copyright notice
    `where a > b` 0.2% and `max(a)` 0.3%: over the limit. So
    digres keeps its test of one scale, where the order of the
    words is the order of the values (its own packing), and
-   calls `ty_decimal64_cmp_scaled` only for two scales. Then the
+   calls `ty_dec64_cmp_scaled` only for two scales. Then the
    three are 0.6%, 0.3% and 0.8% fewer.
 4. **The allocator on each thread** (§3.2): digres sets its
    functions in each backend thread, and sm sets an arena's on
@@ -380,8 +380,8 @@ copied from PostgreSQL keeps its copyright notice
    One `SM_ERR_TYPE` and a copy of ty's message, or a mapping
    of each ty kind to an `SM_ERR_` code.
 5. The header names for the operations inside ty: one header
-   for a type, `ty_decimal.h`, with `ty_decimal64_t` and
-   `ty_decimal128_t`. Is that the pattern for the next types?
+   for a type, `ty_decimal.h`, with `ty_dec64_t` and
+   `ty_dec128_t`. Is that the pattern for the next types?
 6. Does `sm_toast_fetch` change to return a datum from the
    thread's alloc function, or does a new call do it, so that
    `std::string` callers stay as they are?

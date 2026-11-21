@@ -40,8 +40,8 @@ The interface is C in style and compiled as C++, as `sm.h` is.
   success.
 - A call that cannot fail returns its result, and may be an
   inline function in the header, so that a host's wrapper costs
-  no call: `ty_decimal64_neg`, `_abs` and `_sign` are. So is the
-  usual case of `ty_decimal64_cmp`. A host that packs a decimal
+  no call: `ty_dec64_neg`, `_abs` and `_sign` are. So is the
+  usual case of `ty_dec64_cmp`. A host that packs a decimal
   so that its words order as its values do may compare the
   words itself, as digres does: it costs a sort less than
   unpacking both (`../sm/TYPEMOVE_PLAN.md`, step 3).
@@ -133,7 +133,7 @@ Why per thread, and not per process:
   today. The last is a result of `exp` or a power that is not
   zero, but is zero or below the smallest normal double.
 - `exp`, `ln`, `log` and the powers are computed in `double`,
-  never `long double`: some 15 digits. `ty_decimal128_to_double`
+  never `long double`: some 15 digits. `ty_dec128_to_double`
   and `_from_double` convert a value, rounded once.
 - A type adds its own kinds when it moves: out of range,
   division by zero, bad text. Each is appended, and no value is

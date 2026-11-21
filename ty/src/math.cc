@@ -28,7 +28,7 @@ typedef unsigned __int128 u128;
 /* 10^36 - 1: the largest value of a decimal128. */
 constexpr u128 max_value = [] {
   u128 r = 1;
-  for (int i = 0; i < TY_DECIMAL128_MAX_DIGITS; i++) {
+  for (int i = 0; i < TY_DEC128_MAX_DIGITS; i++) {
     r *= 10;
   }
   return r - 1;
@@ -76,7 +76,7 @@ bool parse_fixed(const char *buf, ty_int128_t *value, int *scale) {
     if (v != 0) {
       sig++;
     }
-    if (sig > TY_DECIMAL128_MAX_DIGITS) {
+    if (sig > TY_DEC128_MAX_DIGITS) {
       return false;
     }
     if (frac >= 0) {
@@ -94,7 +94,7 @@ bool parse_fixed(const char *buf, ty_int128_t *value, int *scale) {
  * a as a double, rounded once: a value of 53 bits and a scale of at most
  * 22 is one division of two exact doubles; else by its text.
  */
-double ty_decimal128_to_double(const ty_decimal128_t *a) {
+double ty_dec128_to_double(const ty_dec128_t *a) {
   static const double p10[] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,
                                1e8,  1e9,  1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
                                1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
@@ -143,7 +143,7 @@ double ty_decimal128_to_double(const ty_decimal128_t *a) {
  *    it has 36, as the result of a function of the exponent is rounded.
  * 4. Take the digits as the value.
  */
-int ty_decimal128_from_double(double x, int rscale, ty_decimal128_t *result) {
+int ty_dec128_from_double(double x, int rscale, ty_dec128_t *result) {
   char buf[512];
   ty_int128_t v;
   int scale = rscale;
@@ -164,10 +164,10 @@ int ty_decimal128_from_double(double x, int rscale, ty_decimal128_t *result) {
     if (buf[0] == '0') {
       int_digits = 0;
     }
-    if (int_digits + scale <= TY_DECIMAL128_MAX_DIGITS || scale == 0) {
+    if (int_digits + scale <= TY_DEC128_MAX_DIGITS || scale == 0) {
       break;
     }
-    scale = TY_DECIMAL128_MAX_DIGITS - int_digits;
+    scale = TY_DEC128_MAX_DIGITS - int_digits;
     if (scale < 0) {
       scale = 0;
     }
@@ -191,8 +191,7 @@ int ty_decimal128_from_double(double x, int rscale, ty_decimal128_t *result) {
  *    below 10^36 nothing passes 128 bits.
  * 4. The root is floor(sqrt(N)); round it up if the remainder is above it.
  */
-int ty_decimal128_sqrt(const ty_decimal128_t *a, int rscale,
-                       ty_decimal128_t *result) {
+int ty_dec128_sqrt(const ty_dec128_t *a, int rscale, ty_dec128_t *result) {
   char dig[48];
   int nd = 0;
   int e = 2 * rscale - a->scale;
@@ -246,45 +245,42 @@ int ty_decimal128_sqrt(const ty_decimal128_t *a, int rscale,
  * A double result x of exp or a power, as a value at rscale places: overflow
  * and underflow are errors.
  */
-static int from_big_small(double x, int rscale, ty_decimal128_t *result) {
+static int from_big_small(double x, int rscale, ty_dec128_t *result) {
   if (std::isinf(x)) {
     return range_error();
   }
   if (x == 0 || fabs(x) < DBL_MIN) {
     return ty_internal::set_error(TY_ERR_UNDERFLOW, "result underflows");
   }
-  return ty_decimal128_from_double(x, rscale, result);
+  return ty_dec128_from_double(x, rscale, result);
 }
 
 /* *result = e raised to a, at rscale places. */
-int ty_decimal128_exp(const ty_decimal128_t *a, int rscale,
-                      ty_decimal128_t *result) {
-  return from_big_small(exp(ty_decimal128_to_double(a)), rscale, result);
+int ty_dec128_exp(const ty_dec128_t *a, int rscale, ty_dec128_t *result) {
+  return from_big_small(exp(ty_dec128_to_double(a)), rscale, result);
 }
 
 /* *result = ln(a) at rscale places; a must be above zero. */
-int ty_decimal128_ln(const ty_decimal128_t *a, int rscale,
-                     ty_decimal128_t *result) {
+int ty_dec128_ln(const ty_dec128_t *a, int rscale, ty_dec128_t *result) {
   if (a->value <= 0) {
     return ty_internal::set_error(TY_ERR_INVALID,
                                   "logarithm of a non-positive");
   }
-  return ty_decimal128_from_double(log(ty_decimal128_to_double(a)), rscale,
-                                   result);
+  return ty_dec128_from_double(log(ty_dec128_to_double(a)), rscale, result);
 }
 
 /*
  * *result = log(base, a) at rscale places; both above zero. Fails with
  * TY_ERR_DIVZERO if the base is 1.
  */
-int ty_decimal128_log(const ty_decimal128_t *base, const ty_decimal128_t *a,
-                      int rscale, ty_decimal128_t *result) {
+int ty_dec128_log(const ty_dec128_t *base, const ty_dec128_t *a, int rscale,
+                  ty_dec128_t *result) {
   if (base->value <= 0 || a->value <= 0) {
     return ty_internal::set_error(TY_ERR_INVALID,
                                   "logarithm of a non-positive");
   }
-  double lb = ty_decimal128_to_double(base);
-  double la = ty_decimal128_to_double(a);
+  double lb = ty_dec128_to_double(base);
+  double la = ty_dec128_to_double(a);
   double q;
 
   /* log10 and log2 give a power of the base exactly; log(x) / log(b) not. */
@@ -299,7 +295,7 @@ int ty_decimal128_log(const ty_decimal128_t *base, const ty_decimal128_t *a,
     }
     q = log(la) / ln_base;
   }
-  return ty_decimal128_from_double(q, rscale, result);
+  return ty_dec128_from_double(q, rscale, result);
 }
 
 /*
@@ -311,15 +307,15 @@ int ty_decimal128_log(const ty_decimal128_t *base, const ty_decimal128_t *a,
  *    double's.
  * The base is not zero.
  */
-int ty_decimal128_pow_int(const ty_decimal128_t *base, int64_t n, int rscale,
-                          ty_decimal128_t *result) {
+int ty_dec128_pow_int(const ty_dec128_t *base, int64_t n, int rscale,
+                      ty_dec128_t *result) {
   u128 m = 1;
   u128 b = magnitude(base->value);
   uint64_t k = n < 0 ? (uint64_t)0 - (uint64_t)n : (uint64_t)n;
   bool fits = true;
   double scale_limit = 1e38;
 
-  if ((double)k * (double)base->scale > TY_DECIMAL128_MAX_SCALE * 1.0) {
+  if ((double)k * (double)base->scale > TY_DEC128_MAX_SCALE * 1.0) {
     fits = false;
   }
   for (uint64_t i = 0; fits && i < k; i++) {
@@ -328,22 +324,22 @@ int ty_decimal128_pow_int(const ty_decimal128_t *base, int64_t n, int rscale,
     }
   }
   if (!fits) {
-    return from_big_small(pow(ty_decimal128_to_double(base), (double)n), rscale,
+    return from_big_small(pow(ty_dec128_to_double(base), (double)n), rscale,
                           result);
   }
-  ty_decimal128_t p = {(ty_int128_t)m, (int)(base->scale * k)};
+  ty_dec128_t p = {(ty_int128_t)m, (int)(base->scale * k)};
   if (base->value < 0 && (k & 1)) {
     p.value = -p.value;
   }
   if (p.value > (ty_int128_t)max_value || p.value < -(ty_int128_t)max_value) {
-    return from_big_small(pow(ty_decimal128_to_double(base), (double)n), rscale,
+    return from_big_small(pow(ty_dec128_to_double(base), (double)n), rscale,
                           result);
   }
   if (n < 0) {
-    ty_decimal128_t one = {1, 0};
-    return ty_decimal128_div(&one, &p, rscale, false, result);
+    ty_dec128_t one = {1, 0};
+    return ty_dec128_div(&one, &p, rscale, false, result);
   }
-  return ty_decimal128_round(&p, rscale, result);
+  return ty_dec128_round(&p, rscale, result);
 }
 
 /*
@@ -351,22 +347,19 @@ int ty_decimal128_pow_int(const ty_decimal128_t *base, int64_t n, int rscale,
  * with the sign of base if exp is an odd integer. The base is above zero,
  * or below it and exp an integer.
  */
-int ty_decimal128_pow_real(const ty_decimal128_t *base,
-                           const ty_decimal128_t *ex, int rscale,
-                           ty_decimal128_t *result) {
-  ty_decimal128_t abs_base = ty_decimal128_abs(*base);
-  double ln_num =
-      log(ty_decimal128_to_double(&abs_base)) * ty_decimal128_to_double(ex);
+int ty_dec128_pow_real(const ty_dec128_t *base, const ty_dec128_t *ex,
+                       int rscale, ty_dec128_t *result) {
+  ty_dec128_t abs_base = ty_dec128_abs(*base);
+  double ln_num = log(ty_dec128_to_double(&abs_base)) * ty_dec128_to_double(ex);
   double x = exp(ln_num);
   bool odd = false;
 
   if (ex->scale == 0) {
     odd = (ex->value % 2) != 0;
   } else {
-    ty_decimal128_t whole;
-    ty_decimal128_t e = *ex;
-    if (ty_decimal128_trunc(&e, 0, &whole) == 0 &&
-        ty_decimal128_cmp(whole, e) == 0) {
+    ty_dec128_t whole;
+    ty_dec128_t e = *ex;
+    if (ty_dec128_trunc(&e, 0, &whole) == 0 && ty_dec128_cmp(whole, e) == 0) {
       odd = (whole.value % 2) != 0;
     }
   }

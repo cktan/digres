@@ -29,8 +29,8 @@ int range_error() {
  * 3. If the result has more than 17 digits, fail.
  * 4. Set the result.
  */
-int add_or_sub(const ty_decimal64_t *a, const ty_decimal64_t *b, bool subtract,
-               ty_decimal64_t *result) {
+int add_or_sub(const ty_dec64_t *a, const ty_dec64_t *b, bool subtract,
+               ty_dec64_t *result) {
   int64_t x = a->value;
   int64_t y = b->value;
   int sa = a->scale;
@@ -60,7 +60,7 @@ int add_or_sub(const ty_decimal64_t *a, const ty_decimal64_t *b, bool subtract,
 /* 10^36 - 1: the largest value of a decimal128. */
 constexpr ty_int128_t d128_max = [] {
   ty_int128_t r = 1;
-  for (int i = 0; i < TY_DECIMAL128_MAX_DIGITS; i++) {
+  for (int i = 0; i < TY_DEC128_MAX_DIGITS; i++) {
     r *= 10;
   }
   return r - 1;
@@ -80,8 +80,8 @@ int range_error128() {
  * 3. If the result has more than 36 digits, fail.
  * 4. Set the result.
  */
-int add_or_sub128(const ty_decimal128_t *a, const ty_decimal128_t *b,
-                  bool subtract, ty_decimal128_t *result) {
+int add_or_sub128(const ty_dec128_t *a, const ty_dec128_t *b, bool subtract,
+                  ty_dec128_t *result) {
   ty_int128_t x = a->value;
   ty_int128_t y = b->value;
   int sa = a->scale;
@@ -142,13 +142,13 @@ ty_int128_t drop_places128(ty_int128_t v, int drop, bool cut) {
  *    zeros back: the scale is 0. A value below 10^36 is 0 once 37 places
  *    are dropped.
  */
-int round_or_cut128(const ty_decimal128_t *a, int n, bool cut,
-                    ty_decimal128_t *result) {
+int round_or_cut128(const ty_dec128_t *a, int n, bool cut,
+                    ty_dec128_t *result) {
   ty_int128_t v = a->value;
   int s = a->scale;
 
-  if (n > TY_DECIMAL128_MAX_SCALE) {
-    n = TY_DECIMAL128_MAX_SCALE;
+  if (n > TY_DEC128_MAX_SCALE) {
+    n = TY_DEC128_MAX_SCALE;
   }
   if (n >= s) {
     for (int i = s; i < n; i++) {
@@ -170,7 +170,7 @@ int round_or_cut128(const ty_decimal128_t *a, int n, bool cut,
   }
   int drop = s - n;
   ty_int128_t q =
-      drop > TY_DECIMAL128_MAX_DIGITS ? 0 : drop_places128(v, drop, cut);
+      drop > TY_DEC128_MAX_DIGITS ? 0 : drop_places128(v, drop, cut);
   for (int i = 0; i < -n && q != 0; i++) {
     if (__builtin_mul_overflow(q, (ty_int128_t)10, &q) || q > d128_max ||
         q < -d128_max) {
@@ -183,7 +183,7 @@ int round_or_cut128(const ty_decimal128_t *a, int n, bool cut,
 }
 
 /* The nearest whole number at or above a, or at or below if floor. */
-ty_decimal128_t ceil_or_floor128(ty_decimal128_t a, bool floor) {
+ty_dec128_t ceil_or_floor128(ty_dec128_t a, bool floor) {
   if (a.scale == 0) {
     return a;
   }
@@ -232,8 +232,8 @@ u128 mulpow10_mod(u128 v, int k, u128 m) {
  * bits there: the scale is returned. Else *over is 1 if a's does not, and
  * 2 if b's does not, and the magnitudes are the originals.
  */
-int align128(const ty_decimal128_t *a, const ty_decimal128_t *b, u128 *x,
-             u128 *y, int *over, int *k) {
+int align128(const ty_dec128_t *a, const ty_dec128_t *b, u128 *x, u128 *y,
+             int *over, int *k) {
   int sa = a->scale;
   int sb = b->scale;
 
@@ -264,8 +264,8 @@ int align128(const ty_decimal128_t *a, const ty_decimal128_t *b, u128 *x,
  * value is below 10^17 and a scale is at most 17, so they fit. Returns
  * the scale.
  */
-int common_scale(const ty_decimal64_t *a, const ty_decimal64_t *b,
-                 ty_int128_t *x, ty_int128_t *y) {
+int common_scale(const ty_dec64_t *a, const ty_dec64_t *b, ty_int128_t *x,
+                 ty_int128_t *y) {
   int sa = a->scale;
   int sb = b->scale;
 
@@ -307,13 +307,12 @@ int64_t drop_places64(int64_t v, int drop, bool cut) {
  *    zeros back: the scale is 0. A value below 10^17 drops to 0 once 18
  *    places are dropped, so that is where the value is cut off.
  */
-int round_or_cut(const ty_decimal64_t *a, int n, bool cut,
-                 ty_decimal64_t *result) {
+int round_or_cut(const ty_dec64_t *a, int n, bool cut, ty_dec64_t *result) {
   int64_t v = a->value;
   int s = a->scale;
 
   if (n >= s) {
-    if (n > TY_DECIMAL64_MAX_SCALE) {
+    if (n > TY_DEC64_MAX_SCALE) {
       return range_error();
     }
     ty_int128_t w = v;
@@ -347,7 +346,7 @@ int round_or_cut(const ty_decimal64_t *a, int n, bool cut,
 }
 
 /* The nearest whole number at or above a, or at or below if floor. */
-ty_decimal64_t ceil_or_floor(ty_decimal64_t a, bool floor) {
+ty_dec64_t ceil_or_floor(ty_dec64_t a, bool floor) {
   if (a.scale == 0) {
     return a;
   }
@@ -365,14 +364,12 @@ ty_decimal64_t ceil_or_floor(ty_decimal64_t a, bool floor) {
 } // namespace
 
 /* *result = a + b; fails past 17 digits. */
-int ty_decimal64_add(const ty_decimal64_t *a, const ty_decimal64_t *b,
-                     ty_decimal64_t *result) {
+int ty_dec64_add(const ty_dec64_t *a, const ty_dec64_t *b, ty_dec64_t *result) {
   return add_or_sub(a, b, false, result);
 }
 
 /* *result = a - b; fails past 17 digits. */
-int ty_decimal64_sub(const ty_decimal64_t *a, const ty_decimal64_t *b,
-                     ty_decimal64_t *result) {
+int ty_dec64_sub(const ty_dec64_t *a, const ty_dec64_t *b, ty_dec64_t *result) {
   return add_or_sub(a, b, true, result);
 }
 
@@ -383,12 +380,11 @@ int ty_decimal64_sub(const ty_decimal64_t *a, const ty_decimal64_t *b,
  *    fail.
  * 3. Set the result.
  */
-int ty_decimal64_mul(const ty_decimal64_t *a, const ty_decimal64_t *b,
-                     ty_decimal64_t *result) {
+int ty_dec64_mul(const ty_dec64_t *a, const ty_dec64_t *b, ty_dec64_t *result) {
   ty_int128_t p = (ty_int128_t)a->value * b->value;
   int s = a->scale + b->scale;
 
-  if (s > TY_DECIMAL64_MAX_SCALE || p > d64_max || p < -d64_max) {
+  if (s > TY_DEC64_MAX_SCALE || p > d64_max || p < -d64_max) {
     return range_error();
   }
   result->value = (int64_t)p;
@@ -403,8 +399,7 @@ int ty_decimal64_mul(const ty_decimal64_t *a, const ty_decimal64_t *b,
  * 3. The remainder has the sign of a, and is below |b| and not above
  *    |a| at that scale, so it fits 64 bits.
  */
-int ty_decimal64_mod(const ty_decimal64_t *a, const ty_decimal64_t *b,
-                     ty_decimal64_t *result) {
+int ty_dec64_mod(const ty_dec64_t *a, const ty_dec64_t *b, ty_dec64_t *result) {
   ty_int128_t x, y;
   int s = common_scale(a, b, &x, &y);
 
@@ -423,8 +418,7 @@ int ty_decimal64_mod(const ty_decimal64_t *a, const ty_decimal64_t *b,
  * 3. If it has more than 17 digits, fail: one is zero and the other
  *    is large at that scale.
  */
-int ty_decimal64_gcd(const ty_decimal64_t *a, const ty_decimal64_t *b,
-                     ty_decimal64_t *result) {
+int ty_dec64_gcd(const ty_dec64_t *a, const ty_dec64_t *b, ty_dec64_t *result) {
   ty_int128_t x, y;
   int s = common_scale(a, b, &x, &y);
   u128 g = u128_gcd(x, y);
@@ -444,8 +438,7 @@ int ty_decimal64_gcd(const ty_decimal64_t *a, const ty_decimal64_t *b,
  * 3. Take |x| / gcd(x, y) * |y|; if that does not fit 128 bits, or has
  *    more than 17 digits, fail.
  */
-int ty_decimal64_lcm(const ty_decimal64_t *a, const ty_decimal64_t *b,
-                     ty_decimal64_t *result) {
+int ty_dec64_lcm(const ty_dec64_t *a, const ty_dec64_t *b, ty_dec64_t *result) {
   ty_int128_t x, y;
   int s = common_scale(a, b, &x, &y);
   u128 l = 0;
@@ -467,7 +460,7 @@ int ty_decimal64_lcm(const ty_decimal64_t *a, const ty_decimal64_t *b,
  * 1. Put both values at the larger scale, in 128 bits.
  * 2. Compare them.
  */
-int ty_decimal64_cmp_scaled(ty_decimal64_t a, ty_decimal64_t b) {
+int ty_dec64_cmp_scaled(ty_dec64_t a, ty_dec64_t b) {
   ty_int128_t x, y;
 
   common_scale(&a, &b, &x, &y);
@@ -475,34 +468,30 @@ int ty_decimal64_cmp_scaled(ty_decimal64_t a, ty_decimal64_t b) {
 }
 
 /* *result = a rounded to n places, half away from zero. */
-int ty_decimal64_round(const ty_decimal64_t *a, int n, ty_decimal64_t *result) {
+int ty_dec64_round(const ty_dec64_t *a, int n, ty_dec64_t *result) {
   return round_or_cut(a, n, false, result);
 }
 
 /* *result = a truncated to n places. */
-int ty_decimal64_trunc(const ty_decimal64_t *a, int n, ty_decimal64_t *result) {
+int ty_dec64_trunc(const ty_dec64_t *a, int n, ty_dec64_t *result) {
   return round_or_cut(a, n, true, result);
 }
 
 /* The nearest whole number at or above a. */
-ty_decimal64_t ty_decimal64_ceil(ty_decimal64_t a) {
-  return ceil_or_floor(a, false);
-}
+ty_dec64_t ty_dec64_ceil(ty_dec64_t a) { return ceil_or_floor(a, false); }
 
 /* The nearest whole number at or below a. */
-ty_decimal64_t ty_decimal64_floor(ty_decimal64_t a) {
-  return ceil_or_floor(a, true);
-}
+ty_dec64_t ty_dec64_floor(ty_dec64_t a) { return ceil_or_floor(a, true); }
 
 /* *result = a + b; fails past 36 digits. */
-int ty_decimal128_add(const ty_decimal128_t *a, const ty_decimal128_t *b,
-                      ty_decimal128_t *result) {
+int ty_dec128_add(const ty_dec128_t *a, const ty_dec128_t *b,
+                  ty_dec128_t *result) {
   return add_or_sub128(a, b, false, result);
 }
 
 /* *result = a - b; fails past 36 digits. */
-int ty_decimal128_sub(const ty_decimal128_t *a, const ty_decimal128_t *b,
-                      ty_decimal128_t *result) {
+int ty_dec128_sub(const ty_dec128_t *a, const ty_dec128_t *b,
+                  ty_dec128_t *result) {
   return add_or_sub128(a, b, true, result);
 }
 
@@ -514,13 +503,13 @@ int ty_decimal128_sub(const ty_decimal128_t *a, const ty_decimal128_t *b,
  *    fail.
  * 3. Set the result.
  */
-int ty_decimal128_mul(const ty_decimal128_t *a, const ty_decimal128_t *b,
-                      ty_decimal128_t *result) {
+int ty_dec128_mul(const ty_dec128_t *a, const ty_dec128_t *b,
+                  ty_dec128_t *result) {
   ty_int128_t p;
   int s = a->scale + b->scale;
 
   if (__builtin_mul_overflow(a->value, b->value, &p) ||
-      s > TY_DECIMAL128_MAX_SCALE || p > d128_max || p < -d128_max) {
+      s > TY_DEC128_MAX_SCALE || p > d128_max || p < -d128_max) {
     return range_error128();
   }
   result->value = p;
@@ -529,26 +518,20 @@ int ty_decimal128_mul(const ty_decimal128_t *a, const ty_decimal128_t *b,
 }
 
 /* *result = a rounded to n places, half away from zero. */
-int ty_decimal128_round(const ty_decimal128_t *a, int n,
-                        ty_decimal128_t *result) {
+int ty_dec128_round(const ty_dec128_t *a, int n, ty_dec128_t *result) {
   return round_or_cut128(a, n, false, result);
 }
 
 /* *result = a truncated to n places. */
-int ty_decimal128_trunc(const ty_decimal128_t *a, int n,
-                        ty_decimal128_t *result) {
+int ty_dec128_trunc(const ty_dec128_t *a, int n, ty_dec128_t *result) {
   return round_or_cut128(a, n, true, result);
 }
 
 /* The nearest whole number at or above a. */
-ty_decimal128_t ty_decimal128_ceil(ty_decimal128_t a) {
-  return ceil_or_floor128(a, false);
-}
+ty_dec128_t ty_dec128_ceil(ty_dec128_t a) { return ceil_or_floor128(a, false); }
 
 /* The nearest whole number at or below a. */
-ty_decimal128_t ty_decimal128_floor(ty_decimal128_t a) {
-  return ceil_or_floor128(a, true);
-}
+ty_dec128_t ty_dec128_floor(ty_dec128_t a) { return ceil_or_floor128(a, true); }
 
 /*
  * a <=> b of a decimal128, of two scales.
@@ -557,7 +540,7 @@ ty_decimal128_t ty_decimal128_floor(ty_decimal128_t a) {
  *    any value of 36 digits: its sign decides.
  * 2. Compare them.
  */
-int ty_decimal128_cmp_scaled(ty_decimal128_t a, ty_decimal128_t b) {
+int ty_dec128_cmp_scaled(ty_dec128_t a, ty_dec128_t b) {
   ty_int128_t x = a.value;
   ty_int128_t y = b.value;
   int sa = a.scale;
@@ -584,8 +567,8 @@ int ty_decimal128_cmp_scaled(ty_decimal128_t a, ty_decimal128_t b) {
  *    not fit 128 bits, |a| is below it, and is the remainder.
  * 3. Else both fit: take the remainder.
  */
-int ty_decimal128_mod(const ty_decimal128_t *a, const ty_decimal128_t *b,
-                      ty_decimal128_t *result) {
+int ty_dec128_mod(const ty_dec128_t *a, const ty_dec128_t *b,
+                  ty_dec128_t *result) {
   u128 x, y;
   int over, k;
   int s = align128(a, b, &x, &y, &over, &k);
@@ -615,8 +598,8 @@ int ty_decimal128_mod(const ty_decimal128_t *a, const ty_decimal128_t *b,
  *    one that does not fit: fail.
  * 3. If the gcd has more than 36 digits, fail.
  */
-int ty_decimal128_gcd(const ty_decimal128_t *a, const ty_decimal128_t *b,
-                      ty_decimal128_t *result) {
+int ty_dec128_gcd(const ty_dec128_t *a, const ty_dec128_t *b,
+                  ty_dec128_t *result) {
   u128 x, y;
   int over, k;
   int s = align128(a, b, &x, &y, &over, &k);
@@ -649,8 +632,8 @@ int ty_decimal128_gcd(const ty_decimal128_t *a, const ty_decimal128_t *b,
  * 3. Take |x| / gcd * |y|; if it does not fit 128 bits, or has more than
  *    36 digits, fail.
  */
-int ty_decimal128_lcm(const ty_decimal128_t *a, const ty_decimal128_t *b,
-                      ty_decimal128_t *result) {
+int ty_dec128_lcm(const ty_dec128_t *a, const ty_dec128_t *b,
+                  ty_dec128_t *result) {
   u128 x, y;
   int over, k;
   int s = align128(a, b, &x, &y, &over, &k);
@@ -683,8 +666,8 @@ int ty_decimal128_lcm(const ty_decimal128_t *a, const ty_decimal128_t *b,
  * 5. Round up, unless cut, if the remainder is half of the divisor or more.
  * 6. Give the quotient the sign of a times the sign of b.
  */
-int ty_decimal128_div(const ty_decimal128_t *a, const ty_decimal128_t *b,
-                      int rscale, bool cut, ty_decimal128_t *result) {
+int ty_dec128_div(const ty_dec128_t *a, const ty_dec128_t *b, int rscale,
+                  bool cut, ty_dec128_t *result) {
   u128 x = magnitude(a->value);
   u128 y = magnitude(b->value);
   int e = rscale + b->scale - a->scale;
@@ -753,16 +736,16 @@ int ty_decimal128_div(const ty_decimal128_t *a, const ty_decimal128_t *b,
  *    extra digits as places, and one place more if rounding up adds a digit.
  * 4. If there are still more than 17 digits, fail.
  */
-int ty_decimal64_div(const ty_decimal64_t *a, const ty_decimal64_t *b,
-                     int rscale, ty_decimal64_t *result) {
-  ty_decimal128_t x = {a->value, a->scale};
-  ty_decimal128_t y = {b->value, b->scale};
-  ty_decimal128_t q;
+int ty_dec64_div(const ty_dec64_t *a, const ty_dec64_t *b, int rscale,
+                 ty_dec64_t *result) {
+  ty_dec128_t x = {a->value, a->scale};
+  ty_dec128_t y = {b->value, b->scale};
+  ty_dec128_t q;
 
-  if (ty_decimal128_div(&x, &y, rscale, false, &q) != 0) {
+  if (ty_dec128_div(&x, &y, rscale, false, &q) != 0) {
     return -1;
   }
-  return ty_decimal64_from_decimal128(&q, result);
+  return ty_dec64_from_dec128(&q, result);
 }
 
 /*
@@ -772,29 +755,27 @@ int ty_decimal64_div(const ty_decimal64_t *a, const ty_decimal64_t *b,
  *    extra digits as places, and one place more if rounding up adds a digit.
  * 3. If there are still more than 17 digits, fail.
  */
-int ty_decimal64_from_decimal128(const ty_decimal128_t *a,
-                                 ty_decimal64_t *result) {
+int ty_dec64_from_dec128(const ty_dec128_t *a, ty_dec64_t *result) {
   ty_int128_t v = a->value;
   int s = a->scale;
 
-  if (s > TY_DECIMAL64_MAX_SCALE) {
-    v = drop_places128(v, s - TY_DECIMAL64_MAX_SCALE, false);
-    s = TY_DECIMAL64_MAX_SCALE;
+  if (s > TY_DEC64_MAX_SCALE) {
+    v = drop_places128(v, s - TY_DEC64_MAX_SCALE, false);
+    s = TY_DEC64_MAX_SCALE;
   }
   int digits = 1;
   for (ty_int128_t t = v; t >= 10 || t <= -10; t /= 10) {
     digits++;
   }
-  if (digits > TY_DECIMAL64_MAX_DIGITS &&
-      digits - TY_DECIMAL64_MAX_DIGITS <= s) {
-    int excess = digits - TY_DECIMAL64_MAX_DIGITS;
+  if (digits > TY_DEC64_MAX_DIGITS && digits - TY_DEC64_MAX_DIGITS <= s) {
+    int excess = digits - TY_DEC64_MAX_DIGITS;
     v = drop_places128(v, excess, false);
     s -= excess;
     digits = 1;
     for (ty_int128_t t = v; t >= 10 || t <= -10; t /= 10) {
       digits++;
     }
-    if (digits > TY_DECIMAL64_MAX_DIGITS && s > 0) {
+    if (digits > TY_DEC64_MAX_DIGITS && s > 0) {
       v = drop_places128(v, 1, false);
       s--;
     }
@@ -813,7 +794,7 @@ int ty_decimal64_from_decimal128(const ty_decimal128_t *a,
  * 2. Multiply 2 to n in 128 bits; if that does not fit, or has more than
  *    36 digits, fail.
  */
-int ty_decimal128_factorial(int64_t n, ty_decimal128_t *result) {
+int ty_dec128_factorial(int64_t n, ty_dec128_t *result) {
   u128 r = 1;
 
   if (n < 0) {
@@ -839,30 +820,29 @@ int ty_decimal128_factorial(int64_t n, ty_decimal128_t *result) {
  *    and a remainder, doubled each bit, with num added for a one bit.
  *    num is below den, so no step passes 128 bits.
  */
-int ty_decimal128_width_bucket(const ty_decimal128_t *operand,
-                               const ty_decimal128_t *b1,
-                               const ty_decimal128_t *b2, int32_t count,
-                               int64_t *result) {
-  int c = ty_decimal128_cmp(*b1, *b2);
+int ty_dec128_width_bucket(const ty_dec128_t *operand, const ty_dec128_t *b1,
+                           const ty_dec128_t *b2, int32_t count,
+                           int64_t *result) {
+  int c = ty_dec128_cmp(*b1, *b2);
 
   if (count <= 0 || c == 0) {
     return ty_internal::set_error(TY_ERR_INVALID, "bad width bucket bounds");
   }
-  if (c < 0 ? ty_decimal128_cmp(*operand, *b1) < 0
-            : ty_decimal128_cmp(*operand, *b1) > 0) {
+  if (c < 0 ? ty_dec128_cmp(*operand, *b1) < 0
+            : ty_dec128_cmp(*operand, *b1) > 0) {
     *result = 0;
     return 0;
   }
-  if (c < 0 ? ty_decimal128_cmp(*operand, *b2) >= 0
-            : ty_decimal128_cmp(*operand, *b2) <= 0) {
+  if (c < 0 ? ty_dec128_cmp(*operand, *b2) >= 0
+            : ty_dec128_cmp(*operand, *b2) <= 0) {
     *result = (int64_t)count + 1;
     return 0;
   }
-  ty_decimal128_t num, den;
-  if ((c < 0 ? ty_decimal128_sub(operand, b1, &num)
-             : ty_decimal128_sub(b1, operand, &num)) != 0 ||
-      (c < 0 ? ty_decimal128_sub(b2, b1, &den)
-             : ty_decimal128_sub(b1, b2, &den)) != 0) {
+  ty_dec128_t num, den;
+  if ((c < 0 ? ty_dec128_sub(operand, b1, &num)
+             : ty_dec128_sub(b1, operand, &num)) != 0 ||
+      (c < 0 ? ty_dec128_sub(b2, b1, &den) : ty_dec128_sub(b1, b2, &den)) !=
+          0) {
     return -1;
   }
   u128 x = magnitude(num.value);
