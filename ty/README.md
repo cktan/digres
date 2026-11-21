@@ -44,6 +44,29 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty.h` | the interface |
 | `include/ty_error.h` | the error codes |
 | `src/` | the library |
-| `test/` | the unit tests, in doctest |
+| `test/` | the unit tests, in doctest, and the vectors |
+| `test/gen_vectors.py` | a reference of plain Python integers that writes `test/vectors.txt` |
+| `test/vectors.txt` | about 13,300 vectors of every decimal operation, with the result or the error kind |
 
 `ty/` follows [`../sm/CODE.md`](../sm/CODE.md).
+
+## Tests
+
+`make test` runs two kinds, in one binary (`build/test_ty`):
+
+- **Unit tests** (`test/test_*.cc`), by hand: the allocator, the error
+  state, and the cases of each operation that a reader needs to see.
+- **The vectors** (`test/test_vectors.cc`): every operation of
+  `decimal64` and `decimal128` against `test/vectors.txt`. A reference
+  in plain Python integers, `test/gen_vectors.py`, follows the rules in
+  [`DESIGN.md`](DESIGN.md) and writes them: edges at the ends of both
+  ranges, scales that do and do not align in 128 bits, and random
+  values; `exp`, `ln`, `log` and the powers are checked to 16 places
+  against Python's `decimal`. ty is not compared with itself, nor with
+  digres.
+
+The vectors are reproducible: the seed is fixed. To add a case or an
+operation, change the generator, then run
+`test/gen_vectors.py > test/vectors.txt`, and `make test`.
+It found a bug that no hand-written test had: a quotient that rounds
+to nothing, rounded up when its divisor passed 128 bits.

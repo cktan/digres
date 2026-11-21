@@ -727,6 +727,9 @@ int ty_decimal128_div(const ty_decimal128_t *a, const ty_decimal128_t *b,
       if (!__builtin_mul_overflow(y, p, &den)) {
         q = x / den;
         rem = x % den;
+      } else {
+        /* The divisor passes 128 bits: x is below half of it. */
+        den = ~(u128)0;
       }
     }
   }
