@@ -23,6 +23,7 @@
 --    keyword); another value is refused.
 -- 10. A row store table's foreign key that references a column store
 --     table fails, as the referenced column has no unique key.
+-- 12. TABLESAMPLE is refused: a feature not supported.
 -- 11. Bounds on a numeric(10,2) column, of constants at a finer scale
 --     or past its precision, give what a row store copy gives: two
 --     row groups, d 0.00 to 99.99 and 100.00 to 199.99, and the
@@ -145,6 +146,8 @@ select 'columnar' as t, count(*) from columnar_n where d < 1e20
 union all select 'row', count(*) from columnar_nr where d < 1e20;
 drop table columnar_nr;
 drop table columnar_n;
+select count(*) from columnar_t tablesample bernoulli (100);
+\echo :SQLSTATE
 drop table columnar_row;
 drop table columnar_t;
 drop table columnar_ref;

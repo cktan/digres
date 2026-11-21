@@ -13663,3 +13663,15 @@ A check hook took the new value as a `char **`, to change it with
   the column's precision.
 - **Test**: step 11 of `test/columnar.sql`, against a row store
   copy.
+
+## Step 454: TABLESAMPLE on a column store table is refused
+
+- **What it is**: `smtable_scan_begin()` in `access/sm/smtable.c`
+  refuses a sample scan of a column store table, with SQLSTATE
+  `0A000`. A sample scan reads rows by rising rowno, and a column
+  store table's scan gives its row groups' rows first, then its
+  delta store's, so `smstore_scan_row()` dropped every row that
+  came after a higher rowno: an updated row, a merged row group's.
+- **Left**: a sample scan of a column store table in rowno order;
+  see `../QUESTION.md`.
+- **Test**: step 12 of `test/columnar.sql`.

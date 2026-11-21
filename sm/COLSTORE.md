@@ -822,10 +822,13 @@ All access is by scan. A scan takes three things from digres:
   Var`, `Var = ANY (array)`, `IS NULL` and `IS NOT NULL`. `op` is
   `<`, `<=`, `=`, `>=` or `>` of the default btree operator
   family of the column's type, with both operands of that type
-  and the column's collation. sm encodes the values to key
-  bytes (`sm_row_scanopen_columns`). A qual of another form,
-  such as an `OR`, an expression, a `Param` or `LIKE`, gives no
-  bound.
+  and the column's collation. A decimal constant is the
+  column's integer at or below it for a lower bound or an
+  equality, at or above it for an upper bound, within the
+  column's precision (`numeric_bound()`), so a bound takes in
+  every row the qual would. sm encodes the values to key bytes
+  (`sm_row_scanopen_columns`). A qual of another form, such as
+  an `OR`, an expression, a `Param` or `LIKE`, gives no bound.
 - **Pruning is not filtering.** A scan skips RGs that cannot
   match, and hands out every live row of the other RGs. The
   executor of digres applies the whole qual to each row, the
@@ -845,6 +848,11 @@ All access is by scan. A scan takes three things from digres:
   column.** The write takes the old row from the scan on it.
   digres never takes a row of a scan of some columns as the
   table's row.
+- **`TABLESAMPLE` is refused**, with SQLSTATE `0A000`
+  (`smtable_scan_begin()`). A sample scan reads rows by rising
+  `_id`, and a column store table's scan gives its RGs' rows,
+  then the delta store's: rows would be lost
+  ([`../QUESTION.md`](../QUESTION.md) 4).
 - **A batch interface waits for the columnar executor.** It
   changes the rule of sm3 that its interface is one tuple at a
   time, so it is decided with that executor.
@@ -1090,7 +1098,10 @@ queries with bounds, whose results equal a row store table's;
 `ALTER TABLE` and `TRUNCATE`; `CREATE TABLE AS` and `COPY`; a
 SERIALIZABLE transaction refused with `0A000`; `storage =
 'row'`, and another value refused; a foreign key that
-references a column store table, which fails.
+references a column store table, which fails; bounds on a
+`numeric(10,2)` column of constants at a finer scale or past its
+precision, against a row store copy; `TABLESAMPLE` refused with
+`0A000`.
 
 ### 15.5 Layers with no test
 

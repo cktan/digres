@@ -1,5 +1,30 @@
 # Questions
 
+## 4. TABLESAMPLE on a column store table (2026-11-20)
+
+**Branch:** `wip-colstore-31`, from `wip-colstore-30`.
+
+**Question.** A sample scan (`TABLESAMPLE SYSTEM` or `BERNOULLI`)
+reads rows by rising rowno, the `_id`. A column store table's scan
+gives its row groups' rows, in `rg_id` order, then its delta
+store's, so a row whose `_id` is below one already read is lost:
+
+```sql
+-- c: one row group, _id 1 .. 10000.
+UPDATE c SET amount = 1 WHERE id = 1;  -- _id 1 to the delta store
+SELECT count(*) FROM c TABLESAMPLE BERNOULLI (100);
+    -- 9,999: the delta's _id 1 comes after _id 10000.
+```
+
+| Option | What changes | Cost |
+| --- | --- | --- |
+| A. Refuse it, SQLSTATE `0A000`, as SERIALIZABLE is | `smtable_scan_begin()` | no sample of a column store table |
+| B. A sample scan in `_id` order | a scan of sm3 that merges the row groups' `_id` CGs and the delta store | a merge across every row group, for a query that is rare on an analytics table |
+
+**Recommendation, built:** A. It is safe, and costs one test.
+`ANALYZE` does not use it: sm samples a column store table itself
+(`COLSTORE.md` §12.1). B can come when someone asks for it.
+
 ## 3. How digres names a row of a row group (2026-11-19)
 
 **Branch:** `wip-colstore-10`, from `wip-colstore-9` at
