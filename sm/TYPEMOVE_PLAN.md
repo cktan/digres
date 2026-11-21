@@ -407,7 +407,7 @@ copied from PostgreSQL keeps its copyright notice
      247,138,294 and 247,420,911 (+0.11%); `int2` 281,683,442
      and 282,185,798 (+0.18%); bit operations, `abs` and `gcd`
      296,682,450 and 298,764,434 (+0.70%).
-   - **Floats, and then macaddr, moved (2026-11-21), unattended.**
+   - **Floats moved (2026-11-21), unattended.**
      The user asked for as many types as could be done in a
      long run; the hooks of section 8 were settled by passing a
      setting in: `ty_floatN_format` takes `extra_float_digits` as
@@ -418,11 +418,10 @@ copied from PostgreSQL keeps its copyright notice
      degree functions, the hyperbolics, `erf` and `gamma`;
      `width_bucket`; the hash; the text in and out; and the
      arithmetic of the statistical aggregates. PostgreSQL's Ryu
-     is in `ty/src/ryu/`, and digres's copy is gone. `ty_mac.h`:
-     macaddr and macaddr8. The tests, besides ty's vectors: the
-     new `dg/test/select_float.sql` and `select_mac.sql` print
-     the same, byte for byte, on a digres built before the
-     move, so the move kept the behavior; and
+     is in `ty/src/ryu/`, and digres's copy is gone. The tests,
+     besides ty's vectors: the new `dg/test/select_float.sql`
+     prints the same, byte for byte, on a digres built before
+     the move, so the move kept the behavior; and
      `float_text.txt` and `known.txt` hold what that digres
      printed. Measured by callgrind (old, new): float
      arithmetic and compares -0.02%; float sort -0.00%; hash
@@ -438,55 +437,6 @@ copied from PostgreSQL keeps its copyright notice
      the Ryu code took its 32-bit path, 17% slower; ty's is
      fixed, sm2's `src/ryu/postgres_fe.h` has the same defect
      (the output is the same, only slower).
-   - **bit and varbit moved (2026-11-21), unattended.**
-     `ty_bits.h`: the text in and out, the order, `||`,
-     `substring`, `overlay`, `position`, `bit_count`, the logic
-     operators and the shifts, `get_bit` and `set_bit`, the
-     casts with `int4` and `int8`, and the cut or pad of
-     `bit(n)`. The vectors are a Python reference of strings of
-     `0` and `1`. `dg/test/select_bits.sql` prints the same, byte
-     for byte, on a digres built before the move. Left in
-     digres: the typmod rules, `recv` and `send`.
-     Measured by callgrind (old, new): a statement of bit
-     operations over 200,000 rows +0.43%; a sort of `bit(48)`
-     +0.56%; a text in and out and `||` -5.74%. The first
-     version of the integer-to-bits and compare code cost
-     +36% and +3%: loops over single bits, a frame with a stack
-     guard on each call of a small function, and the bit lengths
-     read before the compare of the bytes. Now the common case
-     is in line in `ty_bits.h`, the copies go a byte at a time,
-     and `ty_bits_cmp_bytes` takes pointers to the lengths.
-   - **inet and cidr moved (2026-11-21), unattended.**
-     `ty_inet.h`: the order, the containment tests, `host`,
-     `network`, `broadcast`, `netmask`, `hostmask`, `merge`,
-     `~`, `&`, `|`, `+` and `-`, the cidr check, and the hash.
-     The ISC text code (`inet_net_pton.c`, `inet_net_ntop.c`,
-     `inet_cidr_ntop.c`) moved from digres to ty with its
-     notices; digres's copies are gone. The tests: known
-     answers from the old digres for about 450 texts, as inet
-     and as cidr; vectors from a Python reference;
-     `dg/test/select_inet.sql` prints the same, byte for byte,
-     on the digres before the move. Left in digres: `recv`,
-     `send`, the sort support and abbreviated keys, the planner
-     support, and the selectivity functions.
-     Measured by callgrind (old, new): a sort of inet -1.06%;
-     a group by -1.39%; host, text and abbrev -49.48%;
-     containment and `+` -2.92%. The first version was +21.74%
-     on the text: digres's `sprintf` is PostgreSQL's, and
-     glibc's, which ty called, is slower; ty now writes the
-     numbers itself.
-   - **tid, pg_lsn and "char" moved (2026-11-21), unattended.**
-     `ty_small.h`: the text in and out and the order of all
-     three, the tid hash, and the range check of the cast to
-     "char". The tests: known answers from the old digres for
-     about 100 texts of each, and `dg/test/select_small.sql`,
-     which prints the same, byte for byte, on the digres before
-     the move. Left in digres: `numeric` arithmetic on pg_lsn,
-     `recv` and `send`, and the other tid functions (the
-     scan functions of the planner).
-     Measured by callgrind (old, new): tid text, sort and
-     `::text` -11.17%; a sort of "char" +0.08%; pg_lsn text in
-     and out -13.11%.
    - **text moved (2026-11-21), unattended.** The user asked
      for the text group. digres has one encoding, UTF8, and
      the C collation by default, so ty holds the UTF-8 text
@@ -524,23 +474,6 @@ copied from PostgreSQL keeps its copyright notice
      Measured by callgrind (old, new): LIKE -12.61% and
      -5.64%, ILIKE -8.91%. The first version was +1.55% on
      ILIKE; `memchr` finds the starts of a match after a `%`.
-   - **money moved (2026-11-21), unattended.** `ty_money.h`:
-     the text in and out, the arithmetic, the words, and the
-     conversions to and from integers' scale. The locale is
-     passed in as a `ty_money_fmt_t`, the fields of `lconv`
-     that PostgreSQL reads (the second kind of hook of
-     section 8, a value passed in). The casts with `numeric`
-     stay in digres. The tests: vectors from Python integers
-     and a Python port of `cash_out` over six made-up locales,
-     known answers from the old digres for the C locale, and
-     `dg/test/select_money.sql`, which prints the same as the
-     digres before the move. Found: the words of the smallest
-     money value were wrong in the old digres, a signed
-     overflow that the compiler used. Measured by callgrind
-     (old, new): arithmetic and compares +0.32%; text out
-     -16.55%; text in +0.74%. The first version was +14.0% on
-     the text out: glibc's `snprintf` is slower than
-     PostgreSQL's.
    - **interval arithmetic moved (2026-11-21), unattended.**
      `ty_interval.h`: the order, the sign, the hash, `-`, `+`
      and `-` of two values, `*` and `/` by a float, and the

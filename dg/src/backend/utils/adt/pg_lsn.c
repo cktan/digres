@@ -17,7 +17,6 @@
 #include "utils/fmgrprotos.h"
 #include "utils/numeric.h"
 #include "utils/pg_lsn.h"
-#include "ty_small.h"
 
 #define MAXPG_LSNLEN			17
 #define MAXPG_LSNCOMPONENT	8
@@ -27,14 +26,30 @@
  *---------------------------------------------------------*/
 
 XLogRecPtr pg_lsn_in_internal(const char *str, bool *have_error) {
-  uint64 result;
+  int len1, len2;
+  uint32 id, off;
+  XLogRecPtr result;
 
+  Assert(have_error != NULL);
   *have_error = false;
-  /* ty reads the text */
-  if (ty_lsn_parse(str, &result) != 0) {
+
+  /* Sanity check input format. */
+  len1 = strspn(str, "0123456789abcdefABCDEF");
+  if (len1 < 1 || len1 > MAXPG_LSNCOMPONENT || str[len1] != '/') {
     *have_error = true;
     return InvalidXLogRecPtr;
   }
+  len2 = strspn(str + len1 + 1, "0123456789abcdefABCDEF");
+  if (len2 < 1 || len2 > MAXPG_LSNCOMPONENT || str[len1 + 1 + len2] != '\0') {
+    *have_error = true;
+    return InvalidXLogRecPtr;
+  }
+
+  /* Decode result. */
+  id = (uint32)strtoul(str, NULL, 16);
+  off = (uint32)strtoul(str + len1 + 1, NULL, 16);
+  result = ((uint64)id << 32) | off;
+
   return result;
 }
 
@@ -56,9 +71,11 @@ Datum pg_lsn_in(PG_FUNCTION_ARGS) {
 Datum pg_lsn_out(PG_FUNCTION_ARGS) {
   XLogRecPtr lsn = PG_GETARG_LSN(0);
   char buf[MAXPG_LSNLEN + 1];
+  char *result;
 
-  ty_lsn_format(lsn, buf);
-  PG_RETURN_CSTRING(pstrdup(buf));
+  snprintf(buf, sizeof buf, "%X/%X", LSN_FORMAT_ARGS(lsn));
+  result = pstrdup(buf);
+  PG_RETURN_CSTRING(result);
 }
 
 Datum pg_lsn_recv(PG_FUNCTION_ARGS) {

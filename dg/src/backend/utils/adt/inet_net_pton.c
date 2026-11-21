@@ -1,5 +1,5 @@
 /*
- * Portions Copyright (c) 2026, CK Tan: the changes for ty,
+ * Portions Copyright (c) 2026, CK Tan: the changes for digres,
  * under the MIT License (https://github.com/cktan/digres/blob/main/LICENSE)
  */
 
@@ -19,21 +19,24 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- *
- * Derived from PostgreSQL's src/backend/utils/adt/inet_net_pton.c.
+ *	  src/backend/utils/adt/inet_net_pton.c
  */
 
-/*
- * inet_pton.cc -- the text of an inet or cidr to its bytes: the ISC code
- * PostgreSQL uses, with the names of ty.
- */
+#if defined(LIBC_SCCS) && !defined(lint)
+static const char rcsid[] =
+    "Id: inet_net_pton.c,v 1.4.2.3 2004/03/17 00:40:11 marka Exp $";
+#endif
+
+#include "postgres.h"
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <assert.h>
 #include <ctype.h>
-#include <errno.h>
-#include <string.h>
-#include <sys/types.h>
 
-#include "inet_text.h"
+#include "utils/builtins.h" /* needed on some platforms */
+#include "utils/inet.h"
 
 static int inet_net_pton_ipv4(const char *src, u_char *dst);
 static int inet_cidr_pton_ipv4(const char *src, u_char *dst, size_t size);
@@ -58,14 +61,14 @@ static int inet_cidr_pton_ipv6(const char *src, u_char *dst, size_t size);
  *	the names to reflect their current use.
  *
  */
-int ty_inet_net_pton(int af, const char *src, void *dst, size_t size) {
+int pg_inet_net_pton(int af, const char *src, void *dst, size_t size) {
   switch (af) {
-  case TY_INET_AF_V4:
-    return size == (size_t)-1 ? inet_net_pton_ipv4(src, (u_char *)dst)
-                              : inet_cidr_pton_ipv4(src, (u_char *)dst, size);
-  case TY_INET_AF_V6:
-    return size == (size_t)-1 ? inet_net_pton_ipv6(src, (u_char *)dst)
-                              : inet_cidr_pton_ipv6(src, (u_char *)dst, size);
+  case PGSQL_AF_INET:
+    return size == -1 ? inet_net_pton_ipv4(src, (u_char *)dst)
+                      : inet_cidr_pton_ipv4(src, (u_char *)dst, size);
+  case PGSQL_AF_INET6:
+    return size == -1 ? inet_net_pton_ipv6(src, (u_char *)dst)
+                      : inet_cidr_pton_ipv6(src, (u_char *)dst, size);
   default:
     errno = EAFNOSUPPORT;
     return -1;

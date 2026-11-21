@@ -22,7 +22,6 @@
 #include "libpq/pqformat.h"
 #include "utils/fmgrprotos.h"
 #include "varatt.h"
-#include "ty_small.h"
 
 #define ISOCTAL(c)   (((c) >= '0') && ((c) <= '7'))
 #define TOOCTAL(c)   ((c) + '0')
@@ -43,8 +42,12 @@
 Datum charin(PG_FUNCTION_ARGS) {
   char *ch = PG_GETARG_CSTRING(0);
 
-  /* ty reads a byte or a backslash and three octal digits */
-  PG_RETURN_CHAR(ty_char_parse(ch, strlen(ch)));
+  if (strlen(ch) == 4 && ch[0] == '\\' && ISOCTAL(ch[1]) && ISOCTAL(ch[2]) &&
+      ISOCTAL(ch[3]))
+    PG_RETURN_CHAR((FROMOCTAL(ch[1]) << 6) + (FROMOCTAL(ch[2]) << 3) +
+                   FROMOCTAL(ch[3]));
+  /* This will do the right thing for a zero-length input string */
+  PG_RETURN_CHAR(ch[0]);
 }
 
 /*
@@ -60,7 +63,17 @@ Datum charout(PG_FUNCTION_ARGS) {
   char ch = PG_GETARG_CHAR(0);
   char *result = (char *)palloc(5);
 
-  ty_char_format((int8_t)ch, result);
+  if (IS_HIGHBIT_SET(ch)) {
+    result[0] = '\\';
+    result[1] = TOOCTAL(((unsigned char)ch) >> 6);
+    result[2] = TOOCTAL((((unsigned char)ch) >> 3) & 07);
+    result[3] = TOOCTAL(((unsigned char)ch) & 07);
+    result[4] = '\0';
+  } else {
+    /* This produces acceptable results for 0x00 as well */
+    result[0] = ch;
+    result[1] = '\0';
+  }
   PG_RETURN_CSTRING(result);
 }
 
@@ -117,19 +130,31 @@ Datum charne(PG_FUNCTION_ARGS) {
 }
 
 Datum charlt(PG_FUNCTION_ARGS) {
-  PG_RETURN_BOOL(ty_char_cmp(PG_GETARG_CHAR(0), PG_GETARG_CHAR(1)) < 0);
+  char arg1 = PG_GETARG_CHAR(0);
+  char arg2 = PG_GETARG_CHAR(1);
+
+  PG_RETURN_BOOL((uint8)arg1 < (uint8)arg2);
 }
 
 Datum charle(PG_FUNCTION_ARGS) {
-  PG_RETURN_BOOL(ty_char_cmp(PG_GETARG_CHAR(0), PG_GETARG_CHAR(1)) <= 0);
+  char arg1 = PG_GETARG_CHAR(0);
+  char arg2 = PG_GETARG_CHAR(1);
+
+  PG_RETURN_BOOL((uint8)arg1 <= (uint8)arg2);
 }
 
 Datum chargt(PG_FUNCTION_ARGS) {
-  PG_RETURN_BOOL(ty_char_cmp(PG_GETARG_CHAR(0), PG_GETARG_CHAR(1)) > 0);
+  char arg1 = PG_GETARG_CHAR(0);
+  char arg2 = PG_GETARG_CHAR(1);
+
+  PG_RETURN_BOOL((uint8)arg1 > (uint8)arg2);
 }
 
 Datum charge(PG_FUNCTION_ARGS) {
-  PG_RETURN_BOOL(ty_char_cmp(PG_GETARG_CHAR(0), PG_GETARG_CHAR(1)) >= 0);
+  char arg1 = PG_GETARG_CHAR(0);
+  char arg2 = PG_GETARG_CHAR(1);
+
+  PG_RETURN_BOOL((uint8)arg1 >= (uint8)arg2);
 }
 
 Datum chartoi4(PG_FUNCTION_ARGS) {
@@ -140,29 +165,54 @@ Datum chartoi4(PG_FUNCTION_ARGS) {
 
 Datum i4tochar(PG_FUNCTION_ARGS) {
   int32 arg1 = PG_GETARG_INT32(0);
-  int8_t result;
 
-  if (ty_char_from_int32(arg1, &result))
+  if (arg1 < SCHAR_MIN || arg1 > SCHAR_MAX)
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("\"char\" out of range")));
-  PG_RETURN_CHAR(result);
+
+  PG_RETURN_CHAR((int8)arg1);
 }
 
 Datum text_char(PG_FUNCTION_ARGS) {
   text *arg1 = PG_GETARG_TEXT_PP(0);
+  char *ch = VARDATA_ANY(arg1);
+  char result;
 
-  /* the same rules as charin; the empty text is 0 */
-  PG_RETURN_CHAR(ty_char_parse(VARDATA_ANY(arg1), VARSIZE_ANY_EXHDR(arg1)));
+  /*
+   * Conversion rules are the same as in charin(), but here we need to
+   * handle the empty-string case honestly.
+   */
+  if (VARSIZE_ANY_EXHDR(arg1) == 4 && ch[0] == '\\' && ISOCTAL(ch[1]) &&
+      ISOCTAL(ch[2]) && ISOCTAL(ch[3]))
+    result =
+        (FROMOCTAL(ch[1]) << 6) + (FROMOCTAL(ch[2]) << 3) + FROMOCTAL(ch[3]);
+  else if (VARSIZE_ANY_EXHDR(arg1) > 0)
+    result = ch[0];
+  else
+    result = '\0';
+
+  PG_RETURN_CHAR(result);
 }
 
 Datum char_text(PG_FUNCTION_ARGS) {
   char arg1 = PG_GETARG_CHAR(0);
   text *result = (text *)palloc(VARHDRSZ + 4);
-  char buf[5];
-  size_t len = ty_char_format((int8_t)arg1, buf);
 
-  /* the same rules as charout, with 0x00 as an empty text */
-  SET_VARSIZE(result, VARHDRSZ + len);
-  memcpy(VARDATA(result), buf, len);
+  /*
+   * Conversion rules are the same as in charout(), but here we need to be
+   * honest about converting 0x00 to an empty string.
+   */
+  if (IS_HIGHBIT_SET(arg1)) {
+    SET_VARSIZE(result, VARHDRSZ + 4);
+    (VARDATA(result))[0] = '\\';
+    (VARDATA(result))[1] = TOOCTAL(((unsigned char)arg1) >> 6);
+    (VARDATA(result))[2] = TOOCTAL((((unsigned char)arg1) >> 3) & 07);
+    (VARDATA(result))[3] = TOOCTAL(((unsigned char)arg1) & 07);
+  } else if (arg1 != '\0') {
+    SET_VARSIZE(result, VARHDRSZ + 1);
+    *(VARDATA(result)) = arg1;
+  } else
+    SET_VARSIZE(result, VARHDRSZ);
+
   PG_RETURN_TEXT_P(result);
 }

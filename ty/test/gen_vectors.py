@@ -411,11 +411,8 @@ def main():
     gen_float_parse()
     gen_trig()
     gen_float_aggs()
-    gen_bits()
-    gen_inet()
     gen_text()
     gen_like()
-    gen_money()
     gen_interval()
     gen_datetime()
     gen_typmod()
@@ -1812,95 +1809,6 @@ def rand_bits(maxn=40):
     return "".join(random.choice("01") for _ in range(n))
 
 
-def gen_bits():
-    """The vectors of bit strings, from a reference of Python strings of
-    0 and 1."""
-    big = 2 ** 31 - 1
-    # text in
-    for t in ["", "b", "B", "x", "X", "101", "b101", "B0110", "x1F", "XaB", "x", "xg", "b102",
-              "0", "1", "b0", "xFFFF", "x0", "bb", "xx", "b 1", "1 0", "x1 ", "x\xc3\xa9", "b\xc3\xa9",
-              "10101010101010101", "x123456789abcdef"]:
-        if t.startswith(("b", "B")) or not t.startswith(("x", "X")):
-            body = t[1:] if t.startswith(("b", "B")) else t
-            ok = all(c in "01" for c in body)
-            r = body if ok else None
-        else:
-            body = t[1:]
-            ok = all(c in "0123456789abcdefABCDEF" for c in body) and t.isascii()
-            r = "".join("{:04b}".format(int(c, 16)) for c in body) if ok else None
-        raw = t.encode("latin-1") if t.isascii() else t.encode("utf-8", "surrogateescape")
-        emit("bits.parse", (hx(raw),), ("E", "INVALID") if r is None else btok(r))
-    for _ in range(150):
-        a, b = rand_bits(), rand_bits()
-        emit("bits.cmp", (btok(a), btok(b)), (a > b) - (a < b))
-        emit("bits.eq", (btok(a), btok(b)), int(a == b))
-        emit("bits.cat", (btok(a), btok(b)), btok(a + b))
-        emit("bits.position", (btok(a), btok(b)), (a.find(b) + 1) if a and len(b) <= len(a) else 0)
-        for op, fn in (("and", lambda x, y: "".join(str(int(p) & int(q)) for p, q in zip(x, y))),
-                       ("or", lambda x, y: "".join(str(int(p) | int(q)) for p, q in zip(x, y))),
-                       ("xor", lambda x, y: "".join(str(int(p) ^ int(q)) for p, q in zip(x, y)))):
-            emit("bits." + op, (btok(a), btok(b)), ("E", "INVALID") if len(a) != len(b) else btok(fn(a, b)))
-        emit("bits.overlay", (btok(a), btok(b), 0, 0), ("E", "INVALID"))
-        for sp in (1, 2, 3, 8, 9, len(a) + 1, len(a) + 5):
-            for sl in (0, 1, 3, 8, big, -2):
-                if sp + sl > big:
-                    res = ("E", "RANGE")
-                else:
-                    res = btok(a[:sp - 1] + b + a[max(sp + sl, 1) - 1:])
-                emit("bits.overlay", (btok(a), btok(b), sp, sl), res)
-    for _ in range(100):
-        a = rand_bits(70)
-        emit("bits.count", (btok(a),), a.count("1"))
-        emit("bits.not", (btok(a),), btok("".join("1" if c == "0" else "0" for c in a)))
-        for n in (0, 1, 3, 7, 8, 9, 16, len(a), len(a) + 3, -1, -5, -9, -len(a)):
-            sl = (a[n:] + "0" * min(n, len(a))) if n >= 0 else ("0" * min(-n, len(a)) + a[:max(len(a) + n, 0)])
-            emit("bits.shl", (btok(a), n), btok(sl if n >= 0 else sl))
-            sr = ("0" * min(n, len(a)) + a[:max(len(a) - n, 0)]) if n >= 0 else (a[-n:] + "0" * min(-n, len(a)))
-            emit("bits.shr", (btok(a), n), btok(sr))
-        for st in (-3, 0, 1, 2, 5, 8, 9, len(a), len(a) + 1):
-            for ln in (None, 0, 1, 4, 9, 100, big, -1):
-                s1 = max(st, 1)
-                if ln is None:
-                    e1 = len(a) + 1
-                elif ln < 0:
-                    emit("bits.substr", (btok(a), st, ln, 1), ("E", "INVALID"))
-                    continue
-                else:
-                    e = st + ln
-                    e1 = len(a) + 1 if e > big else min(e, len(a) + 1)
-                res = "" if (s1 > len(a) or e1 <= s1) else a[s1 - 1:e1 - 1]
-                emit("bits.substr", (btok(a), st, ln if ln is not None else 0, 0 if ln is None else 1), btok(res))
-        for i in (-1, 0, 1, len(a) - 1, len(a), 5):
-            emit("bits.get", (btok(a), i), a[i] if 0 <= i < len(a) else ("E", "RANGE"))
-            for bit in (0, 1, 2, -1):
-                if not 0 <= i < len(a):
-                    res = ("E", "RANGE")
-                elif bit not in (0, 1):
-                    res = ("E", "INVALID")
-                else:
-                    res = btok(a[:i] + str(bit) + a[i + 1:])
-                emit("bits.set", (btok(a), i, bit), res)
-        for ln in (0, 1, 5, 8, 33, 70):
-            emit("bits.resize", (btok(a), ln), btok((a + "0" * ln)[:ln]) if ln <= len(a) or True else None)
-        if len(a) <= 32:
-            emit("bits.toint32", (btok(a),), (lambda v: v - 2 ** 32 if v >= 2 ** 31 else v)(int(a, 2) if a else 0))
-        else:
-            emit("bits.toint32", (btok(a),), ("E", "RANGE"))
-        if len(a) <= 64:
-            emit("bits.toint64", (btok(a),), (lambda v: v - 2 ** 64 if v >= 2 ** 63 else v)(int(a, 2) if a else 0))
-        else:
-            emit("bits.toint64", (btok(a),), ("E", "RANGE"))
-    for _ in range(60):
-        v = random.choice(int_values(32))
-        ln = random.choice([-2, 0, 1, 3, 8, 16, 31, 32, 33, 40, 70])
-        n = 1 if ln <= 0 else ln
-        emit("bits.fromint32", (v, ln), btok(format(v % (1 << n), "0%db" % n)))
-        v = random.choice(int_values(64))
-        ln = random.choice([-2, 0, 1, 3, 8, 32, 63, 64, 65, 100])
-        n = 1 if ln <= 0 else ln
-        emit("bits.fromint64", (v, ln), btok(format(v % (1 << n), "0%db" % n)))
-
-
 def itok(fam, bits, addr):
     """An inet value as a token: family (4 or 6), mask length, address hex."""
     n = 8 if fam == 4 else 32
@@ -1933,66 +1841,6 @@ def rand_inets():
     for _ in range(20):
         out.append(((4, random.randint(0, 32), random.getrandbits(32)), (6, random.randint(0, 128), random.getrandbits(128))))
     return out
-
-
-def gen_inet():
-    """The vectors of inet and cidr, from Python integers: an address is an
-    int, a mask is a prefix of ones."""
-    def prefix(x, bits):
-        fam, b, a = x
-        mb = 32 if fam == 4 else 128
-        return a >> (mb - bits) if bits else 0
-
-    for x, y in rand_inets():
-        fx, bx, ax = x
-        fy, by, ay = y
-        t, u = itok(*x), itok(*y)
-        mbx = 32 if fx == 4 else 128
-        if fx == fy:
-            m = min(bx, by)
-            px, py = prefix(x, m), prefix(y, m)
-            if px != py:
-                c = (px > py) - (px < py)
-            elif bx != by:
-                c = (bx > by) - (bx < by)
-            else:
-                c = (ax > ay) - (ax < ay)
-        else:
-            c = (fx > fy) - (fx < fy)
-        emit("inet.cmp", (t, u), c)
-        same = fx == fy
-        emit("inet.sub", (t, u), int(same and bx > by and prefix(x, by) == prefix(y, by)))
-        emit("inet.subeq", (t, u), int(same and bx >= by and prefix(x, by) == prefix(y, by)))
-        emit("inet.sup", (t, u), int(same and bx < by and prefix(x, bx) == prefix(y, bx)))
-        emit("inet.supeq", (t, u), int(same and bx <= by and prefix(x, bx) == prefix(y, bx)))
-        emit("inet.overlap", (t, u), int(same and prefix(x, min(bx, by)) == prefix(y, min(bx, by))))
-        full = (1 << mbx) - 1
-        mask = ip_mask(fx, bx)
-        emit("inet.broadcast", (t,), itok(fx, bx, ax | (full ^ mask)))
-        emit("inet.network", (t,), itok(fx, bx, ax & mask))
-        emit("inet.netmask", (t,), itok(fx, mbx, mask))
-        emit("inet.hostmask", (t,), itok(fx, mbx, full ^ mask))
-        emit("inet.not", (t,), itok(fx, bx, ax ^ full))
-        if same:
-            m = min(bx, by)
-            common = 0
-            while common < m and ((ax >> (mbx - 1 - common)) & 1) == ((ay >> (mbx - 1 - common)) & 1):
-                common += 1
-            emit("inet.merge", (t, u), itok(fx, common, ax & ip_mask(fx, common)))
-            emit("inet.and", (t, u), itok(fx, max(bx, by), ax & ay))
-            emit("inet.or", (t, u), itok(fx, max(bx, by), ax | ay))
-            d = ax - ay
-            emit("inet.subinet", (t, u), d if -2 ** 63 <= d < 2 ** 63 else ("E", "RANGE"))
-        else:
-            emit("inet.merge", (t, u), ("E", "INVALID"))
-            emit("inet.and", (t, u), ("E", "INVALID"))
-            emit("inet.or", (t, u), ("E", "INVALID"))
-            emit("inet.subinet", (t, u), ("E", "INVALID"))
-        for n in (0, 1, -1, 255, 256, -256, 2 ** 31, -2 ** 31, 2 ** 32, 2 ** 63 - 1, -2 ** 63, random.randint(-2 ** 40, 2 ** 40), random.randint(-2 ** 63, 2 ** 63 - 1)):
-            r = ax + n
-            emit("inet.add", (t, n), itok(fx, bx, r) if 0 <= r <= full else ("E", "RANGE"))
-        nb = random.randint(0, mbx)
-        emit("inet.cidrmask", (t, nb), itok(fx, nb, ax & ip_mask(fx, nb)))
 
 
 def ttok(s):
@@ -2324,54 +2172,6 @@ def money_format(v, fmt):
     if posn == 4:
         return ("%s%s%s%s%s" % (cs, sp2, sg, sp1, buf)) if csp else ("%s%s%s%s%s" % (buf, sp1, cs, sp2, sg))
     return ("%s%s%s%s%s" % (sg, sp2, cs, sp1, buf)) if csp else ("%s%s%s%s%s" % (sg, sp2, buf, sp1, cs))
-
-
-def gen_money():
-    """The vectors of money: arithmetic from Python integers, the words and the
-    text from a port of PostgreSQL's code, over made-up locales."""
-    vals = money_values()
-    for a in vals:
-        emit("money.words", (a,), ttok(money_words(a)))
-        for b in random.sample(vals, 4):
-            r = a + b
-            emit("money.add", (a, b), r if I64MIN <= r <= I64MAX else ("E", "RANGE"))
-            r = a - b
-            emit("money.sub", (a, b), r if I64MIN <= r <= I64MAX else ("E", "RANGE"))
-            r = a * b
-            emit("money.mul_i64", (a, b), r if I64MIN <= r <= I64MAX else ("E", "RANGE"))
-            if b == 0:
-                emit("money.div_i64", (a, b), ("E", "DIVZERO"))
-                emit("money.div_money", (a, b), ("E", "DIVZERO"))
-            else:
-                q = abs(a) // abs(b) * (1 if (a < 0) == (b < 0) else -1)
-                emit("money.div_i64", (a, b), q if I64MIN <= q <= I64MAX else ("E", "RANGE"))
-        emit("money.div_i64", (a, -1), -a if a != I64MIN else ("E", "RANGE"))
-    fmts = [dict(frac=2, dec=".", thou=",", cur="$", pos="", neg="-", grp=3, pcs=1, ncs=1, psep=0, nsep=0, pposn=1, nposn=1),
-            dict(frac=0, dec="", thou=".", cur="€", pos="+", neg="-", grp=3, pcs=0, ncs=0, psep=1, nsep=1, pposn=2, nposn=2),
-            dict(frac=3, dec=",", thou=" ", cur="kr", pos="", neg="~", grp=2, pcs=0, ncs=1, psep=2, nsep=2, pposn=3, nposn=4),
-            dict(frac=2, dec=".", thou=",", cur="USD", pos="", neg="", grp=3, pcs=1, ncs=1, psep=1, nsep=2, pposn=0, nposn=0),
-            dict(frac=127, dec="", thou="", cur="", pos="", neg="", grp=0, pcs=127, ncs=127, psep=127, nsep=127, pposn=127, nposn=127),
-            dict(frac=4, dec="..", thou="'", cur="CHF", pos="", neg="-", grp=4, pcs=1, ncs=0, psep=1, nsep=0, pposn=4, nposn=3)]
-    for fi, fmt in enumerate(fmts):
-        for a in vals:
-            emit("money.format", (fi, a), ttok(money_format(a, fmt)))
-    for a in vals:
-        for f in (0.5, 2.0, -3.0, 1.5, 0.0, 1e10, 1e300, 0.001):
-            r = float(a) * f
-            if r != r or r in (float("inf"), float("-inf")) or r >= 2.0 ** 63 or r < -2.0 ** 63:
-                res = ("E", "RANGE")
-            else:
-                res = int(round(r))
-            emit("money.mul_f64", (a, repr(f)), res)
-            if f != 0.0:
-                r = float(a) / f
-                if r != r or r in (float("inf"), float("-inf")) or r >= 2.0 ** 63 or r < -2.0 ** 63:
-                    res = ("E", "RANGE")
-                else:
-                    res = int(round(r))
-                emit("money.div_f64", (a, repr(f)), res)
-            else:
-                emit("money.div_f64", (a, repr(f)), ("E", "DIVZERO"))
 
 
 I32MIN, I32MAX = -2 ** 31, 2 ** 31 - 1

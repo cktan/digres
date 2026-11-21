@@ -17,7 +17,6 @@
 #include "postgres.h"
 
 #include "storage/itemptr.h"
-#include "ty_small.h"
 
 /*
  * We really want ItemPointerData to be exactly 6 bytes.
@@ -48,8 +47,25 @@ bool ItemPointerEquals(ItemPointer pointer1, ItemPointer pointer2) {
  *		Generic btree-style comparison for item pointers.
  */
 int32 ItemPointerCompare(ItemPointer arg1, ItemPointer arg2) {
-  /* the struct is ty's: the block, then the offset, with no validity check */
-  return ty_tid_cmp((const ty_tid_t *)arg1, (const ty_tid_t *)arg2);
+  /*
+   * Use ItemPointerGet{Offset,Block}NumberNoCheck to avoid asserting
+   * ip_posid != 0, which may not be true for a user-supplied TID.
+   */
+  BlockNumber b1 = ItemPointerGetBlockNumberNoCheck(arg1);
+  BlockNumber b2 = ItemPointerGetBlockNumberNoCheck(arg2);
+
+  if (b1 < b2)
+    return -1;
+  else if (b1 > b2)
+    return 1;
+  else if (ItemPointerGetOffsetNumberNoCheck(arg1) <
+           ItemPointerGetOffsetNumberNoCheck(arg2))
+    return -1;
+  else if (ItemPointerGetOffsetNumberNoCheck(arg1) >
+           ItemPointerGetOffsetNumberNoCheck(arg2))
+    return 1;
+  else
+    return 0;
 }
 
 /*

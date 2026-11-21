@@ -1,5 +1,5 @@
 /*
- * Portions Copyright (c) 2026, CK Tan: the changes for ty,
+ * Portions Copyright (c) 2026, CK Tan: the changes for digres,
  * under the MIT License (https://github.com/cktan/digres/blob/main/LICENSE)
  */
 
@@ -22,19 +22,41 @@
  *	  src/port/inet_net_ntop.c
  */
 
-/*
- * inet_ntop.cc -- the bytes of an inet to text: the ISC code PostgreSQL
- * uses (src/port/inet_net_ntop.c), with the names of ty.
- */
-#include <errno.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/types.h>
+#if defined(LIBC_SCCS) && !defined(lint)
+static const char rcsid[] =
+    "Id: inet_net_ntop.c,v 1.1.2.2 2004/03/09 09:17:27 marka Exp $";
+#endif
 
-#include "inet_text.h"
+#ifndef FRONTEND
+#include "postgres.h"
+#else
+#include "postgres_fe.h"
+#endif
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#ifndef FRONTEND
+#include "utils/inet.h"
+#else
+/*
+ * In a frontend build, we can't include inet.h, but we still need to have
+ * sensible definitions of these two constants.  Note that pg_inet_net_ntop()
+ * assumes that PGSQL_AF_INET is equal to AF_INET.
+ */
+#define PGSQL_AF_INET	(AF_INET + 0)
+#define PGSQL_AF_INET6	(AF_INET + 1)
+#endif
 
 #define NS_IN6ADDRSZ 16
 #define NS_INT16SZ 2
+
+#ifdef SPRINTF_CHAR
+#define SPRINTF(x) strlen(sprintf/**/x)
+#else
+#define SPRINTF(x) ((size_t)sprintf x)
+#endif
 
 static char *inet_net_ntop_ipv4(const u_char *src, int bits, char *dst,
                                 size_t size);
@@ -43,7 +65,7 @@ static char *inet_net_ntop_ipv6(const u_char *src, int bits, char *dst,
 
 /*
  * char *
- * ty_inet_net_ntop(af, src, bits, dst, size)
+ * pg_inet_net_ntop(af, src, bits, dst, size)
  *	convert host/network address from network to presentation format.
  *	"src"'s size is determined from its "af".
  * return:
@@ -55,12 +77,21 @@ static char *inet_net_ntop_ipv6(const u_char *src, int bits, char *dst,
  * author:
  *	Paul Vixie (ISC), October 1998
  */
-char *ty_inet_net_ntop(int af, const void *src, int bits, char *dst,
+char *pg_inet_net_ntop(int af, const void *src, int bits, char *dst,
                        size_t size) {
+  /*
+   * We need to cover both the address family constants used by the PG inet
+   * type (PGSQL_AF_INET and PGSQL_AF_INET6) and those used by the system
+   * libraries (AF_INET and AF_INET6).  We can safely assume PGSQL_AF_INET
+   * == AF_INET, but the INET6 constants are very likely to be different.
+   */
   switch (af) {
-  case TY_INET_AF_V4:
+  case PGSQL_AF_INET:
     return (inet_net_ntop_ipv4((const u_char *)src, bits, dst, size));
-  case TY_INET_AF_V6:
+  case PGSQL_AF_INET6:
+#if AF_INET6 != PGSQL_AF_INET6
+  case AF_INET6:
+#endif
     return (inet_net_ntop_ipv6((const u_char *)src, bits, dst, size));
   default:
     errno = EAFNOSUPPORT;
@@ -100,7 +131,7 @@ static char *inet_net_ntop_ipv4(const u_char *src, int bits, char *dst,
     t = dst;
     if (dst != odst)
       *dst++ = '.';
-    dst += put_u(dst, *src++);
+    dst += SPRINTF((dst, "%u", *src++));
     size -= (size_t)(dst - t);
   }
 
@@ -108,7 +139,7 @@ static char *inet_net_ntop_ipv4(const u_char *src, int bits, char *dst,
   if (bits != 32) {
     if (size <= sizeof "/32")
       goto emsgsize;
-    dst += put_slash_u(dst, bits);
+    dst += SPRINTF((dst, "/%u", bits));
   }
 
   return (odst);
@@ -127,7 +158,7 @@ static int decoct(const u_char *src, int bytes, char *dst, size_t size) {
     if (size <= sizeof "255.")
       return (0);
     t = dst;
-    dst += put_u(dst, *src++);
+    dst += SPRINTF((dst, "%u", *src++));
     if (b != bytes) {
       *dst++ = '.';
       *dst = '\0';
@@ -219,7 +250,7 @@ static char *inet_net_ntop_ipv6(const u_char *src, int bits, char *dst,
       tp += strlen(tp);
       break;
     }
-    tp += put_x(tp, words[i]);
+    tp += SPRINTF((tp, "%x", words[i]));
   }
 
   /* Was it a trailing run of 0x00's? */
@@ -228,7 +259,7 @@ static char *inet_net_ntop_ipv6(const u_char *src, int bits, char *dst,
   *tp = '\0';
 
   if (bits != -1 && bits != 128)
-    tp += put_slash_u(tp, bits);
+    tp += SPRINTF((tp, "/%u", bits));
 
   /*
    * Check for overflow, copy, and we're done.

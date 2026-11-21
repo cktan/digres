@@ -23,7 +23,6 @@
 #include "utils/guc.h"
 #include "utils/inet.h"
 #include "utils/sortsupport.h"
-#include "ty_mac.h"
 #include "utils/control_block.h"
 
 /*
@@ -56,20 +55,48 @@ static Datum macaddr_abbrev_convert(Datum original, SortSupport ssup);
 Datum macaddr_in(PG_FUNCTION_ARGS) {
   char *str = PG_GETARG_CSTRING(0);
   Node *escontext = fcinfo->context;
-  macaddr *result = (macaddr *)palloc(sizeof(macaddr));
+  macaddr *result;
+  int a, b, c, d, e, f;
+  char junk[2];
+  int count;
 
-  /* ty reads the seven forms of the text, as scanf does */
-  if (ty_macaddr_parse(str, (ty_macaddr_t *)result) != 0) {
-    if (ty_errnum() == TY_ERR_RANGE)
-      ereturn(escontext, (Datum)0,
-              (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-               errmsg("invalid octet value in \"macaddr\" value: \"%s\"",
-                      str)));
+  /* %1s matches iff there is trailing non-whitespace garbage */
+
+  count = sscanf(str, "%x:%x:%x:%x:%x:%x%1s", &a, &b, &c, &d, &e, &f, junk);
+  if (count != 6)
+    count = sscanf(str, "%x-%x-%x-%x-%x-%x%1s", &a, &b, &c, &d, &e, &f, junk);
+  if (count != 6)
+    count = sscanf(str, "%2x%2x%2x:%2x%2x%2x%1s", &a, &b, &c, &d, &e, &f, junk);
+  if (count != 6)
+    count = sscanf(str, "%2x%2x%2x-%2x%2x%2x%1s", &a, &b, &c, &d, &e, &f, junk);
+  if (count != 6)
+    count =
+        sscanf(str, "%2x%2x.%2x%2x.%2x%2x%1s", &a, &b, &c, &d, &e, &f, junk);
+  if (count != 6)
+    count =
+        sscanf(str, "%2x%2x-%2x%2x-%2x%2x%1s", &a, &b, &c, &d, &e, &f, junk);
+  if (count != 6)
+    count = sscanf(str, "%2x%2x%2x%2x%2x%2x%1s", &a, &b, &c, &d, &e, &f, junk);
+  if (count != 6)
     ereturn(
         escontext, (Datum)0,
         (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
          errmsg("invalid input syntax for type %s: \"%s\"", "macaddr", str)));
-  }
+
+  if ((a < 0) || (a > 255) || (b < 0) || (b > 255) || (c < 0) || (c > 255) ||
+      (d < 0) || (d > 255) || (e < 0) || (e > 255) || (f < 0) || (f > 255))
+    ereturn(escontext, (Datum)0,
+            (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+             errmsg("invalid octet value in \"macaddr\" value: \"%s\"", str)));
+
+  result = (macaddr *)palloc(sizeof(macaddr));
+
+  result->a = a;
+  result->b = b;
+  result->c = c;
+  result->d = d;
+  result->e = e;
+  result->f = f;
 
   PG_RETURN_MACADDR_P(result);
 }
@@ -80,9 +107,12 @@ Datum macaddr_in(PG_FUNCTION_ARGS) {
 
 Datum macaddr_out(PG_FUNCTION_ARGS) {
   macaddr *addr = PG_GETARG_MACADDR_P(0);
-  char *result = (char *)palloc(TY_MACADDR_TEXT_SIZE);
+  char *result;
 
-  ty_macaddr_format((const ty_macaddr_t *)addr, result);
+  result = (char *)palloc(32);
+
+  snprintf(result, 32, "%02x:%02x:%02x:%02x:%02x:%02x", addr->a, addr->b,
+           addr->c, addr->d, addr->e, addr->f);
 
   PG_RETURN_CSTRING(result);
 }
@@ -132,7 +162,16 @@ Datum macaddr_send(PG_FUNCTION_ARGS) {
  */
 
 static int macaddr_cmp_internal(macaddr *a1, macaddr *a2) {
-  return ty_macaddr_cmp((const ty_macaddr_t *)a1, (const ty_macaddr_t *)a2);
+  if (hibits(a1) < hibits(a2))
+    return -1;
+  else if (hibits(a1) > hibits(a2))
+    return 1;
+  else if (lobits(a1) < lobits(a2))
+    return -1;
+  else if (lobits(a1) > lobits(a2))
+    return 1;
+  else
+    return 0;
 }
 
 Datum macaddr_cmp(PG_FUNCTION_ARGS) {
@@ -194,14 +233,14 @@ Datum macaddr_ne(PG_FUNCTION_ARGS) {
 Datum hashmacaddr(PG_FUNCTION_ARGS) {
   macaddr *key = PG_GETARG_MACADDR_P(0);
 
-  PG_RETURN_UINT32((uint32)ty_macaddr_hash((const ty_macaddr_t *)key, 0));
+  return hash_any((unsigned char *)key, sizeof(macaddr));
 }
 
 Datum hashmacaddrextended(PG_FUNCTION_ARGS) {
   macaddr *key = PG_GETARG_MACADDR_P(0);
 
-  PG_RETURN_UINT64(ty_macaddr_hash((const ty_macaddr_t *)key,
-                                   (uint64)PG_GETARG_INT64(1)));
+  return hash_any_extended((unsigned char *)key, sizeof(macaddr),
+                           PG_GETARG_INT64(1));
 }
 
 /*
@@ -209,29 +248,45 @@ Datum hashmacaddrextended(PG_FUNCTION_ARGS) {
  */
 Datum macaddr_not(PG_FUNCTION_ARGS) {
   macaddr *addr = PG_GETARG_MACADDR_P(0);
-  macaddr *result = (macaddr *)palloc(sizeof(macaddr));
+  macaddr *result;
 
-  *(ty_macaddr_t *)result = ty_macaddr_not((const ty_macaddr_t *)addr);
+  result = (macaddr *)palloc(sizeof(macaddr));
+  result->a = ~addr->a;
+  result->b = ~addr->b;
+  result->c = ~addr->c;
+  result->d = ~addr->d;
+  result->e = ~addr->e;
+  result->f = ~addr->f;
   PG_RETURN_MACADDR_P(result);
 }
 
 Datum macaddr_and(PG_FUNCTION_ARGS) {
   macaddr *addr1 = PG_GETARG_MACADDR_P(0);
   macaddr *addr2 = PG_GETARG_MACADDR_P(1);
-  macaddr *result = (macaddr *)palloc(sizeof(macaddr));
+  macaddr *result;
 
-  *(ty_macaddr_t *)result =
-      ty_macaddr_and((const ty_macaddr_t *)addr1, (const ty_macaddr_t *)addr2);
+  result = (macaddr *)palloc(sizeof(macaddr));
+  result->a = addr1->a & addr2->a;
+  result->b = addr1->b & addr2->b;
+  result->c = addr1->c & addr2->c;
+  result->d = addr1->d & addr2->d;
+  result->e = addr1->e & addr2->e;
+  result->f = addr1->f & addr2->f;
   PG_RETURN_MACADDR_P(result);
 }
 
 Datum macaddr_or(PG_FUNCTION_ARGS) {
   macaddr *addr1 = PG_GETARG_MACADDR_P(0);
   macaddr *addr2 = PG_GETARG_MACADDR_P(1);
-  macaddr *result = (macaddr *)palloc(sizeof(macaddr));
+  macaddr *result;
 
-  *(ty_macaddr_t *)result =
-      ty_macaddr_or((const ty_macaddr_t *)addr1, (const ty_macaddr_t *)addr2);
+  result = (macaddr *)palloc(sizeof(macaddr));
+  result->a = addr1->a | addr2->a;
+  result->b = addr1->b | addr2->b;
+  result->c = addr1->c | addr2->c;
+  result->d = addr1->d | addr2->d;
+  result->e = addr1->e | addr2->e;
+  result->f = addr1->f | addr2->f;
   PG_RETURN_MACADDR_P(result);
 }
 
@@ -241,9 +296,17 @@ Datum macaddr_or(PG_FUNCTION_ARGS) {
  */
 Datum macaddr_trunc(PG_FUNCTION_ARGS) {
   macaddr *addr = PG_GETARG_MACADDR_P(0);
-  macaddr *result = (macaddr *)palloc(sizeof(macaddr));
+  macaddr *result;
 
-  *(ty_macaddr_t *)result = ty_macaddr_trunc((const ty_macaddr_t *)addr);
+  result = (macaddr *)palloc(sizeof(macaddr));
+
+  result->a = addr->a;
+  result->b = addr->b;
+  result->c = addr->c;
+  result->d = 0;
+  result->e = 0;
+  result->f = 0;
+
   PG_RETURN_MACADDR_P(result);
 }
 

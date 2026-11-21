@@ -1,5 +1,5 @@
 /*
- * Portions Copyright (c) 2026, CK Tan: the changes for ty,
+ * Portions Copyright (c) 2026, CK Tan: the changes for digres,
  * under the MIT License (https://github.com/cktan/digres/blob/main/LICENSE)
  */
 
@@ -22,17 +22,25 @@
  *	  src/backend/utils/adt/inet_cidr_ntop.c
  */
 
-/*
- * inet_cidr_ntop.cc -- the bytes of a cidr to text: the ISC code
- * PostgreSQL uses (src/backend/utils/adt/inet_cidr_ntop.c), with the names
- * of ty.
- */
-#include <errno.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/types.h>
+#if defined(LIBC_SCCS) && !defined(lint)
+static const char rcsid[] =
+    "Id: inet_net_ntop.c,v 1.1.2.2 2004/03/09 09:17:27 marka Exp $";
+#endif
 
-#include "inet_text.h"
+#include "postgres.h"
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#include "utils/builtins.h"
+#include "utils/inet.h"
+
+#ifdef SPRINTF_CHAR
+#define SPRINTF(x) strlen(sprintf/**/x)
+#else
+#define SPRINTF(x) ((size_t)sprintf x)
+#endif
 
 static char *inet_cidr_ntop_ipv4(const u_char *src, int bits, char *dst,
                                  size_t size);
@@ -41,7 +49,7 @@ static char *inet_cidr_ntop_ipv6(const u_char *src, int bits, char *dst,
 
 /*
  * char *
- * ty_inet_cidr_ntop(af, src, bits, dst, size)
+ * pg_inet_cidr_ntop(af, src, bits, dst, size)
  *	convert network number from network to presentation format.
  *	generates CIDR style result always.
  * return:
@@ -49,12 +57,12 @@ static char *inet_cidr_ntop_ipv6(const u_char *src, int bits, char *dst,
  * author:
  *	Paul Vixie (ISC), July 1996
  */
-char *ty_inet_cidr_ntop(int af, const void *src, int bits, char *dst,
+char *pg_inet_cidr_ntop(int af, const void *src, int bits, char *dst,
                         size_t size) {
   switch (af) {
-  case TY_INET_AF_V4:
+  case PGSQL_AF_INET:
     return inet_cidr_ntop_ipv4((const u_char *)src, bits, dst, size);
-  case TY_INET_AF_V6:
+  case PGSQL_AF_INET6:
     return inet_cidr_ntop_ipv6((const u_char *)src, bits, dst, size);
   default:
     errno = EAFNOSUPPORT;
@@ -100,7 +108,7 @@ static char *inet_cidr_ntop_ipv4(const u_char *src, int bits, char *dst,
     if (size <= sizeof "255.")
       goto emsgsize;
     t = dst;
-    dst += put_u(dst, *src++);
+    dst += SPRINTF((dst, "%u", *src++));
     if (b > 1) {
       *dst++ = '.';
       *dst = '\0';
@@ -117,14 +125,14 @@ static char *inet_cidr_ntop_ipv4(const u_char *src, int bits, char *dst,
     if (dst != odst)
       *dst++ = '.';
     m = ((1 << b) - 1) << (8 - b);
-    dst += put_u(dst, *src & m);
+    dst += SPRINTF((dst, "%u", *src & m));
     size -= (size_t)(dst - t);
   }
 
   /* Format CIDR /width. */
   if (size <= sizeof "/32")
     goto emsgsize;
-  dst += put_slash_u(dst, bits);
+  dst += SPRINTF((dst, "/%u", bits));
   return odst;
 
 emsgsize:
@@ -233,22 +241,22 @@ static char *inet_cidr_ntop_ipv6(const u_char *src, int bits, char *dst,
 
       if (is_ipv4 && p > 5) {
         *cp++ = (p == 6) ? ':' : '.';
-        cp += put_u(cp, *s++);
+        cp += SPRINTF((cp, "%u", *s++));
         /* we can potentially drop the last octet */
         if (p != 7 || bits > 120) {
           *cp++ = '.';
-          cp += put_u(cp, *s++);
+          cp += SPRINTF((cp, "%u", *s++));
         }
       } else {
         if (cp != outbuf)
           *cp++ = ':';
-        cp += put_x(cp, *s * 256 + s[1]);
+        cp += SPRINTF((cp, "%x", *s * 256 + s[1]));
         s += 2;
       }
     }
   }
   /* Format CIDR /width. */
-  (void)put_slash_u(cp, bits);
+  (void)SPRINTF((cp, "/%u", bits));
   if (strlen(outbuf) + 1 > size)
     goto emsgsize;
   strcpy(dst, outbuf);

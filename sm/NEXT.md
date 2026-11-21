@@ -238,12 +238,9 @@ are the catalog tables psql reads
        and out and encode and decode included. Left over in
        digres: aggregate states (`string_agg` of bytea, the bool
        and integer averages), and sort support. Done after that:
-       the floats, with their text, and macaddr and macaddr8
-       (`ty_float.h`, `ty_mac.h`), and bit and varbit
-       (`ty_bits.h`), inet and cidr (`ty_inet.h`), and tid,
-       pg_lsn and "char" (`ty_small.h`), and text for the C
-       collation, with varchar, bpchar and name (`ty_text.h`).
-       money (`ty_money.h`), and the arithmetic of interval
+       the floats, with their text (`ty_float.h`), and text for
+       the C collation, with varchar, bpchar and name
+       (`ty_text.h`), and the arithmetic of interval
        (`ty_interval.h`), and the arithmetic of date, time and
        timestamp (`ty_datetime.h`). The text out of date, time, timestamp and
        interval is in ty, and the text in of interval. So are

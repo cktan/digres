@@ -426,103 +426,6 @@ ty, so a subnormal result of `exp` or `pow` is left out, as
 `test/float_text.txt`, 1,230 texts that digres printed before the
 move (`test/gen_float_text.py`).
 
-## 12. macaddr and macaddr8
-
-`ty_mac.h` holds `ty_macaddr_t` (6 bytes) and `ty_macaddr8_t` (8
-bytes), from PostgreSQL's `mac.c` and `mac8.c`; the code is new.
-`parse` reads the forms PostgreSQL reads: for a macaddr seven
-forms, each as `scanf`'s `%x` reads them (so a field may have
-fewer than two digits, or a sign, and a field past 255 is
-`TY_ERR_RANGE`); for a macaddr8 six or eight pairs of hex digits
-with one spacer, which a six-byte form widens with `FF:FE`.
-`format`, `cmp` (the order of the bytes), `not`, `and`, `or`,
-`trunc`, `set7bit` and the two conversions are as PostgreSQL's.
-The hash is that of the bytes.
-
-The text forms have too many odd cases to rewrite as a reference,
-so `test/known.txt` holds what a digres built before the move
-printed for a few hundred texts, good and bad
-(`test/gen_known.py` made it); `test/test_mac.cc` covers the
-rest. digres's storage does not hold these types yet, so they
-have no key in a table.
-
-## 13. bit and bit varying
-
-`ty_bits.h` holds the operations of bit strings, from
-PostgreSQL's `varbit.c`; the code is new. A bit string is its
-bytes and its length in bits; the first bit is the high bit of
-the first byte, and the bits of the last byte past the length are
-zero, in every result, so that `memcmp` orders strings. As with
-bytea, a result goes to the caller's buffer; the sizes are known
-before the call.
-
-`parse` reads binary digits (with `b` or without) or hex digits
-after `x`; `format` writes `0` and `1`; `cmp` is the order of the
-bytes then the lengths; `cat`, `substr`, `overlay`, `position`,
-`count`, `and`, `or`, `xor`, `not`, the shifts (a negative count
-shifts the other way), `get` and `set` of a bit, `from_int32` and
-`from_int64` (two's complement, sign-extended or cut at the
-left), `to_int32` and `to_int64`, and `resize`, which pads or
-cuts for `bit(n)` and `bit varying(n)`. The length rules of the
-types, which of the two errors a cast gives, are the host's.
-
-The vectors are a reference of Python strings of `0` and `1`,
-which are the plainest way to say what each operation means; the
-hand tests are in `test/test_bits.cc`.
-
-## 14. inet and cidr
-
-`ty_inet.h` holds `ty_inet_t`: the family (2 for IPv4, 3 for
-IPv6), the mask length and 16 bytes of address. It has the layout
-PostgreSQL stores, so a stored value is a `ty_inet_t` after its
-varlena header.
-
-The text parse and format are the ISC code PostgreSQL uses:
-`src/inet_pton.cc`, `inet_ntop.cc` and `inet_cidr_ntop.cc`, moved
-from digres with their copyright notices. They read the short
-forms (`10/8`, `10.1.2/24`) and write the IPv6 forms with `::`.
-The other operations are new code, from the cases of `network.c`:
-order, the five containment tests, `host`, `network`,
-`broadcast`, `netmask`, `hostmask`, `merge`, `~`, `&`, `|`, `+`
-and `-` with an integer, `-` of two values, the cidr check for a
-bit right of the mask, and the hash.
-
-A cidr with a bit right of its mask is `TY_ERR_RANGE`; any other
-bad text is `TY_ERR_INVALID`. The caller words the message, as
-`inet_in` and `cidr_in` do.
-
-The tests: the text is `test/known.txt`, what the old digres
-printed for about 450 inputs, each as an inet and as a cidr; the
-other operations are in `test/vectors.txt`, from a reference of
-Python integers; the hand tests are in `test/test_inet.cc`.
-
-## 15. tid, pg_lsn and "char"
-
-`ty_small.h` holds three types of a few operations each.
-
-A tid is `ty_tid_t`, PostgreSQL's `ItemPointerData`: the block
-number as two 16-bit halves, high first, then the offset. The
-functions are the text in and out, the order (the block, then the
-offset), and the hash of the six bytes. `ty_tid_parse` keeps the
-rule of `tidin` that the block may be a negative number that
-wraps.
-
-A pg_lsn is a `uint64_t`. The functions are the text in and out
-(`X/Y`, one to eight hex digits each side; written in upper
-case). The compares are the native ones of the integer. The sum
-and the difference with a number go through `numeric`, so they
-stay in digres.
-
-A "char" is an `int8_t`. The functions are the text in and out (a
-backslash and three octal digits is a byte; a byte of 0x80 or
-more is written that way), the order, which is of the byte as
-unsigned, and `ty_char_from_int32`. The cast to int4 is of the
-byte as signed.
-
-The text of all three is in `test/known.txt`, what the old digres
-printed for about 100 inputs each. The hand tests are in
-`test/test_small.cc`.
-
 ## 16. text
 
 `ty_text.h` holds the operations of text: UTF-8 strings ordered
@@ -581,33 +484,6 @@ hand tests in `test/test_text.cc`; and
 digres before the move.
 
 
-
-## 17. money
-
-`ty_money.h` holds the operations of money: an `int64` count of
-the smallest unit. The text depends on the locale
-(`lc_monetary`). The host gives it as a `ty_money_fmt_t`, a copy
-of the fields of C's `struct lconv` that PostgreSQL reads, so
-that ty reads no setting itself; `ty_money_fmt_c` is the C
-locale. The settings are the second kind of hook of
-[`../sm/TYPEMOVE_PLAN.md`](../sm/TYPEMOVE_PLAN.md): a value
-passed in, as `extra_float_digits` is for the floats.
-
-The functions are `parse` and `format` (the signs and the symbols
-in the places `sign_posn`, `cs_precedes` and `sep_by_space` say),
-`+` and `-`, `*` and `/` with an integer or a float, `/` of two
-values and `cash_words`. The float arithmetic is that of
-`ty_float.h`. The casts with `numeric` stay in digres, as they
-use it.
-
-The tests: the arithmetic and the words are in the vectors, from
-Python integers; the text in six made-up locales is a port in
-Python of PostgreSQL's code (about 250 values each); the text in
-the C locale is in `test/known.txt`, from the old digres; the
-hand tests are in `test/test_money.cc`. The words of the smallest
-money value were wrong in the old digres (a signed overflow,
-which the compiler used): ty gives "Minus ninety two quadrillion
-...".
 
 ## 18. interval
 

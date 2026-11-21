@@ -17,20 +17,15 @@
 #include <vector>
 
 #include "doctest.h"
-#include "ty_bits.h"
 #include "ty_bool.h"
 #include "ty_bytea.h"
 #include "ty_decimal.h"
 #include "ty_float.h"
 #include "ty_hash.h"
 #include "ty_datetime.h"
-#include "ty_inet.h"
 #include "ty_interval.h"
-#include "ty_money.h"
-#include "ty_small.h"
 #include "ty_text.h"
 #include "ty_int.h"
-#include "ty_mac.h"
 #include "ty_uuid.h"
 
 namespace {
@@ -537,229 +532,6 @@ bool run_float(const vec_t &v) {
   return true;
 }
 
-/* The bytes of a bit string token (its 0s and 1s, or "-"), and its length. */
-std::vector<uint8_t> bits_of(const std::string &tok, int32_t *nbits) {
-  std::string t = tok == "-" ? "" : tok;
-  std::vector<uint8_t> b(ty_bits_bytes((int32_t)t.size()) + 1, 0);
-
-  for (size_t i = 0; i < t.size(); i++) {
-    if (t[i] == '1') {
-      b[i >> 3] |= (uint8_t)(0x80 >> (i & 7));
-    }
-  }
-  *nbits = (int32_t)t.size();
-  return b;
-}
-
-/* The token of a bit string. */
-std::string bits_token(const uint8_t *b, int32_t nbits) {
-  std::string s(nbits + 1, '0');
-
-  ty_bits_format(b, nbits, &s[0]);
-  s.resize(nbits);
-  return s.empty() ? "-" : s;
-}
-
-/* Run one bit string vector; false if its op is not one. */
-bool run_bits(const vec_t &v) {
-  const std::string &op = v.op;
-
-  if (op.compare(0, 5, "bits.") != 0) {
-    return false;
-  }
-  const std::string name = op.substr(5);
-  int32_t na = 0, nb = 0, nout = 0;
-  std::vector<uint8_t> a, b, out(4096, 0);
-  int rc = 0;
-  auto num = [&](size_t i) { return std::stoll(v.args[i]); };
-  /* check a result that is a bit string, or an error */
-  auto check = [&](int rcode) {
-    INFO(v.line);
-    if (v.res[0] == "E") {
-      CHECK(-1 == rcode);
-      CHECK(errnum_of(v.res[1]) == ty_errnum());
-    } else {
-      REQUIRE(0 == rcode);
-      CHECK(v.res[0] == bits_token(out.data(), nout));
-    }
-  };
-
-  if (name == "parse") {
-    std::vector<uint8_t> t = bytes_of(v.args[0]);
-    out.assign(ty_bits_parse_room(t.size()) + 8, 0);
-    rc = ty_bits_parse(reinterpret_cast<const char *>(t.data()), t.size(),
-                       out.data(), &nout);
-    check(rc);
-    return true;
-  }
-  if (name == "fromint32" || name == "fromint64") {
-    if (name == "fromint32") {
-      ty_bits_from_int32((int32_t)std::stoll(v.args[0]), (int32_t)num(1),
-                         out.data(), &nout);
-    } else {
-      ty_bits_from_int64(std::stoll(v.args[0]), (int32_t)num(1), out.data(),
-                         &nout);
-    }
-    check(0);
-    return true;
-  }
-  a = bits_of(v.args[0], &na);
-  if (name == "cmp" || name == "eq" || name == "cat" || name == "position" ||
-      name == "and" || name == "or" || name == "xor" || name == "overlay") {
-    b = bits_of(v.args[1], &nb);
-  }
-  if (name == "cmp") {
-    int c = ty_bits_cmp(a.data(), na, b.data(), nb);
-    INFO(v.line);
-    CHECK(std::stoi(v.res[0]) == (c > 0) - (c < 0));
-  } else if (name == "eq") {
-    INFO(v.line);
-    CHECK(std::stoi(v.res[0]) == ty_bits_eq(a.data(), na, b.data(), nb));
-  } else if (name == "cat") {
-    rc = ty_bits_cat(a.data(), na, b.data(), nb, out.data(), &nout);
-    check(rc);
-  } else if (name == "position") {
-    INFO(v.line);
-    CHECK(std::stoi(v.res[0]) == ty_bits_position(a.data(), na, b.data(), nb));
-  } else if (name == "and" || name == "or" || name == "xor") {
-    rc = name == "and"  ? ty_bits_and(a.data(), na, b.data(), nb, out.data())
-         : name == "or" ? ty_bits_or(a.data(), na, b.data(), nb, out.data())
-                        : ty_bits_xor(a.data(), na, b.data(), nb, out.data());
-    nout = na;
-    check(rc);
-  } else if (name == "overlay") {
-    rc = ty_bits_overlay(a.data(), na, b.data(), nb, (int32_t)num(2),
-                         (int32_t)num(3), out.data(), &nout);
-    check(rc);
-  } else if (name == "count") {
-    INFO(v.line);
-    CHECK(std::stoll(v.res[0]) == ty_bits_count(a.data(), na));
-  } else if (name == "not") {
-    ty_bits_not(a.data(), na, out.data());
-    nout = na;
-    check(0);
-  } else if (name == "shl" || name == "shr") {
-    if (name == "shl") {
-      ty_bits_shl(a.data(), na, (int32_t)num(1), out.data());
-    } else {
-      ty_bits_shr(a.data(), na, (int32_t)num(1), out.data());
-    }
-    nout = na;
-    check(0);
-  } else if (name == "substr") {
-    rc = ty_bits_substr(a.data(), na, (int32_t)num(1), (int32_t)num(2),
-                        (int)num(3), out.data(), &nout);
-    check(rc);
-  } else if (name == "get") {
-    int32_t r = 0;
-    rc = ty_bits_get(a.data(), na, (int32_t)num(1), &r);
-    INFO(v.line);
-    if (v.res[0] == "E") {
-      CHECK(-1 == rc);
-    } else {
-      REQUIRE(0 == rc);
-      CHECK(std::stoi(v.res[0]) == r);
-    }
-  } else if (name == "set") {
-    rc =
-        ty_bits_set(a.data(), na, (int32_t)num(1), (int32_t)num(2), out.data());
-    nout = na;
-    check(rc);
-  } else if (name == "resize") {
-    ty_bits_resize(a.data(), na, (int32_t)num(1), out.data());
-    nout = (int32_t)num(1);
-    check(0);
-  } else if (name == "toint32" || name == "toint64") {
-    int32_t r32 = 0;
-    int64_t r64 = 0;
-    rc = name == "toint32" ? ty_bits_to_int32(a.data(), na, &r32)
-                           : ty_bits_to_int64(a.data(), na, &r64);
-    check_int(v, rc, name == "toint32" ? r32 : r64);
-  } else {
-    return false;
-  }
-  return true;
-}
-
-/*
- * An inet or cidr text (known.txt): the forms PostgreSQL printed, joined by
- * commas: for an inet, the output, host(), text() and abbrev(); for a cidr,
- * the output, text() and abbrev().
- */
-bool run_inet_text(const vec_t &v) {
-  const bool cidr = v.op == "cidr.parse";
-  std::vector<uint8_t> t = bytes_of(v.args[0]);
-  std::string z(reinterpret_cast<const char *>(t.data()), t.size());
-  ty_inet_t a;
-  char buf[TY_INET_TEXT_MAX];
-  int rc = ty_inet_parse(z.c_str(), cidr, &a);
-  std::string got;
-
-  if (rc == 0) {
-    int modes_inet[] = {TY_INET_OUT, TY_INET_HOST, TY_INET_SHOW,
-                        TY_INET_ABBREV};
-    int modes_cidr[] = {TY_INET_CIDR, TY_INET_SHOW, TY_INET_CIDR_ABBREV};
-
-    for (int i = 0; i < (cidr ? 3 : 4); i++) {
-      REQUIRE(0 ==
-              ty_inet_format(&a, cidr ? modes_cidr[i] : modes_inet[i], buf));
-      got += (i ? "," : "") + std::string(buf);
-    }
-  }
-  INFO(v.line);
-  if (v.res[0] == "E") {
-    CHECK(-1 == rc);
-    CHECK(errnum_of(v.res[1]) == ty_errnum());
-  } else {
-    REQUIRE(0 == rc);
-    CHECK(v.res[0] == got);
-  }
-  return true;
-}
-
-/*
- * A tid, pg_lsn or "char" text (known.txt): the canonical text PostgreSQL
- * printed; the text of "char" may be empty, which the file writes as -.
- */
-bool run_small_text(const vec_t &v) {
-  std::vector<uint8_t> t = bytes_of(v.args[0]);
-  std::string z(reinterpret_cast<const char *>(t.data()), t.size());
-  char buf[32];
-  int rc = 0;
-  std::string got;
-
-  if (v.op == "tid.parse") {
-    ty_tid_t a;
-
-    rc = ty_tid_parse(z.c_str(), &a);
-    if (rc == 0) {
-      ty_tid_format(&a, buf);
-      got = buf;
-    }
-  } else if (v.op == "lsn.parse") {
-    uint64_t a;
-
-    rc = ty_lsn_parse(z.c_str(), &a);
-    if (rc == 0) {
-      ty_lsn_format(a, buf);
-      got = buf;
-    }
-  } else {
-    /* "char" never fails: its text is cut to a byte */
-    ty_char_format(ty_char_parse(z.data(), z.size()), buf);
-    got = buf[0] ? buf : "-";
-  }
-  INFO(v.line);
-  if (v.res[0] == "E") {
-    CHECK(-1 == rc);
-    CHECK(errnum_of(v.res[1]) == ty_errnum());
-  } else {
-    REQUIRE(0 == rc);
-    CHECK(v.res[0] == got);
-  }
-  return true;
-}
-
 /* Run one character(n) or name vector. */
 bool run_bpchar(const vec_t &v) {
   const std::string &op = v.op;
@@ -808,74 +580,6 @@ bool run_bpchar(const vec_t &v) {
     CHECK(v.res[0] ==
           token_of(reinterpret_cast<const uint8_t *>(out), strlen(out)));
   }
-  return true;
-}
-
-/* The made-up locales of the money vectors (see gen_vectors.py). */
-ty_money_fmt_t money_fmt(int i) {
-  static const ty_money_fmt_t fmts[] = {
-      {2, ".", ",", "$", "", "-", 3, 1, 1, 0, 0, 1, 1},
-      {0, "", ".", "€", "+", "-", 3, 0, 0, 1, 1, 2, 2},
-      {3, ",", " ", "kr", "", "~", 2, 0, 1, 2, 2, 3, 4},
-      {2, ".", ",", "USD", "", "", 3, 1, 1, 1, 2, 0, 0},
-      {127, "", "", "", "", "", 0, 127, 127, 127, 127, 127, 127},
-      {4, "..", "'", "CHF", "", "-", 4, 1, 0, 1, 0, 4, 3},
-  };
-
-  return fmts[i];
-}
-
-/* Run one money vector. */
-bool run_money(const vec_t &v) {
-  const std::string &op = v.op;
-
-  if (op.compare(0, 6, "money.") != 0) {
-    return false;
-  }
-  const std::string name = op.substr(6);
-  int rc = 0;
-  int64_t r = 0;
-  auto i64 = [&](size_t i) { return (int64_t)std::stoll(v.args[i]); };
-
-  INFO(v.line);
-  if (name == "words") {
-    char out[256];
-    size_t n = ty_money_words(i64(0), out);
-
-    CHECK(v.res[0] == token_of(reinterpret_cast<const uint8_t *>(out), n));
-    return true;
-  }
-  if (name == "format") {
-    ty_money_fmt_t f = money_fmt(std::stoi(v.args[0]));
-    char out[512];
-    size_t n = ty_money_format(i64(1), &f, out, sizeof out);
-
-    CHECK(v.res[0] == token_of(reinterpret_cast<const uint8_t *>(out), n));
-    return true;
-  }
-  if (name == "add") {
-    rc = ty_money_add(i64(0), i64(1), &r);
-  } else if (name == "sub") {
-    rc = ty_money_sub(i64(0), i64(1), &r);
-  } else if (name == "mul_i64") {
-    rc = ty_money_mul_int64(i64(0), i64(1), &r);
-  } else if (name == "div_i64") {
-    rc = ty_money_div_int64(i64(0), i64(1), &r);
-  } else if (name == "mul_f64") {
-    rc = ty_money_mul_float64(i64(0), std::stod(v.args[1]), &r);
-  } else if (name == "div_f64") {
-    rc = ty_money_div_float64(i64(0), std::stod(v.args[1]), &r);
-  } else if (name == "div_money") {
-    double d;
-
-    rc = ty_money_div_money(i64(0), i64(1), &d);
-    CHECK(-1 == rc);
-    CHECK(errnum_of(v.res[1]) == ty_errnum());
-    return true;
-  } else {
-    return false;
-  }
-  check_int(v, rc, r);
   return true;
 }
 
@@ -1675,144 +1379,11 @@ bool run_ts_known(const vec_t &v) {
   return true;
 }
 
-/* An inet token "family:bits:hex" as a value. */
-ty_inet_t inet_of(const std::string &tok) {
-  ty_inet_t a;
-  int fam = 0, bits = 0;
-  char hex[40];
-
-  memset(&a, 0, sizeof a);
-  REQUIRE(3 == sscanf(tok.c_str(), "%d:%d:%39s", &fam, &bits, hex));
-  a.family = fam == 4 ? TY_INET_V4 : TY_INET_V6;
-  a.bits = (uint8_t)bits;
-  for (size_t i = 0; i < strlen(hex) / 2; i++) {
-    unsigned b;
-
-    sscanf(hex + 2 * i, "%2x", &b);
-    a.addr[i] = (uint8_t)b;
-  }
-  return a;
-}
-
-/* A value as its token. */
-std::string inet_token(const ty_inet_t &a) {
-  char t[64];
-  int n =
-      snprintf(t, sizeof t, "%d:%d:", a.family == TY_INET_V4 ? 4 : 6, a.bits);
-
-  for (int i = 0; i < ty_inet_addrsize(&a); i++) {
-    n += snprintf(t + n, sizeof t - (size_t)n, "%02x", a.addr[i]);
-  }
-  return t;
-}
-
-/* Run one inet vector; false if its op is not one. */
-bool run_inet(const vec_t &v) {
-  const std::string &op = v.op;
-
-  /* inet.parse is the known-answer text vector, in run_known */
-  if (op.compare(0, 5, "inet.") != 0 || op == "inet.parse") {
-    return false;
-  }
-  const std::string name = op.substr(5);
-  ty_inet_t a = inet_of(v.args[0]), b, r;
-  int rc = 0;
-  int64_t i64 = 0;
-  auto sign = [](int c) { return (c > 0) - (c < 0); };
-
-  memset(&r, 0, sizeof r);
-  if (v.args.size() > 1 && name != "add" && name != "cidrmask") {
-    b = inet_of(v.args[1]);
-  }
-  INFO(v.line);
-  if (name == "cmp") {
-    CHECK(std::stoi(v.res[0]) == sign(ty_inet_cmp(&a, &b)));
-  } else if (name == "sub") {
-    CHECK(std::stoi(v.res[0]) == ty_inet_sub(&a, &b));
-  } else if (name == "subeq") {
-    CHECK(std::stoi(v.res[0]) == ty_inet_subeq(&a, &b));
-  } else if (name == "sup") {
-    CHECK(std::stoi(v.res[0]) == ty_inet_sup(&a, &b));
-  } else if (name == "supeq") {
-    CHECK(std::stoi(v.res[0]) == ty_inet_supeq(&a, &b));
-  } else if (name == "overlap") {
-    CHECK(std::stoi(v.res[0]) == ty_inet_overlap(&a, &b));
-  } else if (name == "broadcast") {
-    ty_inet_broadcast(&a, &r);
-    CHECK(v.res[0] == inet_token(r));
-  } else if (name == "network") {
-    ty_inet_network(&a, &r);
-    CHECK(v.res[0] == inet_token(r));
-  } else if (name == "netmask") {
-    ty_inet_netmask(&a, &r);
-    CHECK(v.res[0] == inet_token(r));
-  } else if (name == "hostmask") {
-    ty_inet_hostmask(&a, &r);
-    CHECK(v.res[0] == inet_token(r));
-  } else if (name == "not") {
-    ty_inet_not(&a, &r);
-    CHECK(v.res[0] == inet_token(r));
-  } else if (name == "cidrmask") {
-    ty_inet_set_masklen_cidr(&a, std::stoi(v.args[1]), &r);
-    CHECK(v.res[0] == inet_token(r));
-  } else if (name == "merge" || name == "and" || name == "or") {
-    rc = name == "merge" ? ty_inet_merge(&a, &b, &r)
-         : name == "and" ? ty_inet_and(&a, &b, &r)
-                         : ty_inet_or(&a, &b, &r);
-    if (v.res[0] == "E") {
-      CHECK(-1 == rc);
-      CHECK(errnum_of(v.res[1]) == ty_errnum());
-    } else {
-      REQUIRE(0 == rc);
-      CHECK(v.res[0] == inet_token(r));
-    }
-  } else if (name == "add") {
-    rc = ty_inet_add(&a, std::stoll(v.args[1]), &r);
-    if (v.res[0] == "E") {
-      CHECK(-1 == rc);
-      CHECK(errnum_of(v.res[1]) == ty_errnum());
-    } else {
-      REQUIRE(0 == rc);
-      CHECK(v.res[0] == inet_token(r));
-    }
-  } else if (name == "subinet") {
-    rc = ty_inet_sub_inet(&a, &b, &i64);
-    check_int(v, rc, i64);
-  } else {
-    return false;
-  }
-  return true;
-}
-
 /* Run a vector of what PostgreSQL did with a text (known.txt): the text is hex.
  */
 bool run_known(const vec_t &v) {
   const std::string &op = v.op;
 
-  if (op == "inet.parse" || op == "cidr.parse") {
-    return run_inet_text(v);
-  }
-  if (op == "tid.parse" || op == "lsn.parse" || op == "char.parse") {
-    return run_small_text(v);
-  }
-  if (op == "money.parse") {
-    std::vector<uint8_t> tb = bytes_of(v.args[0]);
-    std::string z(reinterpret_cast<const char *>(tb.data()), tb.size());
-    int64_t r = 0;
-    int rc = ty_money_parse(z.c_str(), &ty_money_fmt_c, &r);
-    char out[128];
-
-    INFO(v.line);
-    if (v.res[0] == "E") {
-      CHECK(-1 == rc);
-      CHECK(errnum_of(v.res[1]) == ty_errnum());
-    } else {
-      REQUIRE(0 == rc);
-      ty_money_format(r, &ty_money_fmt_c, out, sizeof out);
-      CHECK(v.res[0] == std::string(out));
-    }
-    return true;
-  }
   if (op == "ts.trunc" || op == "ts.age" || op == "ts.bin" ||
       op == "iv.trunc") {
     return run_ts_known(v);
@@ -1871,36 +1442,7 @@ bool run_known(const vec_t &v) {
     }
     return true;
   }
-  if (op != "macaddr.parse" && op != "macaddr8.parse") {
-    return false;
-  }
-  std::vector<uint8_t> t = bytes_of(v.args[0]);
-  std::string z(reinterpret_cast<const char *>(t.data()), t.size());
-  char out[TY_MACADDR8_TEXT_SIZE];
-  int rc;
-
-  if (op == "macaddr.parse") {
-    ty_macaddr_t a;
-    rc = ty_macaddr_parse(z.c_str(), &a);
-    if (rc == 0) {
-      ty_macaddr_format(&a, out);
-    }
-  } else {
-    ty_macaddr8_t a;
-    rc = ty_macaddr8_parse(z.c_str(), &a);
-    if (rc == 0) {
-      ty_macaddr8_format(&a, out);
-    }
-  }
-  INFO(v.line);
-  if (v.res[0] == "E") {
-    CHECK(-1 == rc);
-    CHECK(errnum_of(v.res[1]) == ty_errnum());
-  } else {
-    REQUIRE(0 == rc);
-    CHECK(v.res[0] == std::string(out));
-  }
-  return true;
+  return false;
 }
 
 /* Run a float text vector: parse (the text is hex) or format (known). */
@@ -2469,9 +2011,8 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_timetz(v) || run_datetime(v) ||
-                 run_interval(v) || run_money(v) || run_bpchar(v) ||
-                 run_text(v) || run_inet(v) || run_bits(v) || run_known(v) ||
+    bool known = run_timetz(v) || run_datetime(v) || run_interval(v) ||
+                 run_bpchar(v) || run_text(v) || run_known(v) ||
                  run_float_text(v) || run_float(v) || run_hash(v) ||
                  run_bytea(v) || run_int_convert(v) || run64(v) || run128(v) ||
                  run_i16(v) || run_i32(v) || run_i64(v);

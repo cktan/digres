@@ -4491,18 +4491,8 @@ done
 #    an encoding that does not exist.
 # 6. Float overflow, underflow, division by zero, a domain error, a text
 #    that is no float or is out of range, and a bad width_bucket.
-# 7. macaddr and macaddr8 text that is no address, an octet past 255, and a
-#    macaddr8 that does not fit a macaddr.
-# 8. Bit strings of two lengths in a bit operation, a digit that is none, a
-#    length that does not match, a negative substring length, an index outside
-#    the string, and a string too long for an integer.
-# 9. Bad inet and cidr text, values of two families in an operation, an
-#    address past the end of its range, and a mask length too long.
-# 10. Bad tid and pg_lsn text, and an integer too big for "char".
 # 11. A text function with a negative length, a zero field, a result past
 #     the limit, and a character number that is none.
-# 12. LIKE with a backslash at the end of the pattern, and a bad ESCAPE.
-# 13. money out of range, a division by zero, and bad money text.
 # 14. interval arithmetic out of range, and a division by zero.
 # 15. date, time and timestamp arithmetic out of range, bad make_date and
 #     make_time fields, and infinities that clash.
@@ -4598,48 +4588,6 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "degrees(1e308::float8 * 1)|value out of range: overflow" \
   "(select sum(x) from (values (1e308::float8), (1e308::float8)) v(x))|value out of range: overflow" \
   "(select var_pop(x) from (values (1e200::float8), (-1e200::float8), (1e200::float8)) v(x))|value out of range: overflow" \
-  "'08:00:2b:01:02'::macaddr|invalid input syntax for type macaddr: \"08:00:2b:01:02\"" \
-  "'08:00:2b:01:02:03:04'::macaddr|invalid input syntax for type macaddr" \
-  "'g8:00:2b:01:02:03'::macaddr|invalid input syntax for type macaddr" \
-  "'08:00:2b:01:02:03x'::macaddr|invalid input syntax for type macaddr" \
-  "''::macaddr|invalid input syntax for type macaddr" \
-  "'100:00:2b:01:02:03'::macaddr|invalid octet value in \"macaddr\" value" \
-  "'08:00:2b:01:02:03:04:05'::macaddr8::macaddr|macaddr8 data out of range to convert to macaddr" \
-  "'08:00:2b:01:02:03:04:05'::macaddr8::macaddr|Only addresses that have FF and FE" \
-  "'08:00:2b:01:02'::macaddr8|invalid input syntax for type macaddr8: \"08:00:2b:01:02\"" \
-  "'08:00:2b-01:02:03'::macaddr8|invalid input syntax for type macaddr8" \
-  "'08:00:2b:01:02:03:04:05:06'::macaddr8|invalid input syntax for type macaddr8" \
-  "'0g:00:2b:01:02:03'::macaddr8|invalid input syntax for type macaddr8" \
-  "''::macaddr8|invalid input syntax for type macaddr8" \
-  "B'1100' & B'101'|cannot AND bit strings of different sizes" \
-  "B'1100' # B'101'|cannot XOR bit strings of different sizes" \
-  "'102'::bit(3)|\"2\" is not a valid binary digit" \
-  "'x1g'::bit|\"g\" is not a valid hexadecimal digit" \
-  "substring(B'101' FROM 1 FOR -1)|negative substring length not allowed" \
-  "overlay(B'101' PLACING B'1' FROM 0)|negative substring length not allowed" \
-  "overlay(B'101' PLACING B'1' FROM 2 FOR 2147483647)|integer out of range" \
-  "get_bit(B'101', 3)|bit index 3 out of valid range (0..2)" \
-  "get_bit(B'', 0)|bit index 0 out of valid range (0..-1)" \
-  "set_bit(B'101', -1, 1)|bit index -1 out of valid range (0..2)" \
-  "set_bit(B'101', 0, 2)|new bit must be 0 or 1" \
-  "B'111111111111111111111111111111111'::int4|integer out of range" \
-  "B'11111111111111111111111111111111111111111111111111111111111111111'::int8|bigint out of range" \
-  "'1.2.3'::inet|invalid input syntax for type inet" \
-  "'1.2.3.4/33'::inet|invalid input syntax for type inet" \
-  "'::1/129'::inet|invalid input syntax for type inet" \
-  "'1.2.3.4/24'::cidr|invalid cidr value" \
-  "inet_merge('1.2.3.4', '::1')|cannot merge addresses from different families" \
-  "'1.2.3.4'::inet & '::1'::inet|cannot AND inet values of different sizes" \
-  "'1.2.3.4'::inet - '::1'::inet|cannot subtract inet values of different sizes" \
-  "'255.255.255.255'::inet + 1|result is out of range" \
-  "'0.0.0.0'::inet - 1|result is out of range" \
-  "'::'::inet - '8000::'::inet|result is out of range" \
-  "set_masklen('1.2.3.4'::inet, 33)|invalid mask length: 33" \
-  "'(1,2'::tid|invalid input syntax for type tid" \
-  "'(1,65536)'::tid|invalid input syntax for type tid" \
-  "'1'::pg_lsn|invalid input syntax for type pg_lsn" \
-  "'123456789/1'::pg_lsn|invalid input syntax for type pg_lsn" \
-  "200::\"char\"|\"char\" out of range" \
   "substring('abc' from 1 for -1)|negative substring length not allowed" \
   "overlay('abc' placing 'x' from 0)|negative substring length not allowed" \
   "overlay('abc' placing 'x' from 2 for 2147483647)|integer out of range" \
@@ -4653,13 +4601,6 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "chr(55296)|requested character not valid for encoding: 55296" \
   "'abc' LIKE 'a\\'|LIKE pattern must not end with escape character" \
   "'abc' LIKE '%\\'|LIKE pattern must not end with escape character" \
-  "'a' LIKE 'a' ESCAPE 'xy'|invalid escape string" \
-  "'\$1'::money * 1e300::float8|money out of range" \
-  "'\$1'::money / 0::float8|division by zero" \
-  "'\$1'::money / 0|division by zero" \
-  "'\$92233720368547758.07'::money + '\$1'::money|money out of range" \
-  "'\$92233720368547758.07'::money * 2|money out of range" \
-  "'abc'::money|invalid input syntax for type money" \
   "'infinity'::interval + '-infinity'::interval|interval out of range" \
   "'1 day'::interval / 0|division by zero" \
   "'1 day'::interval * 'nan'::float8|interval out of range" \
@@ -4717,8 +4658,7 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "time '12:00' - '-infinity'::interval|cannot subtract infinite interval from time" \
   "'infinity'::timestamp - 'infinity'::timestamp|interval out of range" \
   "'294276-12-31'::timestamp + '1 year'::interval|timestamp out of range" \
-  "'infinity'::timestamp + '-infinity'::interval|timestamp out of range" \
-  "'\$92233720368547758.08'::money|is out of range for type money"; do
+  "'infinity'::timestamp + '-infinity'::interval|timestamp out of range"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"
 done

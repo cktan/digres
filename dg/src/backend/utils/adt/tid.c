@@ -24,7 +24,6 @@
 
 #include "catalog/pg_type.h"
 #include "common/hashfn.h"
-#include "ty_small.h"
 #include "libpq/pqformat.h"
 #include "utils/fmgrprotos.h"
 
@@ -40,17 +39,55 @@
 Datum tidin(PG_FUNCTION_ARGS) {
   char *str = PG_GETARG_CSTRING(0);
   Node *escontext = fcinfo->context;
+  char *p, *coord[NTIDARGS];
+  int i;
   ItemPointer result;
-  ty_tid_t t;
+  BlockNumber blockNumber;
+  OffsetNumber offsetNumber;
+  char *badp;
+  unsigned long cvt;
 
-  /* ty reads the text */
-  if (ty_tid_parse(str, &t) != 0)
+  for (i = 0, p = str; *p && i < NTIDARGS && *p != RDELIM; p++)
+    if (*p == DELIM || (*p == LDELIM && i == 0))
+      coord[i++] = p + 1;
+
+  if (i < NTIDARGS)
     ereturn(escontext, (Datum)0,
             (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
              errmsg("invalid input syntax for type %s: \"%s\"", "tid", str)));
 
+  errno = 0;
+  cvt = strtoul(coord[0], &badp, 10);
+  if (errno || *badp != DELIM)
+    ereturn(escontext, (Datum)0,
+            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+             errmsg("invalid input syntax for type %s: \"%s\"", "tid", str)));
+  blockNumber = (BlockNumber)cvt;
+
+  /*
+   * Cope with possibility that unsigned long is wider than BlockNumber, in
+   * which case strtoul will not raise an error for some values that are out
+   * of the range of BlockNumber.  (See similar code in oidin().)
+   */
+#if SIZEOF_LONG > 4
+  if (cvt != (unsigned long)blockNumber &&
+      cvt != (unsigned long)((int32)blockNumber))
+    ereturn(escontext, (Datum)0,
+            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+             errmsg("invalid input syntax for type %s: \"%s\"", "tid", str)));
+#endif
+
+  cvt = strtoul(coord[1], &badp, 10);
+  if (errno || *badp != RDELIM || cvt > USHRT_MAX)
+    ereturn(escontext, (Datum)0,
+            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+             errmsg("invalid input syntax for type %s: \"%s\"", "tid", str)));
+  offsetNumber = (OffsetNumber)cvt;
+
   result = (ItemPointer)palloc(sizeof(ItemPointerData));
-  ItemPointerSet(result, ty_tid_block(&t), t.offset);
+
+  ItemPointerSet(result, blockNumber, offsetNumber);
+
   PG_RETURN_ITEMPOINTER(result);
 }
 
@@ -60,10 +97,16 @@ Datum tidin(PG_FUNCTION_ARGS) {
  */
 Datum tidout(PG_FUNCTION_ARGS) {
   ItemPointer itemPtr = PG_GETARG_ITEMPOINTER(0);
-  char buf[TY_TID_TEXT_MAX];
+  BlockNumber blockNumber;
+  OffsetNumber offsetNumber;
+  char buf[32];
 
-  /* the struct of a tid is ty's */
-  ty_tid_format((const ty_tid_t *)itemPtr, buf);
+  blockNumber = ItemPointerGetBlockNumberNoCheck(itemPtr);
+  offsetNumber = ItemPointerGetOffsetNumberNoCheck(itemPtr);
+
+  /* Perhaps someday we should output this as a record. */
+  snprintf(buf, sizeof(buf), "(%u,%u)", blockNumber, offsetNumber);
+
   PG_RETURN_CSTRING(pstrdup(buf));
 }
 
@@ -170,12 +213,21 @@ Datum tidsmaller(PG_FUNCTION_ARGS) {
 Datum hashtid(PG_FUNCTION_ARGS) {
   ItemPointer key = PG_GETARG_ITEMPOINTER(0);
 
-  return UInt32GetDatum(ty_tid_hash((const ty_tid_t *)key));
+  /*
+   * While you'll probably have a lot of trouble with a compiler that
+   * insists on appending pad space to struct ItemPointerData, we can at
+   * least make this code work, by not using sizeof(ItemPointerData).
+   * Instead rely on knowing the sizes of the component fields.
+   */
+  return hash_any((unsigned char *)key,
+                  sizeof(BlockIdData) + sizeof(OffsetNumber));
 }
 
 Datum hashtidextended(PG_FUNCTION_ARGS) {
   ItemPointer key = PG_GETARG_ITEMPOINTER(0);
   uint64 seed = PG_GETARG_INT64(1);
 
-  return Int64GetDatum(ty_tid_hash_extended((const ty_tid_t *)key, seed));
+  /* As above */
+  return hash_any_extended((unsigned char *)key,
+                           sizeof(BlockIdData) + sizeof(OffsetNumber), seed);
 }
