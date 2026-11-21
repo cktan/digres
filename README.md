@@ -8,9 +8,11 @@ own storage engine, which keeps its data in RocksDB for now. It
 speaks PostgreSQL's wire protocol, so `psql`, `pgbench` and any
 PostgreSQL driver connect to it unchanged.
 
-Each table is a RocksDB column family. A row's key is its
+A table is a row store or a column store. A row store table,
+the default, is a RocksDB column family. A row's key is its
 primary key in an order-preserving encoding, and its value is
-the tuple.
+the tuple. A column store table keeps its rows column by column,
+in immutable files.
 
 **digres is a work in progress, and much remains to be done.**
 It is not ready for production. It has no PL/pgSQL, no
@@ -58,6 +60,24 @@ of what is above them, and everything under them, is new.
 - **A database is one directory**, `base/X`: one RocksDB
   instance holds its rows, its catalog and RocksDB's WAL.
   PostgreSQL's WAL and checkpointer are removed.
+- **A column store, for analytics**: `CREATE TABLE ... WITH
+  (storage = columnar)` keeps a table column by column
+  ([`sm/COLSTORE.md`](sm/COLSTORE.md)).
+  - New rows go to a row store first. A worker thread seals
+    them in groups of 10k rows: one compressed, immutable file
+    for each column.
+  - A scan reads only the columns that the query uses. It skips
+    each group of rows that the predicate cannot match, from
+    the min, max and filter of each column, kept in RocksDB.
+  - A value is 2 KB at most. Put a longer value in a row store
+    table, and join the two.
+- **The column store needs another executor for its full
+  benefit.** PostgreSQL's executor takes one row at a time.
+  So a scan of a column store table makes each row again from
+  its columns, and the executor evaluates it row by row. The
+  scan reads less data, but it does no work on a column as a
+  batch. A columnar executor, which works on batches of column
+  values, is still to be built.
 
 ## Get started
 
@@ -134,7 +154,7 @@ read [`sm/CODE.md`](sm/CODE.md) for `sm/`, `aa/` and `ty/`, or
 | --- | --- |
 | [`sm/README.md`](sm/README.md) | the stack's levels, and each one's design document |
 | [`sm/sm1/SM1_DESIGN.md`](sm/sm1/SM1_DESIGN.md), [`sm/sm2/SM2_DESIGN.md`](sm/sm2/SM2_DESIGN.md), [`sm/sm3/SM3_DESIGN.md`](sm/sm3/SM3_DESIGN.md), [`sm/sm0/README.md`](sm/sm0/README.md) | the design of each level |
-| [`sm/BTREEINDEX.md`](sm/BTREEINDEX.md) and the other notes in `sm/` | designs of a feature each, built or proposed |
+| [`sm/BTREEINDEX.md`](sm/BTREEINDEX.md), [`sm/COLSTORE.md`](sm/COLSTORE.md) and the other notes in `sm/` | designs of a feature each, built or proposed |
 | [`sm/NEXT.md`](sm/NEXT.md) | what is to be built next, in order |
 | [`dg/README.md`](dg/README.md), [`dg/DESIGN.md`](dg/DESIGN.md) | what digres runs, and its decisions of record |
 | [`sm/PGFORK.md`](sm/PGFORK.md#10-digres-how-the-fork-is-to-be-made) | how the fork of PostgreSQL is made |
