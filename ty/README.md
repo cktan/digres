@@ -47,6 +47,9 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty_bool.h` | the boolean parse |
 | `include/ty_uuid.h` | the uuid operations |
 | `include/ty_bytea.h` | the bytea operations |
+| `include/ty_float.h` | the float4 and float8 operations, with their text |
+| `include/ty_hash.h` | the hash of every type, PostgreSQL's |
+| `include/ty_mac.h` | macaddr and macaddr8 |
 | `include/ty_bits.h` | the bit and bit varying operations |
 | `include/ty_inet.h` | the inet and cidr operations |
 | `include/ty_small.h` | tid, pg_lsn and "char" |
@@ -58,7 +61,8 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `src/` | the library |
 | `test/` | the unit tests, in doctest, and the vectors |
 | `test/gen_vectors.py` | a reference of plain Python integers that writes `test/vectors.txt` |
-| `test/vectors.txt` | about 43,500 vectors of every decimal and integer operation, with the result or the error kind |
+| `test/vectors.txt` | about 180,000 vectors of the operations of every type, with the result or the error kind |
+| `test/known.txt` | about 1,500 texts, with what the old digres printed for them |
 
 `ty/` follows [`../sm/CODE.md`](../sm/CODE.md).
 
@@ -68,9 +72,8 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 
 - **Unit tests** (`test/test_*.cc`), by hand: the allocator, the error
   state, and the cases of each operation that a reader needs to see.
-- **The vectors** (`test/test_vectors.cc`): every operation of
-  `decimal64`, `decimal128` and the integers against
-  `test/vectors.txt`. A reference
+- **The vectors** (`test/test_vectors.cc`): the operations of every
+  type against `test/vectors.txt` and `test/known.txt`. A reference
   in plain Python integers, `test/gen_vectors.py`, follows the rules in
   [`DESIGN.md`](DESIGN.md) and writes them: edges at the ends of both
   ranges, scales that do and do not align in 128 bits, and random
