@@ -24,4 +24,16 @@ ty_int_raise(const char *type) {
                   errmsg("%s out of range", type)));
 }
 
+/*
+ * Raise PostgreSQL's error for a shift whose count ty refused: a count
+ * below 0 or not below the width of the type. It is cold, as the other is.
+ */
+static pg_noreturn pg_noinline pg_attribute_cold void
+ty_int_raise_shift(int bits) {
+  ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                  errmsg("shift count out of range for a %d-bit integer "
+                         "(0 to %d)",
+                         bits, bits - 1)));
+}
+
 #endif /* TY_INT_GLUE_H */

@@ -44,11 +44,14 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty.h` | the interface |
 | `include/ty_decimal.h` | the decimal operations |
 | `include/ty_int.h` | the integer operations |
+| `include/ty_bool.h` | the boolean parse |
+| `include/ty_uuid.h` | the uuid operations |
+| `include/ty_bytea.h` | the bytea operations |
 | `include/ty_error.h` | the error codes |
 | `src/` | the library |
 | `test/` | the unit tests, in doctest, and the vectors |
 | `test/gen_vectors.py` | a reference of plain Python integers that writes `test/vectors.txt` |
-| `test/vectors.txt` | about 38,600 vectors of every decimal and integer operation, with the result or the error kind |
+| `test/vectors.txt` | about 42,700 vectors of every decimal and integer operation, with the result or the error kind |
 
 `ty/` follows [`../sm/CODE.md`](../sm/CODE.md).
 

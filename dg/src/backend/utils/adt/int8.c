@@ -761,7 +761,7 @@ Datum int8shl(PG_FUNCTION_ARGS) {
   int64 r;
 
   if (ty_int64_shl(PG_GETARG_INT64(0), PG_GETARG_INT32(1), &r))
-    ty_int_raise("bigint");
+    ty_int_raise_shift(64);
   PG_RETURN_INT64(r);
 }
 
@@ -769,7 +769,7 @@ Datum int8shr(PG_FUNCTION_ARGS) {
   int64 r;
 
   if (ty_int64_shr(PG_GETARG_INT64(0), PG_GETARG_INT32(1), &r))
-    ty_int_raise("bigint");
+    ty_int_raise_shift(64);
   PG_RETURN_INT64(r);
 }
 

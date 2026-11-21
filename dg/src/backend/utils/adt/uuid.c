@@ -28,6 +28,7 @@
 #include "utils/sortsupport.h"
 #include "utils/timestamp.h"
 #include "utils/uuid.h"
+#include "ty_uuid.h"
 #include "utils/control_block.h"
 
 /* helper macros */
@@ -90,7 +91,6 @@ static int uuid_internal_cmp(const pg_uuid_t *arg1, const pg_uuid_t *arg2);
 static int uuid_fast_cmp(Datum x, Datum y, SortSupport ssup);
 static bool uuid_abbrev_abort(int memtupcount, SortSupport ssup);
 static Datum uuid_abbrev_convert(Datum original, SortSupport ssup);
-static inline void uuid_set_version(pg_uuid_t *uuid, unsigned char version);
 static inline int64 get_real_time_ns_ascending();
 static pg_uuid_t *generate_uuidv7(uint64 unix_ts_ms, uint32 sub_ms);
 
@@ -105,33 +105,10 @@ Datum uuid_in(PG_FUNCTION_ARGS) {
 
 Datum uuid_out(PG_FUNCTION_ARGS) {
   pg_uuid_t *uuid = PG_GETARG_UUID_P(0);
-  static const char hex_chars[] = "0123456789abcdef";
-  char *buf, *p;
-  int i;
+  char *buf = (char *)palloc(TY_UUID_TEXT_SIZE);
 
-  /* counts for the four hyphens and the zero-terminator */
-  buf = (char *)palloc(2 * UUID_LEN + 5);
-  p = buf;
-  for (i = 0; i < UUID_LEN; i++) {
-    int hi;
-    int lo;
-
-    /*
-     * We print uuid values as a string of 8, 4, 4, 4, and then 12
-     * hexadecimal characters, with each group is separated by a hyphen
-     * ("-"). Therefore, add the hyphens at the appropriate places here.
-     */
-    if (i == 4 || i == 6 || i == 8 || i == 10)
-      *p++ = '-';
-
-    hi = uuid->data[i] >> 4;
-    lo = uuid->data[i] & 0x0F;
-
-    *p++ = hex_chars[hi];
-    *p++ = hex_chars[lo];
-  }
-  *p = '\0';
-
+  /* ty writes 8-4-4-4-12 lowercase digits and the NUL. */
+  ty_uuid_format((const ty_uuid_t *)uuid, buf);
   PG_RETURN_CSTRING(buf);
 }
 
@@ -143,47 +120,11 @@ Datum uuid_out(PG_FUNCTION_ARGS) {
  */
 static void string_to_uuid(const char *source, pg_uuid_t *uuid,
                            Node *escontext) {
-  const char *src = source;
-  bool braces = false;
-  int i;
-
-  if (src[0] == '{') {
-    src++;
-    braces = true;
-  }
-
-  for (i = 0; i < UUID_LEN; i++) {
-    char str_buf[3];
-
-    if (src[0] == '\0' || src[1] == '\0')
-      goto syntax_error;
-    memcpy(str_buf, src, 2);
-    if (!isxdigit((unsigned char)str_buf[0]) ||
-        !isxdigit((unsigned char)str_buf[1]))
-      goto syntax_error;
-
-    str_buf[2] = '\0';
-    uuid->data[i] = (unsigned char)strtoul(str_buf, NULL, 16);
-    src += 2;
-    if (src[0] == '-' && (i % 2) == 1 && i < UUID_LEN - 1)
-      src++;
-  }
-
-  if (braces) {
-    if (*src != '}')
-      goto syntax_error;
-    src++;
-  }
-
-  if (*src != '\0')
-    goto syntax_error;
-
-  return;
-
-syntax_error:
-  ereturn(escontext, ,
-          (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-           errmsg("invalid input syntax for type %s: \"%s\"", "uuid", source)));
+  if (ty_uuid_parse(source, strlen(source), (ty_uuid_t *)uuid) != 0)
+    ereturn(escontext, ,
+            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+             errmsg("invalid input syntax for type %s: \"%s\"", "uuid",
+                    source)));
 }
 
 Datum uuid_recv(PG_FUNCTION_ARGS) {
@@ -206,7 +147,7 @@ Datum uuid_send(PG_FUNCTION_ARGS) {
 
 /* internal uuid compare function */
 static int uuid_internal_cmp(const pg_uuid_t *arg1, const pg_uuid_t *arg2) {
-  return memcmp(arg1->data, arg2->data, UUID_LEN);
+  return ty_uuid_cmp((const ty_uuid_t *)arg1, (const ty_uuid_t *)arg2);
 }
 
 Datum uuid_lt(PG_FUNCTION_ARGS) {
@@ -459,24 +400,14 @@ Datum uuid_skipsupport(PG_FUNCTION_ARGS) {
 Datum uuid_hash(PG_FUNCTION_ARGS) {
   pg_uuid_t *key = PG_GETARG_UUID_P(0);
 
-  return hash_any(key->data, UUID_LEN);
+  PG_RETURN_UINT32((uint32)ty_uuid_hash((const ty_uuid_t *)key, 0));
 }
 
 Datum uuid_hash_extended(PG_FUNCTION_ARGS) {
   pg_uuid_t *key = PG_GETARG_UUID_P(0);
 
-  return hash_any_extended(key->data, UUID_LEN, PG_GETARG_INT64(1));
-}
-
-/*
- * Set the given UUID version and the variant bits
- */
-static inline void uuid_set_version(pg_uuid_t *uuid, unsigned char version) {
-  /* set version field, top four bits */
-  uuid->data[6] = (uuid->data[6] & 0x0f) | (version << 4);
-
-  /* set variant field, top two bits are 1, 0 */
-  uuid->data[8] = (uuid->data[8] & 0x3f) | 0x80;
+  PG_RETURN_UINT64(
+      ty_uuid_hash((const ty_uuid_t *)key, (uint64)PG_GETARG_INT64(1)));
 }
 
 /*
@@ -488,15 +419,10 @@ static inline void uuid_set_version(pg_uuid_t *uuid, unsigned char version) {
 Datum gen_random_uuid(PG_FUNCTION_ARGS) {
   pg_uuid_t *uuid = (pg_uuid_t *)palloc(UUID_LEN);
 
-  if (!pg_strong_random(uuid, UUID_LEN))
+  /* ty fills random bytes, sets the version 4 and the variant bits. */
+  if (ty_uuid_v4((ty_uuid_t *)uuid) != 0)
     ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
                     errmsg("could not generate random values")));
-
-  /*
-   * Set magic numbers for a "version 4" (pseudorandom) UUID and variant,
-   * see https://datatracker.ietf.org/doc/html/rfc9562#name-uuid-version-4
-   */
-  uuid_set_version(uuid, 4);
 
   PG_RETURN_UUID_P(uuid);
 }
@@ -559,48 +485,11 @@ static inline int64 get_real_time_ns_ascending() {
  */
 static pg_uuid_t *generate_uuidv7(uint64 unix_ts_ms, uint32 sub_ms) {
   pg_uuid_t *uuid = (pg_uuid_t *)palloc(UUID_LEN);
-  uint32 increased_clock_precision;
 
-  /* Fill in time part */
-  uuid->data[0] = (unsigned char)(unix_ts_ms >> 40);
-  uuid->data[1] = (unsigned char)(unix_ts_ms >> 32);
-  uuid->data[2] = (unsigned char)(unix_ts_ms >> 24);
-  uuid->data[3] = (unsigned char)(unix_ts_ms >> 16);
-  uuid->data[4] = (unsigned char)(unix_ts_ms >> 8);
-  uuid->data[5] = (unsigned char)unix_ts_ms;
-
-  /*
-   * sub-millisecond timestamp fraction (SUBMS_BITS bits, not
-   * SUBMS_MINIMAL_STEP_BITS)
-   */
-  increased_clock_precision = (sub_ms * (1 << SUBMS_BITS)) / NS_PER_MS;
-
-  /* Fill the increased clock precision to "rand_a" bits */
-  uuid->data[6] = (unsigned char)(increased_clock_precision >> 8);
-  uuid->data[7] = (unsigned char)(increased_clock_precision);
-
-  /* fill everything after the increased clock precision with random bytes */
-  if (!pg_strong_random(&uuid->data[8], UUID_LEN - 8))
+  /* ty lays out the time and the fraction, and fills the random bytes. */
+  if (ty_uuid_v7(unix_ts_ms, sub_ms, (ty_uuid_t *)uuid) != 0)
     ereport(ERROR, (errcode(ERRCODE_INTERNAL_ERROR),
                     errmsg("could not generate random values")));
-
-#if SUBMS_MINIMAL_STEP_BITS == 10
-
-  /*
-   * On systems that have only 10 bits of sub-ms precision,  2 least
-   * significant are dependent on other time-specific bits, and they do not
-   * contribute to uniqueness. To make these bit random we mix in two bits
-   * from CSPRNG. SUBMS_MINIMAL_STEP is chosen so that we still guarantee
-   * monotonicity despite altering these bits.
-   */
-  uuid->data[7] = uuid->data[7] ^ (uuid->data[8] >> 6);
-#endif
-
-  /*
-   * Set magic numbers for a "version 7" (pseudorandom) UUID and variant,
-   * see https://www.rfc-editor.org/rfc/rfc9562#name-version-field
-   */
-  uuid_set_version(uuid, 7);
 
   return uuid;
 }
@@ -680,42 +569,14 @@ Datum uuidv7_interval(PG_FUNCTION_ARGS) {
  */
 Datum uuid_extract_timestamp(PG_FUNCTION_ARGS) {
   pg_uuid_t *uuid = PG_GETARG_UUID_P(0);
-  int version;
-  uint64 tms;
-  TimestampTz ts;
+  int64 us;
 
-  /* check if RFC 9562 variant */
-  if ((uuid->data[8] & 0xc0) != 0x80)
+  /* 1 is a uuid of another variant, or of a version with no time. */
+  if (ty_uuid_unix_us((const ty_uuid_t *)uuid, &us) != 0)
     PG_RETURN_NULL();
 
-  version = uuid->data[6] >> 4;
-
-  if (version == 1) {
-    tms = ((uint64)uuid->data[0] << 24) + ((uint64)uuid->data[1] << 16) +
-          ((uint64)uuid->data[2] << 8) + ((uint64)uuid->data[3]) +
-          ((uint64)uuid->data[4] << 40) + ((uint64)uuid->data[5] << 32) +
-          (((uint64)uuid->data[6] & 0xf) << 56) + ((uint64)uuid->data[7] << 48);
-
-    /* convert 100-ns intervals to us, then adjust */
-    ts = (TimestampTz)(tms / 10) -
-         ((uint64)POSTGRES_EPOCH_JDATE - GREGORIAN_EPOCH_JDATE) * SECS_PER_DAY *
-             USECS_PER_SEC;
-    PG_RETURN_TIMESTAMPTZ(ts);
-  }
-
-  if (version == 7) {
-    tms = (uuid->data[5]) + (((uint64)uuid->data[4]) << 8) +
-          (((uint64)uuid->data[3]) << 16) + (((uint64)uuid->data[2]) << 24) +
-          (((uint64)uuid->data[1]) << 32) + (((uint64)uuid->data[0]) << 40);
-
-    /* convert ms to us, then adjust */
-    ts = (TimestampTz)(tms * US_PER_MS) - PG_UNIX_EPOCH_OFFSET_US;
-
-    PG_RETURN_TIMESTAMPTZ(ts);
-  }
-
-  /* not a timestamp-containing UUID version */
-  PG_RETURN_NULL();
+  /* ty counts from the Unix epoch; a timestamp from 2000-01-01. */
+  PG_RETURN_TIMESTAMPTZ((TimestampTz)(us - PG_UNIX_EPOCH_OFFSET_US));
 }
 
 /*
@@ -725,13 +586,11 @@ Datum uuid_extract_timestamp(PG_FUNCTION_ARGS) {
  */
 Datum uuid_extract_version(PG_FUNCTION_ARGS) {
   pg_uuid_t *uuid = PG_GETARG_UUID_P(0);
-  uint16 version;
+  int version = ty_uuid_version((const ty_uuid_t *)uuid);
 
-  /* check if RFC 9562 variant */
-  if ((uuid->data[8] & 0xc0) != 0x80)
+  /* -1 is a variant that is not RFC 9562's. */
+  if (version < 0)
     PG_RETURN_NULL();
 
-  version = uuid->data[6] >> 4;
-
-  PG_RETURN_UINT16(version);
+  PG_RETURN_UINT16((uint16)version);
 }

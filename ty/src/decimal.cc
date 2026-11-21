@@ -10,6 +10,7 @@
 #include "ty_decimal.h"
 
 #include "error.h"
+#include "hash.h"
 
 namespace {
 
@@ -836,20 +837,7 @@ int ty_dec128_width_bucket(const ty_dec128_t *operand, const ty_dec128_t *b1,
   return 0;
 }
 
-namespace {
-
-/* One round of a 64-bit mix, murmur3's finalizer: h folded with w. */
-uint64_t mix64(uint64_t h, uint64_t w) {
-  h ^= w;
-  h ^= h >> 33;
-  h *= 0xff51afd7ed558ccdULL;
-  h ^= h >> 33;
-  h *= 0xc4ceb9fe1a85ec53ULL;
-  h ^= h >> 33;
-  return h;
-}
-
-} // namespace
+using ty_internal::mix64;
 
 /*
  * The hash of a decimal128.

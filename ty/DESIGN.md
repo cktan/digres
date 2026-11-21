@@ -201,3 +201,72 @@ PostgreSQL's boolean input: `true`, `yes`, `on`, `1` and `false`,
 and `0`, which are whole. `o` fails, as both `on` and `off` begin
 with it. It skips no space: a caller that allows one trims first.
 A compare of two bools is C's, and a wrapper uses it.
+
+## 8. uuid
+
+`ty_uuid.h` holds a uuid as its 16 bytes, `ty_uuid_t`, and these
+functions:
+
+- **`ty_uuid_parse`** reads 32 hexadecimal digits, a hyphen
+  allowed after each group of four, in braces if you like, in
+  any case. Other text is `TY_ERR_INVALID`.
+- **`ty_uuid_format`** writes 8-4-4-4-12 lowercase digits.
+- **`ty_uuid_cmp`** compares the bytes, as `memcmp` does.
+- **`ty_uuid_hash`** is a 64-bit hash with a seed; the low 32
+  bits with seed 0 are the standard hash. It is ty's own, so its
+  values are not PostgreSQL's.
+- **`ty_uuid_version`** gives the version, or -1 if the variant
+  is not RFC 9562's.
+- **`ty_uuid_unix_us`** gives the time of a version 1 or version
+  7 uuid in microseconds since the Unix epoch. For any other
+  uuid it returns 1, which is not an error.
+- **`ty_uuid_v4` and `ty_uuid_v7`** make a uuid of random bytes
+  from the system (`getrandom`), with the version and the
+  variant set. Version 7 takes the time in milliseconds and the
+  nanoseconds past it, kept in 12 bits, so uuids of one
+  millisecond still order. The clock, and keeping it ascending,
+  are the host's.
+
+None of them allocates: a uuid is a value of 16 bytes. The tests
+are in `test/test_uuid.cc` and 627 vectors.
+
+## 9. bytea
+
+`ty_bytea.h` holds the operations of a byte string, on a pointer
+and a length. It does not allocate. Where a result has bytes,
+the caller gives a buffer, and the caller can tell its size
+before the call: from `ty_bytea_hex_size`,
+`ty_bytea_escape_size`, `ty_bytea_overlay_size`, or from the
+length of the inputs. A host then writes a result where it
+keeps its own: digres writes after the 4 bytes of a varlena's
+header, with no copy. This differs from the plan's use of
+`ty_set_alloc` for results (`../sm/TYPEMOVE_PLAN.md` section 3)
+on purpose: that is for a result whose size only ty can know,
+and none of bytea's is.
+
+- **Text.** `ty_bytea_parse` reads the hex form (`\x`, pairs of
+  digits, any case, a space, tab, newline or return between
+  pairs) and the escaped form (a byte, `\nnn` octal up to 377,
+  `\\`). Its error is `TY_ERR_INVALID`, and its message is
+  PostgreSQL's text for a hex fault. `ty_bytea_format_hex` and
+  `ty_bytea_format_escape` write both forms; which one a
+  session wants is the host's setting (`bytea_output`).
+- **Compare and hash.** `ty_bytea_cmp` compares the bytes, and a
+  prefix is less. `ty_bytea_hash` is ty's own 64-bit hash with a
+  seed.
+- **Making bytes.** `ty_bytea_cat`, `ty_bytea_reverse`, and
+  `ty_bytea_overlay`. `ty_bytea_substr_range` gives the place and
+  count that SUBSTRING names and needs no length, so a host that
+  fetches part of a stored value fetches that part.
+- **Looking inside.** `ty_bytea_position`, `ty_bytea_bit_count`,
+  `ty_bytea_get_byte`, `ty_bytea_get_bit`; and `ty_bytea_set_byte`
+  and `ty_bytea_set_bit`, which change bytes the caller copied.
+  An index outside is `TY_ERR_RANGE`, with PostgreSQL's message.
+- **Integers.** A bytea of at most N bytes is an unsigned number
+  of N bytes, which then becomes the signed type, and a longer
+  one is `TY_ERR_RANGE`. `ty_intN_to_bytea` is the other way.
+
+Not here: `encode` and `decode` (hex, base64, escape), the
+`string_agg` state, and the hash of a stored value, which are
+digres's for now. The tests are in `test/test_bytea.cc` and
+3,522 vectors.

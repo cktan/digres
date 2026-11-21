@@ -17,8 +17,10 @@
 
 #include "doctest.h"
 #include "ty_bool.h"
+#include "ty_bytea.h"
 #include "ty_decimal.h"
 #include "ty_int.h"
+#include "ty_uuid.h"
 
 namespace {
 
@@ -112,6 +114,193 @@ void check_int(const vec_t &v, int rc, long long got) {
     REQUIRE(0 == rc);
     CHECK(std::stoll(v.res[0]) == got);
   }
+}
+
+/* A uuid from its 32 hexadecimal digits. */
+ty_uuid_t uuid_of(const std::string &hex) {
+  ty_uuid_t u;
+
+  for (int i = 0; i < 16; i++) {
+    u.data[i] = (uint8_t)std::stoi(hex.substr(2 * i, 2), nullptr, 16);
+  }
+  return u;
+}
+
+/* The 32 hexadecimal digits of a uuid. */
+std::string hex_of(const ty_uuid_t &u) {
+  static const char digits[] = "0123456789abcdef";
+  std::string s;
+
+  for (int i = 0; i < 16; i++) {
+    s += digits[u.data[i] >> 4];
+    s += digits[u.data[i] & 15];
+  }
+  return s;
+}
+
+/* The bytes of a token: its hexadecimal digits, or "-" for none. */
+std::vector<uint8_t> bytes_of(const std::string &tok) {
+  std::vector<uint8_t> b;
+
+  if (tok != "-") {
+    for (size_t i = 0; i + 1 < tok.size(); i += 2) {
+      b.push_back((uint8_t)std::stoi(tok.substr(i, 2), nullptr, 16));
+    }
+  }
+  return b;
+}
+
+/* The token of bytes: their hexadecimal digits, or "-" for none. */
+std::string token_of(const uint8_t *p, size_t n) {
+  static const char digits[] = "0123456789abcdef";
+  std::string s;
+
+  for (size_t i = 0; i < n; i++) {
+    s += digits[p[i] >> 4];
+    s += digits[p[i] & 15];
+  }
+  return s.empty() ? "-" : s;
+}
+
+/* The token of a vector of bytes. */
+std::string token_of(const std::vector<uint8_t> &b) {
+  return token_of(b.data(), b.size());
+}
+
+/* A text token: "" stands for the empty text. */
+std::string text_of(const std::string &tok) { return tok == "\"\"" ? "" : tok; }
+
+/* Check a call that gives bytes against the vector: an error or a token. */
+void check_bytes(const vec_t &v, int rc, const std::vector<uint8_t> &got) {
+  INFO(v.line);
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    CHECK(errnum_of(v.res[1]) == ty_errnum());
+  } else {
+    REQUIRE(0 == rc);
+    CHECK(v.res[0] == token_of(got));
+  }
+}
+
+/* Run one bytea vector; false if its op is not one of them. */
+bool run_bytea(const vec_t &v) {
+  const std::string &op = v.op;
+
+  if (op.compare(0, 6, "bytea.") != 0) {
+    return false;
+  }
+  std::string name = op.substr(6);
+  auto arg = [&](size_t i) { return bytes_of(v.args[i]); };
+  auto num = [&](size_t i) { return std::stoll(v.args[i]); };
+
+  if (name == "parse") {
+    std::string t = text_of(v.args[0]);
+    std::vector<uint8_t> out(t.size() + 1);
+    size_t n = 0;
+    int rc = ty_bytea_parse(t.data(), t.size(), out.data(), &n);
+    out.resize(n);
+    check_bytes(v, rc, out);
+  } else if (name == "fmthex") {
+    std::vector<uint8_t> a = arg(0);
+    std::string out(ty_bytea_hex_size(a.size()), '\0');
+    ty_bytea_format_hex(a.data(), a.size(), &out[0]);
+    INFO(v.line);
+    CHECK(v.res[0] == out);
+  } else if (name == "fmtesc") {
+    std::vector<uint8_t> a = arg(0);
+    std::string out(ty_bytea_escape_size(a.data(), a.size()), '\0');
+    ty_bytea_format_escape(a.data(), a.size(), &out[0]);
+    INFO(v.line);
+    CHECK(text_of(v.res[0]) == out);
+  } else if (name == "cmp") {
+    std::vector<uint8_t> a = arg(0), b = arg(1);
+    int c = ty_bytea_cmp(a.data(), a.size(), b.data(), b.size());
+    INFO(v.line);
+    CHECK(std::stoi(v.res[0]) == (c > 0) - (c < 0));
+  } else if (name == "cat") {
+    std::vector<uint8_t> a = arg(0), b = arg(1), out(a.size() + b.size());
+    ty_bytea_cat(a.data(), a.size(), b.data(), b.size(), out.data());
+    check_bytes(v, 0, out);
+  } else if (name == "reverse") {
+    std::vector<uint8_t> a = arg(0), out(a.size());
+    ty_bytea_reverse(a.data(), a.size(), out.data());
+    check_bytes(v, 0, out);
+  } else if (name == "position") {
+    std::vector<uint8_t> a = arg(0), b = arg(1);
+    INFO(v.line);
+    CHECK(std::stoll(v.res[0]) ==
+          ty_bytea_position(a.data(), a.size(), b.data(), b.size()));
+  } else if (name == "bitcount") {
+    std::vector<uint8_t> a = arg(0);
+    INFO(v.line);
+    CHECK(std::stoll(v.res[0]) == ty_bytea_bit_count(a.data(), a.size()));
+  } else if (name == "getbyte" || name == "getbit") {
+    std::vector<uint8_t> a = arg(0);
+    int32_t r = 0;
+    int rc = name == "getbyte"
+                 ? ty_bytea_get_byte(a.data(), a.size(), (int32_t)num(1), &r)
+                 : ty_bytea_get_bit(a.data(), a.size(), num(1), &r);
+    check_int(v, rc, r);
+  } else if (name == "setbyte" || name == "setbit") {
+    std::vector<uint8_t> a = arg(0);
+    int rc =
+        name == "setbyte"
+            ? ty_bytea_set_byte(a.data(), a.size(), (int32_t)num(1),
+                                (int32_t)num(2))
+            : ty_bytea_set_bit(a.data(), a.size(), num(1), (int32_t)num(2));
+    check_bytes(v, rc, a);
+  } else if (name == "substr") {
+    int32_t off = 0, count = 0;
+    int rc = ty_bytea_substr_range((int32_t)num(0), (int32_t)num(1),
+                                   (int)num(2), &off, &count);
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(std::stoll(v.res[0]) == off);
+      CHECK(std::stoll(v.res[1]) == count);
+    }
+  } else if (name == "overlay") {
+    std::vector<uint8_t> a = arg(0), b = arg(1), out;
+    size_t size = 0;
+    int rc = ty_bytea_overlay_size(a.size(), b.size(), (int32_t)num(2),
+                                   (int32_t)num(3), &size);
+    if (rc == 0) {
+      out.resize(size);
+      rc = ty_bytea_overlay(a.data(), a.size(), b.data(), b.size(),
+                            (int32_t)num(2), (int32_t)num(3), out.data());
+    }
+    check_bytes(v, rc, out);
+  } else if (name == "toint16" || name == "toint32" || name == "toint64") {
+    std::vector<uint8_t> a = arg(0);
+    int16_t r16 = 0;
+    int32_t r32 = 0;
+    int64_t r64 = 0;
+    int rc = name == "toint16"   ? ty_bytea_to_int16(a.data(), a.size(), &r16)
+             : name == "toint32" ? ty_bytea_to_int32(a.data(), a.size(), &r32)
+                                 : ty_bytea_to_int64(a.data(), a.size(), &r64);
+    check_int(v, rc, name == "toint16" ? r16 : name == "toint32" ? r32 : r64);
+  } else if (name == "fromint16") {
+    uint8_t out[2];
+    ty_int16_to_bytea((int16_t)num(0), out);
+    INFO(v.line);
+    CHECK(v.res[0] == token_of(out, 2));
+  } else if (name == "fromint32") {
+    uint8_t out[4];
+    ty_int32_to_bytea((int32_t)num(0), out);
+    INFO(v.line);
+    CHECK(v.res[0] == token_of(out, 4));
+  } else if (name == "fromint64") {
+    uint8_t out[8];
+    ty_int64_to_bytea(num(0), out);
+    INFO(v.line);
+    CHECK(v.res[0] == token_of(out, 8));
+  } else {
+    return false;
+  }
+  return true;
 }
 
 /* A decimal64 from two tokens. */
@@ -316,6 +505,44 @@ bool run_int_convert(const vec_t &v) {
     int16_t r = 0;
     rc = ty_int64_to_int16(std::stoll(v.args[0]), &r);
     check_int(v, rc, r);
+  } else if (op == "uuid.parse") {
+    ty_uuid_t u = {};
+    std::string text = v.args[0] == "\"\"" ? "" : v.args[0];
+    rc = ty_uuid_parse(text.data(), text.size(), &u);
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(TY_ERR_INVALID == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(hex_of(u) == v.res[0]);
+    }
+  } else if (op == "uuid.format") {
+    ty_uuid_t u = uuid_of(v.args[0]);
+    char out[TY_UUID_TEXT_SIZE];
+    ty_uuid_format(&u, out);
+    INFO(v.line);
+    CHECK(std::string(out) == v.res[0]);
+  } else if (op == "uuid.cmp") {
+    ty_uuid_t a = uuid_of(v.args[0]), b = uuid_of(v.args[1]);
+    int c = ty_uuid_cmp(&a, &b);
+    INFO(v.line);
+    CHECK(std::stoi(v.res[0]) == (c > 0) - (c < 0));
+  } else if (op == "uuid.version") {
+    ty_uuid_t u = uuid_of(v.args[0]);
+    INFO(v.line);
+    CHECK(std::stoi(v.res[0]) == ty_uuid_version(&u));
+  } else if (op == "uuid.unixus") {
+    ty_uuid_t u = uuid_of(v.args[0]);
+    int64_t us = 0;
+    rc = ty_uuid_unix_us(&u, &us);
+    INFO(v.line);
+    if (v.res[0] == "NONE") {
+      CHECK(1 == rc);
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(std::stoll(v.res[0]) == us);
+    }
   } else if (op == "bool.parse") {
     bool b = false;
     rc = ty_bool_parse(v.args[0].data(), v.args[0].size(), &b);
@@ -350,8 +577,8 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_int_convert(v) || run64(v) || run128(v) || run_i16(v) ||
-                 run_i32(v) || run_i64(v);
+    bool known = run_bytea(v) || run_int_convert(v) || run64(v) || run128(v) ||
+                 run_i16(v) || run_i32(v) || run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

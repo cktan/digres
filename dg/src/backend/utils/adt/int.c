@@ -945,7 +945,7 @@ Datum int4shl(PG_FUNCTION_ARGS) {
   int32 r;
 
   if (ty_int32_shl(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
-    ty_int_raise("integer");
+    ty_int_raise_shift(32);
   PG_RETURN_INT32(r);
 }
 
@@ -953,7 +953,7 @@ Datum int4shr(PG_FUNCTION_ARGS) {
   int32 r;
 
   if (ty_int32_shr(PG_GETARG_INT32(0), PG_GETARG_INT32(1), &r))
-    ty_int_raise("integer");
+    ty_int_raise_shift(32);
   PG_RETURN_INT32(r);
 }
 
@@ -981,7 +981,7 @@ Datum int2shl(PG_FUNCTION_ARGS) {
   int16 r;
 
   if (ty_int16_shl(PG_GETARG_INT16(0), PG_GETARG_INT32(1), &r))
-    ty_int_raise("smallint");
+    ty_int_raise_shift(16);
   PG_RETURN_INT16(r);
 }
 
@@ -989,7 +989,7 @@ Datum int2shr(PG_FUNCTION_ARGS) {
   int16 r;
 
   if (ty_int16_shr(PG_GETARG_INT16(0), PG_GETARG_INT32(1), &r))
-    ty_int_raise("smallint");
+    ty_int_raise_shift(16);
   PG_RETURN_INT16(r);
 }
 

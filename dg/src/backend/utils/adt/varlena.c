@@ -44,6 +44,7 @@
 #include "utils/pg_locale.h"
 #include "utils/sortsupport.h"
 #include "utils/varlena.h"
+#include "ty_bytea.h"
 #include "utils/control_block.h"
 
 /* GUC variable */
@@ -285,73 +286,24 @@ void text_to_cstring_buffer(const text *src, char *dst, size_t dst_len) {
 Datum byteain(PG_FUNCTION_ARGS) {
   char *inputText = PG_GETARG_CSTRING(0);
   Node *escontext = fcinfo->context;
-  char *tp;
-  char *rp;
-  int bc;
-  bytea *result;
+  size_t len = strlen(inputText);
+  bool hex = ty_bytea_is_hex_text(inputText, len);
+  /* the most bytes the text can hold: a hex pair, or a character */
+  size_t room = hex ? (len - 2) / 2 : len;
+  bytea *result = (bytea *)palloc(room + VARHDRSZ);
+  size_t n;
 
-  /* Recognize hex input */
-  if (inputText[0] == '\\' && inputText[1] == 'x') {
-    size_t len = strlen(inputText);
-
-    bc = (len - 2) / 2 + VARHDRSZ; /* maximum possible length */
-    result = (bytea *)palloc(bc);
-    bc = hex_decode_safe(inputText + 2, len - 2, VARDATA(result), escontext);
-    SET_VARSIZE(result, bc + VARHDRSZ); /* actual length */
-
-    PG_RETURN_BYTEA_P(result);
-  }
-
-  /* Else, it's the traditional escaped style */
-  for (bc = 0, tp = inputText; *tp != '\0'; bc++) {
-    if (tp[0] != '\\')
-      tp++;
-    else if ((tp[0] == '\\') && (tp[1] >= '0' && tp[1] <= '3') &&
-             (tp[2] >= '0' && tp[2] <= '7') && (tp[3] >= '0' && tp[3] <= '7'))
-      tp += 4;
-    else if ((tp[0] == '\\') && (tp[1] == '\\'))
-      tp += 2;
-    else {
-      /*
-       * one backslash, not followed by another or ### valid octal
-       */
+  /* ty reads both forms into the varlena's data, with no copy */
+  if (ty_bytea_parse(inputText, len, (uint8_t *)VARDATA(result), &n) != 0) {
+    if (hex)
       ereturn(escontext, (Datum)0,
-              (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-               errmsg("invalid input syntax for type %s", "bytea")));
-    }
+              (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+               errmsg("%s", ty_errmsg())));
+    ereturn(escontext, (Datum)0,
+            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+             errmsg("invalid input syntax for type %s", "bytea")));
   }
-
-  bc += VARHDRSZ;
-
-  result = (bytea *)palloc(bc);
-  SET_VARSIZE(result, bc);
-
-  tp = inputText;
-  rp = VARDATA(result);
-  while (*tp != '\0') {
-    if (tp[0] != '\\')
-      *rp++ = *tp++;
-    else if ((tp[0] == '\\') && (tp[1] >= '0' && tp[1] <= '3') &&
-             (tp[2] >= '0' && tp[2] <= '7') && (tp[3] >= '0' && tp[3] <= '7')) {
-      bc = VAL(tp[1]);
-      bc <<= 3;
-      bc += VAL(tp[2]);
-      bc <<= 3;
-      *rp++ = bc + VAL(tp[3]);
-
-      tp += 4;
-    } else if ((tp[0] == '\\') && (tp[1] == '\\')) {
-      *rp++ = '\\';
-      tp += 2;
-    } else {
-      /*
-       * We should never get here. The first pass should not allow it.
-       */
-      ereturn(escontext, (Datum)0,
-              (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-               errmsg("invalid input syntax for type %s", "bytea")));
-    }
-  }
+  SET_VARSIZE(result, n + VARHDRSZ); /* actual length */
 
   PG_RETURN_BYTEA_P(result);
 }
@@ -365,68 +317,38 @@ Datum byteain(PG_FUNCTION_ARGS) {
  */
 Datum byteaout(PG_FUNCTION_ARGS) {
   bytea *vlena = PG_GETARG_BYTEA_PP(0);
+  const uint8_t *data = (const uint8_t *)VARDATA_ANY(vlena);
+  size_t n = VARSIZE_ANY_EXHDR(vlena);
   char *result;
-  char *rp;
 
   if (tcb->guc.bytea_output == BYTEA_OUTPUT_HEX) {
     /* Print hex format */
-    rp = result = (char *)palloc(VARSIZE_ANY_EXHDR(vlena) * 2 + 2 + 1);
-    *rp++ = '\\';
-    *rp++ = 'x';
-    rp += hex_encode(VARDATA_ANY(vlena), VARSIZE_ANY_EXHDR(vlena), rp);
+    size_t size = ty_bytea_hex_size(n);
+
+    result = (char *)palloc(size + 1);
+    ty_bytea_format_hex(data, n, result);
+    result[size] = '\0';
   } else if (tcb->guc.bytea_output == BYTEA_OUTPUT_ESCAPE) {
     /* Print traditional escaped format */
-    char *vp;
-    uint64 len;
-    int i;
-
-    len = 1; /* empty string has 1 char */
-    vp = VARDATA_ANY(vlena);
-    for (i = VARSIZE_ANY_EXHDR(vlena); i != 0; i--, vp++) {
-      if (*vp == '\\')
-        len += 2;
-      else if ((unsigned char)*vp < 0x20 || (unsigned char)*vp > 0x7e)
-        len += 4;
-      else
-        len++;
-    }
+    uint64 size = ty_bytea_escape_size(data, n);
 
     /*
-     * In principle len can't overflow uint32 if the input fit in 1GB, but
+     * In principle size can't overflow uint32 if the input fit in 1GB, but
      * for safety let's check rather than relying on palloc's internal
      * check.
      */
-    if (len > MaxAllocSize)
+    if (size + 1 > MaxAllocSize)
       ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
                       errmsg_internal(
                           "result of bytea output conversion is too large")));
-    rp = result = (char *)palloc(len);
-
-    vp = VARDATA_ANY(vlena);
-    for (i = VARSIZE_ANY_EXHDR(vlena); i != 0; i--, vp++) {
-      if (*vp == '\\') {
-        *rp++ = '\\';
-        *rp++ = '\\';
-      } else if ((unsigned char)*vp < 0x20 || (unsigned char)*vp > 0x7e) {
-        int val; /* holds unprintable chars */
-
-        val = *vp;
-        rp[0] = '\\';
-        rp[3] = DIG(val & 07);
-        val >>= 3;
-        rp[2] = DIG(val & 07);
-        val >>= 3;
-        rp[1] = DIG(val & 03);
-        rp += 4;
-      } else
-        *rp++ = *vp;
-    }
+    result = (char *)palloc(size + 1);
+    ty_bytea_format_escape(data, n, result);
+    result[size] = '\0';
   } else {
     elog(ERROR, "unrecognized \"bytea_output\" setting: %d",
          tcb->guc.bytea_output);
-    rp = result = NULL; /* keep compiler quiet */
+    result = NULL; /* keep compiler quiet */
   }
-  *rp = '\0';
   PG_RETURN_CSTRING(result);
 }
 
@@ -2738,7 +2660,6 @@ Datum byteacat(PG_FUNCTION_ARGS) {
 static bytea *bytea_catenate(bytea *t1, bytea *t2) {
   bytea *result;
   int len1, len2, len;
-  char *ptr;
 
   len1 = VARSIZE_ANY_EXHDR(t1);
   len2 = VARSIZE_ANY_EXHDR(t2);
@@ -2751,16 +2672,11 @@ static bytea *bytea_catenate(bytea *t1, bytea *t2) {
 
   len = len1 + len2 + VARHDRSZ;
   result = (bytea *)palloc(len);
-
-  /* Set size of result string... */
   SET_VARSIZE(result, len);
 
-  /* Fill data field of result string... */
-  ptr = VARDATA(result);
-  if (len1 > 0)
-    memcpy(ptr, VARDATA_ANY(t1), len1);
-  if (len2 > 0)
-    memcpy(ptr + len1, VARDATA_ANY(t2), len2);
+  ty_bytea_cat((const uint8_t *)VARDATA_ANY(t1), len1,
+               (const uint8_t *)VARDATA_ANY(t2), len2,
+               (uint8_t *)VARDATA(result));
 
   return result;
 }
@@ -2800,50 +2716,18 @@ Datum bytea_substr_no_len(PG_FUNCTION_ARGS) {
 
 static bytea *bytea_substring(Datum str, int S, int L,
                               bool length_not_specified) {
-  int32 S1; /* adjusted start position */
-  int32 L1; /* adjusted substring length */
-  int32 E;  /* end position */
+  int32 off;   /* zero-based place of the first byte */
+  int32 count; /* how many bytes, or -1 for all that follow */
 
-  /*
-   * The logic here should generally match text_substring().
-   */
-  S1 = Max(S, 1);
-
-  if (length_not_specified) {
-    /*
-     * Not passed a length - DatumGetByteaPSlice() grabs everything to the
-     * end of the string if we pass it a negative value for length.
-     */
-    L1 = -1;
-  } else if (L < 0) {
-    /* SQL99 says to throw an error for E < S, i.e., negative length */
+  /* ty says which part SUBSTRING names; it need not know the length */
+  if (ty_bytea_substr_range(S, L, !length_not_specified, &off, &count) != 0)
     ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
                     errmsg("negative substring length not allowed")));
-    L1 = -1; /* silence stupider compilers */
-  } else if (pg_add_s32_overflow(S, L, &E)) {
-    /*
-     * L could be large enough for S + L to overflow, in which case the
-     * substring must run to end of string.
-     */
-    L1 = -1;
-  } else {
-    /*
-     * A zero or negative value for the end position can happen if the
-     * start was negative or one. SQL99 says to return a zero-length
-     * string.
-     */
-    if (E < 1)
-      return PG_STR_GET_BYTEA("");
 
-    L1 = E - S1;
-  }
+  if (count == 0)
+    return PG_STR_GET_BYTEA("");
 
-  /*
-   * If the start position is past the end of the string, SQL99 says to
-   * return a zero-length string -- DatumGetByteaPSlice() will do that for
-   * us.  We need only convert S1 to zero-based starting position.
-   */
-  return DatumGetByteaPSlice(str, S1 - 1, L1);
+  return DatumGetByteaPSlice(str, off, count);
 }
 
 /*
@@ -2874,26 +2758,24 @@ Datum byteaoverlay_no_len(PG_FUNCTION_ARGS) {
 
 static bytea *bytea_overlay(bytea *t1, bytea *t2, int sp, int sl) {
   bytea *result;
-  bytea *s1;
-  bytea *s2;
-  int sp_pl_sl;
+  size_t size;
+  size_t n1 = VARSIZE_ANY_EXHDR(t1);
+  size_t n2 = VARSIZE_ANY_EXHDR(t2);
 
-  /*
-   * Check for possible integer-overflow cases.  For negative sp, throw a
-   * "substring length" error because that's what should be expected
-   * according to the spec's definition of OVERLAY().
-   */
-  if (sp <= 0)
-    ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
-                    errmsg("negative substring length not allowed")));
-  if (pg_add_s32_overflow(sp, sl, &sp_pl_sl))
+  if (ty_bytea_overlay_size(n1, n2, sp, sl, &size) != 0) {
+    if (ty_errnum() == TY_ERR_INVALID)
+      ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
+                      errmsg("negative substring length not allowed")));
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("integer out of range")));
+  }
 
-  s1 = bytea_substring(PointerGetDatum(t1), 1, sp - 1, false);
-  s2 = bytea_substring(PointerGetDatum(t1), sp_pl_sl, -1, true);
-  result = bytea_catenate(s1, t2);
-  result = bytea_catenate(result, s2);
+  result = (bytea *)palloc(size + VARHDRSZ);
+  SET_VARSIZE(result, size + VARHDRSZ);
+  /* the sizes are checked, so this cannot fail */
+  ty_bytea_overlay((const uint8_t *)VARDATA_ANY(t1), n1,
+                   (const uint8_t *)VARDATA_ANY(t2), n2, sp, sl,
+                   (uint8_t *)VARDATA(result));
 
   return result;
 }
@@ -2904,7 +2786,8 @@ static bytea *bytea_overlay(bytea *t1, bytea *t2, int sp, int sl) {
 Datum bytea_bit_count(PG_FUNCTION_ARGS) {
   bytea *t1 = PG_GETARG_BYTEA_PP(0);
 
-  PG_RETURN_INT64(pg_popcount(VARDATA_ANY(t1), VARSIZE_ANY_EXHDR(t1)));
+  PG_RETURN_INT64(ty_bytea_bit_count((const uint8_t *)VARDATA_ANY(t1),
+                                     VARSIZE_ANY_EXHDR(t1)));
 }
 
 /*
@@ -2916,31 +2799,10 @@ Datum bytea_bit_count(PG_FUNCTION_ARGS) {
 Datum byteapos(PG_FUNCTION_ARGS) {
   bytea *t1 = PG_GETARG_BYTEA_PP(0);
   bytea *t2 = PG_GETARG_BYTEA_PP(1);
-  int pos;
-  int px, p;
-  int len1, len2;
-  char *p1, *p2;
 
-  len1 = VARSIZE_ANY_EXHDR(t1);
-  len2 = VARSIZE_ANY_EXHDR(t2);
-
-  if (len2 <= 0)
-    PG_RETURN_INT32(1); /* result for empty pattern */
-
-  p1 = VARDATA_ANY(t1);
-  p2 = VARDATA_ANY(t2);
-
-  pos = 0;
-  px = (len1 - len2);
-  for (p = 0; p <= px; p++) {
-    if ((*p2 == *p1) && (memcmp(p1, p2, len2) == 0)) {
-      pos = p + 1;
-      break;
-    };
-    p1++;
-  };
-
-  PG_RETURN_INT32(pos);
+  PG_RETURN_INT32((int32)ty_bytea_position(
+      (const uint8_t *)VARDATA_ANY(t1), VARSIZE_ANY_EXHDR(t1),
+      (const uint8_t *)VARDATA_ANY(t2), VARSIZE_ANY_EXHDR(t2)));
 }
 
 /*-------------------------------------------------------------
@@ -2950,19 +2812,25 @@ Datum byteapos(PG_FUNCTION_ARGS) {
  * It returns the Nth byte (a number between 0 and 255).
  *-------------------------------------------------------------
  */
+/*
+ * Raise PostgreSQL's error for a ty bytea call that refused an index or a
+ * bit: ty's message is PostgreSQL's text.
+ */
+static pg_noreturn void bytea_index_raise(void) {
+  if (ty_errnum() == TY_ERR_INVALID)
+    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                    errmsg("%s", ty_errmsg())));
+  ereport(ERROR,
+          (errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR), errmsg("%s", ty_errmsg())));
+}
+
 Datum byteaGetByte(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
-  int32 n = PG_GETARG_INT32(1);
-  int len;
-  int byte;
+  int32 byte;
 
-  len = VARSIZE_ANY_EXHDR(v);
-
-  if (n < 0 || n >= len)
-    ereport(ERROR, (errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
-                    errmsg("index %d out of valid range, 0..%d", n, len - 1)));
-
-  byte = ((unsigned char *)VARDATA_ANY(v))[n];
+  if (ty_bytea_get_byte((const uint8_t *)VARDATA_ANY(v), VARSIZE_ANY_EXHDR(v),
+                        PG_GETARG_INT32(1), &byte) != 0)
+    bytea_index_raise();
 
   PG_RETURN_INT32(byte);
 }
@@ -2977,28 +2845,13 @@ Datum byteaGetByte(PG_FUNCTION_ARGS) {
  */
 Datum byteaGetBit(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
-  int64 n = PG_GETARG_INT64(1);
-  int byteNo, bitNo;
-  int len;
-  int byte;
+  int32 bit;
 
-  len = VARSIZE_ANY_EXHDR(v);
+  if (ty_bytea_get_bit((const uint8_t *)VARDATA_ANY(v), VARSIZE_ANY_EXHDR(v),
+                       PG_GETARG_INT64(1), &bit) != 0)
+    bytea_index_raise();
 
-  if (n < 0 || n >= (int64)len * 8)
-    ereport(ERROR, (errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
-                    errmsg("index %" PRId64 " out of valid range, 0..%" PRId64,
-                           n, (int64)len * 8 - 1)));
-
-  /* n/8 is now known < len, so safe to cast to int */
-  byteNo = (int)(n / 8);
-  bitNo = (int)(n % 8);
-
-  byte = ((unsigned char *)VARDATA_ANY(v))[byteNo];
-
-  if (byte & (1 << bitNo))
-    PG_RETURN_INT32(1);
-  else
-    PG_RETURN_INT32(0);
+  PG_RETURN_INT32(bit);
 }
 
 /*-------------------------------------------------------------
@@ -3011,20 +2864,10 @@ Datum byteaGetBit(PG_FUNCTION_ARGS) {
  */
 Datum byteaSetByte(PG_FUNCTION_ARGS) {
   bytea *res = PG_GETARG_BYTEA_P_COPY(0);
-  int32 n = PG_GETARG_INT32(1);
-  int32 newByte = PG_GETARG_INT32(2);
-  int len;
 
-  len = VARSIZE(res) - VARHDRSZ;
-
-  if (n < 0 || n >= len)
-    ereport(ERROR, (errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
-                    errmsg("index %d out of valid range, 0..%d", n, len - 1)));
-
-  /*
-   * Now set the byte.
-   */
-  ((unsigned char *)VARDATA(res))[n] = newByte;
+  if (ty_bytea_set_byte((uint8_t *)VARDATA(res), VARSIZE(res) - VARHDRSZ,
+                        PG_GETARG_INT32(1), PG_GETARG_INT32(2)) != 0)
+    bytea_index_raise();
 
   PG_RETURN_BYTEA_P(res);
 }
@@ -3039,41 +2882,10 @@ Datum byteaSetByte(PG_FUNCTION_ARGS) {
  */
 Datum byteaSetBit(PG_FUNCTION_ARGS) {
   bytea *res = PG_GETARG_BYTEA_P_COPY(0);
-  int64 n = PG_GETARG_INT64(1);
-  int32 newBit = PG_GETARG_INT32(2);
-  int len;
-  int oldByte, newByte;
-  int byteNo, bitNo;
 
-  len = VARSIZE(res) - VARHDRSZ;
-
-  if (n < 0 || n >= (int64)len * 8)
-    ereport(ERROR, (errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
-                    errmsg("index %" PRId64 " out of valid range, 0..%" PRId64,
-                           n, (int64)len * 8 - 1)));
-
-  /* n/8 is now known < len, so safe to cast to int */
-  byteNo = (int)(n / 8);
-  bitNo = (int)(n % 8);
-
-  /*
-   * sanity check!
-   */
-  if (newBit != 0 && newBit != 1)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                    errmsg("new bit must be 0 or 1")));
-
-  /*
-   * Update the byte.
-   */
-  oldByte = ((unsigned char *)VARDATA(res))[byteNo];
-
-  if (newBit == 0)
-    newByte = oldByte & (~(1 << bitNo));
-  else
-    newByte = oldByte | (1 << bitNo);
-
-  ((unsigned char *)VARDATA(res))[byteNo] = newByte;
+  if (ty_bytea_set_bit((uint8_t *)VARDATA(res), VARSIZE(res) - VARHDRSZ,
+                       PG_GETARG_INT64(1), PG_GETARG_INT32(2)) != 0)
+    bytea_index_raise();
 
   PG_RETURN_BYTEA_P(res);
 }
@@ -3083,16 +2895,12 @@ Datum byteaSetBit(PG_FUNCTION_ARGS) {
  */
 Datum bytea_reverse(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
-  const char *p = VARDATA_ANY(v);
   int len = VARSIZE_ANY_EXHDR(v);
-  const char *endp = p + len;
   bytea *result = (bytea *)palloc(len + VARHDRSZ);
-  char *dst = (char *)VARDATA(result) + len;
 
   SET_VARSIZE(result, len + VARHDRSZ);
-
-  while (p < endp)
-    *(--dst) = *p++;
+  ty_bytea_reverse((const uint8_t *)VARDATA_ANY(v), len,
+                   (uint8_t *)VARDATA(result));
 
   PG_RETURN_BYTEA_P(result);
 }
@@ -3612,15 +3420,12 @@ Datum byteage(PG_FUNCTION_ARGS) {
 Datum byteacmp(PG_FUNCTION_ARGS) {
   bytea *arg1 = PG_GETARG_BYTEA_PP(0);
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
-  int len1, len2;
   int cmp;
 
-  len1 = VARSIZE_ANY_EXHDR(arg1);
-  len2 = VARSIZE_ANY_EXHDR(arg2);
-
-  cmp = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
-  if ((cmp == 0) && (len1 != len2))
-    cmp = (len1 < len2) ? -1 : 1;
+  cmp = ty_bytea_cmp((const uint8_t *)VARDATA_ANY(arg1),
+                     VARSIZE_ANY_EXHDR(arg1),
+                     (const uint8_t *)VARDATA_ANY(arg2),
+                     VARSIZE_ANY_EXHDR(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
@@ -3677,20 +3482,12 @@ Datum bytea_sortsupport(PG_FUNCTION_ARGS) {
 /* Cast bytea -> int2 */
 Datum bytea_int2(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
-  int len = VARSIZE_ANY_EXHDR(v);
-  uint16 result;
+  int16 result;
 
-  /* Check that the byte array is not too long */
-  if (len > sizeof(result))
+  if (ty_bytea_to_int16((const uint8_t *)VARDATA_ANY(v),
+                          VARSIZE_ANY_EXHDR(v), &result) != 0)
     ereport(ERROR, errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
             errmsg("smallint out of range"));
-
-  /* Convert it to an integer; most significant bytes come first */
-  result = 0;
-  for (int i = 0; i < len; i++) {
-    result <<= BITS_PER_BYTE;
-    result |= ((unsigned char *)VARDATA_ANY(v))[i];
-  }
 
   PG_RETURN_INT16(result);
 }
@@ -3698,20 +3495,12 @@ Datum bytea_int2(PG_FUNCTION_ARGS) {
 /* Cast bytea -> int4 */
 Datum bytea_int4(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
-  int len = VARSIZE_ANY_EXHDR(v);
-  uint32 result;
+  int32 result;
 
-  /* Check that the byte array is not too long */
-  if (len > sizeof(result))
+  if (ty_bytea_to_int32((const uint8_t *)VARDATA_ANY(v),
+                          VARSIZE_ANY_EXHDR(v), &result) != 0)
     ereport(ERROR, errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
             errmsg("integer out of range"));
-
-  /* Convert it to an integer; most significant bytes come first */
-  result = 0;
-  for (int i = 0; i < len; i++) {
-    result <<= BITS_PER_BYTE;
-    result |= ((unsigned char *)VARDATA_ANY(v))[i];
-  }
 
   PG_RETURN_INT32(result);
 }
@@ -3719,32 +3508,45 @@ Datum bytea_int4(PG_FUNCTION_ARGS) {
 /* Cast bytea -> int8 */
 Datum bytea_int8(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
-  int len = VARSIZE_ANY_EXHDR(v);
-  uint64 result;
+  int64 result;
 
-  /* Check that the byte array is not too long */
-  if (len > sizeof(result))
+  if (ty_bytea_to_int64((const uint8_t *)VARDATA_ANY(v),
+                          VARSIZE_ANY_EXHDR(v), &result) != 0)
     ereport(ERROR, errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
             errmsg("bigint out of range"));
-
-  /* Convert it to an integer; most significant bytes come first */
-  result = 0;
-  for (int i = 0; i < len; i++) {
-    result <<= BITS_PER_BYTE;
-    result |= ((unsigned char *)VARDATA_ANY(v))[i];
-  }
 
   PG_RETURN_INT64(result);
 }
 
 /* Cast int2 -> bytea; can just use int2send() */
-Datum int2_bytea(PG_FUNCTION_ARGS) { return int2send(fcinfo); }
+Datum int2_bytea(PG_FUNCTION_ARGS) {
+  bytea *result = (bytea *)palloc(VARHDRSZ + 2);
+
+  SET_VARSIZE(result, VARHDRSZ + 2);
+  ty_int16_to_bytea(PG_GETARG_INT16(0), (uint8_t *)VARDATA(result));
+
+  PG_RETURN_BYTEA_P(result);
+}
 
 /* Cast int4 -> bytea; can just use int4send() */
-Datum int4_bytea(PG_FUNCTION_ARGS) { return int4send(fcinfo); }
+Datum int4_bytea(PG_FUNCTION_ARGS) {
+  bytea *result = (bytea *)palloc(VARHDRSZ + 4);
+
+  SET_VARSIZE(result, VARHDRSZ + 4);
+  ty_int32_to_bytea(PG_GETARG_INT32(0), (uint8_t *)VARDATA(result));
+
+  PG_RETURN_BYTEA_P(result);
+}
 
 /* Cast int8 -> bytea; can just use int8send() */
-Datum int8_bytea(PG_FUNCTION_ARGS) { return int8send(fcinfo); }
+Datum int8_bytea(PG_FUNCTION_ARGS) {
+  bytea *result = (bytea *)palloc(VARHDRSZ + 8);
+
+  SET_VARSIZE(result, VARHDRSZ + 8);
+  ty_int64_to_bytea(PG_GETARG_INT64(0), (uint8_t *)VARDATA(result));
+
+  PG_RETURN_BYTEA_P(result);
+}
 
 /*
  * appendStringInfoText

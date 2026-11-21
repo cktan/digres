@@ -417,7 +417,44 @@ copied from PostgreSQL keeps its copyright notice
      row of a hash-partitioned table goes to, and many regression
      files print that. A move changes them all. Open: move the
      hash and accept the new files, or keep it.
-   - uuid and bytea: not begun.
+   - **uuid: done (2026-11-21).** `ty_uuid.h`: parse, format,
+     compare, hash, version, the time of a version 1 or 7, and
+     the making of a version 4 and a version 7. digres's
+     `uuid.c` calls them; the sort and skip supports and the
+     clock stay. The hash is ty's own: uuid values hash
+     differently from PostgreSQL's.
+   - **Tests of the three, at each layer.** ty: unit tests and
+     vectors (above). digres: `dg/test/select_int.sql` and
+     `select_bool_uuid.sql` for what a client reads, and a loop
+     in `server.sh` for each error text. sm and `rel`: not
+     applicable, as sm does not call these yet. mvcc: not
+     applicable.
+   - **bytea: done (2026-11-21).** `ty_bytea.h`: the two text
+     forms, compare, hash, `cat`, `reverse`, the part a
+     SUBSTRING names, `overlay`, `position`, `bit_count`, the
+     get and set of a byte and a bit, and the integer casts.
+     digres's `varlena.c` calls them. Not moved: `encode` and
+     `decode`, `string_agg`, the sort support, the compares
+     other than `byteacmp`, and the hash of a stored value
+     (`hashvarlena`, which other types share).
+   - **bytea does not use the allocator of section 3.** Every
+     result has a size the caller can tell before the call,
+     so the caller gives the buffer and ty allocates nothing.
+     digres then writes a result after the 4 bytes of a
+     varlena's header with no copy. The allocator stays for a
+     result whose size only ty can know. `ty/DESIGN.md`
+     section 9 says so.
+   - **uuid and bytea, measured by callgrind**, instructions a
+     statement over 100,000 rows, old and new: uuid compare,
+     text and `<>` 257,963,415 and 258,936,418 (+0.38%); bool
+     parse 281,008,832 and 281,223,557 (+0.08%); a bytea query
+     of `substring`, `||`, `get_byte`, `position`, `bit_count`,
+     `::text` and `reverse` 413,972,236 and 411,606,932
+     (-0.57%). The first bytea build read 5.8% more: the hex
+     output, `bit_count` and `reverse` worked a byte at a time,
+     and `get_byte` and the substring range were calls. They
+     now work 8 bytes at a time, use a table of digit pairs,
+     and are in line.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

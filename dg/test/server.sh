@@ -4428,6 +4428,87 @@ for c in "'NaN'::numeric|invalid input syntax for type numeric" \
     fail "numeric refuses ${c%%|*}"
 done
 
+# Verify that the integer, boolean and uuid operations refuse what they
+# have no value for, as PostgreSQL words each error (ty/DESIGN.md
+# sections 6 to 8).
+# 1. An add, a subtract, a multiply, a negate and an abs past the range of
+#    int2, int4 and int8, and MIN / -1.
+# 2. Division and remainder by zero.
+# 3. A gcd and an lcm that need more than the width has.
+# 4. A shift by a count below 0 or not below the width.
+# 5. A cast that narrows past the range, and a float that has no int8.
+# 6. Text that is no boolean, and none that is a uuid.
+for c in "32767::int2 + 1::int2|smallint out of range" \
+  "(-32768)::int2 - 1::int2|smallint out of range" \
+  "(-32768)::int2 * (-1)::int2|smallint out of range" \
+  "-((-32768)::int2)|smallint out of range" \
+  "2147483647::int4 + 1::int4|integer out of range" \
+  "(-2147483648)::int4 * 2::int4|integer out of range" \
+  "abs((-2147483648)::int4)|integer out of range" \
+  "(-2147483648)::int4 / (-1)::int4|integer out of range" \
+  "9223372036854775807::int8 + 1::int8|bigint out of range" \
+  "-((-9223372036854775808)::int8)|bigint out of range" \
+  "(-9223372036854775808)::int8 / (-1)::int8|bigint out of range" \
+  "1::int2 / 0::int2|division by zero" \
+  "1::int4 % 0::int4|division by zero" \
+  "1::int8 / 0::int8|division by zero" \
+  "gcd((-2147483648)::int4, 0::int4)|integer out of range" \
+  "gcd((-9223372036854775808)::int8, (-9223372036854775808)::int8)|bigint out of range" \
+  "lcm(2147483647::int4, 2::int4)|integer out of range" \
+  "lcm((-9223372036854775808)::int8, 1::int8)|bigint out of range" \
+  "1::int4 << 32|shift count out of range for a 32-bit integer" \
+  "1::int4 >> (-1)|shift count out of range for a 32-bit integer" \
+  "1::int8 << 64|shift count out of range for a 64-bit integer" \
+  "1::int2 << 16|shift count out of range for a 16-bit integer" \
+  "70000::int4::int2|smallint out of range" \
+  "9223372036854775807::int8::int4|integer out of range" \
+  "(-2147483649)::int8::int4|integer out of range" \
+  "9223372036854775807::int8::int2|smallint out of range" \
+  "1e19::float8::int8|bigint out of range" \
+  "'NaN'::float8::int8|bigint out of range" \
+  "9223372036854775808::float8::int8|bigint out of range" \
+  "'maybe'::bool|invalid input syntax for type boolean" \
+  "'o'::bool|invalid input syntax for type boolean" \
+  "'truee'::bool|invalid input syntax for type boolean" \
+  "''::bool|invalid input syntax for type boolean" \
+  "'a0eebc99'::uuid|invalid input syntax for type uuid" \
+  "'{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid|invalid input syntax for type uuid" \
+  "'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a110'::uuid|invalid input syntax for type uuid" \
+  "'g0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid|invalid input syntax for type uuid"; do
+  local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
+    fail "integer, boolean and uuid refuse ${c%%|*}"
+done
+
+# Verify that bytea refuses what it has no value for, as PostgreSQL words
+# each error (ty/DESIGN.md section 9).
+# 1. Hex text with a bad digit, with an odd number of digits, and escaped
+#    text with a stray backslash or an octal past 377.
+# 2. An index outside the bytes, and a bit that is not 0 or 1.
+# 3. A substring with a negative length, and an overlay from below 1 or
+#    with a sum past int4.
+# 4. A bytea of more bytes than the integer has.
+for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
+  "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
+  "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
+  "'ab\\'::bytea|invalid input syntax for type bytea" \
+  "'\\400'::bytea|invalid input syntax for type bytea" \
+  "'\\12'::bytea|invalid input syntax for type bytea" \
+  "get_byte('\\x0102'::bytea, 2)|index 2 out of valid range, 0..1" \
+  "get_byte('\\x'::bytea, 0)|index 0 out of valid range, 0..-1" \
+  "get_bit('\\x01'::bytea, 8)|index 8 out of valid range, 0..7" \
+  "set_byte('\\x0102'::bytea, -1, 0)|index -1 out of valid range, 0..1" \
+  "set_bit('\\x01'::bytea, 8, 1)|index 8 out of valid range, 0..7" \
+  "set_bit('\\x01'::bytea, 0, 2)|new bit must be 0 or 1" \
+  "substring('\\x0102'::bytea FROM 1 FOR -1)|negative substring length not allowed" \
+  "overlay('\\x0102'::bytea PLACING '\\xaa'::bytea FROM 0)|negative substring length not allowed" \
+  "overlay('\\x0102'::bytea PLACING '\\xaa'::bytea FROM 2 FOR 2147483647)|integer out of range" \
+  "'\\x010203'::bytea::int2|smallint out of range" \
+  "'\\x0102030405'::bytea::int4|integer out of range" \
+  "'\\x010203040506070809'::bytea::int8|bigint out of range"; do
+  local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
+    fail "bytea refuses ${c%%|*}"
+done
+
 # Verify that numeric columns are stored in sm as decimals at their scale,
 # indexed, keyed and analyzed.
 # 1. Make t20 with numeric(10,2), numeric(30,5) and a bare numeric, which is

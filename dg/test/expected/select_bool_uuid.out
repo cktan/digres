@@ -1,0 +1,102 @@
+-- Verify the boolean parse and the uuid operations, which ty does
+-- (ty/DESIGN.md sections 7 and 8), and what a client reads from them.
+-- 1. A boolean is read from every word, cut short, in any case, with the
+--    spaces around it skipped.
+-- 2. The same words set a boolean setting.
+-- 3. A uuid is read in every form and written in one.
+-- 4. uuids compare, order and hash by their bytes, in any form.
+-- 5. The version and the time of a uuid are read from its bits.
+-- 6. A made uuid has its version and its time.
+-- 7. A uuid is a key: a primary key, and a lookup by it.
+-- (Temporary tables, as the 8 sessions run.sh starts share one database.
+-- Errors are server.sh's: a run stops at its first.)
+SELECT 't'::bool AS a, 'TRUE'::bool AS b, ' yes '::bool AS c, 'On'::bool AS d, '1'::bool AS e, 'f'::bool AS f, 'fal'::bool AS g, 'NO'::bool AS h, 'oFf'::bool AS i, 'of'::bool AS j, '0'::bool AS k, 'tr'::bool AS l, 'y'::bool AS m, 'n'::bool AS n;
+ a | b | c | d | e | f | g | h | i | j | k | l | m | n 
+---+---+---+---+---+---+---+---+---+---+---+---+---+---
+ t | t | t | t | t | f | f | f | f | f | f | t | t | f
+(1 row)
+
+SET enable_seqscan = 'of';
+SHOW enable_seqscan;
+ enable_seqscan 
+----------------
+ off
+(1 row)
+
+SET enable_seqscan = 'tr';
+SHOW enable_seqscan;
+ enable_seqscan 
+----------------
+ on
+(1 row)
+
+SET enable_seqscan = 'YES';
+SHOW enable_seqscan;
+ enable_seqscan 
+----------------
+ on
+(1 row)
+
+RESET enable_seqscan;
+SELECT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid AS a, 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11'::uuid AS b, '{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}'::uuid AS c, 'a0eebc999c0b4ef8bb6d6bb9bd380a11'::uuid AS d, 'a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11'::uuid AS e, 'a0eebc999c0b-4ef8bb6d6bb9bd380a11'::uuid AS f;
+                  a                   |                  b                   |                  c                   |                  d                   |                  e                   |                  f                   
+--------------------------------------+--------------------------------------+--------------------------------------+--------------------------------------+--------------------------------------+--------------------------------------
+ a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 | a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 | a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 | a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 | a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11 | a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11
+(1 row)
+
+SELECT 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid = 'A0EEBC999C0B4EF8BB6D6BB9BD380A11'::uuid AS eq, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid < 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12'::uuid AS lt, uuid_cmp('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11') > 0 AS cmp, uuid_hash('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11') = uuid_hash('{A0EEBC999C0B4EF8BB6D6BB9BD380A11}') AS hash_eq, uuid_hash('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11') <> uuid_hash('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12') AS hash_ne, uuid_hash_extended('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 0) <> uuid_hash_extended('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 1) AS seed_ne, (uuid_hash_extended('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 0) & 4294967295) = (uuid_hash('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11')::int8 & 4294967295) AS low32;
+ eq | lt | cmp | hash_eq | hash_ne | seed_ne | low32 
+----+----+-----+---------+---------+---------+-------
+ t  | t  | t   | t       | t       | t       | t
+(1 row)
+
+SELECT u FROM (VALUES ('ffffffff-0000-0000-0000-000000000000'::uuid), ('00000000-0000-0000-0000-000000000001'), ('00000000-0000-0000-0000-000000000000'), ('7fffffff-ffff-ffff-ffff-ffffffffffff')) v(u) ORDER BY u;
+                  u                   
+--------------------------------------
+ 00000000-0000-0000-0000-000000000000
+ 00000000-0000-0000-0000-000000000001
+ 7fffffff-ffff-ffff-ffff-ffffffffffff
+ ffffffff-0000-0000-0000-000000000000
+(4 rows)
+
+SELECT uuid_extract_version('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11') AS v4, uuid_extract_version('c232ab00-9414-11ec-b3c8-9f6bdeced846') AS v1, uuid_extract_version('019535d9-3df7-79fb-b466-fa907fa17f9e') AS v7, uuid_extract_version('00000000-0000-0000-0000-000000000000') IS NULL AS nil_variant;
+ v4 | v1 | v7 | nil_variant 
+----+----+----+-------------
+  4 |  1 |  7 | t
+(1 row)
+
+SELECT uuid_extract_timestamp('c232ab00-9414-11ec-b3c8-9f6bdeced846') AT TIME ZONE 'UTC' AS v1, uuid_extract_timestamp('019535d9-3df7-79fb-b466-fa907fa17f9e') AT TIME ZONE 'UTC' AS v7, uuid_extract_timestamp('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11') IS NULL AS v4_none;
+         v1          |           v7            | v4_none 
+---------------------+-------------------------+---------
+ 2022-02-22 19:22:22 | 2025-02-24 02:46:24.503 | t
+(1 row)
+
+SELECT uuid_extract_version(gen_random_uuid()) AS v4, gen_random_uuid() <> gen_random_uuid() AS distinct_v4, uuid_extract_version(uuidv7()) AS v7, uuidv7() < uuidv7() AS ascending, abs(extract(epoch FROM clock_timestamp() - uuid_extract_timestamp(uuidv7()))) < 60 AS recent;
+ v4 | distinct_v4 | v7 | ascending | recent 
+----+-------------+----+-----------+--------
+  4 | t           |  7 | t         | t
+(1 row)
+
+CREATE TEMP TABLE uuid_key (u uuid PRIMARY KEY, n int4);
+INSERT INTO uuid_key VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 1), ('00000000-0000-0000-0000-000000000000', 2), ('ffffffff-ffff-ffff-ffff-ffffffffffff', 3);
+SELECT n FROM uuid_key WHERE u = 'A0EEBC999C0B4EF8BB6D6BB9BD380A11';
+ n 
+---
+ 1
+(1 row)
+
+SELECT n FROM uuid_key ORDER BY u;
+ n 
+---
+ 2
+ 1
+ 3
+(3 rows)
+
+SELECT n FROM uuid_key WHERE u > 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' ORDER BY u;
+ n 
+---
+ 3
+(1 row)
+
+DROP TABLE uuid_key;

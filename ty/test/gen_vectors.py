@@ -24,6 +24,7 @@
 # a fit round half away from zero; trunc and a cut cut toward zero.
 
 import math
+import re
 import random
 import sys
 from decimal import ROUND_HALF_UP, Decimal, getcontext
@@ -401,6 +402,8 @@ def main():
         emit("d128.wb", (op, ops_, lo, los, hi, his, cnt), r)
     gen_ints()
     gen_bools()
+    gen_uuids()
+    gen_byteas()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -461,6 +464,231 @@ def gen_bools():
     for t in sorted(set(texts)):
         v = bool_of(t)
         emit("bool.parse", (t,), ("E", "INVALID") if v is None else int(v))
+
+
+def uuid_of(t):
+    """The 32 digits, lowercase, of a uuid text, or None: 32 hexadecimal
+    digits, a hyphen allowed after each group of four, and all in braces
+    if you like (ty_uuid.h)."""
+    m = re.match(r"^(\{)?" + "-?".join(["([0-9a-fA-F]{4})"] * 8) +
+                 r"(?(1)\})$", t)
+    return "".join(m.groups()[1:]).lower() if m else None
+
+
+def uuid_texts():
+    """Good and bad uuid texts, in many forms."""
+    out = ["", "{", "}", "{}", "-"]
+    for _ in range(60):
+        h = "%032x" % random.getrandbits(128)
+        g = [h[i:i + 4] for i in range(0, 32, 4)]
+        form = random.randrange(8)
+        if form == 0:
+            t = "-".join([h[:8], h[8:12], h[12:16], h[16:20], h[20:]])
+        elif form == 1:
+            t = h
+        elif form == 2:
+            t = "{" + "-".join([h[:8], h[8:12], h[12:16], h[16:20], h[20:]]) + "}"
+        elif form == 3:
+            t = "".join(x + ("-" if random.random() < .5 and i < 7 else "")
+                        for i, x in enumerate(g))
+        elif form == 4:
+            t = ("-".join(g)).upper()
+        elif form == 5:
+            t = h[:-1]
+        elif form == 6:
+            t = h + "0"
+        else:
+            t = "{" + h
+        if random.random() < .15:
+            i = random.randrange(len(t))
+            t = t[:i] + random.choice("gz-{}.x") + t[i + 1:]
+        out.append(t)
+    out += ["a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+            "{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}",
+            "A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11",
+            "a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11",
+            "a0eebc999c0b4ef8bb6d6bb9bd380a11",
+            "-a0eebc999c0b4ef8bb6d6bb9bd380a11",
+            "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11-",
+            "a0eebc99--9c0b-4ef8-bb6d-6bb9bd380a11"]
+    return [t for t in out if not any(c.isspace() for c in t)]
+
+
+def gen_uuids():
+    """The vectors of uuid: parse, format, compare, version, time."""
+    for t in sorted(set(uuid_texts())):
+        h = uuid_of(t)
+        emit("uuid.parse", (t if t else '""',), ("E", "INVALID") if h is None else h)
+    hexes = ["%032x" % random.getrandbits(128) for _ in range(80)]
+    for ver in range(0, 9):
+        for var in (0x00, 0x80, 0xc0, 0xe0):
+            b = bytearray(random.getrandbits(8) for _ in range(16))
+            b[6] = (b[6] & 0x0f) | (ver << 4)
+            b[8] = (b[8] & 0x3f) | var
+            hexes.append(b.hex())
+    hexes += ["0" * 32, "f" * 32]
+    for h in hexes:
+        emit("uuid.format", (h,),
+             "-".join([h[:8], h[8:12], h[12:16], h[16:20], h[20:]]))
+        b = bytes.fromhex(h)
+        var_ok = (b[8] & 0xc0) == 0x80
+        emit("uuid.version", (h,), (b[6] >> 4) if var_ok else -1)
+        res = "NONE"
+        if var_ok and b[6] >> 4 == 1:
+            low = int.from_bytes(b[0:4], "big")
+            mid = int.from_bytes(b[4:6], "big")
+            hi = ((b[6] & 0x0f) << 8) | b[7]
+            ticks = (hi << 48) | (mid << 32) | low
+            res = str(ticks // 10 - 12219292800 * 1000000)
+        elif var_ok and b[6] >> 4 == 7:
+            res = str(int.from_bytes(b[0:6], "big") * 1000)
+        emit("uuid.unixus", (h,), res)
+    for _ in range(200):
+        a, b2 = random.choice(hexes), random.choice(hexes)
+        if random.random() < .1:
+            b2 = a
+        emit("uuid.cmp", (a, b2), (a > b2) - (a < b2))
+
+
+def hx(b):
+    """A bytea as a token: its hexadecimal digits, or - if it is empty."""
+    return b.hex() if b else "-"
+
+
+def rand_bytes(maxlen=20):
+    """Random bytes of a random length, the edge values among them."""
+    n = random.choice([0, 1, 2, 3, 4, 7, 8, 9, random.randint(0, maxlen)])
+    return bytes(random.choice([0, 1, 0x1f, 0x20, 0x5c, 0x7e, 0x7f, 0x80, 0xff,
+                                random.getrandbits(8)]) for _ in range(n))
+
+
+def gen_byteas():
+    """The vectors of bytea: text, compare, cat, reverse, substring,
+    overlay, position, bits and bytes, and integers."""
+    # Text: the escaped form and the hex form read, and written.
+    texts = ["", "abc", "a\\\\b", "\\000", "\\377", "\\400", "\\378",
+             "\\", "a\\", "\\1", "\\12", "\\x", "\\x61", "\\x6", "\\x6g",
+             "\\xG1", "\\xAbCd", "\\x00ff", "x\\x61", "\\\\x61", "\\0001",
+             "\\x6162636465666768"]
+    for t in texts:
+        res = ("E", "INVALID")
+        try:
+            if t.startswith("\\x"):
+                h = t[2:]
+                if len(h) % 2 == 0 and re.fullmatch(r"[0-9a-fA-F]*", h):
+                    res = hx(bytes.fromhex(h))
+            else:
+                out = bytearray()
+                i = 0
+                ok = True
+                while i < len(t):
+                    if t[i] != "\\":
+                        out.append(ord(t[i]))
+                        i += 1
+                    elif re.fullmatch(r"[0-3][0-7][0-7]", t[i + 1:i + 4]):
+                        out.append(int(t[i + 1:i + 4], 8))
+                        i += 4
+                    elif t[i + 1:i + 2] == "\\":
+                        out.append(0x5c)
+                        i += 2
+                    else:
+                        ok = False
+                        break
+                if ok:
+                    res = hx(bytes(out))
+        except ValueError:
+            res = ("E", "INVALID")
+        emit("bytea.parse", (t if t else '""',), res)
+    for _ in range(80):
+        b = rand_bytes()
+        emit("bytea.fmthex", (hx(b),), "\\x" + b.hex())
+        if 0x20 not in b:
+            e = ""
+            for c in b:
+                e += "\\\\" if c == 0x5c else ("\\%03o" % c if c < 0x20 or c > 0x7e else chr(c))
+            emit("bytea.fmtesc", (hx(b),), e if e else '""')
+    pairs = [(rand_bytes(6), rand_bytes(6)) for _ in range(150)]
+    for a, b in pairs:
+        c = (a > b) - (a < b)
+        emit("bytea.cmp", (hx(a), hx(b)), c)
+        emit("bytea.cat", (hx(a), hx(b)), hx(a + b))
+        emit("bytea.position", (hx(a), hx(b)), a.find(b) + 1)
+    for _ in range(40):
+        a = rand_bytes()
+        emit("bytea.reverse", (hx(a),), hx(a[::-1]))
+        emit("bytea.bitcount", (hx(a),), bin(int.from_bytes(a, "big")).count("1"))
+        for idx in (-1, 0, 1, len(a) - 1, len(a), 7, 9):
+            if len(a) > 0 and 0 <= idx < len(a):
+                emit("bytea.getbyte", (hx(a), idx), a[idx])
+            else:
+                emit("bytea.getbyte", (hx(a), idx), ("E", "RANGE"))
+        for idx in (-1, 0, 5, 8 * len(a) - 1, 8 * len(a), 8 * len(a) + 3):
+            if 0 <= idx < 8 * len(a):
+                emit("bytea.getbit", (hx(a), idx), (a[idx // 8] >> (idx % 8)) & 1)
+            else:
+                emit("bytea.getbit", (hx(a), idx), ("E", "RANGE"))
+        for idx in (-1, 0, len(a) - 1, len(a)):
+            for val in (0, 255, 256, -1, 65):
+                if 0 <= idx < len(a):
+                    r = bytearray(a)
+                    r[idx] = val & 0xff
+                    emit("bytea.setbyte", (hx(a), idx, val), hx(bytes(r)))
+                else:
+                    emit("bytea.setbyte", (hx(a), idx, val), ("E", "RANGE"))
+        for idx in (-1, 0, 3, 8 * len(a) - 1, 8 * len(a)):
+            for bit in (0, 1, 2, -1):
+                if not 0 <= idx < 8 * len(a):
+                    res = ("E", "RANGE")
+                elif bit not in (0, 1):
+                    res = ("E", "INVALID")
+                else:
+                    r = bytearray(a)
+                    if bit:
+                        r[idx // 8] |= 1 << (idx % 8)
+                    else:
+                        r[idx // 8] &= ~(1 << (idx % 8)) & 0xff
+                    res = hx(bytes(r))
+                emit("bytea.setbit", (hx(a), idx, bit), res)
+    big = 2 ** 31 - 1
+    for start in (-5, -1, 0, 1, 2, 3, 10, big, -big - 1):
+        for ln in (-1, 0, 1, 2, 5, 100, big, 2 ** 31 - 2):
+            for has in (1,):
+                if ln < 0:
+                    res = ("E", "INVALID")
+                else:
+                    end = start + ln
+                    first = max(start, 1)
+                    if end > big:
+                        res = (first - 1, -1)
+                    elif end < 1:
+                        res = (0, 0)
+                    else:
+                        res = (first - 1, end - first)
+                emit("bytea.substr", (start, ln, 1), res)
+        emit("bytea.substr", (start, 0, 0), (max(start, 1) - 1, -1))
+    for _ in range(300):
+        a, b = rand_bytes(8), rand_bytes(4)
+        sp = random.choice([-1, 0, 1, 2, 3, 5, 9, 12, big])
+        sl = random.choice([-5, -1, 0, 1, 2, 4, 20, big])
+        if sp <= 0:
+            res = ("E", "INVALID")
+        elif sp + sl > big:
+            res = ("E", "RANGE")
+        else:
+            res = hx(a[:sp - 1] + b + a[max(sp + sl, 1) - 1:])
+        emit("bytea.overlay", (hx(a), hx(b), sp, sl), res)
+    for _ in range(60):
+        a = bytes(random.getrandbits(8) for _ in range(random.randint(0, 10)))
+        for bits in (16, 32, 64):
+            if len(a) > bits // 8:
+                res = ("E", "RANGE")
+            else:
+                res = wrap(int.from_bytes(a, "big"), bits)
+            emit("bytea.toint%d" % bits, (hx(a),), res)
+    for bits in (16, 32, 64):
+        for v in int_values(bits):
+            emit("bytea.fromint%d" % bits, (v,),
+                 hx((v & ((1 << bits) - 1)).to_bytes(bits // 8, "big")))
 
 
 def gen_ints():

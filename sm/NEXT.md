@@ -229,15 +229,20 @@ are the catalog tables psql reads
     ranges, arrays, `jsonb`, text search) stay in digres. In
     order:
     1. **decimal**: done (2026-11-21), as above.
-    2. **Types with no session state**: integers (done,
-       2026-11-21, in `ty_int.h`), bool, uuid, bytea. **bool,
-       uuid and bytea are next.** See below.
+    2. **Types with no session state**: integers, bool, uuid
+       and bytea: done, 2026-11-21 (`ty_int.h`, `ty_bool.h`,
+       `ty_uuid.h`, `ty_bytea.h`;
+       [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7). Left over:
+       the hash of the integers and of bool; `encode` and
+       `decode` of bytea; `string_agg`. **The group of date,
+       time, interval, float text and text is next.**
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.
 
-    **The next group: integers, bool, uuid and bytea.** What is
-    in `utils/adt` today (grep, 2026-11-21):
+    **The group of integers, bool, uuid and bytea: done
+    (2026-11-21).** What was in `utils/adt` (grep, before the
+    move) and how it went:
 
     | Type | File | Lines | Entry points |
     | --- | --- | --- | --- |
@@ -247,32 +252,23 @@ are the catalog tables psql reads
     | `uuid` | `uuid.c` | 737 | 20 |
     | `bytea` | `varlena.c`, 32 of its 120 | in 6,144 | 32 |
 
-    This code is PostgreSQL's, so it keeps its copyright notice
-    when it moves. Steps, as decimal's were:
-    1. **Take the rule from decimal.** `int2`, `int4` and `int8`
-       already work as the rule says: `int4 + int4` is an
-       `int4`, and an error if it overflows. So an operation is
-       exact or an error, and a caller who wants more casts an
-       operand. A function of `uuid` and `bool` cannot fail,
-       and returns its result.
-    2. **Put the operations in `ty/`**, in a header of their own
-       beside `ty_decimal.h`: arithmetic, `abs`, `gcd`, `lcm`,
-       the bit operations, the compares, the hash, and the
-       casts between the integers. A small one is in line.
-    3. **`bytea` is the one that allocates**: concatenation,
-       `substring`, `overlay`, `replace`, `encode` and `decode`
-       give a result of variable size, through the thread's
-       alloc function (`ty_set_alloc`). Its errors are
-       `TY_ERR_NOMEM` and `TY_ERR_RANGE` (an index past the
-       end).
-    4. **Test them as ty's decimal is tested**: unit tests, and
-       vectors from a reference in plain Python integers, which
-       follows the rule and not ty's code.
-    5. **Wrappers stay in digres**: the SQL names, the error
-       text, the `Datum`. The 231 regression files must pass.
-    6. **Measure first and after**, by callgrind, on a query
-       that uses each type, as decimal's baseline was: no
-       statement may rise by more than 1%.
+    - **Written new for ty, no PostgreSQL code.** So no
+      copyright notice came with it. The cases and the error
+      texts are PostgreSQL's.
+    - **The rule of decimal holds**: an operation of one width
+      is exact or an error.
+    - **bytea takes a buffer from the caller**, not ty's alloc
+      function: every result's size is known before the call
+      ([`../ty/DESIGN.md`](../ty/DESIGN.md) §9).
+    - **Tested in ty** by hand and by vectors of a Python
+      reference, and in digres by `dg/test/select_int.sql`,
+      `select_bool_uuid.sql`, `select_bytea.sql` and the error
+      loops of `server.sh`.
+    - **Measured by callgrind**: no statement rose by more than
+      1% ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
+    - **Left over**: the hash of the integers and of bool, which
+      decides the partition of a hash-partitioned row; `encode`
+      and `decode` of bytea; `string_agg` of bytea.
 
     This move is not easy. The code in `utils/adt` does not
     copy over. **Moved code cannot call `palloc()`**: it needs
