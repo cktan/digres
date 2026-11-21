@@ -62,8 +62,8 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `src/` | the library |
 | `test/` | the unit tests, in doctest, and the vectors |
 | `test/gen_vectors.py` | a reference of plain Python integers that writes `test/vectors.txt` |
-| `test/vectors.txt` | about 180,000 vectors of the operations of every type, with the result or the error kind |
-| `test/known.txt` | about 11,000 texts, with what the old digres printed for them |
+| `test/vectors.txt` | about 197,000 vectors of the operations of every type, with the result or the error kind |
+| `test/known.txt` | about 11,700 texts, with what the old digres printed for them |
 
 `ty/` follows [`../sm/CODE.md`](../sm/CODE.md).
 
