@@ -24,6 +24,7 @@
 #include "ty_float.h"
 #include "ty_hash.h"
 #include "ty_datetime.h"
+#include "ty_geo.h"
 #include "ty_inet.h"
 #include "ty_interval.h"
 #include "ty_money.h"
@@ -1085,6 +1086,194 @@ bool run_datetime(const vec_t &v) {
   return true;
 }
 
+/* A float token: hex, nan, inf or -inf. */
+double geo_f(const std::string &t) {
+  if (t == "nan") {
+    return NAN;
+  }
+  if (t == "inf") {
+    return INFINITY;
+  }
+  if (t == "-inf") {
+    return -INFINITY;
+  }
+  return strtod(t.c_str(), nullptr);
+}
+
+/* Two floats the same, NaN with NaN, and zero with zero of any sign. */
+bool geo_same(double a, double b) {
+  return std::isnan(a) ? std::isnan(b) : a == b;
+}
+
+/* A point token "x:y". */
+ty_point_t pt_of(const std::string &t) {
+  ty_point_t p;
+  size_t c = t.find(':');
+
+  p.x = geo_f(t.substr(0, c));
+  p.y = geo_f(t.substr(c + 1));
+  return p;
+}
+
+/* A box token "hx:hy:lx:ly". */
+ty_box_t bx_of(const std::string &t) {
+  ty_box_t b;
+  std::vector<std::string> f;
+  size_t s = 0, c;
+
+  while ((c = t.find(':', s)) != std::string::npos) {
+    f.push_back(t.substr(s, c - s));
+    s = c + 1;
+  }
+  f.push_back(t.substr(s));
+  b.high.x = geo_f(f[0]);
+  b.high.y = geo_f(f[1]);
+  b.low.x = geo_f(f[2]);
+  b.low.y = geo_f(f[3]);
+  return b;
+}
+
+/* Whether a result token (a point, a box, a float) equals the value. */
+bool geo_check(const std::string &tok, const ty_point_t &p) {
+  ty_point_t q = pt_of(tok);
+
+  return geo_same(p.x, q.x) && geo_same(p.y, q.y);
+}
+
+bool geo_check(const std::string &tok, const ty_box_t &b) {
+  ty_box_t q = bx_of(tok);
+
+  return geo_same(b.high.x, q.high.x) && geo_same(b.high.y, q.high.y) &&
+         geo_same(b.low.x, q.low.x) && geo_same(b.low.y, q.low.y);
+}
+
+/* Run one point or box vector. */
+bool run_geo(const vec_t &v) {
+  const std::string &op = v.op;
+  const bool pt = op.compare(0, 3, "pt.") == 0,
+             bx = op.compare(0, 3, "bx.") == 0;
+
+  if (!pt && !bx) {
+    return false;
+  }
+  const std::string name = op.substr(3);
+  int rc = 0, flag = 0;
+  double d = 0;
+  ty_point_t p, q, rp;
+  ty_box_t a, b, rb;
+
+  INFO(v.line);
+  /* the result: an error, or a value to compare */
+  auto finish = [&](int rcode, auto check) {
+    if (v.res[0] == "E") {
+      CHECK(-1 == rcode);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rcode);
+      CHECK(check());
+    }
+  };
+
+  if (pt) {
+    if (name == "hypot") {
+      rc = ty_hypot(geo_f(v.args[0]), geo_f(v.args[1]), &d);
+      finish(rc, [&] { return geo_same(d, geo_f(v.res[0])); });
+      return true;
+    }
+    p = pt_of(v.args[0]);
+    q = pt_of(v.args[1]);
+    if (name == "eq" || name == "left" || name == "right" || name == "above" ||
+        name == "below" || name == "vert" || name == "horiz") {
+      flag = name == "eq"      ? ty_point_eq(&p, &q)
+             : name == "left"  ? ty_point_left(&p, &q)
+             : name == "right" ? ty_point_right(&p, &q)
+             : name == "above" ? ty_point_above(&p, &q)
+             : name == "below" ? ty_point_below(&p, &q)
+             : name == "vert"  ? ty_point_vert(&p, &q)
+                               : ty_point_horiz(&p, &q);
+      CHECK(std::stoi(v.res[0]) == flag);
+    } else if (name == "distance" || name == "slope" || name == "invslope") {
+      rc = name == "distance" ? ty_point_distance(&p, &q, &d)
+           : name == "slope"  ? ty_point_slope(&p, &q, &d)
+                              : ty_point_invslope(&p, &q, &d);
+      finish(rc, [&] { return geo_same(d, geo_f(v.res[0])); });
+    } else {
+      rc = name == "add"   ? ty_point_add(&p, &q, &rp)
+           : name == "sub" ? ty_point_sub(&p, &q, &rp)
+           : name == "mul" ? ty_point_mul(&p, &q, &rp)
+                           : ty_point_div(&p, &q, &rp);
+      finish(rc, [&] { return geo_check(v.res[0], rp); });
+    }
+    return true;
+  }
+  if (name == "construct") {
+    p = pt_of(v.args[0]);
+    q = pt_of(v.args[1]);
+    ty_box_construct(&rb, &p, &q);
+    CHECK(geo_check(v.res[0], rb));
+    return true;
+  }
+  a = bx_of(v.args[0]);
+  if (name == "normalize") {
+    ty_box_normalize(&a);
+    CHECK(geo_check(v.res[0], a));
+  } else if (name == "width" || name == "height" || name == "area") {
+    rc = name == "width"    ? ty_box_width(&a, &d)
+         : name == "height" ? ty_box_height(&a, &d)
+                            : ty_box_area(&a, &d);
+    finish(rc, [&] { return geo_same(d, geo_f(v.res[0])); });
+  } else if (name == "center") {
+    rc = ty_box_center(&a, &rp);
+    finish(rc, [&] { return geo_check(v.res[0], rp); });
+  } else if (name == "add" || name == "sub" || name == "mul" || name == "div") {
+    p = pt_of(v.args[1]);
+    rc = name == "add"   ? ty_box_add(&a, &p, &rb)
+         : name == "sub" ? ty_box_sub(&a, &p, &rb)
+         : name == "mul" ? ty_box_mul(&a, &p, &rb)
+                         : ty_box_div(&a, &p, &rb);
+    finish(rc, [&] { return geo_check(v.res[0], rb); });
+  } else {
+    b = bx_of(v.args[1]);
+    if (name == "distance") {
+      rc = ty_box_distance(&a, &b, &d);
+      finish(rc, [&] { return geo_same(d, geo_f(v.res[0])); });
+    } else if (name == "intersect") {
+      int got = ty_box_intersect(&a, &b, &rb);
+
+      if (v.res[0] == "-") {
+        CHECK(0 == got);
+      } else {
+        REQUIRE(1 == got);
+        CHECK(geo_check(v.res[0], rb));
+      }
+    } else if (name == "lt" || name == "gt" || name == "eq" || name == "le" ||
+               name == "ge") {
+      rc = name == "lt"   ? ty_box_lt(&a, &b, &flag)
+           : name == "gt" ? ty_box_gt(&a, &b, &flag)
+           : name == "eq" ? ty_box_eq(&a, &b, &flag)
+           : name == "le" ? ty_box_le(&a, &b, &flag)
+                          : ty_box_ge(&a, &b, &flag);
+      finish(rc, [&] { return std::stoi(v.res[0]) == flag; });
+    } else {
+      flag = name == "same"        ? ty_box_same(&a, &b)
+             : name == "overlap"   ? ty_box_overlap(&a, &b)
+             : name == "contain"   ? ty_box_contain_box(&a, &b)
+             : name == "left"      ? ty_box_left(&a, &b)
+             : name == "overleft"  ? ty_box_overleft(&a, &b)
+             : name == "right"     ? ty_box_right(&a, &b)
+             : name == "overright" ? ty_box_overright(&a, &b)
+             : name == "below"     ? ty_box_below(&a, &b)
+             : name == "overbelow" ? ty_box_overbelow(&a, &b)
+             : name == "above"     ? ty_box_above(&a, &b)
+             : name == "overabove" ? ty_box_overabove(&a, &b)
+             : name == "below_eq"  ? ty_box_below_eq(&a, &b)
+                                   : ty_box_above_eq(&a, &b);
+      CHECK(std::stoi(v.res[0]) == flag);
+    }
+  }
+  return true;
+}
+
 /* Run one text vector: the strings are the hex of UTF-8 bytes. */
 bool run_text(const vec_t &v) {
   const std::string &op = v.op;
@@ -2016,12 +2205,12 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_datetime(v) || run_interval(v) || run_money(v) ||
-                 run_bpchar(v) || run_text(v) || run_inet(v) || run_bits(v) ||
-                 run_known(v) || run_float_text(v) || run_float(v) ||
-                 run_hash(v) || run_bytea(v) || run_int_convert(v) ||
-                 run64(v) || run128(v) || run_i16(v) || run_i32(v) ||
-                 run_i64(v);
+    bool known = run_geo(v) || run_datetime(v) || run_interval(v) ||
+                 run_money(v) || run_bpchar(v) || run_text(v) || run_inet(v) ||
+                 run_bits(v) || run_known(v) || run_float_text(v) ||
+                 run_float(v) || run_hash(v) || run_bytea(v) ||
+                 run_int_convert(v) || run64(v) || run128(v) || run_i16(v) ||
+                 run_i32(v) || run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

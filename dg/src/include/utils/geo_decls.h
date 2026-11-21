@@ -21,6 +21,7 @@
 #include <math.h>
 
 #include "fmgr.h"
+#include "ty_geo.h"
 
 /*--------------------------------------------------------------------
  * Useful floating point utilities and constants.
@@ -38,35 +39,16 @@
  * by eliminating equality cases before subtracting.
  */
 
-#define EPSILON					1.0E-06
+#define EPSILON					TY_GEO_EPSILON
 
-#ifdef EPSILON
-#define FPzero(A)				(fabs(A) <= EPSILON)
-
-static inline bool FPeq(double A, double B) {
-  return A == B || fabs(A - B) <= EPSILON;
-}
-
-static inline bool FPne(double A, double B) {
-  return A != B && fabs(A - B) > EPSILON;
-}
-
-static inline bool FPlt(double A, double B) { return A + EPSILON < B; }
-
-static inline bool FPle(double A, double B) { return A <= B + EPSILON; }
-
-static inline bool FPgt(double A, double B) { return A > B + EPSILON; }
-
-static inline bool FPge(double A, double B) { return A + EPSILON >= B; }
-#else
-#define FPzero(A)				((A) == 0)
-#define FPeq(A, B)				((A) == (B))
-#define FPne(A, B)				((A) != (B))
-#define FPlt(A, B)				((A) < (B))
-#define FPle(A, B)				((A) <= (B))
-#define FPgt(A, B)				((A) > (B))
-#define FPge(A, B)				((A) >= (B))
-#endif
+/* The fuzzy compares are ty's (ty_geo.h). */
+#define FPzero(A)				ty_fp_zero(A)
+#define FPeq(A, B)				ty_fp_eq(A, B)
+#define FPne(A, B)				ty_fp_ne(A, B)
+#define FPlt(A, B)				ty_fp_lt(A, B)
+#define FPle(A, B)				ty_fp_le(A, B)
+#define FPgt(A, B)				ty_fp_gt(A, B)
+#define FPge(A, B)				ty_fp_ge(A, B)
 
 #define HYPOT(A, B)				pg_hypot(A, B)
 

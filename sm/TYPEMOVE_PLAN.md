@@ -581,6 +581,23 @@ copied from PostgreSQL keeps its copyright notice
      tests: vectors, and `dg/test/select_case_ops.sql`, which
      prints the same as the digres before the move. Measured
      by callgrind (old, new): -34.22%.
+   - **point and box moved (2026-11-21), unattended.**
+     `ty_geo.h`: the fuzzy compares of all the geometric types,
+     and for `point` and `box` the compares, the hypotenuse, the
+     distance, the slopes, the sum, difference, product and
+     quotient, the construction, the position operators, the
+     width, height, area, center, the intersection, and the
+     order by area. The float arithmetic is `ty_float.h`'s.
+     The text, the binary forms and the types `lseg`, `line`,
+     `path`, `polygon` and `circle` stay in digres, and call
+     these functions. The tests: about 13,500 vectors from a
+     Python port of the rules, with NaN, infinities and ties
+     at `EPSILON`, and `dg/test/select_geo_ops.sql`, which
+     prints the same as the digres before the move. Measured
+     by callgrind (old, new): point operators +0.73%; box
+     operators +0.58%; point arithmetic -0.22%. The first
+     version was +1.2% to +1.3% on the box and arithmetic
+     statements: the functions were not in line.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

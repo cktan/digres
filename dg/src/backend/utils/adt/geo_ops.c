@@ -396,16 +396,8 @@ Datum box_in(PG_FUNCTION_ARGS) {
     PG_RETURN_NULL();
 
   /* reorder corners if necessary... */
-  if (float8_lt(box->high.x, box->low.x)) {
-    x = box->high.x;
-    box->high.x = box->low.x;
-    box->low.x = x;
-  }
-  if (float8_lt(box->high.y, box->low.y)) {
-    y = box->high.y;
-    box->high.y = box->low.y;
-    box->low.y = y;
-  }
+  /* ty puts the corners in order */
+  ty_box_normalize((ty_box_t *)box);
 
   PG_RETURN_BOX_P(box);
 }
@@ -435,16 +427,8 @@ Datum box_recv(PG_FUNCTION_ARGS) {
   box->low.y = pq_getmsgfloat8(buf);
 
   /* reorder corners if necessary... */
-  if (float8_lt(box->high.x, box->low.x)) {
-    x = box->high.x;
-    box->high.x = box->low.x;
-    box->low.x = x;
-  }
-  if (float8_lt(box->high.y, box->low.y)) {
-    y = box->high.y;
-    box->high.y = box->low.y;
-    box->low.y = y;
-  }
+  /* ty puts the corners in order */
+  ty_box_normalize((ty_box_t *)box);
 
   PG_RETURN_BOX_P(box);
 }
@@ -467,20 +451,7 @@ Datum box_send(PG_FUNCTION_ARGS) {
 /*		box_construct	-		fill in a new box.
  */
 static inline void box_construct(BOX *result, Point *pt1, Point *pt2) {
-  if (float8_gt(pt1->x, pt2->x)) {
-    result->high.x = pt1->x;
-    result->low.x = pt2->x;
-  } else {
-    result->high.x = pt2->x;
-    result->low.x = pt1->x;
-  }
-  if (float8_gt(pt1->y, pt2->y)) {
-    result->high.y = pt1->y;
-    result->low.y = pt2->y;
-  } else {
-    result->high.y = pt2->y;
-    result->low.y = pt1->y;
-  }
+  ty_box_construct((ty_box_t *)result, (ty_point_t *)pt1, (ty_point_t *)pt2);
 }
 
 /*----------------------------------------------------------
@@ -508,8 +479,7 @@ Datum box_overlap(PG_FUNCTION_ARGS) {
 }
 
 static bool box_ov(BOX *box1, BOX *box2) {
-  return (FPle(box1->low.x, box2->high.x) && FPle(box2->low.x, box1->high.x) &&
-          FPle(box1->low.y, box2->high.y) && FPle(box2->low.y, box1->high.y));
+  return ty_box_overlap((ty_box_t *)box1, (ty_box_t *)box2);
 }
 
 /*		box_left		-		is box1 strictly left of
@@ -620,10 +590,7 @@ Datum box_contain(PG_FUNCTION_ARGS) {
  * Check whether the second box is in the first box or on its border
  */
 static bool box_contain_box(BOX *contains_box, BOX *contained_box) {
-  return FPge(contains_box->high.x, contained_box->high.x) &&
-         FPle(contains_box->low.x, contained_box->low.x) &&
-         FPge(contains_box->high.y, contained_box->high.y) &&
-         FPle(contains_box->low.y, contained_box->low.y);
+  return ty_box_contain_box((ty_box_t *)contains_box, (ty_box_t *)contained_box);
 }
 
 /*		box_positionop	-
@@ -746,27 +713,45 @@ Datum box_center(PG_FUNCTION_ARGS) {
 
 /*		box_ar	-		returns the area of the box.
  */
-static float8 box_ar(BOX *box) { return float8_mul(box_wd(box), box_ht(box)); }
+static float8 box_ar(BOX *box) {
+  float8 r;
+
+  if (ty_box_area((ty_box_t *)box, &r))
+    float_raise_ty();
+  return r;
+}
 
 /*		box_cn	-		stores the centerpoint of the box into
  * *center.
  */
 static void box_cn(Point *center, BOX *box) {
-  center->x = float8_div(float8_pl(box->high.x, box->low.x), 2.0);
-  center->y = float8_div(float8_pl(box->high.y, box->low.y), 2.0);
+  if (ty_box_center((ty_box_t *)box, (ty_point_t *)center))
+    float_raise_ty();
 }
 
 /*		box_wd	-		returns the width (length) of the box
  *								  (horizontal
  *magnitude).
  */
-static float8 box_wd(BOX *box) { return float8_mi(box->high.x, box->low.x); }
+static float8 box_wd(BOX *box) {
+  float8 r;
+
+  if (ty_box_width((ty_box_t *)box, &r))
+    float_raise_ty();
+  return r;
+}
 
 /*		box_ht	-		returns the height of the box
  *								  (vertical
  *magnitude).
  */
-static float8 box_ht(BOX *box) { return float8_mi(box->high.y, box->low.y); }
+static float8 box_ht(BOX *box) {
+  float8 r;
+
+  if (ty_box_height((ty_box_t *)box, &r))
+    float_raise_ty();
+  return r;
+}
 
 /*----------------------------------------------------------
  *	Funky operations.
@@ -779,17 +764,11 @@ static float8 box_ht(BOX *box) { return float8_mi(box->high.y, box->low.y); }
 Datum box_intersect(PG_FUNCTION_ARGS) {
   BOX *box1 = PG_GETARG_BOX_P(0);
   BOX *box2 = PG_GETARG_BOX_P(1);
-  BOX *result;
+  BOX *result = (BOX *)palloc(sizeof(BOX));
 
-  if (!box_ov(box1, box2))
+  /* ty finds the common part, if the boxes overlap */
+  if (!ty_box_intersect((ty_box_t *)box1, (ty_box_t *)box2, (ty_box_t *)result))
     PG_RETURN_NULL();
-
-  result = (BOX *)palloc(sizeof(BOX));
-
-  result->high.x = float8_min(box1->high.x, box2->high.x);
-  result->low.x = float8_max(box1->low.x, box2->low.x);
-  result->high.y = float8_min(box1->high.y, box2->high.y);
-  result->low.y = float8_max(box1->low.y, box2->low.y);
 
   PG_RETURN_BOX_P(result);
 }
@@ -1692,12 +1671,7 @@ Datum point_ne(PG_FUNCTION_ARGS) {
  * Check whether the two points are the same
  */
 static inline bool point_eq_point(Point *pt1, Point *pt2) {
-  /* If any NaNs are involved, insist on exact equality */
-  if (unlikely(isnan(pt1->x) || isnan(pt1->y) || isnan(pt2->x) ||
-               isnan(pt2->y)))
-    return (float8_eq(pt1->x, pt2->x) && float8_eq(pt1->y, pt2->y));
-
-  return (FPeq(pt1->x, pt2->x) && FPeq(pt1->y, pt2->y));
+  return ty_point_eq((ty_point_t *)pt1, (ty_point_t *)pt2);
 }
 
 /*----------------------------------------------------------
@@ -1712,7 +1686,11 @@ Datum point_distance(PG_FUNCTION_ARGS) {
 }
 
 static inline float8 point_dt(Point *pt1, Point *pt2) {
-  return HYPOT(float8_mi(pt1->x, pt2->x), float8_mi(pt1->y, pt2->y));
+  float8 r;
+
+  if (ty_point_distance((ty_point_t *)pt1, (ty_point_t *)pt2, &r))
+    float_raise_ty();
+  return r;
 }
 
 Datum point_slope(PG_FUNCTION_ARGS) {
@@ -1728,11 +1706,11 @@ Datum point_slope(PG_FUNCTION_ARGS) {
  * Note that this function returns Inf when the points are the same.
  */
 static inline float8 point_sl(Point *pt1, Point *pt2) {
-  if (FPeq(pt1->x, pt2->x))
-    return get_float8_infinity();
-  if (FPeq(pt1->y, pt2->y))
-    return 0.0;
-  return float8_div(float8_mi(pt1->y, pt2->y), float8_mi(pt1->x, pt2->x));
+  float8 r;
+
+  if (ty_point_slope((ty_point_t *)pt1, (ty_point_t *)pt2, &r))
+    float_raise_ty();
+  return r;
 }
 
 /*
@@ -1741,11 +1719,11 @@ static inline float8 point_sl(Point *pt1, Point *pt2) {
  * Note that this function returns 0.0 when the points are the same.
  */
 static inline float8 point_invsl(Point *pt1, Point *pt2) {
-  if (FPeq(pt1->x, pt2->x))
-    return 0.0;
-  if (FPeq(pt1->y, pt2->y))
-    return get_float8_infinity();
-  return float8_div(float8_mi(pt1->x, pt2->x), float8_mi(pt2->y, pt1->y));
+  float8 r;
+
+  if (ty_point_invslope((ty_point_t *)pt1, (ty_point_t *)pt2, &r))
+    float_raise_ty();
+  return r;
 }
 
 /***********************************************************************
@@ -3529,7 +3507,9 @@ Datum construct_point(PG_FUNCTION_ARGS) {
 }
 
 static inline void point_add_point(Point *result, Point *pt1, Point *pt2) {
-  point_construct(result, float8_pl(pt1->x, pt2->x), float8_pl(pt1->y, pt2->y));
+  /* ty adds, with the float overflow check */
+  if (ty_point_add((ty_point_t *)pt1, (ty_point_t *)pt2, (ty_point_t *)result))
+    float_raise_ty();
 }
 
 Datum point_add(PG_FUNCTION_ARGS) {
@@ -3545,7 +3525,8 @@ Datum point_add(PG_FUNCTION_ARGS) {
 }
 
 static inline void point_sub_point(Point *result, Point *pt1, Point *pt2) {
-  point_construct(result, float8_mi(pt1->x, pt2->x), float8_mi(pt1->y, pt2->y));
+  if (ty_point_sub((ty_point_t *)pt1, (ty_point_t *)pt2, (ty_point_t *)result))
+    float_raise_ty();
 }
 
 Datum point_sub(PG_FUNCTION_ARGS) {
@@ -3561,9 +3542,8 @@ Datum point_sub(PG_FUNCTION_ARGS) {
 }
 
 static inline void point_mul_point(Point *result, Point *pt1, Point *pt2) {
-  point_construct(
-      result, float8_mi(float8_mul(pt1->x, pt2->x), float8_mul(pt1->y, pt2->y)),
-      float8_pl(float8_mul(pt1->x, pt2->y), float8_mul(pt1->y, pt2->x)));
+  if (ty_point_mul((ty_point_t *)pt1, (ty_point_t *)pt2, (ty_point_t *)result))
+    float_raise_ty();
 }
 
 Datum point_mul(PG_FUNCTION_ARGS) {
@@ -3579,17 +3559,8 @@ Datum point_mul(PG_FUNCTION_ARGS) {
 }
 
 static inline void point_div_point(Point *result, Point *pt1, Point *pt2) {
-  float8 div;
-
-  div = float8_pl(float8_mul(pt2->x, pt2->x), float8_mul(pt2->y, pt2->y));
-
-  point_construct(result,
-                  float8_div(float8_pl(float8_mul(pt1->x, pt2->x),
-                                       float8_mul(pt1->y, pt2->y)),
-                             div),
-                  float8_div(float8_mi(float8_mul(pt1->y, pt2->x),
-                                       float8_mul(pt1->x, pt2->y)),
-                             div));
+  if (ty_point_div((ty_point_t *)pt1, (ty_point_t *)pt2, (ty_point_t *)result))
+    float_raise_ty();
 }
 
 Datum point_div(PG_FUNCTION_ARGS) {
@@ -4733,43 +4704,9 @@ static bool plist_same(int npts, Point *p1, Point *p2) {
  *-----------------------------------------------------------------------
  */
 float8 pg_hypot(float8 x, float8 y) {
-  float8 yx, result;
+  float8 r;
 
-  /* Handle INF and NaN properly */
-  if (isinf(x) || isinf(y))
-    return get_float8_infinity();
-
-  if (isnan(x) || isnan(y))
-    return get_float8_nan();
-
-  /* Else, drop any minus signs */
-  x = fabs(x);
-  y = fabs(y);
-
-  /* Swap x and y if needed to make x the larger one */
-  if (x < y) {
-    float8 temp = x;
-
-    x = y;
-    y = temp;
-  }
-
-  /*
-   * If y is zero, the hypotenuse is x.  This test saves a few cycles in
-   * such cases, but more importantly it also protects against
-   * divide-by-zero errors, since now x >= y.
-   */
-  if (y == 0.0)
-    return x;
-
-  /* Determine the hypotenuse */
-  yx = y / x;
-  result = x * sqrt(1.0 + (yx * yx));
-
-  if (unlikely(isinf(result)))
-    float_overflow_error();
-  if (unlikely(result == 0.0))
-    float_underflow_error();
-
-  return result;
+  if (ty_hypot(x, y, &r))
+    float_raise_ty();
+  return r;
 }
