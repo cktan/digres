@@ -349,7 +349,8 @@ copied from PostgreSQL keeps its copyright notice
    a double. Then `mag_t` and `wide_t` and every helper on
    them were deleted from `decimal.c`: 3,910 lines to 3,444
    (3,580 before the work began). The hash then moved to ty,
-   with its own 64-bit function (`ty_dec128_hash`), and the hot
+   (`ty_dec128_hash`, on PostgreSQL's algorithm, which moved to
+   ty with it: `ty/DESIGN.md` section 10), and the hot
    small functions went in line, in `ty_decimal.h`: the three
    baseline queries then read 4,408,326, 4,462,233 and 4,812,383
    instructions a statement, 17.9%, 17.4% and 18.5% fewer than
@@ -406,23 +407,55 @@ copied from PostgreSQL keeps its copyright notice
      247,138,294 and 247,420,911 (+0.11%); `int2` 281,683,442
      and 282,185,798 (+0.18%); bit operations, `abs` and `gcd`
      296,682,450 and 298,764,434 (+0.70%).
+   - **After the first pass, "move all": done (2026-11-21).**
+     The user asked that every operation of a type move, so
+     these followed: the integer compares and the btree compare,
+     sort and skip functions; `in_range`; the integer text in
+     and out (`numutils.c`); the bool text, order and logic;
+     uuid increment and decrement; the bytea compares and
+     `encode` and `decode`; and the hash of every type, on
+     PostgreSQL's algorithm. What stays in digres is glue: the
+     entry points, errors, memory contexts, aggregate states,
+     TOAST slicing, and the sort support's abbreviated keys.
+   - **"Move all", measured by callgrind** on the final tree,
+     instructions a statement over 100,000 rows, old and new
+     (the old is the binary before any of this): `int4`
+     arithmetic +0.02%; `int8` +0.14%; `int2` +0.20%; bit
+     operations, `abs` and `gcd` +0.71%; uuid +0.26%; bool
+     -1.12%; bytea -0.63%; a hash join on `int4` +0.37%; a
+     group by on `int4` +0.24%, on uuid +0.17%, on bytea
+     +0.09%; integer text in and out -0.93%; bytea `encode`
+     and `decode` -1.54%. Two were over the limit at first.
+     Integer text read +1.90%: the host had to call `strlen`,
+     and the reader tested the end at each byte; `ty_intN_parse_z`
+     reads to the NUL, and the first loop tests only the digit.
+     `encode` and `decode` +2.98%: the name of the encoding was
+     compared a byte at a time through a lambda, which cost
+     more than the codecs, and the hex digits used branches;
+     the name is now matched by its first letter, and the digits
+     by a table.
    - **bool: done (2026-11-21).** `ty_bool.h`: `ty_bool_parse`,
      the words of PostgreSQL's boolean input, cut short, in any
      case. digres's `parse_bool_with_len` calls it, and so do
      `boolin` and the GUC parse. The compares, the output (`t`
      and `f`, `true` and `false`), the hash and the aggregate
      states stay in digres.
-   - **The hash of the integers and of bool is not moved.**
-     PostgreSQL's hash of an integer decides which partition a
-     row of a hash-partitioned table goes to, and many regression
-     files print that. A move changes them all. Open: move the
-     hash and accept the new files, or keep it.
+   - **The hash moved, all of it, with PostgreSQL's algorithm.**
+     `ty_hash.h` and `src/hash.cc` hold Bob Jenkins's lookup3
+     from digres's `src/common/hashfn.c`, with PostgreSQL's
+     notice; digres's four hash functions call it. The hash of
+     the integers, bool, uuid, bytea and decimal is built on it.
+     No value changed, so no partition moved and no regression
+     file changed. The tests: values PostgreSQL printed, taken
+     from a digres built before the move, and vectors of a
+     Python reference of lookup3. (An earlier draft gave ty a
+     hash of its own, and left the integers' in digres; it was
+     wrong, and is gone.)
    - **uuid: done (2026-11-21).** `ty_uuid.h`: parse, format,
      compare, hash, version, the time of a version 1 or 7, and
      the making of a version 4 and a version 7. digres's
      `uuid.c` calls them; the sort and skip supports and the
-     clock stay. The hash is ty's own: uuid values hash
-     differently from PostgreSQL's.
+     clock stay. The hash is PostgreSQL's.
    - **Tests of the three, at each layer.** ty: unit tests and
      vectors (above). digres: `dg/test/select_int.sql` and
      `select_bool_uuid.sql` for what a client reads, and a loop
@@ -435,8 +468,8 @@ copied from PostgreSQL keeps its copyright notice
      get and set of a byte and a bit, and the integer casts.
      digres's `varlena.c` calls them. Not moved: `encode` and
      `decode`, `string_agg`, the sort support, the compares
-     other than `byteacmp`, and the hash of a stored value
-     (`hashvarlena`, which other types share).
+     other than `byteacmp`. (Later moved, but `string_agg`
+     and the sort support: see "move all" above.)
    - **bytea does not use the allocator of section 3.** Every
      result has a size the caller can tell before the call,
      so the caller gives the buffer and ty allocates nothing.

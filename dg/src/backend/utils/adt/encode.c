@@ -21,6 +21,7 @@
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "varatt.h"
+#include "ty_bytea.h"
 
 /*
  * Encoding conversion API.
@@ -31,14 +32,23 @@
  * so it's better to get it right.)  The conversion routines write to the
  * buffer at *res and return the true length of their output.
  */
-struct pg_encoding {
-  uint64 (*encode_len)(const char *data, size_t dlen);
-  uint64 (*decode_len)(const char *data, size_t dlen);
-  uint64 (*encode)(const char *data, size_t dlen, char *res);
-  uint64 (*decode)(const char *data, size_t dlen, char *res);
-};
-
-static const struct pg_encoding *pg_find_encoding(const char *name);
+/*
+ * Raise PostgreSQL's error for a decode that ty refused: escape text has a
+ * syntax error; the others a bad parameter, with ty's message, which is
+ * PostgreSQL's (and the hint for the end of base64).
+ */
+static pg_noreturn void binary_decode_raise(ty_bytea_enc_t enc) {
+  if (enc == TY_BYTEA_ENC_ESCAPE)
+    ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                    errmsg("invalid input syntax for type %s", "bytea")));
+  if (strcmp(ty_errmsg(), "invalid base64 end sequence") == 0)
+    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                    errmsg("invalid base64 end sequence"),
+                    errhint("Input data is missing padding, is truncated, or "
+                            "is otherwise corrupted.")));
+  ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                  errmsg("%s", ty_errmsg())));
+}
 
 /*
  * SQL functions.
@@ -49,23 +59,22 @@ Datum binary_encode(PG_FUNCTION_ARGS) {
   Datum name = PG_GETARG_DATUM(1);
   text *result;
   char *namebuf;
-  char *dataptr;
+  ty_bytea_enc_t enc;
   size_t datalen;
-  uint64 resultlen;
-  uint64 res;
-  const struct pg_encoding *enc;
+  size_t resultlen;
+  size_t res;
 
   namebuf = TextDatumGetCString(name);
 
-  enc = pg_find_encoding(namebuf);
-  if (enc == NULL)
+  if (ty_bytea_encoding(namebuf, &enc) != 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unrecognized encoding: \"%s\"", namebuf)));
 
-  dataptr = VARDATA_ANY(data);
   datalen = VARSIZE_ANY_EXHDR(data);
 
-  resultlen = enc->encode_len(dataptr, datalen);
+  /* ty tells the most the text can take, and writes into the varlena */
+  resultlen = ty_bytea_encode_size(enc, (const uint8_t *)VARDATA_ANY(data),
+                                   datalen);
 
   /*
    * resultlen possibly overflows uint32, therefore on 32-bit machines it's
@@ -77,7 +86,8 @@ Datum binary_encode(PG_FUNCTION_ARGS) {
 
   result = (text *)palloc(VARHDRSZ + resultlen);
 
-  res = enc->encode(dataptr, datalen, VARDATA(result));
+  res = ty_bytea_encode(enc, (const uint8_t *)VARDATA_ANY(data), datalen,
+                        VARDATA(result));
 
   /* Make this FATAL 'cause we've trodden on memory ... */
   if (res > resultlen)
@@ -93,23 +103,21 @@ Datum binary_decode(PG_FUNCTION_ARGS) {
   Datum name = PG_GETARG_DATUM(1);
   bytea *result;
   char *namebuf;
-  char *dataptr;
+  ty_bytea_enc_t enc;
   size_t datalen;
-  uint64 resultlen;
-  uint64 res;
-  const struct pg_encoding *enc;
+  size_t resultlen;
+  size_t res;
 
   namebuf = TextDatumGetCString(name);
 
-  enc = pg_find_encoding(namebuf);
-  if (enc == NULL)
+  if (ty_bytea_encoding(namebuf, &enc) != 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unrecognized encoding: \"%s\"", namebuf)));
 
-  dataptr = VARDATA_ANY(data);
   datalen = VARSIZE_ANY_EXHDR(data);
 
-  resultlen = enc->decode_len(dataptr, datalen);
+  if (ty_bytea_decode_size(enc, VARDATA_ANY(data), datalen, &resultlen) != 0)
+    binary_decode_raise(enc);
 
   /*
    * resultlen possibly overflows uint32, therefore on 32-bit machines it's
@@ -121,7 +129,9 @@ Datum binary_decode(PG_FUNCTION_ARGS) {
 
   result = (bytea *)palloc(VARHDRSZ + resultlen);
 
-  res = enc->decode(dataptr, datalen, VARDATA(result));
+  if (ty_bytea_decode(enc, VARDATA_ANY(data), datalen,
+                      (uint8_t *)VARDATA(result), &res) != 0)
+    binary_decode_raise(enc);
 
   /* Make this FATAL 'cause we've trodden on memory ... */
   if (res > resultlen)
@@ -230,141 +240,6 @@ uint64 hex_decode_safe(const char *src, size_t len, char *dst,
   return p - dst;
 }
 
-static uint64 hex_enc_len(const char *src, size_t srclen) {
-  return (uint64)srclen << 1;
-}
-
-static uint64 hex_dec_len(const char *src, size_t srclen) {
-  return (uint64)srclen >> 1;
-}
-
-/*
- * BASE64
- */
-
-static const char _base64[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static const int8 b64lookup[128] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, 62, -1, -1, -1, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-    61, -1, -1, -1, -1, -1, -1, -1, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10,
-    11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, -1, -1, -1, -1,
-    -1, -1, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,
-    43, 44, 45, 46, 47, 48, 49, 50, 51, -1, -1, -1, -1, -1,
-};
-
-static uint64 pg_base64_encode(const char *src, size_t len, char *dst) {
-  char *p, *lend = dst + 76;
-  const char *s, *end = src + len;
-  int pos = 2;
-  uint32 buf = 0;
-
-  s = src;
-  p = dst;
-
-  while (s < end) {
-    buf |= (unsigned char)*s << (pos << 3);
-    pos--;
-    s++;
-
-    /* write it out */
-    if (pos < 0) {
-      *p++ = _base64[(buf >> 18) & 0x3f];
-      *p++ = _base64[(buf >> 12) & 0x3f];
-      *p++ = _base64[(buf >> 6) & 0x3f];
-      *p++ = _base64[buf & 0x3f];
-
-      pos = 2;
-      buf = 0;
-    }
-    if (p >= lend) {
-      *p++ = '\n';
-      lend = p + 76;
-    }
-  }
-  if (pos != 2) {
-    *p++ = _base64[(buf >> 18) & 0x3f];
-    *p++ = _base64[(buf >> 12) & 0x3f];
-    *p++ = (pos == 0) ? _base64[(buf >> 6) & 0x3f] : '=';
-    *p++ = '=';
-  }
-
-  return p - dst;
-}
-
-static uint64 pg_base64_decode(const char *src, size_t len, char *dst) {
-  const char *srcend = src + len, *s = src;
-  char *p = dst;
-  char c;
-  int b = 0;
-  uint32 buf = 0;
-  int pos = 0, end = 0;
-
-  while (s < srcend) {
-    c = *s++;
-
-    if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
-      continue;
-
-    if (c == '=') {
-      /* end sequence */
-      if (!end) {
-        if (pos == 2)
-          end = 1;
-        else if (pos == 3)
-          end = 2;
-        else
-          ereport(ERROR,
-                  (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                   errmsg("unexpected \"=\" while decoding base64 sequence")));
-      }
-      b = 0;
-    } else {
-      b = -1;
-      if (c > 0 && c < 127)
-        b = b64lookup[(unsigned char)c];
-      if (b < 0)
-        ereport(
-            ERROR,
-            (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-             errmsg(
-                 "invalid symbol \"%.*s\" found while decoding base64 sequence",
-                 pg_mblen_range(s - 1, srcend), s - 1)));
-    }
-    /* add it to buffer */
-    buf = (buf << 6) + b;
-    pos++;
-    if (pos == 4) {
-      *p++ = (buf >> 16) & 255;
-      if (end == 0 || end > 1)
-        *p++ = (buf >> 8) & 255;
-      if (end == 0 || end > 2)
-        *p++ = buf & 255;
-      buf = 0;
-      pos = 0;
-    }
-  }
-
-  if (pos != 0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                    errmsg("invalid base64 end sequence"),
-                    errhint("Input data is missing padding, is truncated, or "
-                            "is otherwise corrupted.")));
-
-  return p - dst;
-}
-
-static uint64 pg_base64_enc_len(const char *src, size_t srclen) {
-  /* 3 bytes will be converted to 4, linefeed after 76 chars */
-  return ((uint64)srclen + 2) / 3 * 4 + (uint64)srclen / (76 * 3 / 4);
-}
-
-static uint64 pg_base64_dec_len(const char *src, size_t srclen) {
-  return ((uint64)srclen * 3) >> 2;
-}
-
 /*
  * Escape
  * Minimally escape bytea to text.
@@ -381,147 +256,3 @@ static uint64 pg_base64_dec_len(const char *src, size_t srclen) {
 
 #define VAL(CH)			((CH) - '0')
 #define DIG(VAL)		((VAL) + '0')
-
-static uint64 esc_encode(const char *src, size_t srclen, char *dst) {
-  const char *end = src + srclen;
-  char *rp = dst;
-  uint64 len = 0;
-
-  while (src < end) {
-    unsigned char c = (unsigned char)*src;
-
-    if (c == '\0' || IS_HIGHBIT_SET(c)) {
-      rp[0] = '\\';
-      rp[1] = DIG(c >> 6);
-      rp[2] = DIG((c >> 3) & 7);
-      rp[3] = DIG(c & 7);
-      rp += 4;
-      len += 4;
-    } else if (c == '\\') {
-      rp[0] = '\\';
-      rp[1] = '\\';
-      rp += 2;
-      len += 2;
-    } else {
-      *rp++ = c;
-      len++;
-    }
-
-    src++;
-  }
-
-  return len;
-}
-
-static uint64 esc_decode(const char *src, size_t srclen, char *dst) {
-  const char *end = src + srclen;
-  char *rp = dst;
-  uint64 len = 0;
-
-  while (src < end) {
-    if (src[0] != '\\')
-      *rp++ = *src++;
-    else if (src + 3 < end && (src[1] >= '0' && src[1] <= '3') &&
-             (src[2] >= '0' && src[2] <= '7') &&
-             (src[3] >= '0' && src[3] <= '7')) {
-      int val;
-
-      val = VAL(src[1]);
-      val <<= 3;
-      val += VAL(src[2]);
-      val <<= 3;
-      *rp++ = val + VAL(src[3]);
-      src += 4;
-    } else if (src + 1 < end && (src[1] == '\\')) {
-      *rp++ = '\\';
-      src += 2;
-    } else {
-      /*
-       * One backslash, not followed by ### valid octal. Should never
-       * get here, since esc_dec_len does same check.
-       */
-      ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-                      errmsg("invalid input syntax for type %s", "bytea")));
-    }
-
-    len++;
-  }
-
-  return len;
-}
-
-static uint64 esc_enc_len(const char *src, size_t srclen) {
-  const char *end = src + srclen;
-  uint64 len = 0;
-
-  while (src < end) {
-    if (*src == '\0' || IS_HIGHBIT_SET(*src))
-      len += 4;
-    else if (*src == '\\')
-      len += 2;
-    else
-      len++;
-
-    src++;
-  }
-
-  return len;
-}
-
-static uint64 esc_dec_len(const char *src, size_t srclen) {
-  const char *end = src + srclen;
-  uint64 len = 0;
-
-  while (src < end) {
-    if (src[0] != '\\')
-      src++;
-    else if (src + 3 < end && (src[1] >= '0' && src[1] <= '3') &&
-             (src[2] >= '0' && src[2] <= '7') &&
-             (src[3] >= '0' && src[3] <= '7')) {
-      /*
-       * backslash + valid octal
-       */
-      src += 4;
-    } else if (src + 1 < end && (src[1] == '\\')) {
-      /*
-       * two backslashes = backslash
-       */
-      src += 2;
-    } else {
-      /*
-       * one backslash, not followed by ### valid octal
-       */
-      ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-                      errmsg("invalid input syntax for type %s", "bytea")));
-    }
-
-    len++;
-  }
-  return len;
-}
-
-/*
- * Common
- */
-
-static const struct {
-  const char *name;
-  struct pg_encoding enc;
-} enclist[] =
-
-    {{"hex", {hex_enc_len, hex_dec_len, hex_encode, hex_decode}},
-     {"base64",
-      {pg_base64_enc_len, pg_base64_dec_len, pg_base64_encode,
-       pg_base64_decode}},
-     {"escape", {esc_enc_len, esc_dec_len, esc_encode, esc_decode}},
-     {NULL, {NULL, NULL, NULL, NULL}}};
-
-static const struct pg_encoding *pg_find_encoding(const char *name) {
-  int i;
-
-  for (i = 0; enclist[i].name; i++)
-    if (pg_strcasecmp(enclist[i].name, name) == 0)
-      return &enclist[i].enc;
-
-  return NULL;
-}

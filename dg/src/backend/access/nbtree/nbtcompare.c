@@ -61,6 +61,7 @@
 #include "utils/fmgrprotos.h"
 #include "utils/skipsupport.h"
 #include "utils/sortsupport.h"
+#include "ty_int.h"
 
 #ifdef STRESS_SORT_INT_MIN
 #define A_LESS_THAN_B		INT_MIN
@@ -115,17 +116,11 @@ Datum btboolskipsupport(PG_FUNCTION_ARGS) {
 }
 
 Datum btint2cmp(PG_FUNCTION_ARGS) {
-  int16 a = PG_GETARG_INT16(0);
-  int16 b = PG_GETARG_INT16(1);
-
-  PG_RETURN_INT32((int32)a - (int32)b);
+  PG_RETURN_INT32(ty_int16_cmp(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 static int btint2fastcmp(Datum x, Datum y, SortSupport ssup) {
-  int16 a = DatumGetInt16(x);
-  int16 b = DatumGetInt16(y);
-
-  return (int)a - (int)b;
+  return ty_int16_cmp(DatumGetInt16(x), DatumGetInt16(y));
 }
 
 Datum btint2sortsupport(PG_FUNCTION_ARGS) {
@@ -136,29 +131,31 @@ Datum btint2sortsupport(PG_FUNCTION_ARGS) {
 }
 
 static Datum int2_decrement(Relation rel, Datum existing, bool *underflow) {
-  int16 iexisting = DatumGetInt16(existing);
+  int16 result;
 
-  if (iexisting == PG_INT16_MIN) {
+  /* ty refuses to go below the smallest value */
+  if (ty_int16_dec(DatumGetInt16(existing), &result) != 0) {
     /* return value is undefined */
     *underflow = true;
     return (Datum)0;
   }
 
   *underflow = false;
-  return Int16GetDatum(iexisting - 1);
+  return Int16GetDatum(result);
 }
 
 static Datum int2_increment(Relation rel, Datum existing, bool *overflow) {
-  int16 iexisting = DatumGetInt16(existing);
+  int16 result;
 
-  if (iexisting == PG_INT16_MAX) {
+  /* ty refuses to go above the largest value */
+  if (ty_int16_inc(DatumGetInt16(existing), &result) != 0) {
     /* return value is undefined */
     *overflow = true;
     return (Datum)0;
   }
 
   *overflow = false;
-  return Int16GetDatum(iexisting + 1);
+  return Int16GetDatum(result);
 }
 
 Datum btint2skipsupport(PG_FUNCTION_ARGS) {
@@ -173,15 +170,7 @@ Datum btint2skipsupport(PG_FUNCTION_ARGS) {
 }
 
 Datum btint4cmp(PG_FUNCTION_ARGS) {
-  int32 a = PG_GETARG_INT32(0);
-  int32 b = PG_GETARG_INT32(1);
-
-  if (a > b)
-    PG_RETURN_INT32(A_GREATER_THAN_B);
-  else if (a == b)
-    PG_RETURN_INT32(0);
-  else
-    PG_RETURN_INT32(A_LESS_THAN_B);
+  PG_RETURN_INT32(ty_int32_cmp(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum btint4sortsupport(PG_FUNCTION_ARGS) {
@@ -192,29 +181,31 @@ Datum btint4sortsupport(PG_FUNCTION_ARGS) {
 }
 
 static Datum int4_decrement(Relation rel, Datum existing, bool *underflow) {
-  int32 iexisting = DatumGetInt32(existing);
+  int32 result;
 
-  if (iexisting == PG_INT32_MIN) {
+  /* ty refuses to go below the smallest value */
+  if (ty_int32_dec(DatumGetInt32(existing), &result) != 0) {
     /* return value is undefined */
     *underflow = true;
     return (Datum)0;
   }
 
   *underflow = false;
-  return Int32GetDatum(iexisting - 1);
+  return Int32GetDatum(result);
 }
 
 static Datum int4_increment(Relation rel, Datum existing, bool *overflow) {
-  int32 iexisting = DatumGetInt32(existing);
+  int32 result;
 
-  if (iexisting == PG_INT32_MAX) {
+  /* ty refuses to go above the largest value */
+  if (ty_int32_inc(DatumGetInt32(existing), &result) != 0) {
     /* return value is undefined */
     *overflow = true;
     return (Datum)0;
   }
 
   *overflow = false;
-  return Int32GetDatum(iexisting + 1);
+  return Int32GetDatum(result);
 }
 
 Datum btint4skipsupport(PG_FUNCTION_ARGS) {
@@ -229,28 +220,12 @@ Datum btint4skipsupport(PG_FUNCTION_ARGS) {
 }
 
 Datum btint8cmp(PG_FUNCTION_ARGS) {
-  int64 a = PG_GETARG_INT64(0);
-  int64 b = PG_GETARG_INT64(1);
-
-  if (a > b)
-    PG_RETURN_INT32(A_GREATER_THAN_B);
-  else if (a == b)
-    PG_RETURN_INT32(0);
-  else
-    PG_RETURN_INT32(A_LESS_THAN_B);
+  PG_RETURN_INT32(ty_int64_cmp(PG_GETARG_INT64(0), PG_GETARG_INT64(1)));
 }
 
 #if SIZEOF_DATUM < 8
 static int btint8fastcmp(Datum x, Datum y, SortSupport ssup) {
-  int64 a = DatumGetInt64(x);
-  int64 b = DatumGetInt64(y);
-
-  if (a > b)
-    return A_GREATER_THAN_B;
-  else if (a == b)
-    return 0;
-  else
-    return A_LESS_THAN_B;
+  return ty_int64_cmp(DatumGetInt64(x), DatumGetInt64(y));
 }
 #endif
 
@@ -266,29 +241,31 @@ Datum btint8sortsupport(PG_FUNCTION_ARGS) {
 }
 
 static Datum int8_decrement(Relation rel, Datum existing, bool *underflow) {
-  int64 iexisting = DatumGetInt64(existing);
+  int64 result;
 
-  if (iexisting == PG_INT64_MIN) {
+  /* ty refuses to go below the smallest value */
+  if (ty_int64_dec(DatumGetInt64(existing), &result) != 0) {
     /* return value is undefined */
     *underflow = true;
     return (Datum)0;
   }
 
   *underflow = false;
-  return Int64GetDatum(iexisting - 1);
+  return Int64GetDatum(result);
 }
 
 static Datum int8_increment(Relation rel, Datum existing, bool *overflow) {
-  int64 iexisting = DatumGetInt64(existing);
+  int64 result;
 
-  if (iexisting == PG_INT64_MAX) {
+  /* ty refuses to go above the largest value */
+  if (ty_int64_inc(DatumGetInt64(existing), &result) != 0) {
     /* return value is undefined */
     *overflow = true;
     return (Datum)0;
   }
 
   *overflow = false;
-  return Int64GetDatum(iexisting + 1);
+  return Int64GetDatum(result);
 }
 
 Datum btint8skipsupport(PG_FUNCTION_ARGS) {
@@ -303,75 +280,27 @@ Datum btint8skipsupport(PG_FUNCTION_ARGS) {
 }
 
 Datum btint48cmp(PG_FUNCTION_ARGS) {
-  int32 a = PG_GETARG_INT32(0);
-  int64 b = PG_GETARG_INT64(1);
-
-  if (a > b)
-    PG_RETURN_INT32(A_GREATER_THAN_B);
-  else if (a == b)
-    PG_RETURN_INT32(0);
-  else
-    PG_RETURN_INT32(A_LESS_THAN_B);
+  PG_RETURN_INT32(ty_int64_cmp(PG_GETARG_INT32(0), PG_GETARG_INT64(1)));
 }
 
 Datum btint84cmp(PG_FUNCTION_ARGS) {
-  int64 a = PG_GETARG_INT64(0);
-  int32 b = PG_GETARG_INT32(1);
-
-  if (a > b)
-    PG_RETURN_INT32(A_GREATER_THAN_B);
-  else if (a == b)
-    PG_RETURN_INT32(0);
-  else
-    PG_RETURN_INT32(A_LESS_THAN_B);
+  PG_RETURN_INT32(ty_int64_cmp(PG_GETARG_INT64(0), PG_GETARG_INT32(1)));
 }
 
 Datum btint24cmp(PG_FUNCTION_ARGS) {
-  int16 a = PG_GETARG_INT16(0);
-  int32 b = PG_GETARG_INT32(1);
-
-  if (a > b)
-    PG_RETURN_INT32(A_GREATER_THAN_B);
-  else if (a == b)
-    PG_RETURN_INT32(0);
-  else
-    PG_RETURN_INT32(A_LESS_THAN_B);
+  PG_RETURN_INT32(ty_int32_cmp(PG_GETARG_INT16(0), PG_GETARG_INT32(1)));
 }
 
 Datum btint42cmp(PG_FUNCTION_ARGS) {
-  int32 a = PG_GETARG_INT32(0);
-  int16 b = PG_GETARG_INT16(1);
-
-  if (a > b)
-    PG_RETURN_INT32(A_GREATER_THAN_B);
-  else if (a == b)
-    PG_RETURN_INT32(0);
-  else
-    PG_RETURN_INT32(A_LESS_THAN_B);
+  PG_RETURN_INT32(ty_int32_cmp(PG_GETARG_INT32(0), PG_GETARG_INT16(1)));
 }
 
 Datum btint28cmp(PG_FUNCTION_ARGS) {
-  int16 a = PG_GETARG_INT16(0);
-  int64 b = PG_GETARG_INT64(1);
-
-  if (a > b)
-    PG_RETURN_INT32(A_GREATER_THAN_B);
-  else if (a == b)
-    PG_RETURN_INT32(0);
-  else
-    PG_RETURN_INT32(A_LESS_THAN_B);
+  PG_RETURN_INT32(ty_int64_cmp(PG_GETARG_INT16(0), PG_GETARG_INT64(1)));
 }
 
 Datum btint82cmp(PG_FUNCTION_ARGS) {
-  int64 a = PG_GETARG_INT64(0);
-  int16 b = PG_GETARG_INT16(1);
-
-  if (a > b)
-    PG_RETURN_INT32(A_GREATER_THAN_B);
-  else if (a == b)
-    PG_RETURN_INT32(0);
-  else
-    PG_RETURN_INT32(A_LESS_THAN_B);
+  PG_RETURN_INT32(ty_int64_cmp(PG_GETARG_INT64(0), PG_GETARG_INT16(1)));
 }
 
 Datum btoidcmp(PG_FUNCTION_ARGS) {

@@ -43,6 +43,7 @@
 #include "optimizer/optimizer.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "ty_bool.h"
 #include "utils/ty_int_glue.h"
 
 #define Int2VectorSize(n)	(offsetof(int2vector, values) + (n) * sizeof(int16))
@@ -351,18 +352,12 @@ Datum i4toi2(PG_FUNCTION_ARGS) {
 
 /* Cast int4 -> bool */
 Datum int4_bool(PG_FUNCTION_ARGS) {
-  if (PG_GETARG_INT32(0) == 0)
-    PG_RETURN_BOOL(false);
-  else
-    PG_RETURN_BOOL(true);
+  PG_RETURN_BOOL(ty_bool_from_int32(PG_GETARG_INT32(0)));
 }
 
 /* Cast bool -> int4 */
 Datum bool_int4(PG_FUNCTION_ARGS) {
-  if (PG_GETARG_BOOL(0) == false)
-    PG_RETURN_INT32(0);
-  else
-    PG_RETURN_INT32(1);
+  PG_RETURN_INT32(ty_bool_to_int32(PG_GETARG_BOOL(0)));
 }
 
 /*
@@ -381,171 +376,99 @@ Datum bool_int4(PG_FUNCTION_ARGS) {
  */
 
 Datum int4eq(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 == arg2);
+  PG_RETURN_BOOL(ty_int32_eq(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int4ne(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 != arg2);
+  PG_RETURN_BOOL(ty_int32_ne(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int4lt(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 < arg2);
+  PG_RETURN_BOOL(ty_int32_lt(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int4le(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 <= arg2);
+  PG_RETURN_BOOL(ty_int32_le(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int4gt(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 > arg2);
+  PG_RETURN_BOOL(ty_int32_gt(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int4ge(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 >= arg2);
+  PG_RETURN_BOOL(ty_int32_ge(PG_GETARG_INT32(0), PG_GETARG_INT32(1)));
 }
 
 Datum int2eq(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 == arg2);
+  PG_RETURN_BOOL(ty_int16_eq(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int2ne(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 != arg2);
+  PG_RETURN_BOOL(ty_int16_ne(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int2lt(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 < arg2);
+  PG_RETURN_BOOL(ty_int16_lt(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int2le(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 <= arg2);
+  PG_RETURN_BOOL(ty_int16_le(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int2gt(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 > arg2);
+  PG_RETURN_BOOL(ty_int16_gt(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int2ge(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 >= arg2);
+  PG_RETURN_BOOL(ty_int16_ge(PG_GETARG_INT16(0), PG_GETARG_INT16(1)));
 }
 
 Datum int24eq(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 == arg2);
+  PG_RETURN_BOOL(ty_int32_eq(PG_GETARG_INT16(0), PG_GETARG_INT32(1)));
 }
 
 Datum int24ne(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 != arg2);
+  PG_RETURN_BOOL(ty_int32_ne(PG_GETARG_INT16(0), PG_GETARG_INT32(1)));
 }
 
 Datum int24lt(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 < arg2);
+  PG_RETURN_BOOL(ty_int32_lt(PG_GETARG_INT16(0), PG_GETARG_INT32(1)));
 }
 
 Datum int24le(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 <= arg2);
+  PG_RETURN_BOOL(ty_int32_le(PG_GETARG_INT16(0), PG_GETARG_INT32(1)));
 }
 
 Datum int24gt(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 > arg2);
+  PG_RETURN_BOOL(ty_int32_gt(PG_GETARG_INT16(0), PG_GETARG_INT32(1)));
 }
 
 Datum int24ge(PG_FUNCTION_ARGS) {
-  int16 arg1 = PG_GETARG_INT16(0);
-  int32 arg2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(arg1 >= arg2);
+  PG_RETURN_BOOL(ty_int32_ge(PG_GETARG_INT16(0), PG_GETARG_INT32(1)));
 }
 
 Datum int42eq(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 == arg2);
+  PG_RETURN_BOOL(ty_int32_eq(PG_GETARG_INT32(0), PG_GETARG_INT16(1)));
 }
 
 Datum int42ne(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 != arg2);
+  PG_RETURN_BOOL(ty_int32_ne(PG_GETARG_INT32(0), PG_GETARG_INT16(1)));
 }
 
 Datum int42lt(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 < arg2);
+  PG_RETURN_BOOL(ty_int32_lt(PG_GETARG_INT32(0), PG_GETARG_INT16(1)));
 }
 
 Datum int42le(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 <= arg2);
+  PG_RETURN_BOOL(ty_int32_le(PG_GETARG_INT32(0), PG_GETARG_INT16(1)));
 }
 
 Datum int42gt(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 > arg2);
+  PG_RETURN_BOOL(ty_int32_gt(PG_GETARG_INT32(0), PG_GETARG_INT16(1)));
 }
 
 Datum int42ge(PG_FUNCTION_ARGS) {
-  int32 arg1 = PG_GETARG_INT32(0);
-  int16 arg2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(arg1 >= arg2);
+  PG_RETURN_BOOL(ty_int32_ge(PG_GETARG_INT32(0), PG_GETARG_INT16(1)));
 }
 
 /*----------------------------------------------------------
@@ -559,122 +482,81 @@ Datum int42ge(PG_FUNCTION_ARGS) {
  *---------------------------------------------------------*/
 
 Datum in_range_int4_int4(PG_FUNCTION_ARGS) {
-  int32 val = PG_GETARG_INT32(0);
-  int32 base = PG_GETARG_INT32(1);
-  int32 offset = PG_GETARG_INT32(2);
-  bool sub = PG_GETARG_BOOL(3);
-  bool less = PG_GETARG_BOOL(4);
-  int32 sum;
+  int r;
 
-  if (offset < 0)
+  /* ty does the sum in int64, which any width fits */
+  if (ty_int_in_range(PG_GETARG_INT32(0), PG_GETARG_INT32(1),
+                      PG_GETARG_INT32(2), PG_GETARG_BOOL(3),
+                      PG_GETARG_BOOL(4), &r))
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
              errmsg("invalid preceding or following size in window function")));
-
-  if (sub)
-    offset = -offset; /* cannot overflow */
-
-  if (unlikely(pg_add_s32_overflow(base, offset, &sum))) {
-    /*
-     * If sub is false, the true sum is surely more than val, so correct
-     * answer is the same as "less".  If sub is true, the true sum is
-     * surely less than val, so the answer is "!less".
-     */
-    PG_RETURN_BOOL(sub ? !less : less);
-  }
-
-  if (less)
-    PG_RETURN_BOOL(val <= sum);
-  else
-    PG_RETURN_BOOL(val >= sum);
+  PG_RETURN_BOOL(r);
 }
 
 Datum in_range_int4_int2(PG_FUNCTION_ARGS) {
-  /* Doesn't seem worth duplicating code for, so just invoke int4_int4 */
-  return DirectFunctionCall5(in_range_int4_int4, PG_GETARG_DATUM(0),
-                             PG_GETARG_DATUM(1),
-                             Int32GetDatum((int32)PG_GETARG_INT16(2)),
-                             PG_GETARG_DATUM(3), PG_GETARG_DATUM(4));
+  int r;
+
+  /* ty does the sum in int64, which any width fits */
+  if (ty_int_in_range(PG_GETARG_INT32(0), PG_GETARG_INT32(1),
+                      PG_GETARG_INT16(2), PG_GETARG_BOOL(3),
+                      PG_GETARG_BOOL(4), &r))
+    ereport(ERROR,
+            (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
+             errmsg("invalid preceding or following size in window function")));
+  PG_RETURN_BOOL(r);
 }
 
 Datum in_range_int4_int8(PG_FUNCTION_ARGS) {
-  /* We must do all the math in int64 */
-  int64 val = (int64)PG_GETARG_INT32(0);
-  int64 base = (int64)PG_GETARG_INT32(1);
-  int64 offset = PG_GETARG_INT64(2);
-  bool sub = PG_GETARG_BOOL(3);
-  bool less = PG_GETARG_BOOL(4);
-  int64 sum;
+  int r;
 
-  if (offset < 0)
+  /* ty does the sum in int64, which any width fits */
+  if (ty_int_in_range(PG_GETARG_INT32(0), PG_GETARG_INT32(1),
+                      PG_GETARG_INT64(2), PG_GETARG_BOOL(3),
+                      PG_GETARG_BOOL(4), &r))
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
              errmsg("invalid preceding or following size in window function")));
-
-  if (sub)
-    offset = -offset; /* cannot overflow */
-
-  if (unlikely(pg_add_s64_overflow(base, offset, &sum))) {
-    /*
-     * If sub is false, the true sum is surely more than val, so correct
-     * answer is the same as "less".  If sub is true, the true sum is
-     * surely less than val, so the answer is "!less".
-     */
-    PG_RETURN_BOOL(sub ? !less : less);
-  }
-
-  if (less)
-    PG_RETURN_BOOL(val <= sum);
-  else
-    PG_RETURN_BOOL(val >= sum);
+  PG_RETURN_BOOL(r);
 }
 
 Datum in_range_int2_int4(PG_FUNCTION_ARGS) {
-  /* We must do all the math in int32 */
-  int32 val = (int32)PG_GETARG_INT16(0);
-  int32 base = (int32)PG_GETARG_INT16(1);
-  int32 offset = PG_GETARG_INT32(2);
-  bool sub = PG_GETARG_BOOL(3);
-  bool less = PG_GETARG_BOOL(4);
-  int32 sum;
+  int r;
 
-  if (offset < 0)
+  /* ty does the sum in int64, which any width fits */
+  if (ty_int_in_range(PG_GETARG_INT16(0), PG_GETARG_INT16(1),
+                      PG_GETARG_INT32(2), PG_GETARG_BOOL(3),
+                      PG_GETARG_BOOL(4), &r))
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
              errmsg("invalid preceding or following size in window function")));
-
-  if (sub)
-    offset = -offset; /* cannot overflow */
-
-  if (unlikely(pg_add_s32_overflow(base, offset, &sum))) {
-    /*
-     * If sub is false, the true sum is surely more than val, so correct
-     * answer is the same as "less".  If sub is true, the true sum is
-     * surely less than val, so the answer is "!less".
-     */
-    PG_RETURN_BOOL(sub ? !less : less);
-  }
-
-  if (less)
-    PG_RETURN_BOOL(val <= sum);
-  else
-    PG_RETURN_BOOL(val >= sum);
+  PG_RETURN_BOOL(r);
 }
 
 Datum in_range_int2_int2(PG_FUNCTION_ARGS) {
-  /* Doesn't seem worth duplicating code for, so just invoke int2_int4 */
-  return DirectFunctionCall5(in_range_int2_int4, PG_GETARG_DATUM(0),
-                             PG_GETARG_DATUM(1),
-                             Int32GetDatum((int32)PG_GETARG_INT16(2)),
-                             PG_GETARG_DATUM(3), PG_GETARG_DATUM(4));
+  int r;
+
+  /* ty does the sum in int64, which any width fits */
+  if (ty_int_in_range(PG_GETARG_INT16(0), PG_GETARG_INT16(1),
+                      PG_GETARG_INT16(2), PG_GETARG_BOOL(3),
+                      PG_GETARG_BOOL(4), &r))
+    ereport(ERROR,
+            (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
+             errmsg("invalid preceding or following size in window function")));
+  PG_RETURN_BOOL(r);
 }
 
 Datum in_range_int2_int8(PG_FUNCTION_ARGS) {
-  /* Doesn't seem worth duplicating code for, so just invoke int4_int8 */
-  return DirectFunctionCall5(
-      in_range_int4_int8, Int32GetDatum((int32)PG_GETARG_INT16(0)),
-      Int32GetDatum((int32)PG_GETARG_INT16(1)), PG_GETARG_DATUM(2),
-      PG_GETARG_DATUM(3), PG_GETARG_DATUM(4));
+  int r;
+
+  /* ty does the sum in int64, which any width fits */
+  if (ty_int_in_range(PG_GETARG_INT16(0), PG_GETARG_INT16(1),
+                      PG_GETARG_INT64(2), PG_GETARG_BOOL(3),
+                      PG_GETARG_BOOL(4), &r))
+    ereport(ERROR,
+            (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
+             errmsg("invalid preceding or following size in window function")));
+  PG_RETURN_BOOL(r);
 }
 
 /*
@@ -1057,7 +939,7 @@ Datum generate_series_step_int4(PG_FUNCTION_ARGS) {
      * Increment current in preparation for next iteration. If next-value
      * computation overflows, this is the final result.
      */
-    if (pg_add_s32_overflow(fctx->current, fctx->step, &fctx->current))
+    if (ty_int32_add(fctx->current, fctx->step, &fctx->current))
       fctx->step = 0;
 
     /* do when there is more left to send */

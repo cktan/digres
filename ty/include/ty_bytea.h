@@ -24,6 +24,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "ty.h"
 
@@ -73,13 +74,89 @@ void ty_bytea_format_hex(const uint8_t* data, size_t n, char* out);
 size_t ty_bytea_escape_size(const uint8_t* data, size_t n);
 void ty_bytea_format_escape(const uint8_t* data, size_t n, char* out);
 
+/* ---- encode and decode ---- */
+
+/*
+ * The encodings of ENCODE and DECODE: hex (two lowercase digits a byte),
+ * base64 (a line feed after each 76 characters), and escape (a byte as
+ * itself, but 0 and a byte of 0x80 or more as a backslash and three octal
+ * digits, and a backslash as two).
+ */
+typedef enum ty_bytea_enc_t {
+    TY_BYTEA_ENC_HEX,
+    TY_BYTEA_ENC_BASE64,
+    TY_BYTEA_ENC_ESCAPE
+} ty_bytea_enc_t;
+
+/*
+ * The encoding a name stands for, in any case. An unknown name is
+ * TY_ERR_INVALID with the message unrecognized encoding: "name".
+ */
+int ty_bytea_encoding(const char* name, ty_bytea_enc_t* enc);
+
+/*
+ * The text of n bytes in an encoding is at most encode_size characters;
+ * encode writes it, with no NUL, to out of that size, and returns its length.
+ */
+size_t ty_bytea_encode_size(ty_bytea_enc_t enc, const uint8_t* data, size_t n);
+size_t ty_bytea_encode(ty_bytea_enc_t enc, const uint8_t* data, size_t n,
+                       char* out);
+
+/*
+ * The bytes of the n characters of text at s are at most decode_size: out
+ * needs that room. decode writes them, sets *outlen to how many, and returns
+ * 0. A fault is TY_ERR_INVALID, with PostgreSQL's message: for hex an
+ * invalid digit or an odd number of digits; for base64 an unexpected "=", an
+ * invalid symbol, or "invalid base64 end sequence"; for escape a stray
+ * backslash. decode_size fails the same way for escape, which it must scan.
+ */
+int ty_bytea_decode_size(ty_bytea_enc_t enc, const char* s, size_t n,
+                         size_t* size);
+int ty_bytea_decode(ty_bytea_enc_t enc, const char* s, size_t n, uint8_t* out,
+                    size_t* outlen);
+
 /* ---- compare and hash ---- */
 
 /*
  * Negative, zero or positive as a is below, equal to or above b: the
  * bytes compare, and a prefix is below what it begins.
  */
-int ty_bytea_cmp(const uint8_t* a, size_t na, const uint8_t* b, size_t nb);
+static inline int ty_bytea_cmp(const uint8_t* a, size_t na, const uint8_t* b,
+                               size_t nb) {
+    size_t n = na < nb ? na : nb;
+    int c = n > 0 ? memcmp(a, b, n) : 0;
+
+    if (c == 0 && na != nb) {
+        return na < nb ? -1 : 1;
+    }
+    return c;
+}
+
+/* The predicates of the compare, 1 or 0; eq is false at once for lengths. */
+static inline int ty_bytea_eq(const uint8_t* a, size_t na, const uint8_t* b,
+                              size_t nb) {
+    return na == nb && (na == 0 || memcmp(a, b, na) == 0);
+}
+static inline int ty_bytea_ne(const uint8_t* a, size_t na, const uint8_t* b,
+                              size_t nb) {
+    return !ty_bytea_eq(a, na, b, nb);
+}
+static inline int ty_bytea_lt(const uint8_t* a, size_t na, const uint8_t* b,
+                              size_t nb) {
+    return ty_bytea_cmp(a, na, b, nb) < 0;
+}
+static inline int ty_bytea_le(const uint8_t* a, size_t na, const uint8_t* b,
+                              size_t nb) {
+    return ty_bytea_cmp(a, na, b, nb) <= 0;
+}
+static inline int ty_bytea_gt(const uint8_t* a, size_t na, const uint8_t* b,
+                              size_t nb) {
+    return ty_bytea_cmp(a, na, b, nb) > 0;
+}
+static inline int ty_bytea_ge(const uint8_t* a, size_t na, const uint8_t* b,
+                              size_t nb) {
+    return ty_bytea_cmp(a, na, b, nb) >= 0;
+}
 
 /*
  * A 64-bit hash of the bytes by a seed; the low 32 bits with seed 0 are

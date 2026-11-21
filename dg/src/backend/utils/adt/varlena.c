@@ -3311,8 +3311,9 @@ Datum byteaeq(PG_FUNCTION_ARGS) {
     bytea *barg1 = DatumGetByteaPP(arg1);
     bytea *barg2 = DatumGetByteaPP(arg2);
 
-    result =
-        (memcmp(VARDATA_ANY(barg1), VARDATA_ANY(barg2), len1 - VARHDRSZ) == 0);
+    /* the lengths are equal; ty compares the bytes */
+    result = ty_bytea_eq((const uint8_t *)VARDATA_ANY(barg1), len1 - VARHDRSZ,
+                         (const uint8_t *)VARDATA_ANY(barg2), len1 - VARHDRSZ);
 
     PG_FREE_IF_COPY(barg1, 0);
     PG_FREE_IF_COPY(barg2, 1);
@@ -3339,8 +3340,8 @@ Datum byteane(PG_FUNCTION_ARGS) {
     bytea *barg1 = DatumGetByteaPP(arg1);
     bytea *barg2 = DatumGetByteaPP(arg2);
 
-    result =
-        (memcmp(VARDATA_ANY(barg1), VARDATA_ANY(barg2), len1 - VARHDRSZ) != 0);
+    result = ty_bytea_ne((const uint8_t *)VARDATA_ANY(barg1), len1 - VARHDRSZ,
+                         (const uint8_t *)VARDATA_ANY(barg2), len1 - VARHDRSZ);
 
     PG_FREE_IF_COPY(barg1, 0);
     PG_FREE_IF_COPY(barg2, 1);
@@ -3352,69 +3353,65 @@ Datum byteane(PG_FUNCTION_ARGS) {
 Datum bytealt(PG_FUNCTION_ARGS) {
   bytea *arg1 = PG_GETARG_BYTEA_PP(0);
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
-  int len1, len2;
-  int cmp;
+  bool result;
 
-  len1 = VARSIZE_ANY_EXHDR(arg1);
-  len2 = VARSIZE_ANY_EXHDR(arg2);
-
-  cmp = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
+  result = ty_bytea_lt((const uint8_t *)VARDATA_ANY(arg1),
+                         VARSIZE_ANY_EXHDR(arg1),
+                         (const uint8_t *)VARDATA_ANY(arg2),
+                         VARSIZE_ANY_EXHDR(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
 
-  PG_RETURN_BOOL((cmp < 0) || ((cmp == 0) && (len1 < len2)));
+  PG_RETURN_BOOL(result);
 }
 
 Datum byteale(PG_FUNCTION_ARGS) {
   bytea *arg1 = PG_GETARG_BYTEA_PP(0);
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
-  int len1, len2;
-  int cmp;
+  bool result;
 
-  len1 = VARSIZE_ANY_EXHDR(arg1);
-  len2 = VARSIZE_ANY_EXHDR(arg2);
-
-  cmp = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
+  result = ty_bytea_le((const uint8_t *)VARDATA_ANY(arg1),
+                         VARSIZE_ANY_EXHDR(arg1),
+                         (const uint8_t *)VARDATA_ANY(arg2),
+                         VARSIZE_ANY_EXHDR(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
 
-  PG_RETURN_BOOL((cmp < 0) || ((cmp == 0) && (len1 <= len2)));
+  PG_RETURN_BOOL(result);
 }
 
 Datum byteagt(PG_FUNCTION_ARGS) {
   bytea *arg1 = PG_GETARG_BYTEA_PP(0);
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
-  int len1, len2;
-  int cmp;
+  bool result;
 
-  len1 = VARSIZE_ANY_EXHDR(arg1);
-  len2 = VARSIZE_ANY_EXHDR(arg2);
-
-  cmp = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
+  result = ty_bytea_gt((const uint8_t *)VARDATA_ANY(arg1),
+                         VARSIZE_ANY_EXHDR(arg1),
+                         (const uint8_t *)VARDATA_ANY(arg2),
+                         VARSIZE_ANY_EXHDR(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
 
-  PG_RETURN_BOOL((cmp > 0) || ((cmp == 0) && (len1 > len2)));
+  PG_RETURN_BOOL(result);
 }
 
 Datum byteage(PG_FUNCTION_ARGS) {
   bytea *arg1 = PG_GETARG_BYTEA_PP(0);
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
-  int len1, len2;
-  int cmp;
+  bool result;
 
-  len1 = VARSIZE_ANY_EXHDR(arg1);
-  len2 = VARSIZE_ANY_EXHDR(arg2);
-
-  cmp = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
+  result = ty_bytea_ge((const uint8_t *)VARDATA_ANY(arg1),
+                         VARSIZE_ANY_EXHDR(arg1),
+                         (const uint8_t *)VARDATA_ANY(arg2),
+                         VARSIZE_ANY_EXHDR(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
 
-  PG_RETURN_BOOL((cmp > 0) || ((cmp == 0) && (len1 >= len2)));
+  PG_RETURN_BOOL(result);
 }
 
 Datum byteacmp(PG_FUNCTION_ARGS) {
@@ -3436,33 +3433,25 @@ Datum byteacmp(PG_FUNCTION_ARGS) {
 Datum bytea_larger(PG_FUNCTION_ARGS) {
   bytea *arg1 = PG_GETARG_BYTEA_PP(0);
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
-  bytea *result;
-  int len1, len2;
-  int cmp;
 
-  len1 = VARSIZE_ANY_EXHDR(arg1);
-  len2 = VARSIZE_ANY_EXHDR(arg2);
-
-  cmp = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
-  result = ((cmp > 0) || ((cmp == 0) && (len1 > len2)) ? arg1 : arg2);
-
-  PG_RETURN_BYTEA_P(result);
+  PG_RETURN_BYTEA_P(ty_bytea_gt((const uint8_t *)VARDATA_ANY(arg1),
+                                VARSIZE_ANY_EXHDR(arg1),
+                                (const uint8_t *)VARDATA_ANY(arg2),
+                                VARSIZE_ANY_EXHDR(arg2))
+                        ? arg1
+                        : arg2);
 }
 
 Datum bytea_smaller(PG_FUNCTION_ARGS) {
   bytea *arg1 = PG_GETARG_BYTEA_PP(0);
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
-  bytea *result;
-  int len1, len2;
-  int cmp;
 
-  len1 = VARSIZE_ANY_EXHDR(arg1);
-  len2 = VARSIZE_ANY_EXHDR(arg2);
-
-  cmp = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
-  result = ((cmp < 0) || ((cmp == 0) && (len1 < len2)) ? arg1 : arg2);
-
-  PG_RETURN_BYTEA_P(result);
+  PG_RETURN_BYTEA_P(ty_bytea_lt((const uint8_t *)VARDATA_ANY(arg1),
+                                VARSIZE_ANY_EXHDR(arg1),
+                                (const uint8_t *)VARDATA_ANY(arg2),
+                                VARSIZE_ANY_EXHDR(arg2))
+                        ? arg1
+                        : arg2);
 }
 
 Datum bytea_sortsupport(PG_FUNCTION_ARGS) {

@@ -137,6 +137,8 @@ $(OBJDIR)/backend/storage/ipc/%.o:  CPPFLAGS += -I$(SM)/include
 $(OBJDIR)/backend/utils/init/%.o:   CPPFLAGS += -I$(SM)/include
 $(OBJDIR)/backend/parser/%.o:       CPPFLAGS += -I$(SQ)/include
 $(OBJDIR)/backend/utils/adt/%.o:    CPPFLAGS += -I$(TY)/include
+$(OBJDIR)/common/hashfn.o:           CPPFLAGS += -I$(TY)/include
+$(OBJDIR)/backend/access/nbtree/%.o: CPPFLAGS += -I$(TY)/include
 $(OBJDIR)/backend/main/%.o:         CPPFLAGS += -I$(SM)/include -I$(SQ)/include
 
 # The flags the server's objects are built with, which "digres --build"

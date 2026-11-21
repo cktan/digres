@@ -4487,6 +4487,8 @@ done
 # 3. A substring with a negative length, and an overlay from below 1 or
 #    with a sum past int4.
 # 4. A bytea of more bytes than the integer has.
+# 5. encode and decode of a bad base64, hex or escape text, and a name of
+#    an encoding that does not exist.
 for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'\\x6'::bytea|invalid hexadecimal data: odd number of digits" \
   "'\\x61 6'::bytea|invalid hexadecimal data: odd number of digits" \
@@ -4504,7 +4506,31 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "overlay('\\x0102'::bytea PLACING '\\xaa'::bytea FROM 2 FOR 2147483647)|integer out of range" \
   "'\\x010203'::bytea::int2|smallint out of range" \
   "'\\x0102030405'::bytea::int4|integer out of range" \
-  "'\\x010203040506070809'::bytea::int8|bigint out of range"; do
+  "'\\x010203040506070809'::bytea::int8|bigint out of range" \
+  "'32768'::int2|value \"32768\" is out of range for type smallint" \
+  "'-32769'::int2|value \"-32769\" is out of range for type smallint" \
+  "'2147483648'::int4|value \"2147483648\" is out of range for type integer" \
+  "'9223372036854775808'::int8|value \"9223372036854775808\" is out of range for type bigint" \
+  "'0x80000000'::int4|value \"0x80000000\" is out of range for type integer" \
+  "'99999999999999999999x'::int8|value \"99999999999999999999x\" is out of range for type bigint" \
+  "'abc'::int4|invalid input syntax for type integer: \"abc\"" \
+  "''::int2|invalid input syntax for type smallint: \"\"" \
+  "'1__0'::int4|invalid input syntax for type integer: \"1__0\"" \
+  "'_1'::int4|invalid input syntax for type integer: \"_1\"" \
+  "'1_'::int4|invalid input syntax for type integer: \"1_\"" \
+  "'0x'::int4|invalid input syntax for type integer: \"0x\"" \
+  "'1 2'::int8|invalid input syntax for type bigint: \"1 2\"" \
+  "'1.5'::int4|invalid input syntax for type integer: \"1.5\"" \
+  "decode('AP9c@Q==', 'base64')|invalid symbol \"@\" found while decoding base64 sequence" \
+  "decode('AP9cYQ', 'base64')|invalid base64 end sequence" \
+  "decode('AP9cYQ', 'base64')|Input data is missing padding" \
+  "decode('A=', 'base64')|unexpected \"=\" while decoding base64 sequence" \
+  "decode('6g', 'hex')|invalid hexadecimal digit: \"g\"" \
+  "decode('6', 'hex')|invalid hexadecimal data: odd number of digits" \
+  "decode('a\\', 'escape')|invalid input syntax for type bytea" \
+  "decode('a\\4', 'escape')|invalid input syntax for type bytea" \
+  "encode('\\x61'::bytea, 'rot13')|unrecognized encoding: \"rot13\"" \
+  "decode('61', 'rot13')|unrecognized encoding: \"rot13\""; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"
 done

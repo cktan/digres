@@ -43,6 +43,14 @@ static inline int ty_uuid_cmp(const ty_uuid_t* a, const ty_uuid_t* b) {
 }
 
 /*
+ * The uuid one above a, or one below it, as the 128-bit number of its bytes:
+ * sets *r and returns 0. All ones has no successor, and all zeros no
+ * predecessor: -1 with TY_ERR_RANGE, and *r is not set.
+ */
+int ty_uuid_increment(const ty_uuid_t* a, ty_uuid_t* r);
+int ty_uuid_decrement(const ty_uuid_t* a, ty_uuid_t* r);
+
+/*
  * A 64-bit hash of u by a seed; the low 32 bits with seed 0 are the
  * standard 32-bit hash. It cannot fail.
  */

@@ -51,6 +51,9 @@ const char* ty_errname(ty_errnum_t code);
 int ty_err_range(void);
 int ty_err_divzero(void);
 
+/* Record TY_ERR_INVALID with msg as the thread's error; returns -1. */
+int ty_err_invalid(const char* msg);
+
 /* A branch that is taken on the rare failure. */
 #define TY_UNLIKELY(x) __builtin_expect((x) != 0, 0)
 

@@ -58,22 +58,10 @@ bool parse_bool_with_len(const char *value, size_t len, bool *result) {
  */
 Datum boolin(PG_FUNCTION_ARGS) {
   const char *in_str = PG_GETARG_CSTRING(0);
-  const char *str;
-  size_t len;
   bool result;
 
-  /*
-   * Skip leading and trailing whitespace
-   */
-  str = in_str;
-  while (isspace((unsigned char)*str))
-    str++;
-
-  len = strlen(str);
-  while (len > 0 && isspace((unsigned char)str[len - 1]))
-    len--;
-
-  if (parse_bool_with_len(str, len, &result))
+  /* ty skips the space at both ends, then reads the words */
+  if (ty_bool_parse_text(in_str, strlen(in_str), &result) == 0)
     PG_RETURN_BOOL(result);
 
   ereturn(
@@ -86,12 +74,7 @@ Datum boolin(PG_FUNCTION_ARGS) {
  *		boolout			- converts 1 or 0 to "t" or "f"
  */
 Datum boolout(PG_FUNCTION_ARGS) {
-  bool b = PG_GETARG_BOOL(0);
-  char *result = (char *)palloc(2);
-
-  result[0] = (b) ? 't' : 'f';
-  result[1] = '\0';
-  PG_RETURN_CSTRING(result);
+  PG_RETURN_CSTRING(pstrdup(ty_bool_out(PG_GETARG_BOOL(0))));
 }
 
 /*
@@ -128,15 +111,7 @@ Datum boolsend(PG_FUNCTION_ARGS) {
  * this function follows the SQL-spec result (except for producing lower case)
  */
 Datum booltext(PG_FUNCTION_ARGS) {
-  bool arg1 = PG_GETARG_BOOL(0);
-  const char *str;
-
-  if (arg1)
-    str = "true";
-  else
-    str = "false";
-
-  PG_RETURN_TEXT_P(cstring_to_text(str));
+  PG_RETURN_TEXT_P(cstring_to_text(ty_bool_text(PG_GETARG_BOOL(0))));
 }
 
 /*****************************************************************************
@@ -145,53 +120,36 @@ Datum booltext(PG_FUNCTION_ARGS) {
  *****************************************************************************/
 
 Datum booleq(PG_FUNCTION_ARGS) {
-  bool arg1 = PG_GETARG_BOOL(0);
-  bool arg2 = PG_GETARG_BOOL(1);
-
-  PG_RETURN_BOOL(arg1 == arg2);
+  PG_RETURN_BOOL(ty_bool_eq(PG_GETARG_BOOL(0), PG_GETARG_BOOL(1)));
 }
 
 Datum boolne(PG_FUNCTION_ARGS) {
-  bool arg1 = PG_GETARG_BOOL(0);
-  bool arg2 = PG_GETARG_BOOL(1);
-
-  PG_RETURN_BOOL(arg1 != arg2);
+  PG_RETURN_BOOL(ty_bool_ne(PG_GETARG_BOOL(0), PG_GETARG_BOOL(1)));
 }
 
 Datum boollt(PG_FUNCTION_ARGS) {
-  bool arg1 = PG_GETARG_BOOL(0);
-  bool arg2 = PG_GETARG_BOOL(1);
-
-  PG_RETURN_BOOL(arg1 < arg2);
+  PG_RETURN_BOOL(ty_bool_lt(PG_GETARG_BOOL(0), PG_GETARG_BOOL(1)));
 }
 
 Datum boolgt(PG_FUNCTION_ARGS) {
-  bool arg1 = PG_GETARG_BOOL(0);
-  bool arg2 = PG_GETARG_BOOL(1);
-
-  PG_RETURN_BOOL(arg1 > arg2);
+  PG_RETURN_BOOL(ty_bool_gt(PG_GETARG_BOOL(0), PG_GETARG_BOOL(1)));
 }
 
 Datum boolle(PG_FUNCTION_ARGS) {
-  bool arg1 = PG_GETARG_BOOL(0);
-  bool arg2 = PG_GETARG_BOOL(1);
-
-  PG_RETURN_BOOL(arg1 <= arg2);
+  PG_RETURN_BOOL(ty_bool_le(PG_GETARG_BOOL(0), PG_GETARG_BOOL(1)));
 }
 
 Datum boolge(PG_FUNCTION_ARGS) {
-  bool arg1 = PG_GETARG_BOOL(0);
-  bool arg2 = PG_GETARG_BOOL(1);
-
-  PG_RETURN_BOOL(arg1 >= arg2);
+  PG_RETURN_BOOL(ty_bool_ge(PG_GETARG_BOOL(0), PG_GETARG_BOOL(1)));
 }
 
 Datum hashbool(PG_FUNCTION_ARGS) {
-  return hash_uint32((int32)PG_GETARG_BOOL(0));
+  PG_RETURN_UINT32((uint32)ty_bool_hash(PG_GETARG_BOOL(0), 0));
 }
 
 Datum hashboolextended(PG_FUNCTION_ARGS) {
-  return hash_uint32_extended((int32)PG_GETARG_BOOL(0), PG_GETARG_INT64(1));
+  PG_RETURN_UINT64(
+      ty_bool_hash(PG_GETARG_BOOL(0), (uint64)PG_GETARG_INT64(1)));
 }
 
 /*
@@ -205,7 +163,7 @@ Datum hashboolextended(PG_FUNCTION_ARGS) {
  * Note: this is only used in plain aggregate mode, not moving-aggregate mode.
  */
 Datum booland_statefunc(PG_FUNCTION_ARGS) {
-  PG_RETURN_BOOL(PG_GETARG_BOOL(0) && PG_GETARG_BOOL(1));
+  PG_RETURN_BOOL(ty_bool_and(PG_GETARG_BOOL(0), PG_GETARG_BOOL(1)));
 }
 
 /*
@@ -215,7 +173,7 @@ Datum booland_statefunc(PG_FUNCTION_ARGS) {
  * Note: this is only used in plain aggregate mode, not moving-aggregate mode.
  */
 Datum boolor_statefunc(PG_FUNCTION_ARGS) {
-  PG_RETURN_BOOL(PG_GETARG_BOOL(0) || PG_GETARG_BOOL(1));
+  PG_RETURN_BOOL(ty_bool_or(PG_GETARG_BOOL(0), PG_GETARG_BOOL(1)));
 }
 
 typedef struct BoolAggState {

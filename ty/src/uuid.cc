@@ -12,7 +12,7 @@
 #include <sys/random.h>
 
 #include "error.h"
-#include "hash.h"
+#include "ty_hash.h"
 
 namespace {
 
@@ -28,16 +28,6 @@ int hex_value(char c) {
     return c - 'A' + 10;
   }
   return -1;
-}
-
-/* The 8 bytes at p as one number, the first the most significant. */
-uint64_t load_be64(const uint8_t *p) {
-  uint64_t v = 0;
-
-  for (int i = 0; i < 8; i++) {
-    v = (v << 8) | p[i];
-  }
-  return v;
 }
 
 /* Fill n bytes at p with random bytes from the system; false if it fails. */
@@ -125,13 +115,44 @@ void ty_uuid_format(const ty_uuid_t *u, char out[TY_UUID_TEXT_SIZE]) {
   *p = '\0';
 }
 
-/* The hash of a uuid: its two halves mixed into the seed. */
-uint64_t ty_uuid_hash(const ty_uuid_t *u, uint64_t seed) {
-  uint64_t h =
-      ty_internal::mix64(seed + 0x9e3779b97f4a7c15ULL, 0x2545f4914f6cdd1dULL);
+/*
+ * The uuid one above a: add 1 to the 128-bit number of the bytes.
+ * 1. From the last byte, a byte below 255 gets 1 added and the rest stay.
+ * 2. A byte of 255 becomes 0, and the carry goes to the byte before.
+ * 3. A carry out of the first byte is an overflow.
+ */
+int ty_uuid_increment(const ty_uuid_t *a, ty_uuid_t *r) {
+  ty_uuid_t v = *a;
 
-  h = ty_internal::mix64(h, load_be64(u->data));
-  return ty_internal::mix64(h, load_be64(u->data + 8));
+  for (int i = 15; i >= 0; i--) {
+    if (v.data[i] < 255) {
+      v.data[i]++;
+      *r = v;
+      return 0;
+    }
+    v.data[i] = 0;
+  }
+  return ty_err_range();
+}
+
+/* The uuid one below a: the same, with a borrow. */
+int ty_uuid_decrement(const ty_uuid_t *a, ty_uuid_t *r) {
+  ty_uuid_t v = *a;
+
+  for (int i = 15; i >= 0; i--) {
+    if (v.data[i] > 0) {
+      v.data[i]--;
+      *r = v;
+      return 0;
+    }
+    v.data[i] = 255;
+  }
+  return ty_err_range();
+}
+
+/* The hash of a uuid: that of its 16 bytes. */
+uint64_t ty_uuid_hash(const ty_uuid_t *u, uint64_t seed) {
+  return ty_hash_bytes(u->data, 16, seed);
 }
 
 /* The version of a uuid of the RFC variant; -1 for another variant. */

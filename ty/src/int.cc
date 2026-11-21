@@ -9,6 +9,8 @@
  */
 #include "ty_int.h"
 
+#include "ty_hash.h"
+
 #include <limits>
 
 #include <math.h>
@@ -124,4 +126,21 @@ int ty_int64_from_double(double d, int64_t *r) {
   }
   *r = (int64_t)n;
   return 0;
+}
+
+/*
+ * The hash of an int64, as PostgreSQL's: a value of 32 bits hashes as the
+ * int32 does; another folds its high half into its low half, so that an
+ * int16, an int32 and an int64 of one value hash alike.
+ * 1. Take the low 32 bits, and the high 32 bits.
+ * 2. XOR the high half in if the value is not negative, or its complement
+ *    if it is: a value that fits 32 bits then leaves the low half as it is.
+ * 3. Hash the low half as a 32-bit value.
+ */
+uint64_t ty_int64_hash(int64_t a, uint64_t seed) {
+  uint32_t lo = (uint32_t)a;
+  uint32_t hi = (uint32_t)(a >> 32);
+
+  lo ^= (a >= 0) ? hi : ~hi;
+  return ty_hash_u32(lo, seed);
 }

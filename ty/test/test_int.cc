@@ -8,7 +8,11 @@
  */
 #include <stdint.h>
 
+#include <algorithm>
+#include <vector>
+
 #include "doctest.h"
+#include "ty_bool.h"
 #include "ty_int.h"
 
 // Verify that an int32 operation is exact, or an error that is not wrapped.
@@ -149,4 +153,38 @@ TEST_CASE("narrowing and double conversions are checked") {
   CHECK(-1 == ty_int64_from_double(9223372036854775808.0, &r64));
   CHECK(0 == ty_int64_from_double(-9223372036854775808.0, &r64));
   CHECK(INT64_MIN == r64);
+}
+
+// Verify the integer hash: one hash for one value at every width, and a
+// hash that depends on the value and the seed.
+// 1. The int16, int32 and int64 of one value hash alike, for edge values.
+// 2. A bool hashes as the int 0 or 1.
+// 3. Another value, or another seed, gives another hash.
+// 4. 100,000 consecutive values have no two hashes the same.
+TEST_CASE("the integer hash is one for a value at every width") {
+  // 1. The int16, int32 and int64 of one value hash alike, for edge values.
+  const int16_t edges[] = {0, 1, -1, INT16_MIN, INT16_MAX};
+  for (int16_t v : edges) {
+    CHECK(ty_int16_hash(v, 0) == ty_int64_hash(v, 0));
+    CHECK(ty_int32_hash(v, 7) == ty_int64_hash(v, 7));
+  }
+
+  // 2. A bool hashes as the int 0 or 1.
+  CHECK(ty_bool_hash(true, 3) == ty_int64_hash(1, 3));
+  CHECK(ty_bool_hash(false, 3) == ty_int64_hash(0, 3));
+
+  // 3. Another value, or another seed, gives another hash.
+  CHECK(ty_int64_hash(1, 0) != ty_int64_hash(2, 0));
+  CHECK(ty_int64_hash(1, 0) != ty_int64_hash(1, 1));
+  CHECK((uint32_t)ty_int64_hash(1, 0) != (uint32_t)ty_int64_hash(1, 1));
+  CHECK(ty_int64_hash(-1, 0) != ty_int64_hash(1, 0));
+  CHECK(ty_int64_hash(INT64_MIN, 0) != ty_int64_hash(INT64_MAX, 0));
+
+  // 4. 100,000 consecutive values have no two hashes the same.
+  std::vector<uint64_t> seen;
+  for (int64_t i = -50000; i < 50000; i++) {
+    seen.push_back(ty_int64_hash(i, 0));
+  }
+  std::sort(seen.begin(), seen.end());
+  CHECK(std::adjacent_find(seen.begin(), seen.end()) == seen.end());
 }

@@ -15,7 +15,7 @@
 #include <string.h>
 
 #include "error.h"
-#include "hash.h"
+#include "ty_hash.h"
 
 namespace {
 
@@ -33,19 +33,23 @@ constexpr std::array<char, 512> make_hex_table() {
 
 constexpr std::array<char, 512> hex_table = make_hex_table();
 
-/* The value of a hexadecimal digit, or -1 if c is not one. */
-int hex_value(unsigned char c) {
-  if (c >= '0' && c <= '9') {
-    return c - '0';
+/* The value of each byte as a hexadecimal digit, or -1 if it is not one. */
+constexpr std::array<int8_t, 256> make_hex_values() {
+  std::array<int8_t, 256> t{};
+
+  for (int i = 0; i < 256; i++) {
+    t[i] = (i >= '0' && i <= '9')   ? (int8_t)(i - '0')
+           : (i >= 'a' && i <= 'f') ? (int8_t)(i - 'a' + 10)
+           : (i >= 'A' && i <= 'F') ? (int8_t)(i - 'A' + 10)
+                                    : (int8_t)-1;
   }
-  if (c >= 'a' && c <= 'f') {
-    return c - 'a' + 10;
-  }
-  if (c >= 'A' && c <= 'F') {
-    return c - 'A' + 10;
-  }
-  return -1;
+  return t;
 }
+
+constexpr std::array<int8_t, 256> hex_values = make_hex_values();
+
+/* The value of a hexadecimal digit, or -1 if c is not one. */
+inline int hex_value(unsigned char c) { return hex_values[c]; }
 
 /* How many bytes the UTF-8 character at s has, of the n left; at least 1. */
 size_t char_len(const char *s, size_t n) {
@@ -64,9 +68,10 @@ int bad_hex_digit(const char *s, size_t n) {
   return ty_internal::set_error(TY_ERR_INVALID, msg);
 }
 
-/* Parse the hex form: the digits after the "\x". */
-int parse_hex(const char *s, size_t len, uint8_t *out, size_t *outlen) {
-  size_t p = 2, n = 0;
+/* Parse hex pairs from start on, skipping the space between them. */
+int parse_hex(const char *s, size_t len, size_t start, uint8_t *out,
+              size_t *outlen) {
+  size_t p = start, n = 0;
 
   while (p < len) {
     if (s[p] == ' ' || s[p] == '\n' || s[p] == '\t' || s[p] == '\r') {
@@ -93,16 +98,6 @@ int parse_hex(const char *s, size_t len, uint8_t *out, size_t *outlen) {
   return 0;
 }
 
-/* The 8 bytes at p as one number, the first the most significant. */
-uint64_t load_be(const uint8_t *p, size_t n) {
-  uint64_t v = 0;
-
-  for (size_t i = 0; i < n; i++) {
-    v = (v << 8) | p[i];
-  }
-  return v << (8 * (8 - n));
-}
-
 /* The bytes of a, n of them at most 8, as an unsigned number. */
 template <typename U> int to_unsigned(const uint8_t *a, size_t n, U *r) {
   U v = 0;
@@ -122,6 +117,154 @@ template <typename U> void from_unsigned(U v, uint8_t *out) {
   for (size_t i = 0; i < sizeof(U); i++) {
     out[sizeof(U) - 1 - i] = (uint8_t)(v >> (8 * i));
   }
+}
+
+const char base64_chars[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/* The value of a base64 digit, or -1 if c is not one. */
+int base64_value(char c) {
+  if (c >= 'A' && c <= 'Z') {
+    return c - 'A';
+  }
+  if (c >= 'a' && c <= 'z') {
+    return c - 'a' + 26;
+  }
+  if (c >= '0' && c <= '9') {
+    return c - '0' + 52;
+  }
+  return c == '+' ? 62 : c == '/' ? 63 : -1;
+}
+
+/* Record the invalid base64 symbol at s, naming its character. */
+int bad_base64_symbol(const char *s, size_t n) {
+  char msg[96];
+
+  snprintf(msg, sizeof msg,
+           "invalid symbol \"%.*s\" found while decoding base64 sequence",
+           (int)char_len(s, n), s);
+  return ty_internal::set_error(TY_ERR_INVALID, msg);
+}
+
+/* Write base64 text; a line feed follows each 76 characters of whole groups. */
+size_t encode_base64(const uint8_t *data, size_t n, char *out) {
+  char *p = out, *line_end = out + 76;
+  uint32_t buf = 0;
+  int pos = 2;
+
+  for (size_t i = 0; i < n; i++) {
+    buf |= (uint32_t)data[i] << (pos << 3);
+    pos--;
+    if (pos < 0) {
+      *p++ = base64_chars[(buf >> 18) & 0x3f];
+      *p++ = base64_chars[(buf >> 12) & 0x3f];
+      *p++ = base64_chars[(buf >> 6) & 0x3f];
+      *p++ = base64_chars[buf & 0x3f];
+      pos = 2;
+      buf = 0;
+    }
+    if (p >= line_end) {
+      *p++ = '\n';
+      line_end = p + 76;
+    }
+  }
+  if (pos != 2) {
+    *p++ = base64_chars[(buf >> 18) & 0x3f];
+    *p++ = base64_chars[(buf >> 12) & 0x3f];
+    *p++ = (pos == 0) ? base64_chars[(buf >> 6) & 0x3f] : '=';
+    *p++ = '=';
+  }
+  return (size_t)(p - out);
+}
+
+/*
+ * Read base64 text.
+ * 1. Skip a space, tab, newline or return.
+ * 2. An "=" ends the data, but only after 2 or 3 digits of a group of 4.
+ * 3. Any other character must be a digit; four make three bytes, fewer if
+ *    "=" came.
+ * 4. A group left unfinished at the end is an error.
+ */
+int decode_base64(const char *s, size_t n, uint8_t *out, size_t *outlen) {
+  uint8_t *p = out;
+  uint32_t buf = 0;
+  int pos = 0, end = 0;
+
+  for (size_t i = 0; i < n; i++) {
+    char c = s[i];
+    int b;
+
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      continue;
+    }
+    if (c == '=') {
+      if (!end) {
+        if (pos == 2) {
+          end = 1;
+        } else if (pos == 3) {
+          end = 2;
+        } else {
+          return ty_internal::set_error(
+              TY_ERR_INVALID,
+              "unexpected \"=\" while decoding base64 sequence");
+        }
+      }
+      b = 0;
+    } else {
+      b = (c > 0 && c < 127) ? base64_value(c) : -1;
+      if (b < 0) {
+        return bad_base64_symbol(s + i, n - i);
+      }
+    }
+    buf = (buf << 6) + (uint32_t)b;
+    pos++;
+    if (pos == 4) {
+      *p++ = (uint8_t)((buf >> 16) & 255);
+      if (end == 0 || end > 1) {
+        *p++ = (uint8_t)((buf >> 8) & 255);
+      }
+      if (end == 0 || end > 2) {
+        *p++ = (uint8_t)(buf & 255);
+      }
+      buf = 0;
+      pos = 0;
+    }
+  }
+  if (pos != 0) {
+    return ty_internal::set_error(TY_ERR_INVALID,
+                                  "invalid base64 end sequence");
+  }
+  *outlen = (size_t)(p - out);
+  return 0;
+}
+
+/* True if the 3 bytes after a backslash at s[i] are an octal, 000 to 377. */
+bool is_octal_escape(const char *s, size_t i, size_t n) {
+  return i + 3 < n && s[i + 1] >= '0' && s[i + 1] <= '3' && s[i + 2] >= '0' &&
+         s[i + 2] <= '7' && s[i + 3] >= '0' && s[i + 3] <= '7';
+}
+
+/* Read the escaped form into out (n bytes of room); the length it gives. */
+int decode_escape(const char *s, size_t n, uint8_t *out, size_t *outlen) {
+  size_t i = 0, len = 0;
+
+  while (i < n) {
+    if (s[i] != '\\') {
+      out[len++] = (uint8_t)s[i++];
+    } else if (is_octal_escape(s, i, n)) {
+      out[len++] = (uint8_t)(((s[i + 1] - '0') << 6) | ((s[i + 2] - '0') << 3) |
+                             (s[i + 3] - '0'));
+      i += 4;
+    } else if (i + 1 < n && s[i + 1] == '\\') {
+      out[len++] = '\\';
+      i += 2;
+    } else {
+      return ty_internal::set_error(TY_ERR_INVALID,
+                                    "invalid input syntax for type bytea");
+    }
+  }
+  *outlen = len;
+  return 0;
 }
 
 } // namespace
@@ -152,7 +295,7 @@ int ty_bytea_parse(const char *s, size_t len, uint8_t *out, size_t *outlen) {
   size_t p = 0, n = 0;
 
   if (ty_bytea_is_hex_text(s, len)) {
-    return parse_hex(s, len, out, outlen);
+    return parse_hex(s, len, 2, out, outlen);
   }
   while (p < len) {
     if (s[p] != '\\') {
@@ -214,31 +357,9 @@ void ty_bytea_format_escape(const uint8_t *data, size_t n, char *out) {
   }
 }
 
-/* Compare the bytes; of two that agree as far as the shorter goes, the shorter
- * is less. */
-int ty_bytea_cmp(const uint8_t *a, size_t na, const uint8_t *b, size_t nb) {
-  size_t n = na < nb ? na : nb;
-  int c = n > 0 ? memcmp(a, b, n) : 0;
-
-  if (c == 0 && na != nb) {
-    return na < nb ? -1 : 1;
-  }
-  return c;
-}
-
-/*
- * The hash of bytes: each 8 bytes, the last cut short, mixed into the seed,
- * and then the length, so that bytes ending in zeros differ from shorter.
- */
+/* The hash of bytes: PostgreSQL's hash of the byte string. */
 uint64_t ty_bytea_hash(const uint8_t *data, size_t n, uint64_t seed) {
-  uint64_t h =
-      ty_internal::mix64(seed + 0x9e3779b97f4a7c15ULL, 0x6a09e667f3bcc909ULL);
-
-  for (size_t i = 0; i < n; i += 8) {
-    size_t take = n - i < 8 ? n - i : 8;
-    h = ty_internal::mix64(h, load_be(data + i, take));
-  }
-  return ty_internal::mix64(h, (uint64_t)n);
+  return ty_hash_bytes(data, n, seed);
 }
 
 /* Copy a, then b, to out. */
@@ -422,4 +543,140 @@ void ty_int32_to_bytea(int32_t v, uint8_t out[4]) {
 /* The 8 bytes of an int64. */
 void ty_int64_to_bytea(int64_t v, uint8_t out[8]) {
   from_unsigned<uint64_t>((uint64_t)v, out);
+}
+
+/* True if name is lit, in any case; lit is lowercase letters and digits. */
+static bool is_name(const char *name, const char *lit) {
+  for (; *lit; lit++, name++) {
+    if ((*name | 0x20) != *lit) {
+      return false;
+    }
+  }
+  return *name == '\0';
+}
+
+/* The encoding of a name, in any case. */
+int ty_bytea_encoding(const char *name, ty_bytea_enc_t *enc) {
+  char msg[128];
+
+  switch (name[0] | 0x20) {
+  case 'h':
+    if (is_name(name, "hex")) {
+      *enc = TY_BYTEA_ENC_HEX;
+      return 0;
+    }
+    break;
+  case 'b':
+    if (is_name(name, "base64")) {
+      *enc = TY_BYTEA_ENC_BASE64;
+      return 0;
+    }
+    break;
+  case 'e':
+    if (is_name(name, "escape")) {
+      *enc = TY_BYTEA_ENC_ESCAPE;
+      return 0;
+    }
+    break;
+  }
+  snprintf(msg, sizeof msg, "unrecognized encoding: \"%.80s\"", name);
+  return ty_internal::set_error(TY_ERR_INVALID, msg);
+}
+
+/* The most characters the encoding of n bytes takes. */
+size_t ty_bytea_encode_size(ty_bytea_enc_t enc, const uint8_t *data, size_t n) {
+  switch (enc) {
+  case TY_BYTEA_ENC_HEX:
+    return n * 2;
+  case TY_BYTEA_ENC_BASE64:
+    /* 3 bytes become 4 characters, and a line feed follows each 76 */
+    return (n + 2) / 3 * 4 + n / (76 * 3 / 4);
+  default: {
+    size_t size = 0;
+
+    for (size_t i = 0; i < n; i++) {
+      size += (data[i] == 0 || data[i] >= 0x80) ? 4 : data[i] == '\\' ? 2 : 1;
+    }
+    return size;
+  }
+  }
+}
+
+/* Write the encoding of the bytes; the length written. */
+size_t ty_bytea_encode(ty_bytea_enc_t enc, const uint8_t *data, size_t n,
+                       char *out) {
+  switch (enc) {
+  case TY_BYTEA_ENC_HEX:
+    for (size_t i = 0; i < n; i++) {
+      memcpy(out + 2 * i, &hex_table[2 * (size_t)data[i]], 2);
+    }
+    return n * 2;
+  case TY_BYTEA_ENC_BASE64:
+    return encode_base64(data, n, out);
+  default: {
+    char *p = out;
+
+    for (size_t i = 0; i < n; i++) {
+      uint8_t c = data[i];
+
+      if (c == 0 || c >= 0x80) {
+        *p++ = '\\';
+        *p++ = (char)('0' + (c >> 6));
+        *p++ = (char)('0' + ((c >> 3) & 7));
+        *p++ = (char)('0' + (c & 7));
+      } else if (c == '\\') {
+        *p++ = '\\';
+        *p++ = '\\';
+      } else {
+        *p++ = (char)c;
+      }
+    }
+    return (size_t)(p - out);
+  }
+  }
+}
+
+/* The most bytes the n characters decode to; escape is scanned for faults. */
+int ty_bytea_decode_size(ty_bytea_enc_t enc, const char *s, size_t n,
+                         size_t *size) {
+  switch (enc) {
+  case TY_BYTEA_ENC_HEX:
+    *size = n / 2;
+    return 0;
+  case TY_BYTEA_ENC_BASE64:
+    *size = n * 3 / 4;
+    return 0;
+  default: {
+    size_t i = 0, len = 0;
+
+    while (i < n) {
+      if (s[i] != '\\') {
+        i++;
+      } else if (is_octal_escape(s, i, n)) {
+        i += 4;
+      } else if (i + 1 < n && s[i + 1] == '\\') {
+        i += 2;
+      } else {
+        return ty_internal::set_error(TY_ERR_INVALID,
+                                      "invalid input syntax for type bytea");
+      }
+      len++;
+    }
+    *size = len;
+    return 0;
+  }
+  }
+}
+
+/* Decode the text. */
+int ty_bytea_decode(ty_bytea_enc_t enc, const char *s, size_t n, uint8_t *out,
+                    size_t *outlen) {
+  switch (enc) {
+  case TY_BYTEA_ENC_HEX:
+    return parse_hex(s, n, 0, out, outlen);
+  case TY_BYTEA_ENC_BASE64:
+    return decode_base64(s, n, out, outlen);
+  default:
+    return decode_escape(s, n, out, outlen);
+  }
 }

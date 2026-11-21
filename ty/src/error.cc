@@ -72,3 +72,8 @@ int ty_err_range(void) {
 int ty_err_divzero(void) {
   return ty_internal::set_error(TY_ERR_DIVZERO, "division by zero");
 }
+
+/* Record the invalid argument that an inline operation found; returns -1. */
+int ty_err_invalid(const char *msg) {
+  return ty_internal::set_error(TY_ERR_INVALID, msg);
+}

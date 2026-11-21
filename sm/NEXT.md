@@ -232,10 +232,13 @@ are the catalog tables psql reads
     2. **Types with no session state**: integers, bool, uuid
        and bytea: done, 2026-11-21 (`ty_int.h`, `ty_bool.h`,
        `ty_uuid.h`, `ty_bytea.h`;
-       [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7). Left over:
-       the hash of the integers and of bool; `encode` and
-       `decode` of bytea; `string_agg`. **The group of date,
-       time, interval, float text and text is next.**
+       [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7), with the
+       hash of every type, which is PostgreSQL's, in
+       `ty_hash.h`; and the rest of their operations, text in
+       and out and encode and decode included. Left over in
+       digres: aggregate states (`string_agg` of bytea, the bool
+       and integer averages), and sort support. **The group of
+       date, time, interval, float text and text is next.**
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.
@@ -266,9 +269,10 @@ are the catalog tables psql reads
       loops of `server.sh`.
     - **Measured by callgrind**: no statement rose by more than
       1% ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
-    - **Left over**: the hash of the integers and of bool, which
-      decides the partition of a hash-partitioned row; `encode`
-      and `decode` of bytea; `string_agg` of bytea.
+    - **The hash**: every type's is PostgreSQL's, in `ty_hash.h`,
+      so no value and no partition changed.
+    - **Left over**: aggregate states (`string_agg` of bytea,
+      the bool and integer averages), sort support.
 
     This move is not easy. The code in `utils/adt` does not
     copy over. **Moved code cannot call `palloc()`**: it needs

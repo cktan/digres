@@ -9,8 +9,10 @@
 
 #include "ty_decimal.h"
 
+#include <string.h>
+
 #include "error.h"
-#include "hash.h"
+#include "ty_hash.h"
 
 namespace {
 
@@ -837,17 +839,19 @@ int ty_dec128_width_bucket(const ty_dec128_t *operand, const ty_dec128_t *b1,
   return 0;
 }
 
-using ty_internal::mix64;
-
 /*
- * The hash of a decimal128.
+ * The hash of a decimal128, as digres's was: PostgreSQL's hash of a key of
+ * 32 bytes, the 16 of the value, 2 of the scale, and 14 zeros, in the
+ * machine's order.
  * 1. Drop the zeros at the end, past the point: the value and scale of
- *    its shortest form, and a zero has scale 0.
- * 2. Mix the seed, then the two halves of the value, then the scale.
+ *    its shortest form, and a zero has scale 0. Equal values then have
+ *    the same key at any scale.
+ * 2. Hash the key.
  */
 uint64_t ty_dec128_hash(const ty_dec128_t *a, uint64_t seed) {
   ty_int128_t v = a->value;
   int s = a->scale;
+  uint8_t key[32] = {};
 
   while (s > 0 && v % 10 == 0) {
     v /= 10;
@@ -856,10 +860,11 @@ uint64_t ty_dec128_hash(const ty_dec128_t *a, uint64_t seed) {
   if (v == 0) {
     s = 0;
   }
-  uint64_t h = mix64(seed + 0x9e3779b97f4a7c15ULL, 0x5bd1e9955bd1e995ULL);
-  h = mix64(h, (uint64_t)(u128)v);
-  h = mix64(h, (uint64_t)((u128)v >> 64));
-  return mix64(h, (uint64_t)s);
+  int16_t scale = (int16_t)s;
+
+  memcpy(key, &v, 16);
+  memcpy(key + 16, &scale, 2);
+  return ty_hash_bytes(key, sizeof key, seed);
 }
 
 /* The hash of a decimal64: that of the decimal128 of its value. */

@@ -136,8 +136,9 @@ typedef struct decimal_t {  /* decimal128's, in two halves */
   ty's (`ty_dec128_hash`, `ty_dec64_hash`, 64 bits, with a seed;
   the 32-bit hash is its low half): it first strips trailing
   zeros, so equal values hash alike, a `decimal64` as a
-  `decimal128` of its value. It is not PostgreSQL's `hash_any`
-  over a key, so its values are not PostgreSQL's.
+  `decimal128` of its value. It is PostgreSQL's `hash_any` over a
+  key of 32 bytes, as before the move
+  ([`../ty/DESIGN.md`](../ty/DESIGN.md) §10).
 
 ### 2.3 Stored as sm2's decimal, at the column's scale
 

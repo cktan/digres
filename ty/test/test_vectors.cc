@@ -9,6 +9,7 @@
  * rules of DESIGN.md and not ty's code. Each line is "OP ARGS => RESULT";
  * RESULT is "V S", a number, or "E NAME" for an error.
  */
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -19,6 +20,7 @@
 #include "ty_bool.h"
 #include "ty_bytea.h"
 #include "ty_decimal.h"
+#include "ty_hash.h"
 #include "ty_int.h"
 #include "ty_uuid.h"
 
@@ -138,6 +140,16 @@ std::string hex_of(const ty_uuid_t &u) {
   return s;
 }
 
+/* A decimal64 from two tokens. */
+ty_dec64_t d64(const vec_t &v, size_t i) {
+  return {(int64_t)int128_of(v.args[i]), std::stoi(v.args[i + 1])};
+}
+
+/* A decimal128 from two tokens. */
+ty_dec128_t d128(const vec_t &v, size_t i) {
+  return {int128_of(v.args[i]), std::stoi(v.args[i + 1])};
+}
+
 /* The bytes of a token: its hexadecimal digits, or "-" for none. */
 std::vector<uint8_t> bytes_of(const std::string &tok) {
   std::vector<uint8_t> b;
@@ -182,6 +194,66 @@ void check_bytes(const vec_t &v, int rc, const std::vector<uint8_t> &got) {
   }
 }
 
+/*
+ * Run a hash vector: the op names the type, the last argument is the seed,
+ * and the result is the 64-bit hash; with seed 0 its low 32 bits are the
+ * standard hash too. False if the op is not a hash.
+ */
+bool run_hash(const vec_t &v) {
+  const std::string &op = v.op;
+  static const char *const hashes[] = {"hash.bytes", "bytea.hash", "hash.u32",
+                                       "i16.hash",   "i32.hash",   "i64.hash",
+                                       "bool.hash",  "uuid.hash",  "d128.hash"};
+  bool is_hash = false;
+  for (const char *h : hashes) {
+    is_hash = is_hash || op == h;
+  }
+  if (!is_hash) {
+    return false;
+  }
+  uint64_t seed = std::stoull(v.args.back());
+  uint64_t got;
+
+  if (op == "hash.bytes" || op == "bytea.hash") {
+    std::vector<uint8_t> k = bytes_of(v.args[0]);
+    got = op == "hash.bytes" ? ty_hash_bytes(k.data(), k.size(), seed)
+                             : ty_bytea_hash(k.data(), k.size(), seed);
+    if (seed == 0) {
+      INFO(v.line);
+      CHECK((uint32_t)got == ty_hash_bytes_std(k.data(), k.size()));
+    }
+  } else if (op == "hash.u32") {
+    got = ty_hash_u32((uint32_t)std::stoull(v.args[0]), seed);
+    if (seed == 0) {
+      INFO(v.line);
+      CHECK((uint32_t)got == ty_hash_u32_std((uint32_t)std::stoull(v.args[0])));
+    }
+  } else if (op == "i16.hash") {
+    got = ty_int16_hash((int16_t)std::stoll(v.args[0]), seed);
+  } else if (op == "i32.hash") {
+    got = ty_int32_hash((int32_t)std::stoll(v.args[0]), seed);
+  } else if (op == "i64.hash") {
+    got = ty_int64_hash(std::stoll(v.args[0]), seed);
+  } else if (op == "bool.hash") {
+    got = ty_bool_hash(v.args[0] == "1", seed);
+  } else if (op == "uuid.hash") {
+    ty_uuid_t u = uuid_of(v.args[0]);
+    got = ty_uuid_hash(&u, seed);
+  } else if (op == "d128.hash") {
+    ty_dec128_t d = d128(v, 0);
+    got = ty_dec128_hash(&d, seed);
+    ty_dec64_t d64v = {(int64_t)(d.value % 1000), d.scale > 17 ? 17 : d.scale};
+    ty_dec128_t wide = {d64v.value, d64v.scale};
+    INFO(v.line);
+    CHECK(ty_dec64_hash(&d64v, seed) == ty_dec128_hash(&wide, seed));
+  } else {
+    return false;
+  }
+  INFO(v.line);
+  CHECK(std::stoull(v.res[0]) == got);
+  return true;
+}
+
 /* Run one bytea vector; false if its op is not one of them. */
 bool run_bytea(const vec_t &v) {
   const std::string &op = v.op;
@@ -217,6 +289,41 @@ bool run_bytea(const vec_t &v) {
     int c = ty_bytea_cmp(a.data(), a.size(), b.data(), b.size());
     INFO(v.line);
     CHECK(std::stoi(v.res[0]) == (c > 0) - (c < 0));
+  } else if (name == "eq" || name == "ne" || name == "lt" || name == "le" ||
+             name == "gt" || name == "ge") {
+    std::vector<uint8_t> a = arg(0), b = arg(1);
+    const uint8_t *pa = a.data(), *pb = b.data();
+    int got = name == "eq"   ? ty_bytea_eq(pa, a.size(), pb, b.size())
+              : name == "ne" ? ty_bytea_ne(pa, a.size(), pb, b.size())
+              : name == "lt" ? ty_bytea_lt(pa, a.size(), pb, b.size())
+              : name == "le" ? ty_bytea_le(pa, a.size(), pb, b.size())
+              : name == "gt" ? ty_bytea_gt(pa, a.size(), pb, b.size())
+                             : ty_bytea_ge(pa, a.size(), pb, b.size());
+    INFO(v.line);
+    CHECK(std::stoi(v.res[0]) == got);
+  } else if (name == "enc" || name == "dec") {
+    ty_bytea_enc_t enc;
+    REQUIRE(0 == ty_bytea_encoding(v.args[0].c_str(), &enc));
+    std::vector<uint8_t> in = bytes_of(v.args[1]), out;
+    int rc = 0;
+    if (name == "enc") {
+      out.resize(ty_bytea_encode_size(enc, in.data(), in.size()));
+      size_t n = ty_bytea_encode(enc, in.data(), in.size(),
+                                 reinterpret_cast<char *>(out.data()));
+      REQUIRE(n <= out.size());
+      out.resize(n);
+    } else {
+      size_t size = 0, n = 0;
+      rc = ty_bytea_decode_size(enc, reinterpret_cast<const char *>(in.data()),
+                                in.size(), &size);
+      if (rc == 0) {
+        out.resize(size);
+        rc = ty_bytea_decode(enc, reinterpret_cast<const char *>(in.data()),
+                             in.size(), out.data(), &n);
+        out.resize(rc == 0 ? n : 0);
+      }
+    }
+    check_bytes(v, rc, out);
   } else if (name == "cat") {
     std::vector<uint8_t> a = arg(0), b = arg(1), out(a.size() + b.size());
     ty_bytea_cat(a.data(), a.size(), b.data(), b.size(), out.data());
@@ -301,16 +408,6 @@ bool run_bytea(const vec_t &v) {
     return false;
   }
   return true;
-}
-
-/* A decimal64 from two tokens. */
-ty_dec64_t d64(const vec_t &v, size_t i) {
-  return {(int64_t)int128_of(v.args[i]), std::stoi(v.args[i + 1])};
-}
-
-/* A decimal128 from two tokens. */
-ty_dec128_t d128(const vec_t &v, size_t i) {
-  return {int128_of(v.args[i]), std::stoi(v.args[i + 1])};
 }
 
 /* Run one decimal64 vector; false if its op is not one of them. */
@@ -428,60 +525,100 @@ bool run128(const vec_t &v) {
  * if it is not of that width. A value is a long long in the vector, and
  * a result is checked as a long long.
  */
-#define RUN_INT(N, T)                                                         \
-  bool run_i##N(const vec_t &v) {                                             \
-    const std::string p = "i" #N ".";                                         \
-    if (v.op.compare(0, p.size(), p) != 0) {                                  \
-      return false;                                                           \
-    }                                                                         \
-    const std::string name = v.op.substr(p.size());                           \
-    T a = (T)std::stoll(v.args[0]);                                           \
-    T b = v.args.size() > 1 ? (T)std::stoll(v.args[1]) : 0;                   \
-    int n = v.args.size() > 1 ? (int)std::stoll(v.args[1]) : 0;               \
-    T r = 0;                                                                  \
-    if (name == "add") {                                                      \
-      check_int(v, ty_int##N##_add(a, b, &r), r);                             \
-    } else if (name == "sub") {                                               \
-      check_int(v, ty_int##N##_sub(a, b, &r), r);                             \
-    } else if (name == "mul") {                                               \
-      check_int(v, ty_int##N##_mul(a, b, &r), r);                             \
-    } else if (name == "div") {                                               \
-      check_int(v, ty_int##N##_div(a, b, &r), r);                             \
-    } else if (name == "mod") {                                               \
-      check_int(v, ty_int##N##_mod(a, b, &r), r);                             \
-    } else if (name == "gcd") {                                               \
-      check_int(v, ty_int##N##_gcd(a, b, &r), r);                             \
-    } else if (name == "lcm") {                                               \
-      check_int(v, ty_int##N##_lcm(a, b, &r), r);                             \
-    } else if (name == "neg") {                                               \
-      check_int(v, ty_int##N##_neg(a, &r), r);                                \
-    } else if (name == "abs") {                                               \
-      check_int(v, ty_int##N##_abs(a, &r), r);                                \
-    } else if (name == "inc") {                                               \
-      check_int(v, ty_int##N##_inc(a, &r), r);                                \
-    } else if (name == "dec") {                                               \
-      check_int(v, ty_int##N##_dec(a, &r), r);                                \
-    } else if (name == "shl") {                                               \
-      check_int(v, ty_int##N##_shl(a, n, &r), r);                             \
-    } else if (name == "shr") {                                               \
-      check_int(v, ty_int##N##_shr(a, n, &r), r);                             \
-    } else if (name == "larger") {                                            \
-      check_int(v, 0, ty_int##N##_larger(a, b));                              \
-    } else if (name == "smaller") {                                           \
-      check_int(v, 0, ty_int##N##_smaller(a, b));                             \
-    } else if (name == "and") {                                               \
-      check_int(v, 0, ty_int##N##_and(a, b));                                 \
-    } else if (name == "or") {                                                \
-      check_int(v, 0, ty_int##N##_or(a, b));                                  \
-    } else if (name == "xor") {                                               \
-      check_int(v, 0, ty_int##N##_xor(a, b));                                 \
-    } else if (name == "not") {                                               \
-      check_int(v, 0, ty_int##N##_not(a));                                    \
-    } else {                                                                  \
-      return false;                                                           \
-    }                                                                         \
-    return true;                                                              \
-  }
+#define RUN_INT(N, T) \
+bool run_i##N(const vec_t &v) { \
+  const std::string p = "i" #N "."; \
+  if (v.op.compare(0, p.size(), p) != 0) { \
+    return false; \
+  } \
+  const std::string name = v.op.substr(p.size()); \
+  T a = (T)std::stoll(v.args[0]); \
+  T b = v.args.size() > 1 ? (T)std::stoll(v.args[1]) : 0; \
+  int n = v.args.size() > 1 ? (int)std::stoll(v.args[1]) : 0; \
+  T r = 0; \
+  if (name == "add") { \
+    check_int(v, ty_int##N##_add(a, b, &r), r); \
+  } \
+  else if (name == "sub") { \
+    check_int(v, ty_int##N##_sub(a, b, &r), r); \
+  } \
+  else if (name == "mul") { \
+    check_int(v, ty_int##N##_mul(a, b, &r), r); \
+  } \
+  else if (name == "div") { \
+    check_int(v, ty_int##N##_div(a, b, &r), r); \
+  } \
+  else if (name == "mod") { \
+    check_int(v, ty_int##N##_mod(a, b, &r), r); \
+  } \
+  else if (name == "gcd") { \
+    check_int(v, ty_int##N##_gcd(a, b, &r), r); \
+  } \
+  else if (name == "lcm") { \
+    check_int(v, ty_int##N##_lcm(a, b, &r), r); \
+  } \
+  else if (name == "neg") { \
+    check_int(v, ty_int##N##_neg(a, &r), r); \
+  } \
+  else if (name == "abs") { \
+    check_int(v, ty_int##N##_abs(a, &r), r); \
+  } \
+  else if (name == "inc") { \
+    check_int(v, ty_int##N##_inc(a, &r), r); \
+  } \
+  else if (name == "dec") { \
+    check_int(v, ty_int##N##_dec(a, &r), r); \
+  } \
+  else if (name == "shl") { \
+    check_int(v, ty_int##N##_shl(a, n, &r), r); \
+  } \
+  else if (name == "shr") { \
+    check_int(v, ty_int##N##_shr(a, n, &r), r); \
+  } \
+  else if (name == "cmp") { \
+    check_int(v, 0, ty_int##N##_cmp(a, b)); \
+  } \
+  else if (name == "eq") { \
+    check_int(v, 0, ty_int##N##_eq(a, b)); \
+  } \
+  else if (name == "ne") { \
+    check_int(v, 0, ty_int##N##_ne(a, b)); \
+  } \
+  else if (name == "lt") { \
+    check_int(v, 0, ty_int##N##_lt(a, b)); \
+  } \
+  else if (name == "le") { \
+    check_int(v, 0, ty_int##N##_le(a, b)); \
+  } \
+  else if (name == "gt") { \
+    check_int(v, 0, ty_int##N##_gt(a, b)); \
+  } \
+  else if (name == "ge") { \
+    check_int(v, 0, ty_int##N##_ge(a, b)); \
+  } \
+  else if (name == "larger") { \
+    check_int(v, 0, ty_int##N##_larger(a, b)); \
+  } \
+  else if (name == "smaller") { \
+    check_int(v, 0, ty_int##N##_smaller(a, b)); \
+  } \
+  else if (name == "and") { \
+    check_int(v, 0, ty_int##N##_and(a, b)); \
+  } \
+  else if (name == "or") { \
+    check_int(v, 0, ty_int##N##_or(a, b)); \
+  } \
+  else if (name == "xor") { \
+    check_int(v, 0, ty_int##N##_xor(a, b)); \
+  } \
+  else if (name == "not") { \
+    check_int(v, 0, ty_int##N##_not(a)); \
+  } \
+  else { \
+    return false; \
+  } \
+  return true; \
+}
 
 RUN_INT(16, int16_t)
 RUN_INT(32, int32_t)
@@ -523,6 +660,18 @@ bool run_int_convert(const vec_t &v) {
     ty_uuid_format(&u, out);
     INFO(v.line);
     CHECK(std::string(out) == v.res[0]);
+  } else if (op == "uuid.inc" || op == "uuid.dec") {
+    ty_uuid_t u = uuid_of(v.args[0]), r = {};
+    int rc = op == "uuid.inc" ? ty_uuid_increment(&u, &r)
+                              : ty_uuid_decrement(&u, &r);
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(TY_ERR_RANGE == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(hex_of(r) == v.res[0]);
+    }
   } else if (op == "uuid.cmp") {
     ty_uuid_t a = uuid_of(v.args[0]), b = uuid_of(v.args[1]);
     int c = ty_uuid_cmp(&a, &b);
@@ -543,6 +692,52 @@ bool run_int_convert(const vec_t &v) {
       REQUIRE(0 == rc);
       CHECK(std::stoll(v.res[0]) == us);
     }
+  } else if (op == "i16.parse" || op == "i32.parse" || op == "i64.parse") {
+    std::vector<uint8_t> t = bytes_of(v.args[0]);
+    const char *p = reinterpret_cast<const char *>(t.data());
+    int16_t r16 = 0;
+    int32_t r32 = 0;
+    int64_t r64 = 0;
+    int rc = op == "i16.parse"   ? ty_int16_parse(p, t.size(), &r16)
+             : op == "i32.parse" ? ty_int32_parse(p, t.size(), &r32)
+                                 : ty_int64_parse(p, t.size(), &r64);
+    check_int(v, rc, op == "i16.parse" ? r16 : op == "i32.parse" ? r32 : r64);
+    /* The same text, as a string that ends at its NUL, reads the same. */
+    if (std::find(t.begin(), t.end(), 0) == t.end()) {
+      std::string z(p, t.size());
+      int16_t z16 = 0;
+      int32_t z32 = 0;
+      int64_t z64 = 0;
+      int zrc = op == "i16.parse"   ? ty_int16_parse_z(z.c_str(), &z16)
+                : op == "i32.parse" ? ty_int32_parse_z(z.c_str(), &z32)
+                                    : ty_int64_parse_z(z.c_str(), &z64);
+      check_int(v, zrc,
+                op == "i16.parse"   ? z16
+                : op == "i32.parse" ? z32
+                                    : z64);
+    }
+  } else if (op == "i16.fmt" || op == "i32.fmt" || op == "i64.fmt") {
+    char out[TY_INT64_TEXT_SIZE];
+    size_t n =
+        op == "i16.fmt"   ? ty_int16_format((int16_t)std::stoll(v.args[0]), out)
+        : op == "i32.fmt" ? ty_int32_format((int32_t)std::stoll(v.args[0]), out)
+                          : ty_int64_format(std::stoll(v.args[0]), out);
+    INFO(v.line);
+    CHECK(v.res[0] == std::string(out, n));
+    CHECK(strlen(out) == n);
+  } else if (op == "u32.fmt" || op == "u64.fmt") {
+    char out[TY_INT64_TEXT_SIZE];
+    size_t n = op == "u32.fmt"
+                   ? ty_uint32_format_n((uint32_t)std::stoull(v.args[0]), out)
+                   : ty_uint64_format_n(std::stoull(v.args[0]), out);
+    INFO(v.line);
+    CHECK(v.res[0] == std::string(out, n));
+  } else if (op == "int.inrange") {
+    int r = 0;
+    rc = ty_int_in_range(std::stoll(v.args[0]), std::stoll(v.args[1]),
+                         std::stoll(v.args[2]), (int)std::stoll(v.args[3]),
+                         (int)std::stoll(v.args[4]), &r);
+    check_int(v, rc, r);
   } else if (op == "bool.parse") {
     bool b = false;
     rc = ty_bool_parse(v.args[0].data(), v.args[0].size(), &b);
@@ -577,8 +772,9 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_bytea(v) || run_int_convert(v) || run64(v) || run128(v) ||
-                 run_i16(v) || run_i32(v) || run_i64(v);
+    bool known = run_hash(v) || run_bytea(v) || run_int_convert(v) ||
+                 run64(v) || run128(v) || run_i16(v) || run_i32(v) ||
+                 run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

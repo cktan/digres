@@ -9,7 +9,9 @@
 -- 5. position, bit_count, get_byte, get_bit, set_byte and set_bit.
 -- 6. Compare, sort, and max and min.
 -- 7. bytea to an integer and back.
--- 8. A bytea is a key: a primary key, and a lookup by it.
+-- 8. encode and decode, in hex, base64 and escape: the padding, the line
+--    feeds of base64, space skipped on the way in, and a round trip.
+-- 9. A bytea is a key: a primary key, and a lookup by it.
 -- (Temporary tables, as the 8 sessions run.sh starts share one database.
 -- Errors are server.sh's: a run stops at its first.)
 SELECT '\x6162'::bytea AS a, '\x61 62
@@ -26,6 +28,12 @@ SELECT '\x01'::bytea < '\x0100'::bytea AS a, '\x0100'::bytea < '\x02'::bytea AS 
 SELECT b FROM (VALUES ('\x02'::bytea), ('\x0100'), ('\x'), ('\x01'), ('\xff'), ('\x00')) v(b) ORDER BY b;
 SELECT max(b), min(b) FROM (VALUES ('\x02'::bytea), ('\x0100'), ('\x'), ('\x01'), ('\xff')) v(b);
 SELECT '\x0102'::bytea::int2 AS a, '\xffff'::bytea::int2 AS b, '\xffff'::bytea::int4 AS c, '\x'::bytea::int4 AS d, '\x0000000000000100'::bytea::int8 AS e, '\xffffffffffffffff'::bytea::int8 AS f, 258::int2::bytea AS g, 258::int4::bytea AS h, (-2)::int8::bytea AS i, (-2)::int2::bytea AS j;
+SELECT encode('\x00ff5c61'::bytea, 'hex') AS a, encode('\x00ff5c61'::bytea, 'escape') AS b, encode('\x00ff5c61'::bytea, 'base64') AS c, encode('\x'::bytea, 'base64') AS d, encode('\xff'::bytea, 'base64') AS e, encode('\xffff'::bytea, 'base64') AS f, encode('\xffffff'::bytea, 'base64') AS g, encode('\x61'::bytea, 'HEX') AS h;
+SELECT encode(decode(repeat('a', 57), 'escape'), 'base64') AS a, encode(decode(repeat('a', 58), 'escape'), 'base64') AS b, length(encode(decode(repeat('a', 171), 'escape'), 'base64')) AS c;
+SELECT decode('AP9cYQ==', 'base64') AS a, decode('AP9c YQ==
+', 'base64') AS b, decode('00ff5c61', 'hex') AS c, decode(' 00 ff5c
+61 ', 'hex') AS d, decode('a\\b\141\377', 'escape') AS e, decode('', 'base64') AS f;
+SELECT decode(encode(b, 'base64'), 'base64') = b AS base64, decode(encode(b, 'hex'), 'hex') = b AS hex, decode(encode(b, 'escape'), 'escape') = b AS esc FROM (VALUES ('\x'::bytea), ('\x00'), ('\x5c'), ('\x00ff5c0a20'), (decode(repeat('abcd', 100), 'escape'))) v(b);
 CREATE TEMP TABLE bytea_key (b bytea PRIMARY KEY, n int4);
 INSERT INTO bytea_key VALUES ('\x01', 1), ('\x', 2), ('\xff00', 3), ('\x0100', 4);
 SELECT n FROM bytea_key WHERE b = '\x0100';

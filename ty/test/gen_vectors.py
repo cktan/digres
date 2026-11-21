@@ -404,6 +404,9 @@ def main():
     gen_bools()
     gen_uuids()
     gen_byteas()
+    gen_hashes()
+    gen_encodings()
+    gen_int_text()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -543,6 +546,11 @@ def gen_uuids():
         elif var_ok and b[6] >> 4 == 7:
             res = str(int.from_bytes(b[0:6], "big") * 1000)
         emit("uuid.unixus", (h,), res)
+    for h in hexes + ["0" * 31 + "1", "f" * 31 + "e", "00" * 8 + "ff" * 8,
+                      "ff" * 8 + "00" * 8, "0" * 32, "f" * 32]:
+        n = int(h, 16)
+        emit("uuid.inc", (h,), ("E", "RANGE") if n == 2 ** 128 - 1 else "%032x" % (n + 1))
+        emit("uuid.dec", (h,), ("E", "RANGE") if n == 0 else "%032x" % (n - 1))
     for _ in range(200):
         a, b2 = random.choice(hexes), random.choice(hexes)
         if random.random() < .1:
@@ -611,6 +619,9 @@ def gen_byteas():
     for a, b in pairs:
         c = (a > b) - (a < b)
         emit("bytea.cmp", (hx(a), hx(b)), c)
+        for nm, fn in (("eq", a == b), ("ne", a != b), ("lt", a < b),
+                       ("le", a <= b), ("gt", a > b), ("ge", a >= b)):
+            emit("bytea." + nm, (hx(a), hx(b)), int(fn))
         emit("bytea.cat", (hx(a), hx(b)), hx(a + b))
         emit("bytea.position", (hx(a), hx(b)), a.find(b) + 1)
     for _ in range(40):
@@ -691,6 +702,359 @@ def gen_byteas():
                  hx((v & ((1 << bits) - 1)).to_bytes(bits // 8, "big")))
 
 
+M32 = 0xFFFFFFFF
+
+
+def rot32(x, k):
+    """x rotated left by k bits, in 32 bits."""
+    return ((x << k) | (x >> (32 - k))) & M32
+
+
+def lk_mix(a, b, c):
+    """Bob Jenkins's mix of three 32-bit values, lookup3."""
+    a = (a - c) & M32; a ^= rot32(c, 4); c = (c + b) & M32
+    b = (b - a) & M32; b ^= rot32(a, 6); a = (a + c) & M32
+    c = (c - b) & M32; c ^= rot32(b, 8); b = (b + a) & M32
+    a = (a - c) & M32; a ^= rot32(c, 16); c = (c + b) & M32
+    b = (b - a) & M32; b ^= rot32(a, 19); a = (a + c) & M32
+    c = (c - b) & M32; c ^= rot32(b, 4); b = (b + a) & M32
+    return a, b, c
+
+
+def lk_final(a, b, c):
+    """Bob Jenkins's final mix of three 32-bit values, lookup3."""
+    c ^= b; c = (c - rot32(b, 14)) & M32
+    a ^= c; a = (a - rot32(c, 11)) & M32
+    b ^= a; b = (b - rot32(a, 25)) & M32
+    c ^= b; c = (c - rot32(b, 16)) & M32
+    a ^= c; a = (a - rot32(c, 4)) & M32
+    b ^= a; b = (b - rot32(a, 14)) & M32
+    c ^= b; c = (c - rot32(b, 24)) & M32
+    return a, b, c
+
+
+def le32(b):
+    """Up to 4 bytes as a little-endian number."""
+    return int.from_bytes(b, "little")
+
+
+def pg_hash_bytes(k, seed):
+    """PostgreSQL's hash_bytes_extended of the bytes k, from its algorithm
+    (lookup3, little-endian): 64 bits; the low 32 are hash_bytes."""
+    n = len(k)
+    a = b = c = (0x9E3779B9 + n + 3923095) & M32
+    if seed:
+        a = (a + (seed >> 32)) & M32
+        b = (b + (seed & M32)) & M32
+        a, b, c = lk_mix(a, b, c)
+    i = 0
+    while n - i >= 12:
+        a = (a + le32(k[i:i + 4])) & M32
+        b = (b + le32(k[i + 4:i + 8])) & M32
+        c = (c + le32(k[i + 8:i + 12])) & M32
+        a, b, c = lk_mix(a, b, c)
+        i += 12
+    t = k[i:] + bytes(12 - (n - i))
+    a = (a + le32(t[0:4])) & M32
+    b = (b + le32(t[4:8])) & M32
+    c = (c + (le32(t[8:12]) << 8)) & M32  # the low byte of c is the length's
+    a, b, c = lk_final(a, b, c)
+    return (b << 32) | c
+
+
+def pg_hash_u32(x, seed):
+    """PostgreSQL's hash_bytes_uint32_extended of a 32-bit value."""
+    return pg_hash_bytes((x & M32).to_bytes(4, "little"), seed)
+
+
+def pg_hash_int(v, seed):
+    """The hash of an integer of any width: that of the int64 of its value,
+    its high half folded in (the hashint8 of PostgreSQL)."""
+    lo = v & M32
+    hi = (v >> 32) & M32
+    lo ^= hi if v >= 0 else (~hi & M32)
+    return pg_hash_u32(lo, seed)
+
+
+def gen_hashes():
+    """The vectors of every hash: PostgreSQL's algorithm, on each type's
+    bytes."""
+    seeds = [0, 1, 2 ** 32, 123456789012345, 2 ** 64 - 1]
+    for n in list(range(0, 40)) + [64, 100]:
+        for _ in range(2):
+            k = bytes(random.getrandbits(8) for _ in range(n))
+            sd = random.choice(seeds)
+            emit("hash.bytes", (hx(k), sd), pg_hash_bytes(k, sd))
+            emit("bytea.hash", (hx(k), sd), pg_hash_bytes(k, sd))
+    for x in [0, 1, 2, 255, 2 ** 31, 2 ** 32 - 1] + [random.getrandbits(32) for _ in range(30)]:
+        sd = random.choice(seeds)
+        emit("hash.u32", (x, sd), pg_hash_u32(x, sd))
+    for bits in (16, 32, 64):
+        for v in int_values(bits):
+            sd = random.choice(seeds)
+            emit("i%d.hash" % bits, (v, sd), pg_hash_int(v, sd))
+    for sd in seeds:
+        emit("bool.hash", (0, sd), pg_hash_u32(0, sd))
+        emit("bool.hash", (1, sd), pg_hash_u32(1, sd))
+    for _ in range(40):
+        h = "%032x" % random.getrandbits(128)
+        sd = random.choice(seeds)
+        emit("uuid.hash", (h, sd), pg_hash_bytes(bytes.fromhex(h), sd))
+    for _ in range(120):
+        v, sc = gen_value(D128, 36)
+        sd = random.choice(seeds)
+        # the key is of the shortest form: no zeros at the end past the
+        # point; zero has scale 0
+        v1, s1 = v, sc
+        while s1 > 0 and v1 % 10 == 0:
+            v1 //= 10
+            s1 -= 1
+        if v1 == 0:
+            s1 = 0
+        key = (v1 % (1 << 128)).to_bytes(16, "little") + s1.to_bytes(2, "little") + bytes(14)
+        emit("d128.hash", (v, sc, sd), pg_hash_bytes(key, sd))
+        if sc < 36:
+            # the same value at one more place hashes alike
+            emit("d128.hash", (v * 10 if abs(v * 10) <= D128 else v, sc + 1 if abs(v * 10) <= D128 else sc, sd),
+                 pg_hash_bytes(key, sd))
+
+
+B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def ref_encode(enc, b):
+    """ENCODE of the bytes b, from the rules of ty_bytea.h."""
+    if enc == "hex":
+        return b.hex().encode()
+    if enc == "escape":
+        out = bytearray()
+        for c in b:
+            if c == 0 or c >= 0x80:
+                out += b"\\%03o" % c
+            elif c == 0x5c:
+                out += b"\\\\"
+            else:
+                out.append(c)
+        return bytes(out)
+    # base64: a line feed after each 76 characters of whole groups; the
+    # last partial group, padded, follows with none
+    full, rest = divmod(len(b), 3)
+    out = ""
+    for g in range(full):
+        x = int.from_bytes(b[3 * g:3 * g + 3], "big")
+        out += "".join(B64[(x >> sh) & 63] for sh in (18, 12, 6, 0))
+        if len(out.replace("\n", "")) % 76 == 0 and len(out.replace("\n", "")) > 0 \
+                and not out.endswith("\n"):
+            out += "\n"
+    if rest:
+        x = int.from_bytes(b[3 * full:] + bytes(3 - rest), "big")
+        out += B64[(x >> 18) & 63] + B64[(x >> 12) & 63]
+        out += B64[(x >> 6) & 63] if rest == 2 else "="
+        out += "="
+    return out.encode()
+
+
+def ref_decode(enc, t):
+    """DECODE of the text t (bytes): the data, or None for a fault."""
+    if enc == "hex":
+        i, out = 0, bytearray()
+        while i < len(t):
+            if t[i] in b" \n\t\r":
+                i += 1
+                continue
+            h = chr(t[i]) if t[i] < 128 else "?"
+            if h not in "0123456789abcdefABCDEF":
+                return None
+            i += 1
+            if i >= len(t):
+                return None
+            l = chr(t[i]) if t[i] < 128 else "?"
+            if l not in "0123456789abcdefABCDEF":
+                return None
+            i += 1
+            out.append(int(h + l, 16))
+        return bytes(out)
+    if enc == "escape":
+        i, out = 0, bytearray()
+        while i < len(t):
+            if t[i] != 0x5c:
+                out.append(t[i])
+                i += 1
+            elif i + 3 < len(t) and 0x30 <= t[i + 1] <= 0x33 and \
+                    0x30 <= t[i + 2] <= 0x37 and 0x30 <= t[i + 3] <= 0x37:
+                out.append(int(bytes(t[i + 1:i + 4]), 8))
+                i += 4
+            elif i + 1 < len(t) and t[i + 1] == 0x5c:
+                out.append(0x5c)
+                i += 2
+            else:
+                return None
+        return bytes(out)
+    # base64
+    out, buf, pos, end = bytearray(), 0, 0, 0
+    for c in t:
+        if c in b" \t\n\r":
+            continue
+        if c == 0x3d:
+            if not end:
+                if pos == 2:
+                    end = 1
+                elif pos == 3:
+                    end = 2
+                else:
+                    return None
+            b = 0
+        else:
+            if not 0 < c < 127 or chr(c) not in B64:
+                return None
+            b = B64.index(chr(c))
+        buf = ((buf << 6) + b) & 0xFFFFFF
+        pos += 1
+        if pos == 4:
+            out.append((buf >> 16) & 255)
+            if end == 0 or end > 1:
+                out.append((buf >> 8) & 255)
+            if end == 0 or end > 2:
+                out.append(buf & 255)
+            buf, pos = 0, 0
+    return None if pos else bytes(out)
+
+
+def gen_encodings():
+    """The vectors of encode and decode, for hex, base64 and escape."""
+    for enc in ("hex", "base64", "escape"):
+        for _ in range(120):
+            b = rand_bytes(150) if random.random() < .5 else bytes(
+                random.getrandbits(8) for _ in range(random.choice([0, 1, 2, 3, 56, 57, 58, 114, 115, 171])))
+            t = ref_encode(enc, b)
+            emit("bytea.enc", (enc, hx(b)), hx(t))
+            assert ref_decode(enc, t) == b
+            emit("bytea.dec", (enc, hx(t)), hx(b))
+            # a fault, or a harmless change, in the text
+            m = bytearray(t)
+            kind = random.randrange(5)
+            if m and kind == 0:
+                m[random.randrange(len(m))] = random.choice(b"=\\ \n\tz/+-\x80\xc3")
+            elif m and kind == 1:
+                del m[random.randrange(len(m))]
+            elif kind == 2:
+                m.insert(random.randrange(len(m) + 1), random.choice(b" \n=\\0"))
+            elif m and kind == 3:
+                m = m[:random.randrange(len(m))]
+            else:
+                m += random.choice([b"=", b"==", b" ", b"\\", b"\\1", b"AA"])
+            r = ref_decode(enc, bytes(m))
+            emit("bytea.dec", (enc, hx(bytes(m))), ("E", "INVALID") if r is None else hx(r))
+
+
+def ref_parse_int(t, bits):
+    """The integer of a text of bytes t, as ty_int.h says: a port of the
+    rules, a digit at a time. Returns an int, "RANGE" or "INVALID"."""
+    mag = 1 << (bits - 1)
+    sp = b" \t\n\v\f\r"
+    i = 0
+    while i < len(t) and t[i] in sp:
+        i += 1
+    neg = False
+    if i < len(t) and t[i] == 0x2d:
+        neg = True
+        i += 1
+    elif i < len(t) and t[i] == 0x2b:
+        i += 1
+    base = 10
+    pre = t[i:i + 2].lower()
+    if pre == b"0x":
+        base, i = 16, i + 2
+    elif pre == b"0o":
+        base, i = 8, i + 2
+    elif pre == b"0b":
+        base, i = 2, i + 2
+    first = i
+    tmp = 0
+
+    def dig(k):
+        if k >= len(t):
+            return None
+        d = "0123456789abcdef".find(chr(t[k]).lower()) if t[k] < 128 else -1
+        return d if 0 <= d < base else None
+
+    while True:
+        d = dig(i)
+        if d is not None:
+            if tmp > mag // base:
+                return "RANGE"
+            tmp = tmp * base + d
+            i += 1
+        elif i < len(t) and t[i] == 0x5f:
+            if base == 10 and i == first:
+                return "INVALID"
+            i += 1
+            if dig(i) is None:
+                return "INVALID"
+        else:
+            break
+    if i == first:
+        return "INVALID"
+    while i < len(t) and t[i] in sp:
+        i += 1
+    if i != len(t):
+        return "INVALID"
+    if neg:
+        return "RANGE" if tmp > mag else -tmp
+    return "RANGE" if tmp > mag - 1 else tmp
+
+
+def gen_int_text():
+    """The vectors of the text of the integers: read, in many forms, and
+    write."""
+    for bits in (16, 32, 64):
+        lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
+        texts = [b"", b"0", b"-0", b"+0", b"-", b"+", b" ", b"x", b"0x", b"0b",
+                 b"0o", b"1_000", b"_1", b"1_", b"1__0", b"0x_1", b"0x1_",
+                 b"0b1_0", b"0o7_7", b"0_1", b"1 2", b" 1", b"1 ", b"\t-5\n",
+                 b"--1", b"+-1", b"1e3", b"1.5", b"0X1F", b"0O17", b"0B101",
+                 b"-0x8000", b"0x7fff", b"0xFFFF", b"0x8000", b"-0b1000_0000",
+                 b"\xc3\xa9", b"1\xc3\xa9", str(hi).encode(), str(lo).encode(),
+                 str(hi + 1).encode(), str(lo - 1).encode(),
+                 str(hi * 10).encode(), (str(hi) + "x").encode(),
+                 ("9" * 30 + "x").encode(), ("9" * 30).encode()]
+        for _ in range(120):
+            v = random.randint(lo, hi) if random.random() < .5 else random.choice(
+                [random.randint(-1000, 1000), lo, hi, lo + 1, hi - 1])
+            form = random.randrange(7)
+            if form == 0:
+                t = str(v)
+            elif form == 1:
+                t = "%+d" % v
+            elif form == 2:
+                t = " \t" + str(v) + "\n "
+            elif form == 3:
+                d = str(abs(v))
+                d = "_".join([d[i:i + 3] for i in range(0, len(d), 3)])
+                t = ("-" if v < 0 else "") + d
+            elif form == 4:
+                t = ("-" if v < 0 else "") + random.choice(["0x%X", "0x%x", "0X%x"]) % abs(v)
+            elif form == 5:
+                t = ("-" if v < 0 else "") + random.choice(["0o%o", "0O%o"]) % abs(v)
+            else:
+                t = ("-" if v < 0 else "") + "0b" + bin(abs(v))[2:]
+            if random.random() < .15:
+                k = random.randrange(len(t) + 1)
+                t = t[:k] + random.choice("_ x-+9.") + t[k:]
+            texts.append(t.encode())
+        for t in texts:
+            r = ref_parse_int(t, bits)
+            emit("i%d.parse" % bits, (hx(t),), ("E", r) if isinstance(r, str) else r)
+        for v in int_values(bits):
+            emit("i%d.fmt" % bits, (v,), str(v))
+    for v in [0, 1, 9, 10, 99, 100, 12345, 2 ** 31, 2 ** 32 - 1]:
+        emit("u32.fmt", (v,), str(v))
+    for v in [0, 1, 99, 10 ** 10 - 1, 10 ** 10, 10 ** 18, 2 ** 63, 2 ** 64 - 1]:
+        emit("u64.fmt", (v,), str(v))
+    for _ in range(100):
+        emit("u64.fmt", (random.getrandbits(random.randint(1, 64)),), None) if False else None
+
+
 def gen_ints():
     """The vectors of the integer operations, for each width."""
     for bits in (16, 32, 64):
@@ -714,6 +1078,10 @@ def gen_ints():
             emit(p + ".gcd", (a, b), fit(math.gcd(a, b)))
             emit(p + ".lcm", (a, b), fit(0 if a == 0 or b == 0
                                          else abs(a * b) // math.gcd(a, b)))
+            emit(p + ".cmp", (a, b), (a > b) - (a < b))
+            for nm, fn in (("eq", a == b), ("ne", a != b), ("lt", a < b),
+                           ("le", a <= b), ("gt", a > b), ("ge", a >= b)):
+                emit(p + "." + nm, (a, b), int(fn))
             emit(p + ".larger", (a, b), max(a, b))
             emit(p + ".smaller", (a, b), min(a, b))
             emit(p + ".and", (a, b), a & b)
@@ -729,6 +1097,19 @@ def gen_ints():
                 ok = 0 <= n < bits
                 emit(p + ".shl", (a, n), wrap(a << n, bits) if ok else ("E", "RANGE"))
                 emit(p + ".shr", (a, n), (a >> n) if ok else ("E", "RANGE"))
+    # The window frame of RANGE offsets, in int64.
+    for _ in range(300):
+        vals = int_values(64)
+        val, base = random.choice(vals), random.choice(vals)
+        off = random.choice(vals + [0, 5, 2 ** 62])
+        for sub in (0, 1):
+            for less in (0, 1):
+                if off < 0:
+                    res = ("E", "INVALID")
+                else:
+                    bound = base - off if sub else base + off
+                    res = int(val <= bound) if less else int(val >= bound)
+                emit("int.inrange", (val, base, off, sub, less), res)
     # Narrowing.
     for src, dst in ((32, 16), (64, 32), (64, 16)):
         dlo, dhi = -(1 << (dst - 1)), (1 << (dst - 1)) - 1

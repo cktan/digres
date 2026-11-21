@@ -102,225 +102,135 @@ Datum int8send(PG_FUNCTION_ARGS) {
  * Is val1 relop val2?
  */
 Datum int8eq(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 == val2);
+  PG_RETURN_BOOL(ty_int64_eq(PG_GETARG_INT64(0), PG_GETARG_INT64(1)));
 }
 
 Datum int8ne(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 != val2);
+  PG_RETURN_BOOL(ty_int64_ne(PG_GETARG_INT64(0), PG_GETARG_INT64(1)));
 }
 
 Datum int8lt(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 < val2);
+  PG_RETURN_BOOL(ty_int64_lt(PG_GETARG_INT64(0), PG_GETARG_INT64(1)));
 }
 
 Datum int8gt(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 > val2);
+  PG_RETURN_BOOL(ty_int64_gt(PG_GETARG_INT64(0), PG_GETARG_INT64(1)));
 }
 
 Datum int8le(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 <= val2);
+  PG_RETURN_BOOL(ty_int64_le(PG_GETARG_INT64(0), PG_GETARG_INT64(1)));
 }
 
 Datum int8ge(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 >= val2);
+  PG_RETURN_BOOL(ty_int64_ge(PG_GETARG_INT64(0), PG_GETARG_INT64(1)));
 }
 
 /* int84relop()
  * Is 64-bit val1 relop 32-bit val2?
  */
 Datum int84eq(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int32 val2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(val1 == val2);
+  PG_RETURN_BOOL(ty_int64_eq(PG_GETARG_INT64(0), PG_GETARG_INT32(1)));
 }
 
 Datum int84ne(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int32 val2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(val1 != val2);
+  PG_RETURN_BOOL(ty_int64_ne(PG_GETARG_INT64(0), PG_GETARG_INT32(1)));
 }
 
 Datum int84lt(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int32 val2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(val1 < val2);
+  PG_RETURN_BOOL(ty_int64_lt(PG_GETARG_INT64(0), PG_GETARG_INT32(1)));
 }
 
 Datum int84gt(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int32 val2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(val1 > val2);
+  PG_RETURN_BOOL(ty_int64_gt(PG_GETARG_INT64(0), PG_GETARG_INT32(1)));
 }
 
 Datum int84le(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int32 val2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(val1 <= val2);
+  PG_RETURN_BOOL(ty_int64_le(PG_GETARG_INT64(0), PG_GETARG_INT32(1)));
 }
 
 Datum int84ge(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int32 val2 = PG_GETARG_INT32(1);
-
-  PG_RETURN_BOOL(val1 >= val2);
+  PG_RETURN_BOOL(ty_int64_ge(PG_GETARG_INT64(0), PG_GETARG_INT32(1)));
 }
 
 /* int48relop()
  * Is 32-bit val1 relop 64-bit val2?
  */
 Datum int48eq(PG_FUNCTION_ARGS) {
-  int32 val1 = PG_GETARG_INT32(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 == val2);
+  PG_RETURN_BOOL(ty_int64_eq(PG_GETARG_INT32(0), PG_GETARG_INT64(1)));
 }
 
 Datum int48ne(PG_FUNCTION_ARGS) {
-  int32 val1 = PG_GETARG_INT32(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 != val2);
+  PG_RETURN_BOOL(ty_int64_ne(PG_GETARG_INT32(0), PG_GETARG_INT64(1)));
 }
 
 Datum int48lt(PG_FUNCTION_ARGS) {
-  int32 val1 = PG_GETARG_INT32(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 < val2);
+  PG_RETURN_BOOL(ty_int64_lt(PG_GETARG_INT32(0), PG_GETARG_INT64(1)));
 }
 
 Datum int48gt(PG_FUNCTION_ARGS) {
-  int32 val1 = PG_GETARG_INT32(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 > val2);
+  PG_RETURN_BOOL(ty_int64_gt(PG_GETARG_INT32(0), PG_GETARG_INT64(1)));
 }
 
 Datum int48le(PG_FUNCTION_ARGS) {
-  int32 val1 = PG_GETARG_INT32(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 <= val2);
+  PG_RETURN_BOOL(ty_int64_le(PG_GETARG_INT32(0), PG_GETARG_INT64(1)));
 }
 
 Datum int48ge(PG_FUNCTION_ARGS) {
-  int32 val1 = PG_GETARG_INT32(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 >= val2);
+  PG_RETURN_BOOL(ty_int64_ge(PG_GETARG_INT32(0), PG_GETARG_INT64(1)));
 }
 
 /* int82relop()
  * Is 64-bit val1 relop 16-bit val2?
  */
 Datum int82eq(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int16 val2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(val1 == val2);
+  PG_RETURN_BOOL(ty_int64_eq(PG_GETARG_INT64(0), PG_GETARG_INT16(1)));
 }
 
 Datum int82ne(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int16 val2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(val1 != val2);
+  PG_RETURN_BOOL(ty_int64_ne(PG_GETARG_INT64(0), PG_GETARG_INT16(1)));
 }
 
 Datum int82lt(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int16 val2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(val1 < val2);
+  PG_RETURN_BOOL(ty_int64_lt(PG_GETARG_INT64(0), PG_GETARG_INT16(1)));
 }
 
 Datum int82gt(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int16 val2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(val1 > val2);
+  PG_RETURN_BOOL(ty_int64_gt(PG_GETARG_INT64(0), PG_GETARG_INT16(1)));
 }
 
 Datum int82le(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int16 val2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(val1 <= val2);
+  PG_RETURN_BOOL(ty_int64_le(PG_GETARG_INT64(0), PG_GETARG_INT16(1)));
 }
 
 Datum int82ge(PG_FUNCTION_ARGS) {
-  int64 val1 = PG_GETARG_INT64(0);
-  int16 val2 = PG_GETARG_INT16(1);
-
-  PG_RETURN_BOOL(val1 >= val2);
+  PG_RETURN_BOOL(ty_int64_ge(PG_GETARG_INT64(0), PG_GETARG_INT16(1)));
 }
 
 /* int28relop()
  * Is 16-bit val1 relop 64-bit val2?
  */
 Datum int28eq(PG_FUNCTION_ARGS) {
-  int16 val1 = PG_GETARG_INT16(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 == val2);
+  PG_RETURN_BOOL(ty_int64_eq(PG_GETARG_INT16(0), PG_GETARG_INT64(1)));
 }
 
 Datum int28ne(PG_FUNCTION_ARGS) {
-  int16 val1 = PG_GETARG_INT16(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 != val2);
+  PG_RETURN_BOOL(ty_int64_ne(PG_GETARG_INT16(0), PG_GETARG_INT64(1)));
 }
 
 Datum int28lt(PG_FUNCTION_ARGS) {
-  int16 val1 = PG_GETARG_INT16(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 < val2);
+  PG_RETURN_BOOL(ty_int64_lt(PG_GETARG_INT16(0), PG_GETARG_INT64(1)));
 }
 
 Datum int28gt(PG_FUNCTION_ARGS) {
-  int16 val1 = PG_GETARG_INT16(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 > val2);
+  PG_RETURN_BOOL(ty_int64_gt(PG_GETARG_INT16(0), PG_GETARG_INT64(1)));
 }
 
 Datum int28le(PG_FUNCTION_ARGS) {
-  int16 val1 = PG_GETARG_INT16(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 <= val2);
+  PG_RETURN_BOOL(ty_int64_le(PG_GETARG_INT16(0), PG_GETARG_INT64(1)));
 }
 
 Datum int28ge(PG_FUNCTION_ARGS) {
-  int16 val1 = PG_GETARG_INT16(0);
-  int64 val2 = PG_GETARG_INT64(1);
-
-  PG_RETURN_BOOL(val1 >= val2);
+  PG_RETURN_BOOL(ty_int64_ge(PG_GETARG_INT16(0), PG_GETARG_INT64(1)));
 }
 
 /*
@@ -330,34 +240,16 @@ Datum int28ge(PG_FUNCTION_ARGS) {
  * coercion of the offset value takes care of those scenarios just as well.
  */
 Datum in_range_int8_int8(PG_FUNCTION_ARGS) {
-  int64 val = PG_GETARG_INT64(0);
-  int64 base = PG_GETARG_INT64(1);
-  int64 offset = PG_GETARG_INT64(2);
-  bool sub = PG_GETARG_BOOL(3);
-  bool less = PG_GETARG_BOOL(4);
-  int64 sum;
+  int r;
 
-  if (offset < 0)
+  /* ty does the sum in int64, which any width fits */
+  if (ty_int_in_range(PG_GETARG_INT64(0), PG_GETARG_INT64(1),
+                      PG_GETARG_INT64(2), PG_GETARG_BOOL(3),
+                      PG_GETARG_BOOL(4), &r))
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
              errmsg("invalid preceding or following size in window function")));
-
-  if (sub)
-    offset = -offset; /* cannot overflow */
-
-  if (unlikely(pg_add_s64_overflow(base, offset, &sum))) {
-    /*
-     * If sub is false, the true sum is surely more than val, so correct
-     * answer is the same as "less".  If sub is true, the true sum is
-     * surely less than val, so the answer is "!less".
-     */
-    PG_RETURN_BOOL(sub ? !less : less);
-  }
-
-  if (less)
-    PG_RETURN_BOOL(val <= sum);
-  else
-    PG_RETURN_BOOL(val >= sum);
+  PG_RETURN_BOOL(r);
 }
 
 /*----------------------------------------------------------
@@ -463,7 +355,7 @@ Datum int8inc(PG_FUNCTION_ARGS) {
   if (AggCheckCallContext(fcinfo, NULL)) {
     int64 *arg = (int64 *)PG_GETARG_POINTER(0);
 
-    if (unlikely(pg_add_s64_overflow(*arg, 1, arg)))
+    if (unlikely(ty_int64_inc(*arg, arg)))
       ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                       errmsg("bigint out of range")));
 
@@ -475,7 +367,7 @@ Datum int8inc(PG_FUNCTION_ARGS) {
     int64 arg = PG_GETARG_INT64(0);
     int64 result;
 
-    if (unlikely(pg_add_s64_overflow(arg, 1, &result)))
+    if (unlikely(ty_int64_inc(arg, &result)))
       ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                       errmsg("bigint out of range")));
 
@@ -495,7 +387,7 @@ Datum int8dec(PG_FUNCTION_ARGS) {
   if (AggCheckCallContext(fcinfo, NULL)) {
     int64 *arg = (int64 *)PG_GETARG_POINTER(0);
 
-    if (unlikely(pg_sub_s64_overflow(*arg, 1, arg)))
+    if (unlikely(ty_int64_dec(*arg, arg)))
       ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                       errmsg("bigint out of range")));
     PG_RETURN_POINTER(arg);
@@ -506,7 +398,7 @@ Datum int8dec(PG_FUNCTION_ARGS) {
     int64 arg = PG_GETARG_INT64(0);
     int64 result;
 
-    if (unlikely(pg_sub_s64_overflow(arg, 1, &result)))
+    if (unlikely(ty_int64_dec(arg, &result)))
       ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                       errmsg("bigint out of range")));
 
@@ -920,7 +812,7 @@ Datum generate_series_step_int8(PG_FUNCTION_ARGS) {
      * Increment current in preparation for next iteration. If next-value
      * computation overflows, this is the final result.
      */
-    if (pg_add_s64_overflow(fctx->current, fctx->step, &fctx->current))
+    if (ty_int64_add(fctx->current, fctx->step, &fctx->current))
       fctx->step = 0;
 
     /* do when there is more left to send */

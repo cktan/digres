@@ -36,6 +36,8 @@
 #include "utils/float.h"
 #include "utils/fmgrprotos.h"
 #include "utils/pg_locale.h"
+#include "ty_bytea.h"
+#include "ty_int.h"
 #include "varatt.h"
 
 /*
@@ -57,47 +59,36 @@ Datum hashcharextended(PG_FUNCTION_ARGS) {
   return hash_uint32_extended((int32)PG_GETARG_CHAR(0), PG_GETARG_INT64(1));
 }
 
+/*
+ * The hash of an integer is ty's, of its value as an int64: equal at every
+ * width, so that a hash join of an int2, an int4 and an int8 finds equal
+ * values (ty/DESIGN.md section 6).
+ */
 Datum hashint2(PG_FUNCTION_ARGS) {
-  return hash_uint32((int32)PG_GETARG_INT16(0));
+  PG_RETURN_UINT32((uint32)ty_int16_hash(PG_GETARG_INT16(0), 0));
 }
 
 Datum hashint2extended(PG_FUNCTION_ARGS) {
-  return hash_uint32_extended((int32)PG_GETARG_INT16(0), PG_GETARG_INT64(1));
+  PG_RETURN_UINT64(
+      ty_int16_hash(PG_GETARG_INT16(0), (uint64)PG_GETARG_INT64(1)));
 }
 
-Datum hashint4(PG_FUNCTION_ARGS) { return hash_uint32(PG_GETARG_INT32(0)); }
+Datum hashint4(PG_FUNCTION_ARGS) {
+  PG_RETURN_UINT32((uint32)ty_int32_hash(PG_GETARG_INT32(0), 0));
+}
 
 Datum hashint4extended(PG_FUNCTION_ARGS) {
-  return hash_uint32_extended(PG_GETARG_INT32(0), PG_GETARG_INT64(1));
+  PG_RETURN_UINT64(
+      ty_int32_hash(PG_GETARG_INT32(0), (uint64)PG_GETARG_INT64(1)));
 }
 
 Datum hashint8(PG_FUNCTION_ARGS) {
-  /*
-   * The idea here is to produce a hash value compatible with the values
-   * produced by hashint4 and hashint2 for logically equal inputs; this is
-   * necessary to support cross-type hash joins across these input types.
-   * Since all three types are signed, we can xor the high half of the int8
-   * value if the sign is positive, or the complement of the high half when
-   * the sign is negative.
-   */
-  int64 val = PG_GETARG_INT64(0);
-  uint32 lohalf = (uint32)val;
-  uint32 hihalf = (uint32)(val >> 32);
-
-  lohalf ^= (val >= 0) ? hihalf : ~hihalf;
-
-  return hash_uint32(lohalf);
+  PG_RETURN_UINT32((uint32)ty_int64_hash(PG_GETARG_INT64(0), 0));
 }
 
 Datum hashint8extended(PG_FUNCTION_ARGS) {
-  /* Same approach as hashint8 */
-  int64 val = PG_GETARG_INT64(0);
-  uint32 lohalf = (uint32)val;
-  uint32 hihalf = (uint32)(val >> 32);
-
-  lohalf ^= (val >= 0) ? hihalf : ~hihalf;
-
-  return hash_uint32_extended(lohalf, PG_GETARG_INT64(1));
+  PG_RETURN_UINT64(
+      ty_int64_hash(PG_GETARG_INT64(0), (uint64)PG_GETARG_INT64(1)));
 }
 
 Datum hashoid(PG_FUNCTION_ARGS) {
@@ -338,26 +329,28 @@ Datum hashtextextended(PG_FUNCTION_ARGS) {
  */
 Datum hashvarlena(PG_FUNCTION_ARGS) {
   struct varlena *key = PG_GETARG_VARLENA_PP(0);
-  Datum result;
+  uint32 result;
 
-  result = hash_any((unsigned char *)VARDATA_ANY(key), VARSIZE_ANY_EXHDR(key));
+  /* the hash of a byte string is ty's, PostgreSQL's algorithm */
+  result = (uint32)ty_bytea_hash((const uint8_t *)VARDATA_ANY(key),
+                                 VARSIZE_ANY_EXHDR(key), 0);
 
   /* Avoid leaking memory for toasted inputs */
   PG_FREE_IF_COPY(key, 0);
 
-  return result;
+  PG_RETURN_UINT32(result);
 }
 
 Datum hashvarlenaextended(PG_FUNCTION_ARGS) {
   struct varlena *key = PG_GETARG_VARLENA_PP(0);
-  Datum result;
+  uint64 result;
 
-  result = hash_any_extended((unsigned char *)VARDATA_ANY(key),
-                             VARSIZE_ANY_EXHDR(key), PG_GETARG_INT64(1));
+  result = ty_bytea_hash((const uint8_t *)VARDATA_ANY(key),
+                         VARSIZE_ANY_EXHDR(key), (uint64)PG_GETARG_INT64(1));
 
   PG_FREE_IF_COPY(key, 0);
 
-  return result;
+  PG_RETURN_UINT64(result);
 }
 
 Datum hashbytea(PG_FUNCTION_ARGS) { return hashvarlena(fcinfo); }

@@ -38,6 +38,9 @@
  *   ty_intN_lcm(a, b, &r)     r = the least common multiple, never
  *                             negative; 0 if a or b is 0. RANGE if it
  *                             does not fit.
+ *   ty_intN_cmp(a, b)         -1, 0 or 1 as a is below, equal to or above
+ *                             b.                          Cannot fail.
+ *   ty_intN_eq, _ne, _lt, _le, _gt, _ge (a, b)   1 or 0.  Cannot fail.
  *   ty_intN_larger(a, b)      the larger of a and b.     Cannot fail.
  *   ty_intN_smaller(a, b)     the smaller of a and b.    Cannot fail.
  *   ty_intN_and(a, b)         a & b, and ty_intN_or, ty_intN_xor.
@@ -58,7 +61,46 @@
  *                             the even; RANGE if d is not a number or
  *                             does not fit.
  *
- * To widen, a caller assigns: int32_t to int64_t cannot fail.
+ * To widen, a caller assigns: int32_t to int64_t cannot fail. So a compare
+ * of an int16 and an int64 is ty_int64_lt(a, b), as C does it.
+ *
+ * And for the window frame of RANGE offsets:
+ *
+ *   ty_int_in_range(val, base, offset, sub, less, &r)
+ *                             r = 1 if val is within the offset of base:
+ *                             val <= base + offset if less and not sub,
+ *                             val >= base + offset if not less, and
+ *                             base - offset in place of base + offset if
+ *                             sub. TY_ERR_INVALID if offset is negative.
+ *                             The sum cannot overflow: when it would, r is
+ *                             what the true sum gives. Done in int64, which
+ *                             any width fits.
+ *
+ * And the text of an integer:
+ *
+ *   ty_intN_parse(s, len, &r) r = the integer in the len bytes at s, which
+ *                             need not end in NUL. Space may stand at both
+ *                             ends; a sign, '-' or '+'; then decimal digits,
+ *                             or "0x", "0o" or "0b" and digits of base 16,
+ *                             8 or 2. A single '_' may stand between
+ *                             digits. TY_ERR_RANGE if the value does not fit
+ *                             (reported as soon as the digits pass what the
+ *                             type holds, before a later fault), and
+ *                             TY_ERR_INVALID for any other text.
+ *   ty_intN_format(a, out)    writes a in decimal and a NUL to out, which
+ *                             has room for TY_INTN_TEXT_SIZE; returns the
+ *                             length, without the NUL.
+ *   ty_uint32_format_n, ty_uint64_format_n (v, out)
+ *                             the digits of an unsigned value, with no NUL;
+ *                             returns how many (at most 10, and 20).
+ *
+ * And the hash:
+ *
+ *   ty_intN_hash(a, seed)     a 64-bit hash of a by a seed. Equal values
+ *                             hash alike whatever the width, so an int16,
+ *                             an int32 and an int64 of one value are one
+ *                             hash. The low 32 bits with seed 0 are the
+ *                             standard 32-bit hash. It cannot fail.
  */
 #ifndef TY_INT_H
 #define TY_INT_H
@@ -66,6 +108,28 @@
 #include <stdint.h>
 
 #include "ty.h"
+
+/* The size of the buffer ty_intN_format needs: the sign, digits and NUL. */
+#define TY_INT16_TEXT_SIZE 7
+#define TY_INT32_TEXT_SIZE 12
+#define TY_INT64_TEXT_SIZE 21
+
+int ty_int16_parse(const char* s, size_t len, int16_t* r);
+int ty_int32_parse(const char* s, size_t len, int32_t* r);
+int ty_int64_parse(const char* s, size_t len, int64_t* r);
+
+/* The same for a string that ends at its NUL, which saves the host a strlen. */
+int ty_int16_parse_z(const char* s, int16_t* r);
+int ty_int32_parse_z(const char* s, int32_t* r);
+int ty_int64_parse_z(const char* s, int64_t* r);
+size_t ty_int16_format(int16_t a, char* out);
+size_t ty_int32_format(int32_t a, char* out);
+size_t ty_int64_format(int64_t a, char* out);
+size_t ty_uint32_format_n(uint32_t v, char* out);
+size_t ty_uint64_format_n(uint64_t v, char* out);
+
+/* The hash of an int64, and so of every width: out of line. */
+uint64_t ty_int64_hash(int64_t a, uint64_t seed);
 
 /* The out-of-line parts: gcd and lcm. */
 int ty_int16_gcd(int16_t a, int16_t b, int16_t* r);
@@ -149,6 +213,13 @@ int ty_int64_from_double(double d, int64_t* r);
     static inline int ty_int##N##_dec(T a, T* r) {                           \
         return ty_int##N##_sub(a, 1, r);                                     \
     }                                                                        \
+    static inline int ty_int##N##_cmp(T a, T b) { return (a > b) - (a < b); } \
+    static inline int ty_int##N##_eq(T a, T b) { return a == b; }            \
+    static inline int ty_int##N##_ne(T a, T b) { return a != b; }            \
+    static inline int ty_int##N##_lt(T a, T b) { return a < b; }             \
+    static inline int ty_int##N##_le(T a, T b) { return a <= b; }            \
+    static inline int ty_int##N##_gt(T a, T b) { return a > b; }             \
+    static inline int ty_int##N##_ge(T a, T b) { return a >= b; }            \
     static inline T ty_int##N##_larger(T a, T b) { return a > b ? a : b; }   \
     static inline T ty_int##N##_smaller(T a, T b) { return a < b ? a : b; }  \
     static inline T ty_int##N##_and(T a, T b) { return (T)(a & b); }         \
@@ -199,6 +270,41 @@ static inline int ty_int64_to_int16(int64_t a, int16_t* r) {
     }
     *r = (int16_t)a;
     return 0;
+}
+
+/*
+ * Whether val is within offset of base, for a window frame of RANGE offsets;
+ * see above.
+ */
+static inline int ty_int_in_range(int64_t val, int64_t base, int64_t offset,
+                                  int sub, int less, int* r) {
+    int64_t sum;
+
+    if (TY_UNLIKELY(offset < 0)) {
+        return ty_err_invalid("invalid preceding or following size");
+    }
+    if (sub) {
+        offset = -offset; /* cannot overflow: offset is not negative */
+    }
+    if (TY_UNLIKELY(__builtin_add_overflow(base, offset, &sum))) {
+        /*
+         * Without sub the true sum is more than any val, with it less, so
+         * the answer is that of a far bound.
+         */
+        *r = sub ? !less : less;
+        return 0;
+    }
+    *r = less ? val <= sum : val >= sum;
+    return 0;
+}
+
+/* The hash of an int16 or an int32: that of the int64 of its value. */
+static inline uint64_t ty_int16_hash(int16_t a, uint64_t seed) {
+    return ty_int64_hash(a, seed);
+}
+
+static inline uint64_t ty_int32_hash(int32_t a, uint64_t seed) {
+    return ty_int64_hash(a, seed);
 }
 
 /* An int64 as a double: the nearest, as C converts it. */

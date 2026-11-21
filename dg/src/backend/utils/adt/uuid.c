@@ -339,45 +339,37 @@ static Datum uuid_abbrev_convert(Datum original, SortSupport ssup) {
 }
 
 static Datum uuid_decrement(Relation rel, Datum existing, bool *underflow) {
-  pg_uuid_t *uuid;
+  pg_uuid_t *uuid = (pg_uuid_t *)palloc(UUID_LEN);
 
-  uuid = (pg_uuid_t *)palloc(UUID_LEN);
-  memcpy(uuid, DatumGetUUIDP(existing), UUID_LEN);
-  for (int i = UUID_LEN - 1; i >= 0; i--) {
-    if (uuid->data[i] > 0) {
-      uuid->data[i]--;
-      *underflow = false;
-      return UUIDPGetDatum(uuid);
-    }
-    uuid->data[i] = UCHAR_MAX;
+  /* ty counts the uuid down as a 128-bit number; all zeros has no lower */
+  if (ty_uuid_decrement((const ty_uuid_t *)DatumGetUUIDP(existing),
+                        (ty_uuid_t *)uuid) != 0) {
+    pfree(uuid); /* cannot leak memory */
+
+    /* return value is undefined */
+    *underflow = true;
+    return (Datum)0;
   }
 
-  pfree(uuid); /* cannot leak memory */
-
-  /* return value is undefined */
-  *underflow = true;
-  return (Datum)0;
+  *underflow = false;
+  return UUIDPGetDatum(uuid);
 }
 
 static Datum uuid_increment(Relation rel, Datum existing, bool *overflow) {
-  pg_uuid_t *uuid;
+  pg_uuid_t *uuid = (pg_uuid_t *)palloc(UUID_LEN);
 
-  uuid = (pg_uuid_t *)palloc(UUID_LEN);
-  memcpy(uuid, DatumGetUUIDP(existing), UUID_LEN);
-  for (int i = UUID_LEN - 1; i >= 0; i--) {
-    if (uuid->data[i] < UCHAR_MAX) {
-      uuid->data[i]++;
-      *overflow = false;
-      return UUIDPGetDatum(uuid);
-    }
-    uuid->data[i] = 0;
+  /* ty counts the uuid up as a 128-bit number; all ones has no higher */
+  if (ty_uuid_increment((const ty_uuid_t *)DatumGetUUIDP(existing),
+                        (ty_uuid_t *)uuid) != 0) {
+    pfree(uuid); /* cannot leak memory */
+
+    /* return value is undefined */
+    *overflow = true;
+    return (Datum)0;
   }
 
-  pfree(uuid); /* cannot leak memory */
-
-  /* return value is undefined */
-  *overflow = true;
-  return (Datum)0;
+  *overflow = false;
+  return UUIDPGetDatum(uuid);
 }
 
 Datum uuid_skipsupport(PG_FUNCTION_ARGS) {
