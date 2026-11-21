@@ -260,6 +260,11 @@ copied from PostgreSQL keeps its copyright notice
    | `a * b > 100000` | 5,394,971 | 4,488,746 | -16.8% |
    | `(a + b) - (a - b) * 2 > 0` | 5,907,925 | 4,995,572 | -15.4% |
 
+   On the final tree, after every move below (2026-11-21), the
+   same three read 4,457,700, 4,534,525 and 5,031,062: 17.0%,
+   16.0% and 14.8% fewer than the old binary, and 0.9%, 1.0% and
+   0.7% more than after step 2, the cost of the later moves.
+
    About 450 to 480 instructions fewer for each row: the
    `palloc` of a `decimal128` result, and the compare of a
    `decimal128` with a literal. The first run of the first
