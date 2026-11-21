@@ -252,9 +252,10 @@ are the catalog tables psql reads
        `make_interval`, `date_trunc` of timestamp and interval,
        `age`, `date_bin`, `extract` and `date_part` of
        timestamp, date, time and interval, OVERLAPS, and the
-       order, hash and RANGE offsets of timetz. **Left: the other geometric types, the text in
-       of date, time, timestamp and timetz, anything with a time
-       zone, and the rest.**
+       order, hash and RANGE offsets of timetz. **Left: the
+       other geometric types, the text in of date, time,
+       timestamp and timetz, anything with a time zone, and the
+       rest.**
     3. **Types that read a setting**: date and time, interval,
        float text, text. Hold until the hooks below are
        settled.
