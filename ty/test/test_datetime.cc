@@ -84,3 +84,47 @@ TEST_CASE("date and time errors") {
   CHECK(-1 == ty_date_diff(TY_DATE_NOEND, 0, &r));
   CHECK(std::string(ty_errmsg()) == "cannot subtract infinite dates");
 }
+
+// Verify that the epoch of a timestamp near the end of the range is exact:
+// the old numeric division rounded it to 3 digits first.
+// 1. Take the last timestamp, whose seconds since the Unix epoch need 13
+// digits.
+// 2. Check the integer seconds and the microseconds, apart.
+// 3. Check the sum is the exact quotient.
+TEST_CASE("timestamp epoch is exact at the end of the range") {
+  ty_part_t p;
+  int64_t ts = INT64_C(9223371331199999999);
+
+  CHECK(0 == ty_timestamp_part(1, TY_UNIT_EPOCH, ts, &p));
+  CHECK(TY_PART_SUM == p.kind);
+  CHECK(INT64_C(9224318015999) == p.num2);
+  CHECK(999999 == p.num);
+}
+
+// Verify that the fast path of the words extract is asked with says what the
+// tables of words say.
+// 1. For each common word, and its upper-case form, ask both ways.
+// 2. Check the kind and the code are the same.
+TEST_CASE("the common words of extract agree with the tables") {
+  const char *words[] = {
+      "year",       "month",        "day",          "hour",   "minute",
+      "second",     "quarter",      "week",         "decade", "century",
+      "millennium", "milliseconds", "microseconds", "epoch",  "dow",
+      "doy",        "isodow",       "isoyear",      "julian", "timezone",
+      "years",      "yearx",        "da",           "epochs", "",
+      "e",          "now",          "today"};
+
+  for (const char *w : words) {
+    for (int epoch_only = 0; epoch_only < 2; epoch_only++) {
+      int c1 = -1, c2 = -1;
+      int r1 = ty_datetime_part_unit(w, epoch_only, &c1);
+      int r2 = ty_datetime_part_unit_slow(w, epoch_only, &c2);
+
+      INFO(w);
+      CHECK(r1 == r2);
+      if (r1 != 0) {
+        CHECK(c1 == c2);
+      }
+    }
+  }
+}

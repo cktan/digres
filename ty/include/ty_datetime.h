@@ -274,6 +274,72 @@ int ty_timestamp_bin(const ty_interval_t* stride, int64_t ts, int64_t origin,
 int ty_timestamp_age(int64_t a, int64_t b, ty_interval_t* out);
 
 /*
+ * extract and date_part. A unit is a word as PostgreSQL knows it, in lower
+ * case; ty_datetime_part_unit gives 1 for a unit, 2 for a reserved word
+ * (such as epoch), and 0 for a word that is not known. With epoch_only
+ * (interval and time), a reserved word that is not epoch is 0. The code is
+ * the DTK_ value of PostgreSQL: the TY_UNIT_ numbers below.
+ */
+#define TY_UNIT_TZ 4
+#define TY_UNIT_EPOCH 11
+#define TY_UNIT_SECOND 18
+#define TY_UNIT_MINUTE 19
+#define TY_UNIT_HOUR 20
+#define TY_UNIT_DAY 21
+#define TY_UNIT_WEEK 22
+#define TY_UNIT_MONTH 23
+#define TY_UNIT_QUARTER 24
+#define TY_UNIT_YEAR 25
+#define TY_UNIT_DECADE 26
+#define TY_UNIT_CENTURY 27
+#define TY_UNIT_MILLENNIUM 28
+#define TY_UNIT_MILLISEC 29
+#define TY_UNIT_MICROSEC 30
+#define TY_UNIT_JULIAN 31
+#define TY_UNIT_DOW 32
+#define TY_UNIT_DOY 33
+#define TY_UNIT_TZ_HOUR 34
+#define TY_UNIT_TZ_MINUTE 35
+#define TY_UNIT_ISOYEAR 36
+#define TY_UNIT_ISODOW 37
+int ty_datetime_part_unit(const char* lowtoken, int epoch_only, int* code);
+/* The same, from the tables of words only (the tests compare the two). */
+int ty_datetime_part_unit_slow(const char* lowtoken, int epoch_only, int* code);
+
+/*
+ * The result of a part, as the exact value and as a float8. The value is by
+ * kind:
+ *   TY_PART_INT     num
+ *   TY_PART_SCALED  num / 10^scale (scale is 3 or 6)
+ *   TY_PART_SUM     num2 + num / 10^6
+ *   TY_PART_JULIAN  num2 + num / 86400000000
+ * f is what date_part (float8) gives, which is not always the rounded exact
+ * value.
+ */
+#define TY_PART_INT 0
+#define TY_PART_SCALED 1
+#define TY_PART_SUM 2
+#define TY_PART_JULIAN 3
+typedef struct ty_part_t {
+    int kind;
+    int scale;
+    int64_t num;
+    int64_t num2;
+    double f;
+} ty_part_t;
+
+/*
+ * The part of a finite timestamp, date, time or interval. reserved is 1 if
+ * the unit word was reserved (see above). A unit that the type has no part
+ * for is TY_ERR_INVALID; a timestamp that is out of range, TY_ERR_RANGE.
+ */
+int ty_timestamp_part(int reserved, int code, int64_t ts, ty_part_t* out);
+int ty_date_part(int reserved, int code, int32_t date, ty_part_t* out);
+int ty_time_part(int reserved, int code, int64_t t, ty_part_t* out);
+int ty_interval_part(int reserved, int code, const ty_interval_t* iv,
+                     ty_part_t* out);
+
+/*
  * Make a timestamp fit its precision (0 to 6; -1 or 6 leaves it): rounded to
  * the microsecond digits, away from zero for a half. A precision outside 0 to
  * 6 is TY_ERR_INVALID ("timestamp(%d) precision must be between 0 and 6").

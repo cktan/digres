@@ -4676,6 +4676,15 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "date_bin('0 seconds'::interval, timestamp '2024-01-01', timestamp '2001-01-01')|stride must be greater than zero" \
   "date_bin('1 day'::interval, timestamp '2024-01-01', timestamp 'infinity')|origin out of range" \
   "date_bin('infinity'::interval, timestamp '2024-01-01', timestamp '2001-01-01')|timestamps cannot be binned into infinite intervals" \
+  "extract('timezone' from timestamp '2024-01-01')|unit \"timezone\" not supported for type timestamp without time zone" \
+  "extract('now' from timestamp '2024-01-01')|unit \"now\" not supported for type timestamp without time zone" \
+  "date_part('foo', timestamp '2024-01-01')|unit \"foo\" not recognized for type timestamp without time zone" \
+  "extract('timezone' from date '2024-01-01')|unit \"timezone\" not supported for type date" \
+  "extract('foo' from date '2024-01-01')|unit \"foo\" not recognized for type date" \
+  "extract('day' from time '12:00')|unit \"day\" not supported for type time without time zone" \
+  "extract('now' from time '12:00')|unit \"now\" not recognized for type time without time zone" \
+  "extract('dow' from interval '1 day')|unit \"dow\" not supported for type interval" \
+  "extract('now' from interval '1 day')|unit \"now\" not recognized for type interval" \
   "timetz '12:00+01' + 'infinity'::interval|cannot add infinite interval to time" \
   "timetz '12:00+01' - '-infinity'::interval|cannot subtract infinite interval from time" \
   "make_interval(0, 0, 0, 0, 0, 0, 'nan')|interval out of range" \

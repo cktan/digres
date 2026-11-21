@@ -700,6 +700,16 @@ timetz one compares in 128 bits, because a sum may be far from a
 time of day. The text of timetz and its typmod are still in
 digres.
 
+`ty_timestamp_part`, `ty_date_part`, `ty_time_part` and
+`ty_interval_part` are `extract` and `date_part`. A `ty_part_t`
+holds the exact value, as an integer, a scaled integer, or a sum,
+and the float8 that `date_part` gives. digres makes the numeric
+from it. `ty_datetime_part_unit` looks up a word: the words that
+extract is nearly always asked with are found without the tables.
+An epoch of a timestamp at the end of the range is exact now: the
+old numeric division rounded it to three digits. The infinities
+and the numeric are still in digres.
+
 The tests: the vectors, from Python integers and a second
 formulation of the Julian day (the Wikipedia formula and
 Richards' inverse, not PostgreSQL's), about 3,500;

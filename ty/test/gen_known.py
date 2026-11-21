@@ -371,7 +371,53 @@ def main_trunc(args):
             print("ts.bin %s %d %d => %s" % (k[1], k[2], k[3], res))
 
 
+def main_part(args):
+    random.seed(20261125)
+    tss = [0, 1, -1, 86400000000, -86400000000, -211813488000000000, -211813487999999999, 9223371331200000000 - 1, 86399999999,
+           725803200000000, 1000000000000000000, -200000000000000000, 3155760000000000, -3155760000000000, 500, 1500000, 10000, 120000,
+           -2208988800000000, -62135596800000000, 31622400000000, 63113904000000000, 7 * 86400000000, 1234567890123456,
+           -946684800000000, -946684800000001, 9223371331200000000 - 946684800000000, 9223371331200000000 - 946684800000001,
+           -211813488000000000 + 86400000000 * 4, 86400000000 * 365 * 24 + 12345]
+    tss += [random.randint(-211813488000000000, 9223371331200000000 - 1) for _ in range(12)] + [random.randint(-10 ** 15, 10 ** 15) for _ in range(12)]
+    dates = [0, 1, -1, 365, -365, 2451545, -2451545, 2147483646 - 2451545 if False else 5874897, -2451545 + 1, 3000, -719162, 10957, 365 * 100, 14712 - 24000, 7, -7]
+    times = [0, 1, 999999, 1000000, 59999999, 3599999999, 3600000000, 45296789012, 86399999999, 86400000000, 43200000000, 500000]
+    ivs = [(0, 0, 0), (0, 0, 1), (1, 0, 0), (-1, 0, 0), (13, 40, 3661000001), (-13, -40, -3661000001), (14, 0, 0), (-14, 0, 0), (25 * 12 + 7, 1, 0),
+           (12 * 1000 + 5, 400, 0), (-12 * 1000 - 5, -400, -1), (0, 0, 9223372036854775807), (0, 0, -9223372036854775808),
+           (2147483647, 2147483647, 9223372036854775807), (-2147483647, -2147483647, -9223372036854775808), (7, 0, 0), (-1, 0, 0), (-4, 0, 0), (-3, 0, 0), (-11, 0, 0),
+           (0, 15, 90000000000), (0, 0, 86399999999), (0, 0, -86399999999), (5, 100, -5)]
+    units = ["microseconds", "milliseconds", "second", "minute", "hour", "day", "week", "month", "quarter", "year", "decade", "century", "millennium", "julian",
+             "dow", "doy", "isoyear", "isodow", "epoch", "timezone", "timezone_hour", "timezone_minute", "foo", "now", "today", "ms", "us", "d", "h", "min", "sec", "mon", "yr", "dec", "cent", "mil"]
+    sets = "set datestyle = 'ISO, YMD';\nset intervalstyle = 'postgres';\nset timezone = 'UTC';\n"
+    qs = []
+    for u in units:
+        for t in tss:
+            lit = "(timestamp '2000-01-01' + interval '%d microseconds')" % t
+            qs.append(("ts", u, t, "select extract('%s' from %s)::text, date_part('%s', %s)::text" % (u, lit, u, lit)))
+        for d in dates:
+            lit = "(date '2000-01-01' + %d)" % d
+            qs.append(("date", u, d, "select extract('%s' from %s)::text, extract('%s' from %s)::text" % (u, lit, u, lit)))
+        for t in times:
+            lit = "(time '00:00' + interval '%d microseconds')" % t if t < 86400000000 else "time '24:00:00'"
+            qs.append(("time", u, t, "select extract('%s' from %s)::text, date_part('%s', %s)::text" % (u, lit, u, lit)))
+        for m, d, t in ivs:
+            lit = "make_interval(0, %d, 0, %d, 0, 0, 0) + interval '%d microseconds'" % (m, d, t) if False else "interval '%d months %d days %d microseconds'" % (m, d, t)
+            qs.append(("iv", u, "%d:%d:%d" % (m, d, t), "select extract('%s' from %s)::text, date_part('%s', %s)::text" % (u, lit, u, lit)))
+    for kind, u, v, q in qs:
+        r = subprocess.run(["psql", "-X", "-A", "-t", "-q", "-v", "VERBOSITY=sqlstate"] + args, input=sets + q + ";\n", capture_output=True, text=True)
+        if r.returncode == 0 and "ERROR" not in r.stderr:
+            parts = r.stdout.strip().split("|")
+            res = " ".join(x.encode().hex() or "-" for x in parts) if len(parts) == 2 else "E ?" + r.stdout.strip()
+        else:
+            e = r.stderr
+            res = "E INVALID" if "0A000" in e else "E UNKNOWN" if "22023" in e else "E RANGE" if "22008" in e or "22003" in e else "E ?" + e.strip().replace(" ", "_")[:40]
+        print("part.%s %s %s => %s" % (kind, u.encode().hex(), v, res))
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--part":
+        sys.argv.pop(1)
+        main_part(sys.argv[1:])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--trunc":
         sys.argv.pop(1)
         main_trunc(sys.argv[1:])

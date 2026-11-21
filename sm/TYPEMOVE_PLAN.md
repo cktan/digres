@@ -645,6 +645,18 @@ copied from PostgreSQL keeps its copyright notice
      stored, hashed or used as a window order in digres yet,
      so those paths have ty tests only. Cost: +0.75% on
      `max` of a timetz sum.
+   - **extract and date_part of timestamp, date, time and
+     interval moved (2026-11-21).** `ty_timestamp_part`,
+     `ty_date_part`, `ty_time_part`, `ty_interval_part`, and
+     `ty_datetime_part_unit`. The tests: about 3,700 known
+     answers from the old digres (`known.txt`), and
+     `dg/test/select_part_ops.sql`, which prints the same as
+     the digres before the move. Three differences stay out
+     of the tests: the epoch of a timestamp at the end of the
+     range is exact now, and the old digres could not make the
+     julian numeric of a timestamp past the year 290000. Cost:
+     -6% to -15%, because the common unit words skip the
+     tables of words; before that fast path it was +5%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

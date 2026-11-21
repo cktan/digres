@@ -133,6 +133,7 @@ extern void isoweek2date(int woy, int *year, int *mon, int *mday);
 extern void isoweekdate2date(int isoweek, int wday, int *year, int *mon,
                              int *mday);
 extern int date2isoweek(int year, int mon, int mday);
+extern Datum ty_part_datum(const struct ty_part_t *p, bool retnumeric);
 extern int date2isoyear(int year, int mon, int mday);
 extern int date2isoyearday(int year, int mon, int mday);
 

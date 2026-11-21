@@ -1641,6 +1641,93 @@ std::string iv_text(const ty_interval_t &iv) {
   return out;
 }
 
+/* num / 10^scale as numeric prints it, with exactly scale decimals. */
+std::string scaled_text(__int128 num, int scale) {
+  bool neg = num < 0;
+  unsigned __int128 u = neg ? -(unsigned __int128)num : (unsigned __int128)num;
+  std::string digits;
+
+  do {
+    digits.insert(digits.begin(), (char)('0' + (int)(u % 10)));
+    u /= 10;
+  } while (u != 0);
+  while ((int)digits.size() <= scale) {
+    digits.insert(digits.begin(), '0');
+  }
+  if (scale > 0) {
+    digits.insert(digits.size() - scale, ".");
+  }
+  return neg ? "-" + digits : digits;
+}
+
+/*
+ * extract and date_part (known.txt): the exact value as numeric prints it,
+ * and the float8 that date_part gives, or the kind of the error.
+ */
+bool run_part_known(const vec_t &v) {
+  const std::string kind = v.op.substr(5);
+  std::vector<uint8_t> ub = bytes_of(v.args[0]);
+  std::string unit(reinterpret_cast<const char *>(ub.data()), ub.size());
+  int code = 0;
+  int found = ty_datetime_part_unit(unit.c_str(),
+                                    kind == "iv" || kind == "time", &code);
+  ty_part_t p;
+  int rc = 0;
+
+  INFO(v.line);
+  if (v.res[0] == "E" && v.res[1] == "UNKNOWN") {
+    CHECK(0 == found);
+    return true;
+  }
+  REQUIRE(0 != found);
+  if (kind == "ts") {
+    rc = ty_timestamp_part(found == 2, code, std::stoll(v.args[1]), &p);
+  } else if (kind == "date") {
+    rc = ty_date_part(found == 2, code, (int32_t)std::stoll(v.args[1]), &p);
+  } else if (kind == "time") {
+    rc = ty_time_part(found == 2, code, std::stoll(v.args[1]), &p);
+  } else {
+    long long m, d, t;
+
+    REQUIRE(3 == sscanf(v.args[1].c_str(), "%lld:%lld:%lld", &m, &d, &t));
+    ty_interval_t iv = {t, (int32_t)d, (int32_t)m};
+
+    rc = ty_interval_part(found == 2, code, &iv, &p);
+  }
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    CHECK(errnum_of(v.res[1]) == ty_errnum());
+    return true;
+  }
+  REQUIRE(0 == rc);
+  std::vector<uint8_t> nb = bytes_of(v.res[0]);
+  std::string numtext(reinterpret_cast<const char *>(nb.data()), nb.size());
+  std::vector<uint8_t> fb = bytes_of(v.res[1]);
+  std::string ftext(reinterpret_cast<const char *>(fb.data()), fb.size());
+
+  if (kind != "date") {
+    /* date has no float8 date_part: its second column is its numeric */
+    CHECK(strtod(ftext.c_str(), nullptr) == p.f);
+  }
+  switch (p.kind) {
+  case TY_PART_INT:
+    CHECK(numtext == std::to_string(p.num));
+    break;
+  case TY_PART_SCALED:
+    CHECK(numtext == scaled_text(p.num, p.scale));
+    break;
+  case TY_PART_SUM:
+    CHECK(numtext == scaled_text((__int128)p.num2 * 1000000 + p.num, 6));
+    break;
+  default:
+    /* julian: the numeric has the division's scale; the day is the integer */
+    CHECK(0 == numtext.compare(0, std::to_string(p.num2).size(),
+                               std::to_string(p.num2)));
+    break;
+  }
+  return true;
+}
+
 /*
  * date_trunc, age and date_bin of timestamps (known.txt): what the old digres
  * printed, or the kind of the error.
@@ -1835,6 +1922,9 @@ bool run_known(const vec_t &v) {
   }
   if (op == "ts.trunc" || op == "ts.age" || op == "ts.bin") {
     return run_ts_known(v);
+  }
+  if (op.compare(0, 5, "part.") == 0) {
+    return run_part_known(v);
   }
   if (op == "iv.parse") {
     std::vector<uint8_t> tb = bytes_of(v.args[1]);

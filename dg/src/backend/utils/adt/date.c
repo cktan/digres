@@ -902,21 +902,21 @@ Datum in_range_date_interval(PG_FUNCTION_ARGS) {
 Datum extract_date(PG_FUNCTION_ARGS) {
   text *units = PG_GETARG_TEXT_PP(0);
   DateADT date = PG_GETARG_DATEADT(1);
-  int64 intresult;
   int type, val;
   char *lowunits;
-  int year, mon, mday;
+  ty_part_t part;
 
   lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
                                           VARSIZE_ANY_EXHDR(units), false);
 
-  type = DecodeUnits(0, lowunits, &val);
-  if (type == UNKNOWN_FIELD)
-    type = DecodeSpecial(0, lowunits, &val);
+  type = ty_datetime_part_unit(lowunits, 0, &val);
 
-  if (DATE_NOT_FINITE(date) && (type == UNITS || type == RESERV)) {
+  if (DATE_NOT_FINITE(date) && type != 0) {
+    /*
+     * Infinite dates: the parts of the year and above are infinite, the
+     * smaller ones are null.
+     */
     switch (val) {
-      /* Oscillating units */
     case DTK_DAY:
     case DTK_MONTH:
     case DTK_QUARTER:
@@ -927,7 +927,6 @@ Datum extract_date(PG_FUNCTION_ARGS) {
       PG_RETURN_NULL();
       break;
 
-      /* Monotonically-increasing units */
     case DTK_YEAR:
     case DTK_DECADE:
     case DTK_CENTURY:
@@ -948,107 +947,20 @@ Datum extract_date(PG_FUNCTION_ARGS) {
                       errmsg("unit \"%s\" not supported for type %s", lowunits,
                              format_type_be(DATEOID))));
     }
-  } else if (type == UNITS) {
-    j2date(date + POSTGRES_EPOCH_JDATE, &year, &mon, &mday);
+  }
 
-    switch (val) {
-    case DTK_DAY:
-      intresult = mday;
-      break;
-
-    case DTK_MONTH:
-      intresult = mon;
-      break;
-
-    case DTK_QUARTER:
-      intresult = (mon - 1) / 3 + 1;
-      break;
-
-    case DTK_WEEK:
-      intresult = date2isoweek(year, mon, mday);
-      break;
-
-    case DTK_YEAR:
-      if (year > 0)
-        intresult = year;
-      else
-        /* there is no year 0, just 1 BC and 1 AD */
-        intresult = year - 1;
-      break;
-
-    case DTK_DECADE:
-      /* see comments in timestamp_part */
-      if (year >= 0)
-        intresult = year / 10;
-      else
-        intresult = -((8 - (year - 1)) / 10);
-      break;
-
-    case DTK_CENTURY:
-      /* see comments in timestamp_part */
-      if (year > 0)
-        intresult = (year + 99) / 100;
-      else
-        intresult = -((99 - (year - 1)) / 100);
-      break;
-
-    case DTK_MILLENNIUM:
-      /* see comments in timestamp_part */
-      if (year > 0)
-        intresult = (year + 999) / 1000;
-      else
-        intresult = -((999 - (year - 1)) / 1000);
-      break;
-
-    case DTK_JULIAN:
-      intresult = date + POSTGRES_EPOCH_JDATE;
-      break;
-
-    case DTK_ISOYEAR:
-      intresult = date2isoyear(year, mon, mday);
-      /* Adjust BC years */
-      if (intresult <= 0)
-        intresult -= 1;
-      break;
-
-    case DTK_DOW:
-    case DTK_ISODOW:
-      intresult = j2day(date + POSTGRES_EPOCH_JDATE);
-      if (val == DTK_ISODOW && intresult == 0)
-        intresult = 7;
-      break;
-
-    case DTK_DOY:
-      intresult = date2j(year, mon, mday) - date2j(year, 1, 1) + 1;
-      break;
-
-    default:
-      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                      errmsg("unit \"%s\" not supported for type %s", lowunits,
-                             format_type_be(DATEOID))));
-      intresult = 0;
-    }
-  } else if (type == RESERV) {
-    switch (val) {
-    case DTK_EPOCH:
-      intresult = ((int64)date + POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) *
-                  SECS_PER_DAY;
-      break;
-
-    default:
-      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                      errmsg("unit \"%s\" not supported for type %s", lowunits,
-                             format_type_be(DATEOID))));
-      intresult = 0;
-    }
-  } else {
+  if (type == 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unit \"%s\" not recognized for type %s", lowunits,
                            format_type_be(DATEOID))));
-    intresult = 0;
-  }
 
-  PG_RETURN_NUMERIC(int64_to_numeric(intresult));
+  /* ty takes the date apart and picks the unit */
+  if (ty_date_part(type == 2, val, date, &part))
+    ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                    errmsg("unit \"%s\" not supported for type %s", lowunits,
+                           format_type_be(DATEOID))));
+
+  PG_RETURN_DATUM(ty_part_datum(&part, true));
 }
 
 /* Add an interval to a date, giving a new date.
@@ -1758,93 +1670,27 @@ Datum in_range_time_interval(PG_FUNCTION_ARGS) {
 static Datum time_part_common(PG_FUNCTION_ARGS, bool retnumeric) {
   text *units = PG_GETARG_TEXT_PP(0);
   TimeADT time = PG_GETARG_TIMEADT(1);
-  int64 intresult;
   int type, val;
   char *lowunits;
+  ty_part_t part;
 
   lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
                                           VARSIZE_ANY_EXHDR(units), false);
 
-  type = DecodeUnits(0, lowunits, &val);
-  if (type == UNKNOWN_FIELD)
-    type = DecodeSpecial(0, lowunits, &val);
+  /* only epoch is a reserved word a time has a part for */
+  type = ty_datetime_part_unit(lowunits, 1, &val);
 
-  if (type == UNITS) {
-    fsec_t fsec;
-    struct pg_tm tt, *tm = &tt;
-
-    time2tm(time, tm, &fsec);
-
-    switch (val) {
-    case DTK_MICROSEC:
-      intresult = tm->tm_sec * INT64CONST(1000000) + fsec;
-      break;
-
-    case DTK_MILLISEC:
-      if (retnumeric)
-        /*---
-         * tm->tm_sec * 1000 + fsec / 1000
-         * = (tm->tm_sec * 1'000'000 + fsec) / 1000
-         */
-        PG_RETURN_NUMERIC(int64_div_fast_to_numeric(
-            tm->tm_sec * INT64CONST(1000000) + fsec, 3));
-      else
-        PG_RETURN_FLOAT8(tm->tm_sec * 1000.0 + fsec / 1000.0);
-      break;
-
-    case DTK_SECOND:
-      if (retnumeric)
-        /*---
-         * tm->tm_sec + fsec / 1'000'000
-         * = (tm->tm_sec * 1'000'000 + fsec) / 1'000'000
-         */
-        PG_RETURN_NUMERIC(int64_div_fast_to_numeric(
-            tm->tm_sec * INT64CONST(1000000) + fsec, 6));
-      else
-        PG_RETURN_FLOAT8(tm->tm_sec + fsec / 1000000.0);
-      break;
-
-    case DTK_MINUTE:
-      intresult = tm->tm_min;
-      break;
-
-    case DTK_HOUR:
-      intresult = tm->tm_hour;
-      break;
-
-    case DTK_TZ:
-    case DTK_TZ_MINUTE:
-    case DTK_TZ_HOUR:
-    case DTK_DAY:
-    case DTK_MONTH:
-    case DTK_QUARTER:
-    case DTK_YEAR:
-    case DTK_DECADE:
-    case DTK_CENTURY:
-    case DTK_MILLENNIUM:
-    case DTK_ISOYEAR:
-    default:
-      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                      errmsg("unit \"%s\" not supported for type %s", lowunits,
-                             format_type_be(TIMEOID))));
-      intresult = 0;
-    }
-  } else if (type == RESERV && val == DTK_EPOCH) {
-    if (retnumeric)
-      PG_RETURN_NUMERIC(int64_div_fast_to_numeric(time, 6));
-    else
-      PG_RETURN_FLOAT8(time / 1000000.0);
-  } else {
+  if (type == 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unit \"%s\" not recognized for type %s", lowunits,
                            format_type_be(TIMEOID))));
-    intresult = 0;
-  }
 
-  if (retnumeric)
-    PG_RETURN_NUMERIC(int64_to_numeric(intresult));
-  else
-    PG_RETURN_FLOAT8(intresult);
+  if (ty_time_part(type == 2, val, time, &part))
+    ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                    errmsg("unit \"%s\" not supported for type %s", lowunits,
+                           format_type_be(TIMEOID))));
+
+  return ty_part_datum(&part, retnumeric);
 }
 
 Datum time_part(PG_FUNCTION_ARGS) { return time_part_common(fcinfo, false); }

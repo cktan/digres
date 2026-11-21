@@ -1712,3 +1712,102 @@ int ty_datetime_unit(const char *lowtoken, int *code) {
   *code = val;
   return 1;
 }
+
+/*
+ * The words that extract is nearly always asked with, with what the tables of
+ * words say of them (the unit tests check it). A word that is not here goes
+ * to the tables.
+ */
+static int common_unit(const char *w, int *code) {
+  static const struct {
+    const char *word;
+    int code, found;
+  } common[] = {
+      {"year", DTK_YEAR, 1},
+      {"month", DTK_MONTH, 1},
+      {"day", DTK_DAY, 1},
+      {"hour", DTK_HOUR, 1},
+      {"minute", DTK_MINUTE, 1},
+      {"second", DTK_SECOND, 1},
+      {"quarter", DTK_QUARTER, 1},
+      {"week", DTK_WEEK, 1},
+      {"decade", DTK_DECADE, 1},
+      {"century", DTK_CENTURY, 1},
+      {"millennium", DTK_MILLENNIUM, 1},
+      {"milliseconds", DTK_MILLISEC, 1},
+      {"microseconds", DTK_MICROSEC, 1},
+      {"epoch", DTK_EPOCH, 2},
+      {"dow", DTK_DOW, 1},
+      {"doy", DTK_DOY, 1},
+      {"isodow", DTK_ISODOW, 1},
+      {"isoyear", DTK_ISOYEAR, 1},
+      {"julian", DTK_JULIAN, 1},
+  };
+  /* the first letter picks the few words to compare */
+  switch (w[0]) {
+  case 'y':
+  case 'm':
+  case 'd':
+  case 'h':
+  case 'q':
+  case 'w':
+  case 'c':
+  case 'e':
+  case 'i':
+  case 'j':
+  case 's':
+    for (const auto &c : common) {
+      if (c.word[0] == w[0] && strcmp(c.word, w) == 0) {
+        *code = c.code;
+        return c.found;
+      }
+    }
+    break;
+  default:
+    break;
+  }
+  return 0;
+}
+
+/* The kind of a word for extract: see ty_datetime.h. */
+int ty_datetime_part_unit(const char *lowtoken, int epoch_only, int *code) {
+  int val = 0;
+  int fast = common_unit(lowtoken, &val);
+
+  if (fast != 0) {
+    *code = val;
+    return fast;
+  }
+  int type = DecodeUnits(0, lowtoken, &val);
+
+  if (type == UNKNOWN_FIELD) {
+    type = DecodeSpecial(0, lowtoken, &val);
+  }
+  *code = val;
+  if (type == UNITS) {
+    return 1;
+  }
+  if (type == RESERV && !(epoch_only && val != DTK_EPOCH)) {
+    return 2;
+  }
+  return 0;
+}
+
+/* The slow path alone, for the tests to check the common words against. */
+int ty_datetime_part_unit_slow(const char *lowtoken, int epoch_only,
+                               int *code) {
+  int val = 0;
+  int type = DecodeUnits(0, lowtoken, &val);
+
+  if (type == UNKNOWN_FIELD) {
+    type = DecodeSpecial(0, lowtoken, &val);
+  }
+  *code = val;
+  if (type == UNITS) {
+    return 1;
+  }
+  if (type == RESERV && !(epoch_only && val != DTK_EPOCH)) {
+    return 2;
+  }
+  return 0;
+}
