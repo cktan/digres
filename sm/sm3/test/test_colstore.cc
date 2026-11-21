@@ -1862,3 +1862,50 @@ TEST_CASE("a scan's bounds on a text column skip only what cannot match") {
   past.bound.lo = key("zzz");
   CHECK(scan_rows(db, c, {}, {past}).empty());
 }
+
+// Verify a second write of a row of a row group in one statement fails
+// with SM_ERR_SELFMODIFIED, as a row store table's does, and a later
+// statement's sees the first, with row groups of 100 rows.
+// 1. Load 100 rows: one row group.
+// 2. In one statement, delete a = 5 by its name twice: the second
+//    fails with SM_ERR_SELFMODIFIED; so does an update of it after.
+// 3. In one statement, update a = 6 by its name twice: the same.
+// 4. In the next statement, a delete of a = 5 by its name is
+//    SM_ERR_NOTFOUND, and of a = 6 SM_ERR_UPDATED: its new version is
+//    in the delta store.
+TEST_CASE("a second write of a row group's row in a statement is "
+          "self-modified") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  load_rows(db, c, 100);
+  auto [rg5, id5] = where(db, c, 5);
+  auto [rg6, id6] = where(db, c, 6);
+  REQUIRE(rg5 != 0);
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r5(5, "u"), r6(6, "u");
+  // 2. Two deletes.
+  REQUIRE(sm3::stmt_begin(db.ss) == 0);
+  REQUIRE(sm3::tbl_delete_at(t, rg5, id5) == 0);
+  CHECK(sm3::tbl_delete_at(t, rg5, id5) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_SELFMODIFIED);
+  CHECK(sm3::tbl_update_at(t, rg5, id5, r5.d, r5.null) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_SELFMODIFIED);
+  // 3. Two updates.
+  REQUIRE(sm3::tbl_update_at(t, rg6, id6, r6.d, r6.null) == 0);
+  CHECK(sm3::tbl_update_at(t, rg6, id6, r6.d, r6.null) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_SELFMODIFIED);
+  // 4. The next statement.
+  REQUIRE(sm3::stmt_begin(db.ss) == 0);
+  CHECK(sm3::tbl_delete_at(t, rg5, id5) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_NOTFOUND);
+  CHECK(sm3::tbl_delete_at(t, rg6, id6) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_UPDATED);
+  sm3::tbl_close(t);
+  db.commit();
+  CHECK(scan_rows(db, c).size() == 99);
+}

@@ -13675,3 +13675,19 @@ A check hook took the new value as a `char **`, to change it with
 - **Left**: a sample scan of a column store table in rowno order;
   see `../QUESTION.md`.
 - **Test**: step 12 of `test/columnar.sql`.
+
+## Step 455: a row of a row group written twice in one statement
+
+- **What it is**: a fix in sm, which digres's writes of column
+  store tables reach. A second delete or update of a row of a row
+  group in one statement, as a `DELETE ... USING` whose join
+  matches the row twice makes, met the statement's own delete
+  marker and failed with `SM_ERR_NOTFOUND` or `SM_ERR_UPDATED`.
+  At REPEATABLE READ digres raised a serialization failure where
+  PostgreSQL deletes the row once.
+- **How**: `mark_deleted()` in `sm/sm3/src/table/table.cc`, past a
+  marker there already, takes the marker's lock as a row read, and
+  so fails with `SM_ERR_SELFMODIFIED` for the statement's own
+  marker, which digres skips, as for a row store table.
+- **Test**: step 13 of `test/columnar.sql`, a nested loop that
+  deletes a row twice with its scan on it; `sm3`'s test of it.

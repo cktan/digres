@@ -24,6 +24,9 @@
 -- 10. A row store table's foreign key that references a column store
 --     table fails, as the referenced column has no unique key.
 -- 12. TABLESAMPLE is refused: a feature not supported.
+-- 13. A DELETE ... USING whose join matches a row of a row group twice,
+--     the scan on the row each time, deletes it once, at REPEATABLE
+--     READ too, as PostgreSQL does.
 -- 11. Bounds on a numeric(10,2) column, of constants at a finer scale
 --     or past its precision, give what a row store copy gives: two
 --     row groups, d 0.00 to 99.99 and 100.00 to 199.99, and the
@@ -148,6 +151,16 @@ drop table columnar_nr;
 drop table columnar_n;
 select count(*) from columnar_t tablesample bernoulli (100);
 \echo :SQLSTATE
+create temp table columnar_dup (id int, v int) with (storage = columnar);
+insert into columnar_dup select g, g from generate_series(1, 20000) g;
+explain (costs off) delete from columnar_dup using (values (1), (2)) d (x)
+  where columnar_dup.id = 100;
+begin isolation level repeatable read;
+delete from columnar_dup using (values (1), (2)) d (x)
+  where columnar_dup.id = 100;
+select count(*) from columnar_dup where id = 100;
+rollback;
+drop table columnar_dup;
 drop table columnar_row;
 drop table columnar_t;
 drop table columnar_ref;

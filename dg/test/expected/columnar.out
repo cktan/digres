@@ -24,6 +24,9 @@
 -- 10. A row store table's foreign key that references a column store
 --     table fails, as the referenced column has no unique key.
 -- 12. TABLESAMPLE is refused: a feature not supported.
+-- 13. A DELETE ... USING whose join matches a row of a row group twice,
+--     the scan on the row each time, deletes it once, at REPEATABLE
+--     READ too, as PostgreSQL does.
 -- 11. Bounds on a numeric(10,2) column, of constants at a finer scale
 --     or past its precision, give what a row store copy gives: two
 --     row groups, d 0.00 to 99.99 and 100.00 to 199.99, and the
@@ -36,14 +39,14 @@ create temp table columnar_t (
   ref int references columnar_ref (id),
   amount int)
   with (storage = columnar);
-psql:test/columnar.sql:38: WARNING:  column store table "columnar_t" has no primary key: it is not made
-psql:test/columnar.sql:38: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
-psql:test/columnar.sql:38: WARNING:  column store table "columnar_t" has no foreign key: it is not made
+psql:test/columnar.sql:41: WARNING:  column store table "columnar_t" has no primary key: it is not made
+psql:test/columnar.sql:41: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
+psql:test/columnar.sql:41: WARNING:  column store table "columnar_t" has no foreign key: it is not made
 insert into columnar_t values (null, 'x', null, 1);
-psql:test/columnar.sql:39: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
+psql:test/columnar.sql:42: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
 DETAIL:  Failing row contains (null, x, null, 1).
 create index columnar_t_amount on columnar_t (amount);
-psql:test/columnar.sql:40: WARNING:  column store table "columnar_t" has no index: it is not made
+psql:test/columnar.sql:43: WARNING:  column store table "columnar_t" has no index: it is not made
 insert into columnar_t
   select g, 'c' || g, null, g % 10 from generate_series(1, 25000) g;
 insert into columnar_t values (0, 'zero', 7, 0);
@@ -306,7 +309,7 @@ select * from columnar_ctas where k = 5 order by id;
 drop table columnar_ctas;
 begin isolation level serializable;
 select count(*) from columnar_t;
-psql:test/columnar.sql:124: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
+psql:test/columnar.sql:127: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
 LINE 1: select count(*) from columnar_t;
                              ^
 \echo :SQLSTATE
@@ -321,10 +324,10 @@ select * from columnar_row;
 (1 row)
 
 create temp table columnar_bad (a int) with (storage = banana);
-psql:test/columnar.sql:130: ERROR:  invalid value for option "storage": banana
+psql:test/columnar.sql:133: ERROR:  invalid value for option "storage": banana
 HINT:  Valid values are "row" and "columnar".
 create temp table columnar_child (r int references columnar_t (id));
-psql:test/columnar.sql:131: ERROR:  there is no unique constraint matching given keys for referenced table "columnar_t"
+psql:test/columnar.sql:134: ERROR:  there is no unique constraint matching given keys for referenced table "columnar_t"
 create temp table columnar_n (d numeric(10,2)) with (storage = columnar);
 insert into columnar_n select g / 100.0 from generate_series(0, 24999) g;
 create temp table columnar_nr as select * from columnar_n;
@@ -367,9 +370,34 @@ union all select 'row', count(*) from columnar_nr where d < 1e20;
 drop table columnar_nr;
 drop table columnar_n;
 select count(*) from columnar_t tablesample bernoulli (100);
-psql:test/columnar.sql:149: ERROR:  TABLESAMPLE is not supported on column store table "columnar_t"
+psql:test/columnar.sql:152: ERROR:  TABLESAMPLE is not supported on column store table "columnar_t"
 \echo :SQLSTATE
 0A000
+create temp table columnar_dup (id int, v int) with (storage = columnar);
+insert into columnar_dup select g, g from generate_series(1, 20000) g;
+explain (costs off) delete from columnar_dup using (values (1), (2)) d (x)
+  where columnar_dup.id = 100;
+                 QUERY PLAN                  
+---------------------------------------------
+ Delete on columnar_dup
+   ->  Nested Loop
+         ->  Seq Scan on columnar_dup
+               Filter: (id = 100)
+         ->  Materialize
+               ->  Values Scan on "*VALUES*"
+(6 rows)
+
+begin isolation level repeatable read;
+delete from columnar_dup using (values (1), (2)) d (x)
+  where columnar_dup.id = 100;
+select count(*) from columnar_dup where id = 100;
+ count 
+-------
+     0
+(1 row)
+
+rollback;
+drop table columnar_dup;
 drop table columnar_row;
 drop table columnar_t;
 drop table columnar_ref;

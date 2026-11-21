@@ -1765,9 +1765,11 @@ static int lock_row(table_t *table, uint64_t id, sm1::lockmode_t mode,
  * Delete row id of row group rg_id by its marker (../COLSTORE.md §9):
  * 1. Take the row's exclusive lock, on its _id, as any write of it
  *    does: a FOR UPDATE holder is waited for.
- * 2. Put the marker. A marker there already, at read committed, is
- *    a delete since, or an update since whose new version is in the
- *    delta store.
+ * 2. Put the marker.
+ * 3. A marker there already that the running statement put: the
+ *    statement changed the row already (SM_ERR_SELFMODIFIED).
+ * 4. Another, at read committed, is a delete since, or an update
+ *    since whose new version is in the delta store.
  */
 static int mark_deleted(table_t *table, uint64_t rg_id, uint64_t id) {
   if (need_writable(table) != 0) {
@@ -1801,6 +1803,14 @@ static int mark_deleted(table_t *table, uint64_t rg_id, uint64_t id) {
   if (sm1::errnum() != sm1::SM_ERR_DUPKEY) {
     return -1;
   }
+  // 3. The statement's own marker: the marker's lock, taken as a row
+  //    read, fails with SM_ERR_SELFMODIFIED, as a row store's write
+  //    does. It is taken only here, past a marker there already.
+  if (sm1::lock_row(s, table->def->storeid, marker_key(rg_id, id),
+                    sm1::SM_LOCKMODE_EX, true, marker_relid) != 0) {
+    return -1;
+  }
+  // 4. Another's.
   std::string_view tuple;
   int r = tbl_read_latest(table, id, tuple);
   if (r < 0) {

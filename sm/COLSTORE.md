@@ -538,8 +538,12 @@ table. A write takes the `rg_id` from the scan instead:
   2. Inserts the delete marker, a versioned key, as a unique
      index entry is. First-committer-wins applies to it as to any
      key.
-  3. Meets a marker there already: at READ COMMITTED, the row
-     was deleted since (`SM_ERR_NOTFOUND`), or updated since,
+  3. Meets a marker there already. If the running statement put
+     it, the statement changed the row already: the marker's
+     lock, taken as a row read, fails with
+     `SM_ERR_SELFMODIFIED`, which digres skips, as for a row
+     store table. Otherwise, at READ COMMITTED, the row was
+     deleted since (`SM_ERR_NOTFOUND`), or updated since,
      with its new version in the delta store (`SM_ERR_UPDATED`,
      which the caller answers by a read of the newest version).
   4. Meets a moved marker (`SM_ERR_SEALED`): finds the row's new
@@ -1071,6 +1075,9 @@ random CGs and random bounds, against a test of every value.
     reads them.
 15. A scan's bounds on a text column, a range and an equality,
     skip only the RGs that cannot match.
+16. A second delete or update of a row of an RG in one statement
+    fails with `SM_ERR_SELFMODIFIED`; in the next statement, the
+    first one's result is seen.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.
@@ -1101,7 +1108,8 @@ SERIALIZABLE transaction refused with `0A000`; `storage =
 references a column store table, which fails; bounds on a
 `numeric(10,2)` column of constants at a finer scale or past its
 precision, against a row store copy; `TABLESAMPLE` refused with
-`0A000`.
+`0A000`; a `DELETE ... USING` that matches a row of an RG twice,
+at REPEATABLE READ, deletes it once.
 
 ### 15.5 Layers with no test
 
