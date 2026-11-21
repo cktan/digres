@@ -4739,16 +4739,6 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "circle '<(1e308,1e308),1>' + point '(1e308,1e308)'|value out of range: overflow" \
   "circle '<(0,0),1e308>' * point '(1e200,1e200)'|value out of range: overflow" \
   "circle '<(0,0),1e308>' <-> circle '<(1e308,0),1e308>'|value out of range: overflow" \
-  "area(path '((0,0),(1e308,1e308),(-1e308,0))')|value out of range: overflow" \
-  "length(path '[(0,0),(1e308,1e308),(-1e308,-1e308)]')|value out of range: overflow" \
-  "path '[(1e200,1),(2,2)]' * point '(1e200,1)'|value out of range: overflow" \
-  "path '[(1,1),(2,2)]' / point '(0,0)'|division by zero" \
-  "point '(1,1)' <-> path '[(0,0),(1e308,1e308),(-1e308,-1e308)]'|value out of range: overflow" \
-  "polygon '((0,0),(4,0),(0,4))' <-> polygon '((1e308,1e308),(-1e308,0),(0,-1e308))'|value out of range: overflow" \
-  "circle(polygon '((0,0),(1e308,1e308),(-1e308,0))')|value out of range: overflow" \
-  "polygon '((0,0),(1e308,1e308),(-1e308,0))' @> point '(1,1)'|value out of range: overflow" \
-  "polygon(2, circle '<(0,0),0>')|cannot convert circle with radius zero to polygon" \
-  "polygon(1, circle '<(0,0),1>')|must request at least 2 points" \
   "'\$92233720368547758.08'::money|is out of range for type money"; do
   local_psql -c "select ${c%%|*}" 2>&1 | grep -q "${c#*|}" ||
     fail "bytea refuses ${c%%|*}"

@@ -20,7 +20,6 @@
 #define INLINE inline __attribute__((always_inline))
 
 #include "error.h"
-#include "geo.h"
 #include "ty_geo.h"
 
 #define TRY(call) TY_GEO_TRY(call)
@@ -871,27 +870,4 @@ int ty_lseg_box_close(const ty_lseg_t *s, const ty_box_t *b, ty_point_t *r,
   TRY(ty_lseg_box_distance(s, b, r, &d));
   *hit = !std::isnan(d);
   return 0;
-}
-
-/* The segments meet: 1 or 0. */
-int ty_internal::geo_seg_interpt_seg(const ty_lseg_t *a, const ty_lseg_t *b,
-                                     ty_point_t *result) {
-  return seg_interpt_seg(a, b, result);
-}
-
-/* The point is on the segment: 1 or 0. */
-int ty_internal::geo_seg_has(const ty_lseg_t *s, const ty_point_t *p) {
-  return seg_has(s, p);
-}
-
-/* The distance of two segments. */
-int ty_internal::geo_seg_closept_seg(const ty_lseg_t *on, const ty_lseg_t *to,
-                                     double *dist) {
-  return seg_closept_seg(on, to, nullptr, dist);
-}
-
-/* The distance of a point from a segment. */
-int ty_internal::geo_seg_closept_point(const ty_lseg_t *seg,
-                                       const ty_point_t *pt, double *dist) {
-  return seg_closept_point(seg, pt, nullptr, dist);
 }

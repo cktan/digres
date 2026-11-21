@@ -47,8 +47,6 @@ const char *ty_errname(ty_errnum_t code) {
     return "TY_ERR_DIVZERO";
   case TY_ERR_UNDERFLOW:
     return "TY_ERR_UNDERFLOW";
-  case TY_ERR_ABORTED:
-    return "TY_ERR_ABORTED";
   }
   return "TY_ERR_UNKNOWN";
 }
