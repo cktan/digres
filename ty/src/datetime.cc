@@ -1042,18 +1042,8 @@ int ty_datetime_to_timestamp(int32_t date, int64_t time, int64_t *out) {
   return 0;
 }
 
-/* interval to time of day. */
-int ty_interval_to_time(const ty_interval_t *iv, int64_t *out) {
-  int64_t r;
-
-  if (ty_interval_not_finite(iv)) {
-    return ty_internal::set_error(TY_ERR_RANGE,
-                                  "cannot convert infinite interval to time");
-  }
-  r = iv->time % (TY_USECS_PER_HOUR * 24);
-  if (r < 0) {
-    r += TY_USECS_PER_HOUR * 24;
-  }
-  *out = r;
-  return 0;
+/* The error of an interval to a time of day: the interval is infinite. */
+int ty_interval_to_time_error(void) {
+  return ty_internal::set_error(TY_ERR_RANGE,
+                                "cannot convert infinite interval to time");
 }

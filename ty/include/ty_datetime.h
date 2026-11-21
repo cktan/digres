@@ -273,7 +273,20 @@ int ty_datetime_to_timestamp(int32_t date, int64_t time, int64_t* out);
  * An interval to a time of day: the part of the days, 0 to a day; the months
  * and days are dropped. An infinite interval is TY_ERR_RANGE.
  */
-int ty_interval_to_time(const ty_interval_t* iv, int64_t* out);
+int ty_interval_to_time_error(void);
+static inline int ty_interval_to_time(const ty_interval_t* iv, int64_t* out) {
+    int64_t r;
+
+    if (TY_UNLIKELY(ty_interval_not_finite(iv))) {
+        return ty_interval_to_time_error();
+    }
+    r = iv->time % (TY_USECS_PER_HOUR * 24);
+    if (r < 0) {
+        r += TY_USECS_PER_HOUR * 24;
+    }
+    *out = r;
+    return 0;
+}
 
 /*
  * The ISO 8601 week of a date: the week number, the year the week is in, the
