@@ -297,10 +297,11 @@ Results are exact or an error, never silently wrong.
   `generate_series` (it ends when its next value would pass 36
   digits), `width_bucket` (`ty_dec128_width_bucket`, one bit
   of the count at a time), `inc`, the factorial and the window
-  `in_range` are in ty too. The sums of the aggregates and the
-  text and binary forms still use the 512-bit magnitude (`mag_t`,
-  `wide_t` in `decimal.c`): the rule above removes it, one piece
-  a commit, and then those too give an error past 36 digits.
+  `in_range` are in ty too, and so are the aggregates' sums.
+  The text and binary forms read a number as a string of digits,
+  up to 154, and make a 128-bit value. The 512-bit magnitude
+  (`mag_t`, `wide_t`) is gone from `decimal.c` (2026-11-21): a
+  value past 36 digits is an error, wherever it arises.
 - **Overflow is an error**: "numeric field overflow", as
   PostgreSQL says it past a typmod.
 - **No NaN, no infinity**: `'NaN'::numeric` and division by
@@ -484,8 +485,8 @@ Where it lives:
   recv, send, typmod, comparison, hash, sort support and
   casts; `decimal64`'s native `sum` and `avg`; the operations
   themselves are in `ty/`, called by thin wrappers here, which
-  unpack a datum and raise PostgreSQL's error for ty's. What is
-  left of the 512-bit path, in the list in §2.5, goes away.
+  unpack a datum and raise PostgreSQL's error for ty's. The
+  512-bit path is gone.
 - `src/include/catalog/`: the types, functions, operators,
   casts, opclasses and aggregates; what was `numeric` there is
   `decimal128`'s, but for what §2.8 runs on `decimal64`.

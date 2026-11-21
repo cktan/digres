@@ -229,7 +229,7 @@ session lookup, and a statement's instructions do not move.
 
 | Order | Type | Moves | Stays in digres |
 | --- | --- | --- | --- |
-| 1 | decimal | arithmetic, rounding, compare, hash, `sqrt`, `ln`, `exp`, `log`, power, the 512-bit magnitude | wrappers, aggregates, series, planner support, typmod, error text |
+| 1 | decimal | arithmetic, rounding, compare, hash, `sqrt`, `ln`, `exp`, `log`, power, no 512-bit magnitude (dropped) | wrappers, aggregates, series, planner support, typmod, error text |
 | 2 | integers, bool, uuid, bytea | the same shape: pure functions | wrappers, error text |
 | 3 | date, time, interval, float text, text | hold: they read `DateStyle`, `TimeZone`, `extra_float_digits` and collation | until the hooks are settled |
 
@@ -274,13 +274,13 @@ copied from PostgreSQL keeps its copyright notice
    by-reference `decimal128` result cost a `palloc` a row. A
    caller who wants more digits adds a `decimal128` to a
    `decimal64`. `-` and `*` follow in ty (`ty_dec64_sub`,
-   `_mul`), exact or an error; `/` stays in digres's wide path,
-   rounded to 17 digits, until the 512-bit magnitude moves. This
-   is decision 2's first error. → verify: the regression files
-   pass, and the instruction count is within the limit of the
-   open question below. The files that print a result's type, or
-   a sum past 17 digits, are changed on purpose
-   (`select_decimal64`, `select_numeric`). Built on 2026-11-20.
+   `_mul`), exact or an error; `/` follows, rounded to 17
+   digits, in 128 bits. This is decision 2's first error. →
+   verify: the regression files pass, and the instruction count
+   is within the limit of the open question below. The files
+   that print a result's type, or a sum past 17 digits, are
+   changed on purpose (`select_decimal64`, `select_numeric`).
+   Built on 2026-11-20.
    The instruction count is in step 1: it fell.
 3. **The rest of decimal's core**, in groups: arithmetic, then
    rounding, then functions of the exponent. → verify: the
@@ -336,9 +336,12 @@ copied from PostgreSQL keeps its copyright notice
    up to 154, rounds a long input once by its first dropped digit
    under a typmod, and then makes a 128-bit value.
    `where (a::text)::numeric > 500` fell 56.9%.
-   Left, still on `mag_t` and `wide_t`: the aggregates' sums,
-   `variance` and `stddev`; then the hash.
-   `/` waits for the 512-bit magnitude. The rounding group is
+   The aggregates' sums are off `mag_t` and `wide_t` too: the
+   sum is a 128-bit value, exact to 36 digits, and the squares
+   a double. Then `mag_t` and `wide_t` and every helper on
+   them were deleted from `decimal.c`: 3,910 lines to 3,444
+   (3,580 before the work began). The hash key stays in digres.
+   The rounding group is
    done too: `round`, `trunc`, `ceil` and `floor`, in 64 bits.
    `where round(a, 1) > 500` over the 2,000 rows fell from
    14,631,134 to 4,375,507 instructions a statement (-70%), as
