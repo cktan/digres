@@ -436,3 +436,26 @@ int ty_timestamp_diff(int64_t dt1, int64_t dt2, ty_interval_t *result) {
   span.day = 0;
   return ty_interval_justify_hours(&span, result);
 }
+
+/* Make a timestamp fit its precision. */
+int ty_timestamp_adjust_typmod(int64_t *ts, int32_t typmod) {
+  static const int64_t scales[7] = {1000000, 100000, 10000, 1000, 100, 10, 1};
+  static const int64_t offsets[7] = {500000, 50000, 5000, 500, 50, 5, 0};
+
+  if (!ty_timestamp_finite(*ts) || typmod == -1 || typmod == 6) {
+    return 0;
+  }
+  if (typmod < 0 || typmod > 6) {
+    char msg[96];
+
+    snprintf(msg, sizeof msg,
+             "timestamp(%d) precision must be between %d and %d", typmod, 0, 6);
+    return ty_internal::set_error(TY_ERR_INVALID, msg);
+  }
+  if (*ts >= 0) {
+    *ts = ((*ts + offsets[typmod]) / scales[typmod]) * scales[typmod];
+  } else {
+    *ts = -((((-*ts) + offsets[typmod]) / scales[typmod]) * scales[typmod]);
+  }
+  return 0;
+}

@@ -9,12 +9,16 @@
 #include "ty_interval.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
+
+#include "ty_float.h"
 
 #include "error.h"
 
 namespace {
 
+const int64_t TY_USECS_PER_HOUR_I = INT64_C(3600000000);
 const double k_secs_per_day = 86400.0;
 const double k_usecs_per_sec = 1000000.0;
 
@@ -302,5 +306,98 @@ int ty_interval_justify(const ty_interval_t *a, ty_interval_t *r) {
     r->time -= TY_USECS_PER_DAY;
     r->day++;
   }
+  return 0;
+}
+
+/* Make an interval fit its typmod. */
+int ty_interval_adjust_typmod(ty_interval_t *a, int32_t typmod) {
+  static const int64_t scales[7] = {1000000, 100000, 10000, 1000, 100, 10, 1};
+  static const int64_t offsets[7] = {500000, 50000, 5000, 500, 50, 5, 0};
+  if (ty_interval_not_finite(a) || typmod < 0) {
+    return 0;
+  }
+  int range = (typmod >> 16) & 0x7FFF;
+  int precision = typmod & 0xFFFF;
+  /* the fields: year 2, month 1, day 3, hour 10, minute 11, second 12 */
+  const int Y = 1 << 2, M = 1 << 1, D = 1 << 3, H = 1 << 10, MI = 1 << 11,
+            S = 1 << 12;
+
+  if (range == TY_INTERVAL_FULL_RANGE) {
+    /* nothing to cut */
+  } else if (range == Y) {
+    a->month = (a->month / 12) * 12;
+    a->day = 0;
+    a->time = 0;
+  } else if (range == M || range == (Y | M)) {
+    a->day = 0;
+    a->time = 0;
+  } else if (range == D) {
+    a->time = 0;
+  } else if (range == H || range == (D | H)) {
+    a->time = (a->time / TY_USECS_PER_HOUR_I) * TY_USECS_PER_HOUR_I;
+  } else if (range == MI || range == (D | H | MI) || range == (H | MI)) {
+    a->time = (a->time / 60000000) * 60000000;
+  } else if (range == S || range == (D | H | MI | S) || range == (H | MI | S) ||
+             range == (MI | S)) {
+    /* the sub-second rounding is below */
+  } else {
+    char msg[64];
+
+    snprintf(msg, sizeof msg, "unrecognized interval typmod: %d", typmod);
+    return ty_internal::set_error(TY_ERR_INVALID, msg);
+  }
+  if (precision != TY_INTERVAL_FULL_PRECISION) {
+    if (precision < 0 || precision > 6) {
+      char msg[96];
+
+      snprintf(msg, sizeof msg,
+               "interval(%d) precision must be between %d and %d", precision, 0,
+               6);
+      return ty_internal::set_error(TY_ERR_INVALID, msg);
+    }
+    if (a->time >= 0) {
+      if (__builtin_add_overflow(a->time, offsets[precision], &a->time)) {
+        return out_of_range();
+      }
+    } else if (__builtin_sub_overflow(a->time, offsets[precision], &a->time)) {
+      return out_of_range();
+    }
+    a->time -= a->time % scales[precision];
+  }
+  return 0;
+}
+
+/* make_interval. */
+int ty_interval_make(int32_t years, int32_t months, int32_t weeks, int32_t days,
+                     int32_t hours, int32_t mins, double secs,
+                     ty_interval_t *out) {
+  ty_interval_t r;
+
+  if (std::isinf(secs) || std::isnan(secs)) {
+    return out_of_range();
+  }
+  if (__builtin_mul_overflow(years, 12, &r.month) ||
+      __builtin_add_overflow(r.month, months, &r.month)) {
+    return out_of_range();
+  }
+  if (__builtin_mul_overflow(weeks, 7, &r.day) ||
+      __builtin_add_overflow(r.day, days, &r.day)) {
+    return out_of_range();
+  }
+  r.time = (int64_t)hours * TY_USECS_PER_HOUR_I + (int64_t)mins * 60000000;
+  double us;
+
+  if (ty_float64_mul(secs, 1000000.0, &us) != 0) {
+    return -1;
+  }
+  us = rint(us);
+  if (!(us >= -9223372036854775808.0 && us < 9223372036854775808.0) ||
+      __builtin_add_overflow(r.time, (int64_t)us, &r.time)) {
+    return out_of_range();
+  }
+  if (ty_interval_not_finite(&r)) {
+    return out_of_range();
+  }
+  *out = r;
   return 0;
 }

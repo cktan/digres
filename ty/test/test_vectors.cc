@@ -913,6 +913,25 @@ bool run_interval(const vec_t &v) {
   if (name == "out" || name == "parse") {
     return false;
   }
+  if (name == "make") {
+    int y, mo, w, d, h, mi;
+    char sec[64];
+    ty_interval_t r2;
+
+    REQUIRE(7 == sscanf(v.args[0].c_str(), "%d:%d:%d:%d:%d:%d:%63s", &y, &mo,
+                        &w, &d, &h, &mi, sec));
+    int rc2 = ty_interval_make(y, mo, w, d, h, mi, strtod(sec, nullptr), &r2);
+
+    INFO(v.line);
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc2);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rc2);
+      CHECK(v.res[0] == iv_token(r2));
+    }
+    return true;
+  }
   ty_interval_t a = iv_of(v.args[0]), b, r;
   int rc = 0;
 
@@ -937,6 +956,9 @@ bool run_interval(const vec_t &v) {
 
     rc =
         name == "mul" ? ty_interval_mul(&a, f, &r) : ty_interval_div(&a, f, &r);
+  } else if (name == "typmod") {
+    r = a;
+    rc = ty_interval_adjust_typmod(&r, (int32_t)std::stoll(v.args[1]));
   } else if (name == "neg") {
     rc = ty_interval_neg(&a, &r);
   } else if (name == "justify_hours") {
@@ -1033,6 +1055,12 @@ bool run_datetime(const vec_t &v) {
     int64_t r = 0;
     ty_interval_t iv;
 
+    if (name == "typmod") {
+      r = i64(0);
+      ty_time_adjust_typmod(&r, (int32_t)i64(1));
+      CHECK(std::stoll(v.res[0]) == r);
+      return true;
+    }
     if (name == "make") {
       rc = ty_time_make((int32_t)i64(0), (int32_t)i64(1), std::stod(v.args[2]),
                         &r);
@@ -1046,6 +1074,13 @@ bool run_datetime(const vec_t &v) {
                                   : ty_time_sub_interval(i64(0), &iv, &r);
     }
     check_num(rc, r);
+    return true;
+  }
+  if (name == "typmod") {
+    int64_t t = i64(0);
+
+    rc = ty_timestamp_adjust_typmod(&t, (int32_t)i64(1));
+    check_num(rc, t);
     return true;
   }
   if (name == "to_tm") {

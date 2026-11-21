@@ -622,6 +622,14 @@ copied from PostgreSQL keeps its copyright notice
      of the errors, and `dg/test/select_interval_in.sql`.
      Measured by callgrind (old, new): the postgres form
      -14.08%; the ISO 8601 form +0.30%; the clock form +0.21%.
+   - **The typmod of interval, timestamp and time, and
+     `make_interval` moved (2026-11-21).**
+     `ty_interval_adjust_typmod`, `ty_timestamp_adjust_typmod`,
+     `ty_time_adjust_typmod` and `ty_interval_make`. The tests:
+     about 1,800 vectors from a Python port, and
+     `dg/test/select_typmod_ops.sql`, which prints the same as
+     the digres before the move; the cost of the casts is
+     +0.24%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

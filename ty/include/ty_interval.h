@@ -128,4 +128,28 @@ int ty_interval_justify(const ty_interval_t* a, ty_interval_t* r);
 int ty_interval_parse(const char* str, int range, int intervalstyle,
                       ty_interval_t* out, int* dterr);
 
+/* The typmod of an interval: the range of fields, then the precision. */
+#define TY_INTERVAL_FULL_RANGE 0x7FFF
+#define TY_INTERVAL_FULL_PRECISION 0xFFFF
+#define TY_INTERVAL_TYPMOD(precision, range) \
+    ((((range) & 0x7FFF) << 16) | ((precision) & 0xFFFF))
+
+/*
+ * Make an interval fit its typmod: the fields to the right of the range are
+ * zeroed, and the microseconds are rounded to the precision. A typmod of -1
+ * and an infinite interval are left as they are. A precision that is not 0 to
+ * 6 is TY_ERR_INVALID ("interval(%d) precision must be between 0 and 6");
+ * rounding that overflows is TY_ERR_RANGE.
+ */
+int ty_interval_adjust_typmod(ty_interval_t* a, int32_t typmod);
+
+/*
+ * An interval from years, months, weeks, days, hours, minutes and seconds
+ * (make_interval). TY_ERR_RANGE ("interval out of range") if a field
+ * overflows or the seconds are not a number.
+ */
+int ty_interval_make(int32_t years, int32_t months, int32_t weeks,
+                     int32_t days, int32_t hours, int32_t mins, double secs,
+                     ty_interval_t* out);
+
 #endif

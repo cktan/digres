@@ -1,0 +1,73 @@
+-- Verify the typmod of interval, timestamp and time, and make_interval, which
+-- ty does (ty/DESIGN.md sections 18 and 19).
+-- (Errors are server.sh's: a run stops at its first.)
+SELECT v, v::interval(0) AS p0, v::interval(1) AS p1, v::interval(3) AS p3, v::interval(6) AS p6, v::interval second(2) AS s2, v::interval minute to second(1) AS ms1 FROM (VALUES ('1 day 2 hours 3 minutes 4.5678 seconds'::interval), ('-1 day -2 hours -3 minutes -4.5678 seconds'), ('0.0000005 seconds'), ('-0.0000005 seconds'), ('1.5 seconds'), ('-1.5 seconds'), ('2.5 seconds'), ('infinity'), ('0')) x(v);
+           v            |        p0         |         p1          |          p3           |           p6           |          s2          |         ms1         
+------------------------+-------------------+---------------------+-----------------------+------------------------+----------------------+---------------------
+ 1 day 02:03:04.5678    | 1 day 02:03:05    | 1 day 02:03:04.6    | 1 day 02:03:04.568    | 1 day 02:03:04.5678    | 1 day 02:03:04.57    | 1 day 02:03:04.6
+ -1 days -02:03:04.5678 | -1 days -02:03:05 | -1 days -02:03:04.6 | -1 days -02:03:04.568 | -1 days -02:03:04.5678 | -1 days -02:03:04.57 | -1 days -02:03:04.6
+ 00:00:00               | 00:00:00          | 00:00:00            | 00:00:00              | 00:00:00               | 00:00:00             | 00:00:00
+ 00:00:00               | 00:00:00          | 00:00:00            | 00:00:00              | 00:00:00               | 00:00:00             | 00:00:00
+ 00:00:01.5             | 00:00:02          | 00:00:01.5          | 00:00:01.5            | 00:00:01.5             | 00:00:01.5           | 00:00:01.5
+ -00:00:01.5            | -00:00:02         | -00:00:01.5         | -00:00:01.5           | -00:00:01.5            | -00:00:01.5          | -00:00:01.5
+ 00:00:02.5             | 00:00:03          | 00:00:02.5          | 00:00:02.5            | 00:00:02.5             | 00:00:02.5           | 00:00:02.5
+ infinity               | infinity          | infinity            | infinity              | infinity               | infinity             | infinity
+ 00:00:00               | 00:00:00          | 00:00:00            | 00:00:00              | 00:00:00               | 00:00:00             | 00:00:00
+(9 rows)
+
+SELECT v, v::interval year AS y, v::interval month AS m, v::interval year to month AS ym, v::interval day AS d, v::interval hour AS h, v::interval minute AS mi, v::interval day to hour AS dh, v::interval day to minute AS dm, v::interval day to second AS ds, v::interval hour to minute AS hm, v::interval hour to second AS hs FROM (VALUES ('1 year 14 months 3 days 2 hours 3 minutes 4.5 seconds'::interval), ('-1 year -2 months -3 days -2 hours -3 minutes -4.5 seconds'), ('1 month 40 days 100:30:30'), ('0'), ('-infinity')) x(v);
+                  v                   |     y     |        m         |        ym        |            d             |                 h                  |                 mi                 |                 dh                 |                 dm                 |                  ds                  |                 hm                 |                  hs                  
+--------------------------------------+-----------+------------------+------------------+--------------------------+------------------------------------+------------------------------------+------------------------------------+------------------------------------+--------------------------------------+------------------------------------+--------------------------------------
+ 2 years 2 mons 3 days 02:03:04.5     | 2 years   | 2 years 2 mons   | 2 years 2 mons   | 2 years 2 mons 3 days    | 2 years 2 mons 3 days 02:00:00     | 2 years 2 mons 3 days 02:03:00     | 2 years 2 mons 3 days 02:00:00     | 2 years 2 mons 3 days 02:03:00     | 2 years 2 mons 3 days 02:03:04.5     | 2 years 2 mons 3 days 02:03:00     | 2 years 2 mons 3 days 02:03:04.5
+ -1 years -2 mons -3 days -02:03:04.5 | -1 years  | -1 years -2 mons | -1 years -2 mons | -1 years -2 mons -3 days | -1 years -2 mons -3 days -02:00:00 | -1 years -2 mons -3 days -02:03:00 | -1 years -2 mons -3 days -02:00:00 | -1 years -2 mons -3 days -02:03:00 | -1 years -2 mons -3 days -02:03:04.5 | -1 years -2 mons -3 days -02:03:00 | -1 years -2 mons -3 days -02:03:04.5
+ 1 mon 40 days 100:30:30              | 00:00:00  | 1 mon            | 1 mon            | 1 mon 40 days            | 1 mon 40 days 100:00:00            | 1 mon 40 days 100:30:00            | 1 mon 40 days 100:00:00            | 1 mon 40 days 100:30:00            | 1 mon 40 days 100:30:30              | 1 mon 40 days 100:30:00            | 1 mon 40 days 100:30:30
+ 00:00:00                             | 00:00:00  | 00:00:00         | 00:00:00         | 00:00:00                 | 00:00:00                           | 00:00:00                           | 00:00:00                           | 00:00:00                           | 00:00:00                             | 00:00:00                           | 00:00:00
+ -infinity                            | -infinity | -infinity        | -infinity        | -infinity                | -infinity                          | -infinity                          | -infinity                          | -infinity                          | -infinity                            | -infinity                          | -infinity
+(5 rows)
+
+SELECT t, t::timestamp(0) AS p0, t::timestamp(1) AS p1, t::timestamp(3) AS p3, t::timestamp(6) AS p6, t::timestamp AS pd FROM (VALUES ('2024-02-29 13:45:56.789012'::timestamp), ('2024-02-29 13:45:56.5'), ('2024-02-29 13:45:56.4999999'), ('0001-01-01 00:00:00.5 BC'), ('infinity'), ('-infinity'), ('1999-12-31 23:59:59.9999995')) x(t);
+             t              |           p0           |            p1            |            p3            |             p6             |             pd             
+----------------------------+------------------------+--------------------------+--------------------------+----------------------------+----------------------------
+ 2024-02-29 13:45:56.789012 | 2024-02-29 13:45:57    | 2024-02-29 13:45:56.8    | 2024-02-29 13:45:56.789  | 2024-02-29 13:45:56.789012 | 2024-02-29 13:45:56.789012
+ 2024-02-29 13:45:56.5      | 2024-02-29 13:45:57    | 2024-02-29 13:45:56.5    | 2024-02-29 13:45:56.5    | 2024-02-29 13:45:56.5      | 2024-02-29 13:45:56.5
+ 2024-02-29 13:45:56.5      | 2024-02-29 13:45:57    | 2024-02-29 13:45:56.5    | 2024-02-29 13:45:56.5    | 2024-02-29 13:45:56.5      | 2024-02-29 13:45:56.5
+ 0001-01-01 00:00:00.5 BC   | 0001-01-01 00:00:00 BC | 0001-01-01 00:00:00.5 BC | 0001-01-01 00:00:00.5 BC | 0001-01-01 00:00:00.5 BC   | 0001-01-01 00:00:00.5 BC
+ infinity                   | infinity               | infinity                 | infinity                 | infinity                   | infinity
+ -infinity                  | -infinity              | -infinity                | -infinity                | -infinity                  | -infinity
+ 2000-01-01 00:00:00        | 2000-01-01 00:00:00    | 2000-01-01 00:00:00      | 2000-01-01 00:00:00      | 2000-01-01 00:00:00        | 2000-01-01 00:00:00
+(7 rows)
+
+SELECT t, t::time(0) AS p0, t::time(2) AS p2, t::time(6) AS p6, t::time AS pd FROM (VALUES ('13:45:56.789012'::time), ('13:45:56.5'), ('23:59:59.9999995'), ('00:00:00.0000004'), ('24:00:00')) x(t);
+        t        |    p0    |     p2      |       p6        |       pd        
+-----------------+----------+-------------+-----------------+-----------------
+ 13:45:56.789012 | 13:45:57 | 13:45:56.79 | 13:45:56.789012 | 13:45:56.789012
+ 13:45:56.5      | 13:45:57 | 13:45:56.5  | 13:45:56.5      | 13:45:56.5
+ 24:00:00        | 24:00:00 | 24:00:00    | 24:00:00        | 24:00:00
+ 00:00:00        | 00:00:00 | 00:00:00    | 00:00:00        | 00:00:00
+ 24:00:00        | 24:00:00 | 24:00:00    | 24:00:00        | 24:00:00
+(5 rows)
+
+SELECT z, z::timestamptz(0) AS p0, z::timestamptz(2) AS p2 FROM (VALUES ('2024-02-29 13:45:56.789012+00'::timestamptz), ('2024-02-29 23:59:59.999+00'), ('infinity')) x(z);
+               z               |           p0           |            p2             
+-------------------------------+------------------------+---------------------------
+ 2024-02-29 13:45:56.789012+00 | 2024-02-29 13:45:57+00 | 2024-02-29 13:45:56.79+00
+ 2024-02-29 23:59:59.999+00    | 2024-03-01 00:00:00+00 | 2024-03-01 00:00:00+00
+ infinity                      | infinity               | infinity
+(3 rows)
+
+SELECT make_interval(0, 0, 0, 0, 0, 0, 0) AS a, make_interval(1, 2, 3, 4, 5, 6, 7.5) AS b, make_interval(1, 0, 0, 0, 0, 0, 0) AS c, make_interval(0, 0, 2, 1, 0, 0, 0) AS d, make_interval(0, 0, 0, 0, 25, 61, 61.5) AS e, make_interval(0, 0, 0, 0, 0, 0, 0.0000005) AS f, make_interval(-1, 13, 0, 0, 0, 0, 0) AS g, make_interval(0, 0, 0, 0, 0, 0, -1.25) AS h;
+    a     |                b                 |   c    |    d    |     e      |    f     |   g   |      h       
+----------+----------------------------------+--------+---------+------------+----------+-------+--------------
+ 00:00:00 | 1 year 2 mons 25 days 05:06:07.5 | 1 year | 15 days | 26:02:01.5 | 00:00:00 | 1 mon | -00:00:01.25
+(1 row)
+
+SELECT i, i::interval(2) AS p2 FROM (SELECT (n || ' hours')::interval + '0.126 seconds'::interval AS i FROM generate_series(1, 5) n) x;
+      i       |     p2      
+--------------+-------------
+ 01:00:00.126 | 01:00:00.13
+ 02:00:00.126 | 02:00:00.13
+ 03:00:00.126 | 03:00:00.13
+ 04:00:00.126 | 04:00:00.13
+ 05:00:00.126 | 05:00:00.13
+(5 rows)
+

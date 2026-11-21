@@ -635,8 +635,11 @@ PostgreSQL's (`datetime.c`), moved with its notice into
 `src/interval_in.cc`, and is checked against what the old digres
 did with about 1,070 texts; the codes of the errors are
 PostgreSQL's, and the host words them. The text out is in section
-19; `extract`, `date_trunc` and `age`, and the typmod
-(`interval(2)`, `day to second`), are still in digres.
+19; `extract`, `date_trunc` and `age`, and and the text of a
+typmod, are still in digres. The typmod itself is
+`ty_interval_adjust_typmod`: the fields to the right of the range
+are zeroed, and the microseconds are rounded to the precision.
+`make_interval` is `ty_interval_make`.
 
 The tests: the vectors, from Python integers for the order and
 the sum, and from a port of the steps of PostgreSQL's code in
@@ -678,6 +681,10 @@ the time zone (`DecodeDateTime`), `extract`, `date_trunc`, `age`,
 the casts, the typmods and everything with a time zone stay in
 digres until those settings are passed in, as the locale of money
 is.
+
+`ty_timestamp_adjust_typmod` and `ty_time_adjust_typmod` round a
+timestamp and a time to the precision of `timestamp(p)` and
+`time(p)`.
 
 The tests: the vectors, from Python integers and a second
 formulation of the Julian day (the Wikipedia formula and

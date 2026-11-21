@@ -419,6 +419,7 @@ def main():
     gen_interval()
     gen_datetime()
     gen_geo()
+    gen_typmod()
     sys.stdout.write("\n".join(out) + "\n")
 
 
@@ -3134,6 +3135,102 @@ def gen_geo():
         geo_emit("bx.div", (a, c), lambda: bx_tok(g_bx_construct(g_pt_div(b1[0], pt), g_pt_div(b1[1], pt))))
         for nm, fn in (("lt", fp_lt), ("gt", fp_gt), ("eq", fp_eq), ("le", fp_le), ("ge", fp_ge)):
             geo_emit("bx." + nm, (a, b), lambda fn=fn: int(fn(g_bx_ar(b1), g_bx_ar(b2))))
+
+
+def gen_typmod():
+    """The typmod of interval and timestamp, and make_interval."""
+    Y, M, D, H, MI, S = 1 << 2, 1 << 1, 1 << 3, 1 << 10, 1 << 11, 1 << 12
+    ranges = [0x7FFF, Y, M, Y | M, D, H, MI, S, D | H, D | H | MI, D | H | MI | S, H | MI, H | MI | S, MI | S, 3, 0]
+    scales = [1000000, 100000, 10000, 1000, 100, 10, 1]
+    offs = [500000, 50000, 5000, 500, 50, 5, 0]
+    ivs = [v for v in iv_values()]
+    for rng in ranges:
+        for prec in (0, 1, 3, 6, 0xFFFF, 7, 100):
+            typmod = (rng << 16) | prec
+            for v in random.sample(ivs, 12):
+                m, d, t = v
+                if iv_inf(v):
+                    emit("iv.typmod", (ivtok(*v), typmod), ivtok(*v))
+                    continue
+                if rng == 0x7FFF:
+                    pass
+                elif rng == Y:
+                    m, d, t = cdiv(m, 12) * 12, 0, 0
+                elif rng in (M, Y | M):
+                    d, t = 0, 0
+                elif rng == D:
+                    t = 0
+                elif rng in (H, D | H):
+                    t = cdiv(t, 3600000000) * 3600000000
+                elif rng in (MI, D | H | MI, H | MI):
+                    t = cdiv(t, 60000000) * 60000000
+                elif rng in (S, D | H | MI | S, H | MI | S, MI | S):
+                    pass
+                else:
+                    emit("iv.typmod", (ivtok(*v), typmod), ("E", "INVALID"))
+                    continue
+                if prec != 0xFFFF:
+                    if prec > 6:
+                        emit("iv.typmod", (ivtok(*v), typmod), ("E", "INVALID"))
+                        continue
+                    t = t + offs[prec] if t >= 0 else t - offs[prec]
+                    if not (I64MIN <= t <= I64MAX):
+                        emit("iv.typmod", (ivtok(*v), typmod), ("E", "RANGE"))
+                        continue
+                    t = t - cmod(t, scales[prec])
+                emit("iv.typmod", (ivtok(*v), typmod), ivtok(m, d, t))
+    for ts in [0, 1, -1, 499999, 500000, 500001, -499999, -500000, -500001, 1234567, -1234567, 86400000000 + 123456, MIN_TS, END_TS - 1, I64MIN, I64MAX, 999999, 1500000, 2500000, -1500000, -2500000]:
+        for prec in (-1, 0, 1, 2, 3, 4, 5, 6, 7, -2):
+            if ts in (I64MIN, I64MAX) or prec in (-1, 6):
+                emit("ts.typmod", (ts, prec), ts)
+            elif prec < 0 or prec > 6:
+                emit("ts.typmod", (ts, prec), ("E", "INVALID"))
+            elif ts >= 0:
+                emit("ts.typmod", (ts, prec), (ts + offs[prec]) // scales[prec] * scales[prec])
+            else:
+                emit("ts.typmod", (ts, prec), -(((-ts) + offs[prec]) // scales[prec] * scales[prec]))
+    for t in [0, 1, 499999, 500000, 500001, 86399999999, 86400000000, 1234567, 999999, 1500000, 45296789012]:
+        for prec in (-1, 0, 1, 2, 3, 4, 5, 6, 7, 100):
+            if prec < 0 or prec > 6:
+                emit("time.typmod", (t, prec), t)
+            else:
+                emit("time.typmod", (t, prec), (t + offs[prec]) // scales[prec] * scales[prec])
+    for _ in range(200):
+        a = [random.choice([0, 1, -1, 10, random.randint(-100, 100), I32MAX, I32MIN, 178956970, -178956970, 306783378]) for _ in range(6)]
+        sec = random.choice([0.0, 1.5, -1.5, 59.999999, 1e-7, 5e-7, 1e12, -1e12, 1e13, 9.3e12, float("inf"), float("nan"), 0.1234567, 123456789.123456])
+        years, months, weeks, days, hours, mins = a
+        res = None
+        if sec != sec or sec in (float("inf"), float("-inf")):
+            res = ("E", "RANGE")
+        else:
+            mo = years * 12
+            if not (I32MIN <= mo <= I32MAX):
+                res = ("E", "RANGE")
+            else:
+                mo += months
+                if not (I32MIN <= mo <= I32MAX):
+                    res = ("E", "RANGE")
+                else:
+                    dy = weeks * 7
+                    if not (I32MIN <= dy <= I32MAX) or not (I32MIN <= dy + days <= I32MAX):
+                        res = ("E", "RANGE")
+                    else:
+                        dy += days
+                        tm = hours * 3600000000 + mins * 60000000
+                        try:
+                            us = sec * 1000000.0
+                            if _m.isinf(us):
+                                res = ("E", "RANGE")
+                            else:
+                                us = round(us)
+                                if not (-9223372036854775808 <= us < 9223372036854775808) or not (I64MIN <= tm + int(us) <= I64MAX):
+                                    res = ("E", "RANGE")
+                                else:
+                                    r = (mo, dy, tm + int(us))
+                                    res = ivtok(*r) if not iv_inf(r) else ("E", "RANGE")
+                        except OverflowError:
+                            res = ("E", "RANGE")
+        emit("iv.make", ("%d:%d:%d:%d:%d:%d:%s" % (years, months, weeks, days, hours, mins, repr(sec)),), res)
 
 
 def gen_ints():

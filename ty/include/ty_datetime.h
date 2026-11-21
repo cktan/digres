@@ -161,6 +161,28 @@ int ty_timestamp_sub_interval(int64_t ts, const ty_interval_t* span,
 int ty_timestamp_diff(int64_t a, int64_t b, ty_interval_t* out);
 
 /*
+ * Make a timestamp fit its precision (0 to 6; -1 or 6 leaves it): rounded to
+ * the microsecond digits, away from zero for a half. A precision outside 0 to
+ * 6 is TY_ERR_INVALID ("timestamp(%d) precision must be between 0 and 6").
+ * An infinite timestamp is not changed.
+ */
+int ty_timestamp_adjust_typmod(int64_t* ts, int32_t typmod);
+
+/* Make a time fit its precision (0 to 6; anything else leaves it). */
+static inline void ty_time_adjust_typmod(int64_t* t, int32_t typmod) {
+    static const int64_t scales[7] = {1000000, 100000, 10000, 1000, 100, 10, 1};
+    static const int64_t offsets[7] = {500000, 50000, 5000, 500, 50, 5, 0};
+
+    if (typmod >= 0 && typmod <= 6) {
+        if (*t >= 0) {
+            *t = ((*t + offsets[typmod]) / scales[typmod]) * scales[typmod];
+        } else {
+            *t = -((((-*t) + offsets[typmod]) / scales[typmod]) * scales[typmod]);
+        }
+    }
+}
+
+/*
  * The text of date, time, timestamp and interval, written by the settings
  * the host passes in: a date style, a date order and an interval style, whose
  * values are PostgreSQL's. The result is written to out, which must have

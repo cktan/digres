@@ -4667,6 +4667,11 @@ for c in "'\\x6g'::bytea|invalid hexadecimal digit: \"g\"" \
   "'2147483647 months'::interval + '1 month'|interval out of range" \
   "'2147483647 days'::interval * 2|interval out of range" \
   "'infinity'::interval * 0|interval out of range" \
+  "make_interval(0, 0, 0, 0, 0, 0, 'nan')|interval out of range" \
+  "make_interval(2147483647, 0, 0, 0, 0, 0, 0)|interval out of range" \
+  "make_interval(0, 0, 2147483647, 0, 0, 0, 0)|interval out of range" \
+  "make_interval(0, 0, 0, 0, 0, 0, 1e300)|interval out of range" \
+  "'9223372036854775807 microseconds'::interval(0)|interval out of range" \
   "'x'::interval|invalid input syntax for type interval" \
   "''::interval|invalid input syntax for type interval" \
   "'2147483648 months'::interval|interval field value out of range" \

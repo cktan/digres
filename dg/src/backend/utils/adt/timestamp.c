@@ -333,33 +333,10 @@ Datum timestamp_scale(PG_FUNCTION_ARGS) {
  * ErrorSaveContext; otherwise errors are thrown).
  */
 bool AdjustTimestampForTypmod(Timestamp *time, int32 typmod, Node *escontext) {
-  static const int64 TimestampScales[MAX_TIMESTAMP_PRECISION + 1] = {
-      INT64CONST(1000000), INT64CONST(100000), INT64CONST(10000),
-      INT64CONST(1000),    INT64CONST(100),    INT64CONST(10),
-      INT64CONST(1)};
-
-  static const int64 TimestampOffsets[MAX_TIMESTAMP_PRECISION + 1] = {
-      INT64CONST(500000), INT64CONST(50000), INT64CONST(5000), INT64CONST(500),
-      INT64CONST(50),     INT64CONST(5),     INT64CONST(0)};
-
-  if (!TIMESTAMP_NOT_FINITE(*time) && (typmod != -1) &&
-      (typmod != MAX_TIMESTAMP_PRECISION)) {
-    if (typmod < 0 || typmod > MAX_TIMESTAMP_PRECISION)
-      ereturn(escontext, false,
-              (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-               errmsg("timestamp(%d) precision must be between %d and %d",
-                      typmod, 0, MAX_TIMESTAMP_PRECISION)));
-
-    if (*time >= INT64CONST(0)) {
-      *time = ((*time + TimestampOffsets[typmod]) / TimestampScales[typmod]) *
-              TimestampScales[typmod];
-    } else {
-      *time =
-          -((((-*time) + TimestampOffsets[typmod]) / TimestampScales[typmod]) *
-            TimestampScales[typmod]);
-    }
-  }
-
+  if (ty_timestamp_adjust_typmod(time, typmod))
+    ereturn(escontext, false,
+            (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+             errmsg("%s", ty_errmsg())));
   return true;
 }
 
@@ -1160,125 +1137,16 @@ Datum interval_scale(PG_FUNCTION_ARGS) {
  */
 static bool AdjustIntervalForTypmod(Interval *interval, int32 typmod,
                                     Node *escontext) {
-  static const int64 IntervalScales[MAX_INTERVAL_PRECISION + 1] = {
-      INT64CONST(1000000), INT64CONST(100000), INT64CONST(10000),
-      INT64CONST(1000),    INT64CONST(100),    INT64CONST(10),
-      INT64CONST(1)};
-
-  static const int64 IntervalOffsets[MAX_INTERVAL_PRECISION + 1] = {
-      INT64CONST(500000), INT64CONST(50000), INT64CONST(5000), INT64CONST(500),
-      INT64CONST(50),     INT64CONST(5),     INT64CONST(0)};
-
-  /* Typmod has no effect on infinite intervals */
-  if (INTERVAL_NOT_FINITE(interval))
-    return true;
-
-  /*
-   * Unspecified range and precision? Then not necessary to adjust. Setting
-   * typmod to -1 is the convention for all data types.
-   */
-  if (typmod >= 0) {
-    int range = INTERVAL_RANGE(typmod);
-    int precision = INTERVAL_PRECISION(typmod);
-
-    /*
-     * Our interpretation of intervals with a limited set of fields is
-     * that fields to the right of the last one specified are zeroed out,
-     * but those to the left of it remain valid.  Thus for example there
-     * is no operational difference between INTERVAL YEAR TO MONTH and
-     * INTERVAL MONTH.  In some cases we could meaningfully enforce that
-     * higher-order fields are zero; for example INTERVAL DAY could reject
-     * nonzero "month" field.  However that seems a bit pointless when we
-     * can't do it consistently.  (We cannot enforce a range limit on the
-     * highest expected field, since we do not have any equivalent of
-     * SQL's <interval leading field precision>.)  If we ever decide to
-     * revisit this, interval_support will likely require adjusting.
-     *
-     * Note: before PG 8.4 we interpreted a limited set of fields as
-     * actually causing a "modulo" operation on a given value, potentially
-     * losing high-order as well as low-order information.  But there is
-     * no support for such behavior in the standard, and it seems fairly
-     * undesirable on data consistency grounds anyway.  Now we only
-     * perform truncation or rounding of low-order fields.
-     */
-    if (range == INTERVAL_FULL_RANGE) {
-      /* Do nothing... */
-    } else if (range == INTERVAL_MASK(YEAR)) {
-      interval->month = (interval->month / MONTHS_PER_YEAR) * MONTHS_PER_YEAR;
-      interval->day = 0;
-      interval->time = 0;
-    } else if (range == INTERVAL_MASK(MONTH)) {
-      interval->day = 0;
-      interval->time = 0;
-    }
-    /* YEAR TO MONTH */
-    else if (range == (INTERVAL_MASK(YEAR) | INTERVAL_MASK(MONTH))) {
-      interval->day = 0;
-      interval->time = 0;
-    } else if (range == INTERVAL_MASK(DAY)) {
-      interval->time = 0;
-    } else if (range == INTERVAL_MASK(HOUR)) {
-      interval->time = (interval->time / USECS_PER_HOUR) * USECS_PER_HOUR;
-    } else if (range == INTERVAL_MASK(MINUTE)) {
-      interval->time = (interval->time / USECS_PER_MINUTE) * USECS_PER_MINUTE;
-    } else if (range == INTERVAL_MASK(SECOND)) {
-      /* fractional-second rounding will be dealt with below */
-    }
-    /* DAY TO HOUR */
-    else if (range == (INTERVAL_MASK(DAY) | INTERVAL_MASK(HOUR))) {
-      interval->time = (interval->time / USECS_PER_HOUR) * USECS_PER_HOUR;
-    }
-    /* DAY TO MINUTE */
-    else if (range == (INTERVAL_MASK(DAY) | INTERVAL_MASK(HOUR) |
-                       INTERVAL_MASK(MINUTE))) {
-      interval->time = (interval->time / USECS_PER_MINUTE) * USECS_PER_MINUTE;
-    }
-    /* DAY TO SECOND */
-    else if (range == (INTERVAL_MASK(DAY) | INTERVAL_MASK(HOUR) |
-                       INTERVAL_MASK(MINUTE) | INTERVAL_MASK(SECOND))) {
-      /* fractional-second rounding will be dealt with below */
-    }
-    /* HOUR TO MINUTE */
-    else if (range == (INTERVAL_MASK(HOUR) | INTERVAL_MASK(MINUTE))) {
-      interval->time = (interval->time / USECS_PER_MINUTE) * USECS_PER_MINUTE;
-    }
-    /* HOUR TO SECOND */
-    else if (range == (INTERVAL_MASK(HOUR) | INTERVAL_MASK(MINUTE) |
-                       INTERVAL_MASK(SECOND))) {
-      /* fractional-second rounding will be dealt with below */
-    }
-    /* MINUTE TO SECOND */
-    else if (range == (INTERVAL_MASK(MINUTE) | INTERVAL_MASK(SECOND))) {
-      /* fractional-second rounding will be dealt with below */
-    } else
-      elog(ERROR, "unrecognized interval typmod: %d", typmod);
-
-    /* Need to adjust sub-second precision? */
-    if (precision != INTERVAL_FULL_PRECISION) {
-      if (precision < 0 || precision > MAX_INTERVAL_PRECISION)
-        ereturn(escontext, false,
-                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                 errmsg("interval(%d) precision must be between %d and %d",
-                        precision, 0, MAX_INTERVAL_PRECISION)));
-
-      if (interval->time >= INT64CONST(0)) {
-        if (pg_add_s64_overflow(interval->time, IntervalOffsets[precision],
-                                &interval->time))
-          ereturn(escontext, false,
-                  (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                   errmsg("interval out of range")));
-        interval->time -= interval->time % IntervalScales[precision];
-      } else {
-        if (pg_sub_s64_overflow(interval->time, IntervalOffsets[precision],
-                                &interval->time))
-          ereturn(escontext, false,
-                  (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                   errmsg("interval out of range")));
-        interval->time -= interval->time % IntervalScales[precision];
-      }
-    }
+  /* ty cuts the fields to the range and rounds to the precision */
+  if (ty_interval_adjust_typmod((ty_interval_t *)interval, typmod)) {
+    if (ty_errnum() == TY_ERR_INVALID)
+      ereturn(escontext, false,
+              (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+               errmsg("%s", ty_errmsg())));
+    ereturn(escontext, false,
+            (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+             errmsg("interval out of range")));
   }
-
   return true;
 }
 
@@ -1286,54 +1154,19 @@ static bool AdjustIntervalForTypmod(Interval *interval, int32 typmod,
  * make_interval - numeric Interval constructor
  */
 Datum make_interval(PG_FUNCTION_ARGS) {
-  int32 years = PG_GETARG_INT32(0);
-  int32 months = PG_GETARG_INT32(1);
-  int32 weeks = PG_GETARG_INT32(2);
-  int32 days = PG_GETARG_INT32(3);
-  int32 hours = PG_GETARG_INT32(4);
-  int32 mins = PG_GETARG_INT32(5);
-  double secs = PG_GETARG_FLOAT8(6);
-  Interval *result;
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
-  /*
-   * Reject out-of-range inputs.  We reject any input values that cause
-   * integer overflow of the corresponding interval fields.
-   */
-  if (isinf(secs) || isnan(secs))
-    goto out_of_range;
-
-  result = (Interval *)palloc(sizeof(Interval));
-
-  /* years and months -> months */
-  if (pg_mul_s32_overflow(years, MONTHS_PER_YEAR, &result->month) ||
-      pg_add_s32_overflow(result->month, months, &result->month))
-    goto out_of_range;
-
-  /* weeks and days -> days */
-  if (pg_mul_s32_overflow(weeks, DAYS_PER_WEEK, &result->day) ||
-      pg_add_s32_overflow(result->day, days, &result->day))
-    goto out_of_range;
-
-  /* hours and mins -> usecs (cannot overflow 64-bit) */
-  result->time = hours * USECS_PER_HOUR + mins * USECS_PER_MINUTE;
-
-  /* secs -> usecs */
-  secs = rint(float8_mul(secs, USECS_PER_SEC));
-  if (!FLOAT8_FITS_IN_INT64(secs) ||
-      pg_add_s64_overflow(result->time, (int64)secs, &result->time))
-    goto out_of_range;
-
-  /* make sure that the result is finite */
-  if (INTERVAL_NOT_FINITE(result))
-    goto out_of_range;
+  if (ty_interval_make(PG_GETARG_INT32(0), PG_GETARG_INT32(1),
+                       PG_GETARG_INT32(2), PG_GETARG_INT32(3),
+                       PG_GETARG_INT32(4), PG_GETARG_INT32(5),
+                       PG_GETARG_FLOAT8(6), (ty_interval_t *)result)) {
+    if (ty_errnum() != TY_ERR_RANGE || strcmp(ty_errmsg(), "interval out of range"))
+      float_raise_ty(); /* the seconds times a million overflowed */
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("interval out of range")));
+  }
 
   PG_RETURN_INTERVAL_P(result);
-
-out_of_range:
-  ereport(ERROR, errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-          errmsg("interval out of range"));
-
-  PG_RETURN_NULL(); /* keep compiler quiet */
 }
 
 /* EncodeSpecialTimestamp()

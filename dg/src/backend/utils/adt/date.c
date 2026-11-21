@@ -1396,23 +1396,7 @@ Datum time_scale(PG_FUNCTION_ARGS) {
  * implementation. - thomas
  */
 void AdjustTimeForTypmod(TimeADT *time, int32 typmod) {
-  static const int64 TimeScales[MAX_TIME_PRECISION + 1] = {
-      INT64CONST(1000000), INT64CONST(100000), INT64CONST(10000),
-      INT64CONST(1000),    INT64CONST(100),    INT64CONST(10),
-      INT64CONST(1)};
-
-  static const int64 TimeOffsets[MAX_TIME_PRECISION + 1] = {
-      INT64CONST(500000), INT64CONST(50000), INT64CONST(5000), INT64CONST(500),
-      INT64CONST(50),     INT64CONST(5),     INT64CONST(0)};
-
-  if (typmod >= 0 && typmod <= MAX_TIME_PRECISION) {
-    if (*time >= INT64CONST(0))
-      *time = ((*time + TimeOffsets[typmod]) / TimeScales[typmod]) *
-              TimeScales[typmod];
-    else
-      *time = -((((-*time) + TimeOffsets[typmod]) / TimeScales[typmod]) *
-                TimeScales[typmod]);
-  }
+  ty_time_adjust_typmod(time, typmod);
 }
 
 Datum time_eq(PG_FUNCTION_ARGS) {
