@@ -32,6 +32,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/varlena.h"
+#include "ty_text.h"
 
 /*****************************************************************************
  *	 USER I/O ROUTINES (none)
@@ -48,17 +49,10 @@
 Datum namein(PG_FUNCTION_ARGS) {
   char *s = PG_GETARG_CSTRING(0);
   Name result;
-  int len;
 
-  len = strlen(s);
-
-  /* Truncate oversize input */
-  if (len >= NAMEDATALEN)
-    len = pg_mbcliplen(s, len, NAMEDATALEN - 1);
-
-  /* We use palloc0 here to ensure result is zero-padded */
-  result = (Name)palloc0(NAMEDATALEN);
-  memcpy(NameStr(*result), s, len);
+  /* ty cuts to 63 bytes at a character, and zero-fills the rest */
+  result = (Name)palloc(NAMEDATALEN);
+  ty_name_parse(s, strlen(s), NameStr(*result));
 
   PG_RETURN_NAME(result);
 }
@@ -127,7 +121,7 @@ Datum namesend(PG_FUNCTION_ARGS) {
 static int namecmp(Name arg1, Name arg2, Oid collid) {
   /* Fast path for common case used in system catalogs */
   if (collid == C_COLLATION_OID)
-    return strncmp(NameStr(*arg1), NameStr(*arg2), NAMEDATALEN);
+    return ty_name_cmp(NameStr(*arg1), NameStr(*arg2));
 
   /* Else rely on the varstr infrastructure */
   return varstr_cmp(NameStr(*arg1), strlen(NameStr(*arg1)), NameStr(*arg2),

@@ -664,3 +664,64 @@ int ty_text_chr(int32_t n, char *out, size_t *outlen) {
   }
   return 0;
 }
+
+/* The bytes of the first nchars characters. */
+size_t ty_text_cliplen(const char *s, size_t len, size_t nchars) {
+  return (size_t)(advance(s, s + len, (int64_t)nchars) - s);
+}
+
+/* The longest part of at most nbytes that ends at a character boundary. */
+size_t ty_text_clipbytes(const char *s, size_t len, size_t nbytes) {
+  const char *p = s, *end = s + len;
+  size_t kept = 0;
+
+  while (p < end) {
+    const char *q = next_char(p, end);
+
+    if ((size_t)(q - s) > nbytes) {
+      break;
+    }
+    kept = (size_t)(q - s);
+    p = q;
+  }
+  return kept;
+}
+
+/*
+ * Fit to maxchars characters.
+ * 1. If s has more characters, keep the first maxchars; the rest must be
+ *    spaces unless force is set.
+ * 2. If not, keep all of s, and for character(n) add spaces up to maxchars.
+ */
+int ty_bpchar_fit(const char *s, size_t len, size_t maxchars, int force,
+                  int pad, size_t *keep, size_t *total) {
+  size_t chars = ty_text_length(s, len);
+
+  if (chars > maxchars) {
+    size_t k = ty_text_cliplen(s, len, maxchars);
+
+    if (!force) {
+      for (size_t j = k; j < len; j++) {
+        if (s[j] != ' ') {
+          return ty_internal::set_error(TY_ERR_RANGE, "value too long");
+        }
+      }
+    }
+    *keep = k;
+    *total = k;
+  } else {
+    *keep = len;
+    *total = pad ? len + (maxchars - chars) : len;
+  }
+  return 0;
+}
+
+/* A name: cut to 63 bytes at a character, zero-filled to 64. */
+void ty_name_parse(const char *s, size_t len, char *out) {
+  size_t n = len >= TY_NAMEDATALEN
+                 ? ty_text_clipbytes(s, len, TY_NAMEDATALEN - 1)
+                 : len;
+
+  memset(out, 0, TY_NAMEDATALEN);
+  memcpy(out, s, n);
+}

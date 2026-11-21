@@ -204,4 +204,60 @@ int ty_text_ascii(const char* s, size_t len, int32_t* out);
  */
 int ty_text_chr(int32_t n, char* out, size_t* outlen);
 
+/*
+ * The bytes of the first nchars characters of s (all of s if it has fewer);
+ * and the longest part of s of at most nbytes bytes that ends at a character
+ * boundary (PostgreSQL's pg_mbcliplen).
+ */
+size_t ty_text_cliplen(const char* s, size_t len, size_t nchars);
+size_t ty_text_clipbytes(const char* s, size_t len, size_t nbytes);
+
+/*
+ * character(n) and character varying(n). Fit s to maxchars characters: if it
+ * has more, the part kept is *keep bytes, and a character cut off that is not
+ * a space is TY_ERR_RANGE unless force (the host words "value too long").
+ * *total is the bytes of the result: for character(n) the part kept, and
+ * spaces to make n characters; pad is 1 for that and 0 for varying.
+ */
+int ty_bpchar_fit(const char* s, size_t len, size_t maxchars, int force,
+                  int pad, size_t* keep, size_t* total);
+
+/* The length of a character(n) value without its trailing spaces. */
+static inline size_t ty_bpchar_truelen(const char* s, size_t len) {
+    while (len > 0 && s[len - 1] == ' ') {
+        len--;
+    }
+    return len;
+}
+
+/*
+ * The order and equality of two character(n) values: the C order of the
+ * values without trailing spaces.
+ */
+static inline int ty_bpchar_cmp(const char* a, size_t alen, const char* b,
+                                size_t blen) {
+    return ty_text_cmp(a, ty_bpchar_truelen(a, alen), b,
+                       ty_bpchar_truelen(b, blen));
+}
+
+/* The hash of the value without its trailing spaces. */
+static inline uint32_t ty_bpchar_hash(const char* s, size_t len) {
+    return ty_text_hash(s, ty_bpchar_truelen(s, len));
+}
+static inline uint64_t ty_bpchar_hash_extended(const char* s, size_t len,
+                                               uint64_t seed) {
+    return ty_text_hash_extended(s, ty_bpchar_truelen(s, len), seed);
+}
+
+/*
+ * name: NAMEDATALEN bytes, a NUL-ended string cut to 63 bytes at a character
+ * boundary. Write the name from s to out (zero-filled); the order is of
+ * the bytes up to the NUL.
+ */
+#define TY_NAMEDATALEN 64
+void ty_name_parse(const char* s, size_t len, char* out);
+static inline int ty_name_cmp(const char* a, const char* b) {
+    return strncmp(a, b, TY_NAMEDATALEN);
+}
+
 #endif

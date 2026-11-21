@@ -170,7 +170,7 @@ Datum tidsmaller(PG_FUNCTION_ARGS) {
 Datum hashtid(PG_FUNCTION_ARGS) {
   ItemPointer key = PG_GETARG_ITEMPOINTER(0);
 
-  return Int32GetDatum(ty_tid_hash((const ty_tid_t *)key));
+  return UInt32GetDatum(ty_tid_hash((const ty_tid_t *)key));
 }
 
 Datum hashtidextended(PG_FUNCTION_ARGS) {

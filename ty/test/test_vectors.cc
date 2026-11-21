@@ -757,6 +757,57 @@ bool run_small_text(const vec_t &v) {
   return true;
 }
 
+/* Run one character(n) or name vector. */
+bool run_bpchar(const vec_t &v) {
+  const std::string &op = v.op;
+
+  if (op != "bpchar.truelen" && op != "bpchar.cmp" && op != "bpchar.fit" &&
+      op != "name.parse" && op != "text.cliplen" && op != "text.clipbytes") {
+    return false;
+  }
+  std::vector<uint8_t> ab = bytes_of(v.args[0]);
+  std::string a(reinterpret_cast<const char *>(ab.data()), ab.size());
+  INFO(v.line);
+  if (op == "bpchar.truelen") {
+    CHECK(std::stoll(v.res[0]) ==
+          (int64_t)ty_bpchar_truelen(a.data(), a.size()));
+  } else if (op == "bpchar.cmp") {
+    std::vector<uint8_t> bb = bytes_of(v.args[1]);
+    std::string b(reinterpret_cast<const char *>(bb.data()), bb.size());
+    int c = ty_bpchar_cmp(a.data(), a.size(), b.data(), b.size());
+
+    CHECK(std::stoi(v.res[0]) == (c > 0) - (c < 0));
+  } else if (op == "text.cliplen") {
+    CHECK(std::stoll(v.res[0]) ==
+          (int64_t)ty_text_cliplen(a.data(), a.size(), std::stoull(v.args[1])));
+  } else if (op == "text.clipbytes") {
+    CHECK(
+        std::stoll(v.res[0]) ==
+        (int64_t)ty_text_clipbytes(a.data(), a.size(), std::stoull(v.args[1])));
+  } else if (op == "bpchar.fit") {
+    size_t keep = 0, total = 0;
+    int rc = ty_bpchar_fit(a.data(), a.size(), std::stoull(v.args[1]),
+                           std::stoi(v.args[2]), std::stoi(v.args[3]), &keep,
+                           &total);
+
+    if (v.res[0] == "E") {
+      CHECK(-1 == rc);
+      CHECK(errnum_of(v.res[1]) == ty_errnum());
+    } else {
+      REQUIRE(0 == rc);
+      CHECK(std::stoll(v.res[0]) == (int64_t)keep);
+      CHECK(std::stoll(v.res[1]) == (int64_t)total);
+    }
+  } else {
+    char out[TY_NAMEDATALEN];
+
+    ty_name_parse(a.data(), a.size(), out);
+    CHECK(v.res[0] ==
+          token_of(reinterpret_cast<const uint8_t *>(out), strlen(out)));
+  }
+  return true;
+}
+
 /* Run one text vector: the strings are the hex of UTF-8 bytes. */
 bool run_text(const vec_t &v) {
   const std::string &op = v.op;
@@ -1632,10 +1683,11 @@ TEST_CASE(
   // 2. Run each through ty, by its operation.
   // 3. Check the number and its scale, or the integer, or the error kind.
   for (const vec_t &v : vecs) {
-    bool known = run_text(v) || run_inet(v) || run_bits(v) || run_known(v) ||
-                 run_float_text(v) || run_float(v) || run_hash(v) ||
-                 run_bytea(v) || run_int_convert(v) || run64(v) || run128(v) ||
-                 run_i16(v) || run_i32(v) || run_i64(v);
+    bool known = run_bpchar(v) || run_text(v) || run_inet(v) || run_bits(v) ||
+                 run_known(v) || run_float_text(v) || run_float(v) ||
+                 run_hash(v) || run_bytea(v) || run_int_convert(v) ||
+                 run64(v) || run128(v) || run_i16(v) || run_i32(v) ||
+                 run_i64(v);
     INFO(v.line);
     REQUIRE(known);
   }

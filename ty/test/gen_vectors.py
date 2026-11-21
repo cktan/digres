@@ -2099,6 +2099,40 @@ def gen_text():
                 out_chars.append(c[i])
         emit("text.translate", (ta, tb, tc), ttok("".join(out_chars)))
         emit("text.ascii", (ta,), ord(a[0]) if a else 0)
+    # character(n), character varying(n), name
+    for _ in range(200):
+        pool = random.sample(ALPHABET, random.randint(2, 5)) + [" ", " "]
+        a = rand_text(14, pool)
+        ta = ttok(a)
+        emit("bpchar.truelen", (ta,), len(a.encode().rstrip(b" ")))
+        for n in (0, 1, 2, 3, 5, 9, 20):
+            emit("text.cliplen", (ta, n), len(a[:n].encode()))
+            emit("text.clipbytes", (ta, n), max([len(a[:i].encode()) for i in range(len(a) + 1) if len(a[:i].encode()) <= n]))
+            for force in (0, 1):
+                for pad in (0, 1):
+                    if len(a) > n:
+                        kept = a[:n]
+                        if not force and a[n:].strip(" ") != "":
+                            res = ("E", "RANGE")
+                        else:
+                            k = len(kept.encode())
+                            res = (k, k)
+                    else:
+                        k = len(a.encode())
+                        res = (k, k + (n - len(a) if pad else 0))
+                    emit("bpchar.fit", (ta, n, force, pad), res)
+        b = rand_text(14, pool)
+        tb = ttok(b)
+        x, y = a.encode().rstrip(b" "), b.encode().rstrip(b" ")
+        emit("bpchar.cmp", (ta, tb), (x > y) - (x < y))
+        raw = a.encode()
+        cut = max([len(a[:i].encode()) for i in range(len(a) + 1) if len(a[:i].encode()) <= 63])
+        emit("name.parse", (ta,), hx(raw[:cut]) if len(raw) >= 64 else ta)
+    for _ in range(20):
+        a = "".join(random.choice(["a", "é", "日", "😀"]) for _ in range(random.randint(30, 80)))
+        raw = a.encode()
+        cut = max([len(a[:i].encode()) for i in range(len(a) + 1) if len(a[:i].encode()) <= 63])
+        emit("name.parse", (ttok(a),), hx(raw[:cut]) if len(raw) >= 64 else ttok(a))
     for cp in [-1, 0, 1, 65, 127, 128, 233, 2047, 2048, 8364, 55295, 55296, 57343, 57344, 65535, 65536, 128512, 1114111, 1114112, 2 ** 31 - 1] + [random.randint(1, 1114111) for _ in range(60)]:
         if cp < 0:
             res = ("E", "INVALID")

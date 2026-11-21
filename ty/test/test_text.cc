@@ -111,3 +111,44 @@ TEST_CASE("text search finds copies that do not overlap") {
   CHECK(5000 == ty_text_find_next(&f));
   CHECK(-1 == ty_text_find_next(&f));
 }
+
+// Verify character(n), character varying(n) and name.
+// 1. char(5) of "ab" is 5 characters: 2 kept and 3 spaces added.
+// 2. "abcdef" to 3 characters: the rest is not spaces, so it is an error
+//    unless forced.
+// 3. "ab   " to 2 characters is fine: the rest is spaces.
+// 4. Trailing spaces do not count in the order or the hash.
+// 5. A name is cut to 63 bytes at a character boundary.
+TEST_CASE("character(n) and name") {
+  size_t keep, total;
+
+  // 1. char(5) of "ab" is 5 characters: 2 kept and 3 spaces added.
+  CHECK(0 == ty_bpchar_fit("ab", 2, 5, 0, 1, &keep, &total));
+  CHECK(2 == keep);
+  CHECK(5 == total);
+
+  // 2. "abcdef" to 3 characters: the rest is not spaces, so it is an error
+  //    unless forced.
+  CHECK(-1 == ty_bpchar_fit("abcdef", 6, 3, 0, 1, &keep, &total));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(0 == ty_bpchar_fit("abcdef", 6, 3, 1, 1, &keep, &total));
+  CHECK(3 == keep);
+
+  // 3. "ab   " to 2 characters is fine: the rest is spaces.
+  CHECK(0 == ty_bpchar_fit("ab   ", 5, 2, 0, 1, &keep, &total));
+  CHECK(2 == total);
+
+  // 4. Trailing spaces do not count in the order or the hash.
+  CHECK(ty_bpchar_cmp("ab  ", 4, "ab", 2) == 0);
+  CHECK(ty_bpchar_cmp("ab", 2, "abc", 3) < 0);
+  CHECK(ty_bpchar_hash("ab  ", 4) == ty_bpchar_hash("ab", 2));
+
+  // 5. A name is cut to 63 bytes at a character boundary.
+  std::string longname(21, 'x');
+  longname += "日日日日日日日日日日日日日日日"; // 21 + 45 = 66 bytes
+  char name[TY_NAMEDATALEN];
+
+  ty_name_parse(longname.data(), longname.size(), name);
+  CHECK(strlen(name) == 63);
+  CHECK(strlen(name) % 3 == 0);
+}

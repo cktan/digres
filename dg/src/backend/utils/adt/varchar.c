@@ -29,6 +29,7 @@
 #include "utils/builtins.h"
 #include "utils/pg_locale.h"
 #include "utils/varlena.h"
+#include "ty_text.h"
 
 /* common code for bpchartypmodin and varchartypmodin */
 static int32 anychar_typmodin(ArrayType *ta, const char *typename_) {
@@ -126,57 +127,25 @@ static BpChar *bpchar_input(const char *s, size_t len, int32 atttypmod,
                             Node *escontext) {
   BpChar *result;
   char *r;
-  size_t maxlen;
+  size_t keep, total;
 
-  /* If typmod is -1 (or invalid), use the actual string length */
-  if (atttypmod < (int32)VARHDRSZ)
-    maxlen = len;
-  else {
-    size_t charlen; /* number of CHARACTERS in the input */
+  if (atttypmod < (int32)VARHDRSZ) {
+    keep = total = len;
+  } else {
+    size_t maxlen = atttypmod - VARHDRSZ;
 
-    maxlen = atttypmod - VARHDRSZ;
-    charlen = pg_mbstrlen_with_len(s, len);
-    if (charlen > maxlen) {
-      /* Verify that extra characters are spaces, and clip them off */
-      size_t mbmaxlen = pg_mbcharcliplen(s, len, maxlen);
-      size_t j;
-
-      /*
-       * at this point, len is the actual BYTE length of the input
-       * string, maxlen is the max number of CHARACTERS allowed for this
-       * bpchar type, mbmaxlen is the length in BYTES of those chars.
-       */
-      for (j = mbmaxlen; j < len; j++) {
-        if (s[j] != ' ')
-          ereturn(
-              escontext, NULL,
+    /* ty cuts to maxlen characters, or pads with spaces to maxlen */
+    if (ty_bpchar_fit(s, len, maxlen, 0, 1, &keep, &total))
+      ereturn(escontext, NULL,
               (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
                errmsg("value too long for type character(%d)", (int)maxlen)));
-      }
-
-      /*
-       * Now we set maxlen to the necessary byte length, not the number
-       * of CHARACTERS!
-       */
-      maxlen = len = mbmaxlen;
-    } else {
-      /*
-       * Now we set maxlen to the necessary byte length, not the number
-       * of CHARACTERS!
-       */
-      maxlen = len + (maxlen - charlen);
-    }
   }
-
-  result = (BpChar *)palloc(maxlen + VARHDRSZ);
-  SET_VARSIZE(result, maxlen + VARHDRSZ);
+  result = (BpChar *)palloc(total + VARHDRSZ);
+  SET_VARSIZE(result, total + VARHDRSZ);
   r = VARDATA(result);
-  memcpy(r, s, len);
-
-  /* blank pad the string if necessary */
-  if (maxlen > len)
-    memset(r + len, ' ', maxlen - len);
-
+  memcpy(r, s, keep);
+  if (total > keep)
+    memset(r + keep, ' ', total - keep);
   return result;
 }
 
@@ -257,9 +226,7 @@ Datum bpchar(PG_FUNCTION_ARGS) {
   int32 len;
   char *r;
   char *s;
-  int i;
-  int charlen; /* number of characters in the input string +
-                * VARHDRSZ */
+  size_t keep, total;
 
   /* No work if typmod is invalid */
   if (maxlen < (int32)VARHDRSZ)
@@ -270,52 +237,21 @@ Datum bpchar(PG_FUNCTION_ARGS) {
   len = VARSIZE_ANY_EXHDR(source);
   s = VARDATA_ANY(source);
 
-  charlen = pg_mbstrlen_with_len(s, len);
+  /* ty cuts to maxlen characters or pads with spaces to maxlen */
+  if (ty_bpchar_fit(s, len, maxlen, isExplicit, 1, &keep, &total))
+    ereport(ERROR, (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
+                    errmsg("value too long for type character(%d)", maxlen)));
 
-  /* No work if supplied data matches typmod already */
-  if (charlen == maxlen)
+  /* No work if the supplied data is already of the right size */
+  if (total == (size_t)len && keep == total)
     PG_RETURN_BPCHAR_P(source);
 
-  if (charlen > maxlen) {
-    /* Verify that extra characters are spaces, and clip them off */
-    size_t maxmblen;
-
-    maxmblen = pg_mbcharcliplen(s, len, maxlen);
-
-    if (!isExplicit) {
-      for (i = maxmblen; i < len; i++)
-        if (s[i] != ' ')
-          ereport(ERROR,
-                  (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
-                   errmsg("value too long for type character(%d)", maxlen)));
-    }
-
-    len = maxmblen;
-
-    /*
-     * At this point, maxlen is the necessary byte length, not the number
-     * of CHARACTERS!
-     */
-    maxlen = len;
-  } else {
-    /*
-     * At this point, maxlen is the necessary byte length, not the number
-     * of CHARACTERS!
-     */
-    maxlen = len + (maxlen - charlen);
-  }
-
-  Assert(maxlen >= len);
-
-  result = (BpChar *)palloc(maxlen + VARHDRSZ);
-  SET_VARSIZE(result, maxlen + VARHDRSZ);
+  result = (BpChar *)palloc(total + VARHDRSZ);
+  SET_VARSIZE(result, total + VARHDRSZ);
   r = VARDATA(result);
-
-  memcpy(r, s, len);
-
-  /* blank pad the string if necessary */
-  if (maxlen > len)
-    memset(r + len, ' ', maxlen - len);
+  memcpy(r, s, keep);
+  if (total > keep)
+    memset(r + keep, ' ', total - keep);
 
   PG_RETURN_BPCHAR_P(result);
 }
@@ -349,14 +285,10 @@ Datum bpchar_name(PG_FUNCTION_ARGS) {
 
   /* Truncate oversize input */
   if (len >= NAMEDATALEN)
-    len = pg_mbcliplen(s_data, len, NAMEDATALEN - 1);
+    len = ty_text_clipbytes(s_data, len, NAMEDATALEN - 1);
 
   /* Remove trailing blanks */
-  while (len > 0) {
-    if (s_data[len - 1] != ' ')
-      break;
-    len--;
-  }
+  len = ty_bpchar_truelen(s_data, len);
 
   /* We use palloc0 here to ensure result is zero-padded */
   result = (Name)palloc0(NAMEDATALEN);
@@ -422,19 +354,16 @@ static VarChar *varchar_input(const char *s, size_t len, int32 atttypmod,
   maxlen = atttypmod - VARHDRSZ;
 
   if (atttypmod >= (int32)VARHDRSZ && len > maxlen) {
-    /* Verify that extra characters are spaces, and clip them off */
-    size_t mbmaxlen = pg_mbcharcliplen(s, len, maxlen);
-    size_t j;
+    size_t keep, total;
 
-    for (j = mbmaxlen; j < len; j++) {
-      if (s[j] != ' ')
-        ereturn(escontext, NULL,
-                (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
-                 errmsg("value too long for type character varying(%d)",
-                        (int)maxlen)));
-    }
+    /* ty clips to maxlen characters; the rest must be spaces */
+    if (ty_bpchar_fit(s, len, maxlen, 0, 0, &keep, &total))
+      ereturn(escontext, NULL,
+              (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
+               errmsg("value too long for type character varying(%d)",
+                      (int)maxlen)));
 
-    len = mbmaxlen;
+    len = keep;
   }
 
   /*
@@ -556,8 +485,7 @@ Datum varchar(PG_FUNCTION_ARGS) {
   int32 typmod = PG_GETARG_INT32(1);
   bool isExplicit = PG_GETARG_BOOL(2);
   int32 len, maxlen;
-  size_t maxmblen;
-  int i;
+  size_t keep, total;
   char *s_data;
 
   len = VARSIZE_ANY_EXHDR(source);
@@ -568,20 +496,13 @@ Datum varchar(PG_FUNCTION_ARGS) {
   if (maxlen < 0 || len <= maxlen)
     PG_RETURN_VARCHAR_P(source);
 
-  /* only reach here if string is too long... */
+  /* only reach here if string is too long: ty clips it at a character */
+  if (ty_bpchar_fit(s_data, len, maxlen, isExplicit, 0, &keep, &total))
+    ereport(ERROR, (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
+                    errmsg("value too long for type character varying(%d)",
+                           maxlen)));
 
-  /* truncate multibyte string preserving multibyte boundary */
-  maxmblen = pg_mbcharcliplen(s_data, len, maxlen);
-
-  if (!isExplicit) {
-    for (i = maxmblen; i < len; i++)
-      if (s_data[i] != ' ')
-        ereport(ERROR, (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
-                        errmsg("value too long for type character varying(%d)",
-                               maxlen)));
-  }
-
-  PG_RETURN_VARCHAR_P((VarChar *)cstring_to_text_with_len(s_data, maxmblen));
+  PG_RETURN_VARCHAR_P((VarChar *)cstring_to_text_with_len(s_data, keep));
 }
 
 Datum varchartypmodin(PG_FUNCTION_ARGS) {
@@ -606,31 +527,14 @@ static inline int bcTruelen(BpChar *arg) {
 }
 
 int bpchartruelen(char *s, int len) {
-  int i;
-
-  /*
-   * Note that we rely on the assumption that ' ' is a singleton unit on
-   * every supported multibyte server encoding.
-   */
-  for (i = len - 1; i >= 0; i--) {
-    if (s[i] != ' ')
-      break;
-  }
-  return i + 1;
+  return (int)ty_bpchar_truelen(s, len);
 }
 
 Datum bpcharlen(PG_FUNCTION_ARGS) {
   BpChar *arg = PG_GETARG_BPCHAR_PP(0);
-  int len;
 
-  /* get number of bytes, ignoring trailing spaces */
-  len = bcTruelen(arg);
-
-  /* in multibyte encoding, convert to number of characters */
-  if (pg_database_encoding_max_length() != 1)
-    len = pg_mbstrlen_with_len(VARDATA_ANY(arg), len);
-
-  PG_RETURN_INT32(len);
+  /* the characters of the value without its trailing spaces */
+  PG_RETURN_INT32((int32)ty_text_length(VARDATA_ANY(arg), bcTruelen(arg)));
 }
 
 Datum bpcharoctetlen(PG_FUNCTION_ARGS) {
@@ -686,7 +590,7 @@ Datum bpchareq(PG_FUNCTION_ARGS) {
     if (len1 != len2)
       result = false;
     else
-      result = (memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), len1) == 0);
+      result = ty_text_eq(VARDATA_ANY(arg1), len1, VARDATA_ANY(arg2), len2);
   } else {
     result = (varstr_cmp(VARDATA_ANY(arg1), len1, VARDATA_ANY(arg2), len2,
                          collid) == 0);
@@ -894,7 +798,7 @@ Datum hashbpchar(PG_FUNCTION_ARGS) {
   mylocale = pg_newlocale_from_collation(collid);
 
   if (mylocale->deterministic) {
-    result = hash_any((unsigned char *)keydata, keylen);
+    result = UInt32GetDatum(ty_text_hash(keydata, keylen));
   } else {
     Size bsize, rsize;
     char *buf;
@@ -946,8 +850,8 @@ Datum hashbpcharextended(PG_FUNCTION_ARGS) {
   mylocale = pg_newlocale_from_collation(collid);
 
   if (mylocale->deterministic) {
-    result =
-        hash_any_extended((unsigned char *)keydata, keylen, PG_GETARG_INT64(1));
+    result = Int64GetDatum(
+        ty_text_hash_extended(keydata, keylen, PG_GETARG_INT64(1)));
   } else {
     Size bsize, rsize;
     char *buf;
@@ -985,21 +889,8 @@ Datum hashbpcharextended(PG_FUNCTION_ARGS) {
  */
 
 static int internal_bpchar_pattern_compare(BpChar *arg1, BpChar *arg2) {
-  int result;
-  int len1, len2;
-
-  len1 = bcTruelen(arg1);
-  len2 = bcTruelen(arg2);
-
-  result = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
-  if (result != 0)
-    return result;
-  else if (len1 < len2)
-    return -1;
-  else if (len1 > len2)
-    return 1;
-  else
-    return 0;
+  return ty_bpchar_cmp(VARDATA_ANY(arg1), VARSIZE_ANY_EXHDR(arg1),
+                       VARDATA_ANY(arg2), VARSIZE_ANY_EXHDR(arg2));
 }
 
 Datum bpchar_pattern_lt(PG_FUNCTION_ARGS) {

@@ -548,13 +548,22 @@ result is made in one buffer. The limits are PostgreSQL's: a
 result may not pass `MaxAllocSize`, and `lpad` and `rpad` apply
 the limit to four bytes a character, as PostgreSQL does.
 
+`character(n)`, `character varying(n)` and `name` use the same
+functions: `ty_bpchar_fit` cuts to n characters or pads to n with
+spaces (a character cut off that is not a space is an error,
+unless the cast is explicit), the order and the hash ignore
+trailing spaces, and `ty_name_parse` cuts a name to 63 bytes at a
+character boundary. The typmod text, the error text and the
+binary forms stay in digres.
+
 The case functions (`lower`, `upper`, `initcap`) depend on the
 collation and stay in digres, with `like`, the regular
 expressions, `format` and the functions on arrays of text.
 
 The tests: the vectors, from a reference of Python strings, whose
 characters are code points as UTF-8's are (about 51,000); the
-hand tests in `test/test_text.cc`; and `dg/test/select_text_ops.sql`,
-which prints the same as the digres before the move.
+hand tests in `test/test_text.cc`; and
+`dg/test/select_text_ops.sql`, which prints the same as the
+digres before the move.
 
 

@@ -730,7 +730,7 @@ Datum network_larger(PG_FUNCTION_ARGS) {
 Datum hashinet(PG_FUNCTION_ARGS) {
   inet *addr = PG_GETARG_INET_PP(0);
 
-  return Int32GetDatum(ty_inet_hash(TY_INET(addr)));
+  return UInt32GetDatum(ty_inet_hash(TY_INET(addr)));
 }
 
 Datum hashinetextended(PG_FUNCTION_ARGS) {

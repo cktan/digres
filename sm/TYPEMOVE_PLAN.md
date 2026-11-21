@@ -497,8 +497,14 @@ copied from PostgreSQL keeps its copyright notice
      `translate`, `ascii` and `chr`. A collation that is not C
      or not deterministic still takes digres's old path. Left
      in digres: the case functions, `like`, the regular
-     expressions, `format`, the functions on arrays of text,
-     `varchar` and `bpchar`, `name`. The tests: about 51,000
+     expressions, `format`, and the functions on arrays of
+     text. `varchar`, `bpchar` and `name` followed (same day):
+     the cut and pad to n characters, the order and hash that
+     ignore trailing spaces, and the cut of a name; the test
+     is `dg/test/select_char_types.sql`; measured by callgrind
+     (old, new): compares of character(n) +0.28%, its text in
+     and `length` -4.36%, a sort of varchar +0.11%, a sort of
+     name -0.36%. The tests: about 51,000
      vectors from a Python reference, `test_text.cc`, and
      `dg/test/select_text_ops.sql`, which prints the same as the
      digres before the move. Measured by callgrind (old, new):
