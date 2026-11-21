@@ -575,6 +575,12 @@ copied from PostgreSQL keeps its copyright notice
      `make_date`, `make_time` and `time + interval` +0.17%.
      The first version was +4.26% on the date arithmetic: the
      calls were not in line.
+   - **The C-ctype case functions moved (2026-11-21).**
+     `ty_ascii_lower`, `ty_ascii_upper` and `ty_ascii_initcap`,
+     for `lower`, `upper` and `initcap` in the C ctype. The
+     tests: vectors, and `dg/test/select_case_ops.sql`, which
+     prints the same as the digres before the move. Measured
+     by callgrind (old, new): -34.22%.
    - **After the first pass, "move all": done (2026-11-21).**
      The user asked that every operation of a type move, so
      these followed: the integer compares and the btree compare,

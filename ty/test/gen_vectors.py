@@ -2137,6 +2137,22 @@ def gen_text():
         raw = a.encode()
         cut = max([len(a[:i].encode()) for i in range(len(a) + 1) if len(a[:i].encode()) <= 63])
         emit("name.parse", (ttok(a),), hx(raw[:cut]) if len(raw) >= 64 else ttok(a))
+    # the case of ASCII letters
+    for _ in range(120):
+        t = "".join(random.choice(["a", "B", "z", "Z", "0", "9", " ", "-", "_", "é", "日", "😀", "'", "x1", "AbC", "dEf"]) for _ in range(random.randint(0, 12)))
+        tt = ttok(t)
+        emit("text.lower", (tt,), ttok("".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in t)))
+        emit("text.upper", (tt,), ttok("".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in t)))
+        res = ""
+        was = False
+        for c in t:
+            c = c.lower() if was and c.isascii() else (c.upper() if c.isascii() else c)
+            if c.isascii() and (c.isalpha() or c.isdigit()):
+                was = True
+            else:
+                was = False
+            res += c
+        emit("text.initcap", (tt,), ttok(res))
     for cp in [-1, 0, 1, 65, 127, 128, 233, 2047, 2048, 8364, 55295, 55296, 57343, 57344, 65535, 65536, 128512, 1114111, 1114112, 2 ** 31 - 1] + [random.randint(1, 1114111) for _ in range(60)]:
         if cp < 0:
             res = ("E", "INVALID")

@@ -566,15 +566,21 @@ nests one call for each `%`, and a nesting of 5,000 is an error,
 as the stack limit is in PostgreSQL. `ILIKE` still lowers both
 strings in digres, then calls ty.
 
-The case functions (`lower`, `upper`, `initcap`) depend on the
-collation and stay in digres, with the regular
-expressions, `format` and the functions on arrays of text.
+`lower`, `upper` and `initcap` for the C ctype are
+`ty_ascii_lower`, `ty_ascii_upper` and `ty_ascii_initcap`: only
+ASCII letters change. The other ctypes (the builtin Unicode
+tables, ICU) depend on the collation and stay in digres.
+
+The regular expressions, `format` and the functions on arrays of
+text.
 
 The tests: the vectors, from a reference of Python strings, whose
 characters are code points as UTF-8's are (about 51,000); the
 hand tests in `test/test_text.cc`; and
 `dg/test/select_text_ops.sql`, which prints the same as the
 digres before the move.
+
+
 
 ## 17. money
 

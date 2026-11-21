@@ -283,4 +283,41 @@ int ty_text_like(const char* t, size_t tlen, const char* p, size_t plen,
 int ty_text_like_escape(const char* pat, size_t plen, const char* esc,
                         size_t elen, int utf8, char* out, size_t* outlen);
 
+/*
+ * The case of ASCII letters, for the C ctype: only A-Z and a-z change, any
+ * other byte (a byte of a multibyte character included) stays. out may be s.
+ * initcap makes the first letter of each word upper case and the rest lower;
+ * a word is a run of ASCII letters and digits.
+ */
+static inline void ty_ascii_lower(const char* s, size_t len, char* out) {
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+
+        out[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+    }
+}
+static inline void ty_ascii_upper(const char* s, size_t len, char* out) {
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+
+        out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+    }
+}
+static inline void ty_ascii_initcap(const char* s, size_t len, char* out) {
+    int wasalnum = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        char c = s[i];
+
+        if (wasalnum) {
+            c = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+        } else {
+            c = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+        }
+        out[i] = c;
+        wasalnum = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                   (c >= '0' && c <= '9');
+    }
+}
+
 #endif

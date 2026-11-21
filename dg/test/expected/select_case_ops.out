@@ -1,0 +1,19 @@
+-- Verify lower, upper and initcap in the C ctype, which ty does
+-- (ty/DESIGN.md section 16): only ASCII letters change.
+SELECT s, lower(s) AS lo, upper(s) AS up, initcap(s) AS ic FROM (VALUES (''), ('Hello World'), ('hELLO wORLD'), ('héllo wörld'), ('ÀÉÎ ñ'), ('日本語 abc'), ('a😀B'), ('o''neil mc-donald'), ('foo_bar baz1qux 2nd'), ('ALL CAPS'), ('already Title Case'), ('x') ) v(s);
+          s          |         lo          |         up          |         ic          
+---------------------+---------------------+---------------------+---------------------
+                     |                     |                     | 
+ Hello World         | hello world         | HELLO WORLD         | Hello World
+ hELLO wORLD         | hello world         | HELLO WORLD         | Hello World
+ héllo wörld         | héllo wörld         | HéLLO WöRLD         | HéLlo WöRld
+ ÀÉÎ ñ               | ÀÉÎ ñ               | ÀÉÎ ñ               | ÀÉÎ ñ
+ 日本語 abc          | 日本語 abc          | 日本語 ABC          | 日本語 Abc
+ a😀B                | a😀b                | A😀B                | A😀B
+ o'neil mc-donald    | o'neil mc-donald    | O'NEIL MC-DONALD    | O'Neil Mc-Donald
+ foo_bar baz1qux 2nd | foo_bar baz1qux 2nd | FOO_BAR BAZ1QUX 2ND | Foo_Bar Baz1qux 2nd
+ ALL CAPS            | all caps            | ALL CAPS            | All Caps
+ already Title Case  | already title case  | ALREADY TITLE CASE  | Already Title Case
+ x                   | x                   | X                   | X
+(12 rows)
+

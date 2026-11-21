@@ -1118,7 +1118,8 @@ bool run_text(const vec_t &v) {
 
   if (v.args.size() > 1 && name != "left" && name != "right" &&
       name != "repeat" && name != "chr" && name != "length" &&
-      name != "substr" && name != "like" && name != "like_escape") {
+      name != "substr" && name != "like" && name != "like_escape" &&
+      name != "lower" && name != "upper" && name != "initcap") {
     b = str(1);
   }
   if (name == "chr") {
@@ -1231,6 +1232,17 @@ bool run_text(const vec_t &v) {
     ty_text_translate(a.data(), a.size(), b.data(), b.size(), c.data(),
                       c.size(), &out[0], &n);
     CHECK(v.res[0] == tok(out.data(), n));
+  } else if (name == "lower" || name == "upper" || name == "initcap") {
+    std::string out(a.size() + 1, '\0');
+
+    if (name == "lower") {
+      ty_ascii_lower(a.data(), a.size(), &out[0]);
+    } else if (name == "upper") {
+      ty_ascii_upper(a.data(), a.size(), &out[0]);
+    } else {
+      ty_ascii_initcap(a.data(), a.size(), &out[0]);
+    }
+    CHECK(v.res[0] == tok(out.data(), a.size()));
   } else if (name == "like") {
     std::string pat = str(1);
 

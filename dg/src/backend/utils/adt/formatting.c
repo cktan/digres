@@ -91,6 +91,7 @@
 #include "utils/memutils.h"
 #include "utils/numeric.h"
 #include "utils/pg_locale.h"
+#include "ty_text.h"
 #include "varatt.h"
 
 /* ----------
@@ -1798,15 +1799,13 @@ char *str_casefold(const char *buff, size_t nbytes, Oid collid) {
  */
 char *asc_tolower(const char *buff, size_t nbytes) {
   char *result;
-  char *p;
 
   if (!buff)
     return NULL;
 
   result = pnstrdup(buff, nbytes);
-
-  for (p = result; *p; p++)
-    *p = pg_ascii_tolower((unsigned char)*p);
+  /* ty changes the ASCII letters, in place */
+  ty_ascii_lower(result, strlen(result), result);
 
   return result;
 }
@@ -1819,15 +1818,13 @@ char *asc_tolower(const char *buff, size_t nbytes) {
  */
 char *asc_toupper(const char *buff, size_t nbytes) {
   char *result;
-  char *p;
 
   if (!buff)
     return NULL;
 
   result = pnstrdup(buff, nbytes);
-
-  for (p = result; *p; p++)
-    *p = pg_ascii_toupper((unsigned char)*p);
+  /* ty changes the ASCII letters, in place */
+  ty_ascii_upper(result, strlen(result), result);
 
   return result;
 }
@@ -1840,25 +1837,13 @@ char *asc_toupper(const char *buff, size_t nbytes) {
  */
 char *asc_initcap(const char *buff, size_t nbytes) {
   char *result;
-  char *p;
-  int wasalnum = false;
 
   if (!buff)
     return NULL;
 
   result = pnstrdup(buff, nbytes);
-
-  for (p = result; *p; p++) {
-    char c;
-
-    if (wasalnum)
-      *p = c = pg_ascii_tolower((unsigned char)*p);
-    else
-      *p = c = pg_ascii_toupper((unsigned char)*p);
-    /* we don't trust isalnum() here */
-    wasalnum = ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                (c >= '0' && c <= '9'));
-  }
+  /* ty changes the ASCII letters, in place */
+  ty_ascii_initcap(result, strlen(result), result);
 
   return result;
 }
