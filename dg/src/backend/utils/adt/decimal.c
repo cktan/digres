@@ -14,7 +14,7 @@
  * or is an error.  What PostgreSQL's numeric did with arbitrary precision
  * this does exactly, in a 512-bit integer where 128 bits do not reach, and
  * rounds to 36 digits; ln, exp, log and a power to a fraction are computed
- * in long double.  The scale of each result is the one PostgreSQL's numeric
+ * in double.  The scale of each result is the one PostgreSQL's numeric
  * would give it, as far as 36 digits allow.
  *
  *-------------------------------------------------------------------------
@@ -433,6 +433,18 @@ static Numeric dec_range_error(bool *have_error) {
                     errmsg("value overflows numeric format")));
   *have_error = true;
   return NULL;
+}
+
+static bool division_by_zero(bool *have_error);
+
+/* The ERROR for the error that ty's last function of the exponent set. */
+static Numeric dec_math_error(void) {
+  if (ty_errnum() == TY_ERR_UNDERFLOW)
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("value underflows numeric format")));
+  if (ty_errnum() == TY_ERR_DIVZERO)
+    division_by_zero(NULL);
+  return dec_range_error(NULL);
 }
 
 /* num's value and scale, as ty takes them. */
@@ -1654,8 +1666,8 @@ Datum in_range_numeric_numeric(PG_FUNCTION_ARGS) {
     c = ty_decimal128_cmp(val, sum);
   } else {
     /* The sum passes 36 digits, so val is on one side of it, by its sign. */
-    long double lb = ty_decimal128_to_ld(&base);
-    long double lo = ty_decimal128_to_ld(&offset);
+    double lb = ty_decimal128_to_double(&base);
+    double lo = ty_decimal128_to_double(&offset);
 
     c = (sub ? lb - lo : lb + lo) > 0 ? -1 : 1;
   }
@@ -1758,6 +1770,46 @@ static nbase_t dec_nbase128(i128 v, int scale) {
     nb.ndigits = (r1 != 0 || rest != 0 || r2 != 0) ? 2 : 1;
   }
   return nb;
+}
+
+/*
+ * The base-10000 shape of a positive v, a double: its weight and its
+ * first digit, as dec_nbase128() gives them.
+ */
+static nbase_t dec_nbase_d(double v) {
+  nbase_t nb = {0, 0, 0, 1};
+  int e;
+  double scaled;
+
+  if (!(v > 0))
+    return nb;
+  e = (int)floor(log10(v));
+  while (pow(10.0, e + 1) <= v)
+    e++;
+  while (pow(10.0, e) > v)
+    e--;
+  nb.weight = e >= 0 ? e / 4 : -((-e + 3) / 4);
+  scaled = v / pow(10000.0, nb.weight);
+  nb.first = (int)scaled;
+  nb.second = (int)((scaled - nb.first) * 10000);
+  nb.ndigits = (scaled - nb.first) != 0 ? 2 : 1;
+  return nb;
+}
+
+/* PostgreSQL's scale for a quotient of two shapes: select_div_scale(). */
+static int select_div_scale_nb(const nbase_t &na, int sa, const nbase_t &nb,
+                               int sb) {
+  int qweight = na.weight - nb.weight;
+  int rscale;
+
+  if (na.first <= nb.first)
+    qweight--;
+  rscale = NUMERIC_MIN_SIG_DIGITS - qweight * 4;
+  rscale = Max(rscale, sa);
+  rscale = Max(rscale, sb);
+  rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
+  rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
+  return rscale;
 }
 
 /* PostgreSQL's scale for a quotient of two values: select_div_scale(). */
@@ -2043,7 +2095,7 @@ static void check_log_argument(const ty_decimal128_t &w) {
 /* e raised to num, at PostgreSQL's scale for it. */
 Datum numeric_exp(PG_FUNCTION_ARGS) {
   ty_decimal128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
-  long double x = ty_decimal128_to_ld(&arg);
+  double x = ty_decimal128_to_double(&arg);
   double val = (double)x * 0.434294481903252; /* the result's dweight */
   int rscale;
 
@@ -2054,7 +2106,7 @@ Datum numeric_exp(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
   if (ty_decimal128_exp(&arg, rscale, &r) != 0)
-    dec_range_error(NULL);
+    dec_math_error();
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
@@ -2069,7 +2121,7 @@ Datum numeric_ln(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
   if (ty_decimal128_ln(&arg, rscale, &r) != 0)
-    dec_range_error(NULL);
+    dec_math_error();
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
@@ -2087,11 +2139,8 @@ Datum numeric_log(PG_FUNCTION_ARGS) {
   rscale = Max(rscale, num.scale);
   rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
   rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  if (ty_decimal128_log(&base, &num, rscale, &r) != 0) {
-    if (ty_errnum() == TY_ERR_DIVZERO)
-      division_by_zero(NULL);
-    dec_range_error(NULL);
-  }
+  if (ty_decimal128_log(&base, &num, rscale, &r) != 0)
+    dec_math_error();
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
@@ -2136,7 +2185,7 @@ static Numeric power_int(const ty_decimal128_t &base, int64 exp,
     return dec_make(exp == 0 ? dec_pow10(rscale) : 0, rscale);
   }
   if (ty_decimal128_pow_int(&base, exp, rscale, &r) != 0)
-    return dec_range_error(NULL);
+    return dec_math_error();
   return dec_make(r.value, r.scale);
 }
 
@@ -2145,7 +2194,7 @@ Datum numeric_power(PG_FUNCTION_ARGS) {
   ty_decimal128_t base = dec_ty(PG_GETARG_NUMERIC(0));
   ty_decimal128_t exp = dec_ty(PG_GETARG_NUMERIC(1)), exp_int, r;
   bool exp_is_int;
-  long double ln_num, val;
+  double ln_num, val;
   int rscale;
 
   ty_decimal128_trunc(&exp, 0, &exp_int);
@@ -2166,14 +2215,15 @@ Datum numeric_power(PG_FUNCTION_ARGS) {
   {
     ty_decimal128_t abs_base = ty_decimal128_abs(base);
 
-    ln_num = logl(ty_decimal128_to_ld(&abs_base)) * ty_decimal128_to_ld(&exp);
-    if (fabsl(ln_num) > NUMERIC_MAX_RESULT_SCALE * 3.01L) {
+    ln_num = log(ty_decimal128_to_double(&abs_base)) * ty_decimal128_to_double(&exp);
+    if (fabs(ln_num) > NUMERIC_MAX_RESULT_SCALE * 3.01) {
       if (ln_num > 0)
         ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                         errmsg("value overflows numeric format")));
-      PG_RETURN_NUMERIC(dec_make(0, NUMERIC_MAX_DISPLAY_SCALE));
+      ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                      errmsg("value underflows numeric format")));
     }
-    val = ln_num * 0.434294481903252L; /* the result's dweight */
+    val = ln_num * 0.434294481903252; /* the result's dweight */
     rscale = NUMERIC_MIN_SIG_DIGITS - (int)val;
     rscale = Max(rscale, base.scale);
     rscale = Max(rscale, exp.scale);
@@ -2181,7 +2231,7 @@ Datum numeric_power(PG_FUNCTION_ARGS) {
     rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
     /* A negative base has an integer exponent: ty keeps its sign. */
     if (ty_decimal128_pow_real(&base, &exp, rscale, &r) != 0)
-      dec_range_error(NULL);
+      dec_math_error();
     PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
   }
 }
@@ -2396,24 +2446,107 @@ Numeric random_numeric(pg_prng_state *state, Numeric rmin, Numeric rmax) {
  * ----------------------------------------------------------------------
  */
 
-/* An aggregate's state: its count, and the sums of its values and squares. */
 typedef struct dec_agg_t {
   bool calc_sumX2; /* whether squares are summed, for variance */
   MemoryContext agg_context;
-  int64 N;               /* values counted */
-  wide_t sumX;           /* their sum, exact */
-  wide_t sumX2;          /* the sum of their squares, exact */
+  int64 N; /* values counted */
+  /*
+   * Their sum, exact to 36 digits, as 128 bits in two halves at sx_scale;
+   * and the sum of their squares in double, in bytes (a state is only
+   * 8-byte aligned), as a sum of the squares of their words, in units of
+   * 10^-(2 * sx2_scale): a row of a lower scale is multiplied up, and the
+   * sum when a row has a higher one.
+   */
+  uint64 sx_lo;
+  int64 sx_hi;
+  int sx_scale;
+  int sx2_scale;
+  unsigned char sx2[8];
   int max_scale;         /* the largest scale among them */
   int64 max_scale_count; /* how many have it */
   /*
-   * A decimal64 sum not yet in sumX (agg_flush()): 128 bits in two halves,
-   * as a state is only 8-byte aligned, at fast_scale, if fast.
+   * A decimal64 sum not yet in the sum (agg_flush()): 128 bits in two
+   * halves, at fast_scale, if fast.
    */
   bool fast;
   int fast_scale;
   uint64 fast_lo;
   int64 fast_hi;
 } dec_agg_t;
+
+/* state's sum. */
+static ty_decimal128_t agg_sumX(const dec_agg_t *state) {
+  return {(i128)(((u128)(uint64)state->sx_hi << 64) | state->sx_lo),
+          state->sx_scale};
+}
+
+/* Set state's sum to v. */
+static void agg_set_sumX(dec_agg_t *state, const ty_decimal128_t &v) {
+  state->sx_lo = (uint64)(u128)v.value;
+  state->sx_hi = (int64)((u128)v.value >> 64);
+  state->sx_scale = v.scale;
+}
+
+/* 10^n as a double. */
+static double agg_pow10(int n) {
+  double p = 1;
+
+  while (n-- > 0)
+    p *= 10;
+  return p;
+}
+
+/* state's sum of squares of words, in units of 10^-(2 * its scale). */
+static double agg_sumX2_raw(const dec_agg_t *state) {
+  double x;
+
+  memcpy(&x, state->sx2, sizeof(x));
+  return x;
+}
+
+/* Set state's sum of squares to x, in units of 10^-(2 * scale). */
+static void agg_set_sumX2_raw(dec_agg_t *state, double x, int scale) {
+  if (!std::isfinite(x))
+    dec_range_error(NULL);
+  memcpy(state->sx2, &x, sizeof(x));
+  state->sx2_scale = scale;
+}
+
+/* state's sum of squares in units of 10^-(2 * scale), not below its scale. */
+static double agg_sumX2_at(const dec_agg_t *state, int scale) {
+  double x = agg_sumX2_raw(state);
+
+  return scale == state->sx2_scale
+             ? x
+             : x * agg_pow10(2 * (scale - state->sx2_scale));
+}
+
+/* state's sum of squares, as a value. */
+static double agg_sumX2(const dec_agg_t *state) {
+  return agg_sumX2_raw(state) / agg_pow10(2 * state->sx2_scale);
+}
+
+/* Add the square of the word v at scale to state's sum of squares. */
+static void agg_add_square(dec_agg_t *state, i128 v, int scale, bool sub) {
+  int s = Max(scale, state->sx2_scale);
+  double x = agg_sumX2_at(state, s);
+  double w = (double)v;
+
+  w *= w;
+  if (scale < s)
+    w *= agg_pow10(2 * (s - scale));
+  agg_set_sumX2_raw(state, sub ? x - w : x + w, s);
+}
+
+/* state's sum plus x, or less x if sub; past 36 digits is an error. */
+static void agg_add_sumX(dec_agg_t *state, const ty_decimal128_t &x, bool sub) {
+  ty_decimal128_t a = agg_sumX(state), r;
+
+  if ((sub ? ty_decimal128_sub(&a, &x, &r) : ty_decimal128_add(&a, &x, &r)) !=
+      0)
+    dec_range_error(NULL);
+  agg_set_sumX(state, r);
+}
 
 /* A new state in the aggregate's memory context. */
 static dec_agg_t *make_agg_state(FunctionCallInfo fcinfo, bool calc_sumX2) {
@@ -2425,8 +2558,6 @@ static dec_agg_t *make_agg_state(FunctionCallInfo fcinfo, bool calc_sumX2) {
   state = (dec_agg_t *)MemoryContextAllocZero(agg_context, sizeof(dec_agg_t));
   state->calc_sumX2 = calc_sumX2;
   state->agg_context = agg_context;
-  state->sumX = wide_of_int(0);
-  state->sumX2 = wide_of_int(0);
   return state;
 }
 
@@ -2440,12 +2571,12 @@ static void agg_count(dec_agg_t *state, int scale) {
     state->max_scale_count++;
 }
 
-/* state's decimal64 sum not yet in sumX. */
+/* state's decimal64 sum not yet in the sum. */
 static i128 agg_fast_sum(const dec_agg_t *state) {
   return (i128)(((u128)(uint64)state->fast_hi << 64) | state->fast_lo);
 }
 
-/* Set state's decimal64 sum not yet in sumX to v at scale. */
+/* Set state's decimal64 sum not yet in the sum to v at scale. */
 static void agg_set_fast(dec_agg_t *state, i128 v, int scale) {
   state->fast = true;
   state->fast_scale = scale;
@@ -2453,22 +2584,19 @@ static void agg_set_fast(dec_agg_t *state, i128 v, int scale) {
   state->fast_hi = (int64)((u128)v >> 64);
 }
 
-/* Add state's decimal64 sum into sumX, before sumX is read. */
+/* Add state's decimal64 sum into the sum, before the sum is read. */
 static void agg_flush(dec_agg_t *state) {
-  wide_t w;
-
   if (!state->fast)
     return;
-  w = wide_of_int(agg_fast_sum(state));
-  w.scale = state->fast_scale;
-  state->sumX = wide_add(state->sumX, w, false);
+  /* The sum is ty's: exact, or an error past 36 digits. */
+  agg_add_sumX(state, {agg_fast_sum(state), state->fast_scale}, false);
   state->fast = false;
 }
 
 /*
  * Count v at scale s into state: into the 128-bit sum while the scale
- * stays, without the wide path; sumX takes it when the scale changes, the
- * sum would overflow, or sumX is read (agg_flush()).
+ * stays; the sum takes it when the scale changes, the sum would overflow,
+ * or the sum is read (agg_flush()).
  */
 static void agg_fast_accum(dec_agg_t *state, int64 v, int s) {
   i128 sum;
@@ -2486,11 +2614,11 @@ static void agg_fast_accum(dec_agg_t *state, int64 v, int s) {
 }
 
 /* Count x into state. */
-static void agg_accum(dec_agg_t *state, const wide_t &x) {
+static void agg_accum(dec_agg_t *state, const ty_decimal128_t &x) {
   agg_count(state, x.scale);
-  state->sumX = wide_add(state->sumX, x, false);
+  agg_add_sumX(state, x, false);
   if (state->calc_sumX2)
-    state->sumX2 = wide_add(state->sumX2, wide_mul(x, x), false);
+    agg_add_square(state, x.value, x.scale, false);
 }
 
 /*
@@ -2498,7 +2626,7 @@ static void agg_accum(dec_agg_t *state, const wide_t &x) {
  * longer say its sum's scale, the last value of the largest scale gone,
  * and the aggregate must be computed again.
  */
-static bool agg_discard(dec_agg_t *state, const wide_t &x) {
+static bool agg_discard(dec_agg_t *state, const ty_decimal128_t &x) {
   agg_flush(state);
   if (x.scale == state->max_scale) {
     if (state->max_scale_count > 1 || state->max_scale == 0)
@@ -2510,12 +2638,12 @@ static bool agg_discard(dec_agg_t *state, const wide_t &x) {
       return false;
   }
   state->N--;
-  state->sumX = wide_add(state->sumX, x, true);
+  agg_add_sumX(state, x, true);
   if (state->calc_sumX2)
-    state->sumX2 = wide_add(state->sumX2, wide_mul(x, x), true);
+    agg_add_square(state, x.value, x.scale, true);
   if (state->N == 0) {
-    state->sumX = wide_of_int(0);
-    state->sumX2 = wide_of_int(0);
+    agg_set_sumX(state, {0, 0});
+    agg_set_sumX2_raw(state, 0, 0);
   }
   return true;
 }
@@ -2531,7 +2659,7 @@ Datum numeric_accum(PG_FUNCTION_ARGS) {
   dec_agg_t *state = agg_state_arg(fcinfo, true);
 
   if (!PG_ARGISNULL(1))
-    agg_accum(state, dec_wide(PG_GETARG_NUMERIC(1)));
+    agg_accum(state, dec_ty(PG_GETARG_NUMERIC(1)));
   PG_RETURN_POINTER(state);
 }
 
@@ -2540,7 +2668,7 @@ Datum numeric_avg_accum(PG_FUNCTION_ARGS) {
   dec_agg_t *state = agg_state_arg(fcinfo, false);
 
   if (!PG_ARGISNULL(1))
-    agg_accum(state, dec_wide(PG_GETARG_NUMERIC(1)));
+    agg_accum(state, dec_ty(PG_GETARG_NUMERIC(1)));
   PG_RETURN_POINTER(state);
 }
 
@@ -2551,7 +2679,7 @@ Datum numeric_accum_inv(PG_FUNCTION_ARGS) {
   if (PG_ARGISNULL(0))
     elog(ERROR, "numeric_accum_inv called with NULL state");
   state = (dec_agg_t *)PG_GETARG_POINTER(0);
-  if (!PG_ARGISNULL(1) && !agg_discard(state, dec_wide(PG_GETARG_NUMERIC(1))))
+  if (!PG_ARGISNULL(1) && !agg_discard(state, dec_ty(PG_GETARG_NUMERIC(1))))
     PG_RETURN_NULL();
   PG_RETURN_POINTER(state);
 }
@@ -2561,7 +2689,7 @@ static Datum int_accum(FunctionCallInfo fcinfo, int64 value, bool calc_sumX2) {
   dec_agg_t *state = agg_state_arg(fcinfo, calc_sumX2);
 
   if (!PG_ARGISNULL(1))
-    agg_accum(state, wide_of_int(value));
+    agg_accum(state, ty_decimal128_t{value, 0});
   PG_RETURN_POINTER(state);
 }
 
@@ -2597,7 +2725,7 @@ static Datum int_accum_inv(FunctionCallInfo fcinfo, int64 value) {
     elog(ERROR, "integer accumulator inverse called with NULL state");
   state = (dec_agg_t *)PG_GETARG_POINTER(0);
   if (!PG_ARGISNULL(1))
-    (void)agg_discard(state, wide_of_int(value));
+    (void)agg_discard(state, ty_decimal128_t{value, 0});
   PG_RETURN_POINTER(state);
 }
 
@@ -2645,9 +2773,13 @@ static Datum agg_combine(FunctionCallInfo fcinfo) {
     PG_RETURN_POINTER(state1);
   }
   state1->N += state2->N;
-  state1->sumX = wide_add(state1->sumX, state2->sumX, false);
-  if (state1->calc_sumX2)
-    state1->sumX2 = wide_add(state1->sumX2, state2->sumX2, false);
+  agg_add_sumX(state1, agg_sumX(state2), false);
+  if (state1->calc_sumX2) {
+    int sc = Max(state1->sx2_scale, state2->sx2_scale);
+
+    agg_set_sumX2_raw(state1,
+                      agg_sumX2_at(state1, sc) + agg_sumX2_at(state2, sc), sc);
+  }
   if (state2->max_scale > state1->max_scale) {
     state1->max_scale = state2->max_scale;
     state1->max_scale_count = state2->max_scale_count;
@@ -2668,25 +2800,6 @@ Datum numeric_poly_combine(PG_FUNCTION_ARGS) { return agg_combine(fcinfo); }
 /* Combine int8 sum and avg states. */
 Datum int8_avg_combine(PG_FUNCTION_ARGS) { return agg_combine(fcinfo); }
 
-/* Write w to buf. */
-static void send_wide(StringInfo buf, const wide_t &w) {
-  pq_sendbyte(buf, w.neg ? 1 : 0);
-  pq_sendint32(buf, w.scale);
-  for (int i = 0; i < MAG_LIMBS; i++)
-    pq_sendint64(buf, (int64)w.mag.limb[i]);
-}
-
-/* Read a wide value from buf. */
-static wide_t recv_wide(StringInfo buf) {
-  wide_t w;
-
-  w.neg = pq_getmsgbyte(buf) != 0;
-  w.scale = pq_getmsgint(buf, 4);
-  for (int i = 0; i < MAG_LIMBS; i++)
-    w.mag.limb[i] = (uint64)pq_getmsgint64(buf);
-  return w;
-}
-
 /* A state as bytes, for a partial aggregate's worker. */
 static Datum agg_serialize(FunctionCallInfo fcinfo) {
   dec_agg_t *state;
@@ -2701,8 +2814,11 @@ static Datum agg_serialize(FunctionCallInfo fcinfo) {
   pq_sendint64(&buf, state->N);
   pq_sendint32(&buf, state->max_scale);
   pq_sendint64(&buf, state->max_scale_count);
-  send_wide(&buf, state->sumX);
-  send_wide(&buf, state->sumX2);
+  pq_sendint64(&buf, (int64)state->sx_lo);
+  pq_sendint64(&buf, state->sx_hi);
+  pq_sendint32(&buf, state->sx_scale);
+  pq_sendint32(&buf, state->sx2_scale);
+  pq_sendbytes(&buf, state->sx2, sizeof(state->sx2));
   PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
 }
 
@@ -2721,8 +2837,12 @@ static Datum agg_deserialize(FunctionCallInfo fcinfo) {
   state->N = pq_getmsgint64(&buf);
   state->max_scale = pq_getmsgint(&buf, 4);
   state->max_scale_count = pq_getmsgint64(&buf);
-  state->sumX = recv_wide(&buf);
-  state->sumX2 = recv_wide(&buf);
+  state->sx_lo = (uint64)pq_getmsgint64(&buf);
+  state->sx_hi = pq_getmsgint64(&buf);
+  state->sx_scale = pq_getmsgint(&buf, 4);
+  state->sx2_scale = pq_getmsgint(&buf, 4);
+  memcpy(state->sx2, pq_getmsgbytes(&buf, sizeof(state->sx2)),
+         sizeof(state->sx2));
   pq_getmsgend(&buf);
   PG_RETURN_POINTER(state);
 }
@@ -2771,56 +2891,66 @@ static Datum agg_sum(FunctionCallInfo fcinfo) {
 
   if (state == NULL || state->N == 0)
     PG_RETURN_NULL();
-  PG_RETURN_NUMERIC(dec_from_wide(state->sumX));
+  ty_decimal128_t sx = agg_sumX(state);
+
+  PG_RETURN_NUMERIC(dec_make(sx.value, sx.scale));
 }
 
 /* avg: the sum over the count, at division's scale, or null. */
 static Datum agg_avg(FunctionCallInfo fcinfo) {
   dec_agg_t *state = final_state(fcinfo);
-  wide_t n;
+  ty_decimal128_t sx, n, r;
 
   if (state == NULL || state->N == 0)
     PG_RETURN_NULL();
-  n = wide_of_int(state->N);
-  PG_RETURN_NUMERIC(dec_from_wide(
-      wide_div(state->sumX, n, select_div_scale(state->sumX, n), false)));
+  sx = agg_sumX(state);
+  n = {state->N, 0};
+  /* The quotient is ty's, at PostgreSQL's scale for it. */
+  if (ty_decimal128_div(&sx, &n,
+                        select_div_scale128(sx.value, sx.scale, n.value, 0),
+                        false, &r) != 0)
+    dec_range_error(NULL);
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /*
  * The variance, or with !variance the standard deviation, of the sample if
- * sample, else of the population, as PostgreSQL computes it exactly:
- * (N * sumX2 - sumX^2) / (N * (N - 1)), or over N * N.  Null with too few
- * values.
+ * sample, else of the population:
+ * (N * sumX2 - sumX^2) / (N * (N - 1)), or over N * N, in double, as
+ * DuckDB's are, so that a sum of squares does not pass 36 digits. A result that is no more
+ * than the noise of that difference is zero. Null with too few values.
  */
 static Datum agg_stddev(FunctionCallInfo fcinfo, bool variance, bool sample) {
   dec_agg_t *state = final_state(fcinfo);
-  wide_t n, num, den, var;
+  ty_decimal128_t sx, var, r;
+  double n, sum, n_sumX2, num;
+  i128 den;
   int rscale;
 
   if (state == NULL || state->N == 0 || (sample && state->N <= 1))
     PG_RETURN_NULL();
-  n = wide_of_int(state->N);
-  /* N * sumX2 - sumX * sumX, both at twice the sum's scale */
-  num =
-      wide_add(wide_scale_up(wide_mul(n, state->sumX2), 2 * state->sumX.scale),
-               wide_mul(state->sumX, state->sumX), true);
-  if (wide_is_zero(num) || num.neg)
+  sx = agg_sumX(state);
+  n = (double)state->N;
+  sum = ty_decimal128_to_double(&sx);
+  n_sumX2 = n * agg_sumX2(state);
+  num = n_sumX2 - sum * sum;
+  if (!std::isfinite(n_sumX2) || !std::isfinite(num))
+    dec_range_error(NULL);
+  if (!(num > n_sumX2 * 1e-14))
     PG_RETURN_NUMERIC(dec_make(0, 0));
-  den = wide_mul(n, wide_of_int(sample ? state->N - 1 : state->N));
-  rscale = select_div_scale(num, den);
-  var = wide_div(num, den, rscale, false);
+  den = (i128)state->N * (sample ? state->N - 1 : state->N);
+  /* num is at twice the sum's scale. */
+  rscale = select_div_scale_nb(dec_nbase_d(num), 2 * sx.scale,
+                               dec_nbase128(den, 0), 0);
+  if (ty_decimal128_from_double(num / (double)den, rscale, &var) != 0)
+    dec_range_error(NULL);
   if (!variance) {
     /* The root of the rounded variance, rounded at the same scale. */
-    int e = 2 * (rscale + 1) - var.scale;
-    wide_t r;
-
-    r.mag = mag_isqrt(e >= 0 ? mag_mul(var.mag, mag_pow10(e))
-                             : mag_divmod(var.mag, mag_pow10(-e), NULL));
-    r.neg = false;
-    r.scale = rscale + 1;
-    var = wide_round(r, rscale, false);
+    if (ty_decimal128_sqrt(&var, rscale, &r) != 0)
+      dec_range_error(NULL);
+    var = r;
   }
-  PG_RETURN_NUMERIC(dec_from_wide(var));
+  PG_RETURN_NUMERIC(dec_make(var.value, var.scale));
 }
 
 /* avg(numeric). */
@@ -3658,7 +3788,7 @@ Datum decimal64_accum_inv(PG_FUNCTION_ARGS) {
   if (PG_ARGISNULL(0))
     elog(ERROR, "decimal64_accum_inv called with NULL state");
   state = (dec_agg_t *)PG_GETARG_POINTER(0);
-  if (!PG_ARGISNULL(1) && !agg_discard(state, d64_wide(PG_GETARG_DATUM(1))))
+  if (!PG_ARGISNULL(1) && !agg_discard(state, ty_decimal128_t{d64_value(PG_GETARG_DATUM(1)), d64_scale(PG_GETARG_DATUM(1))}))
     PG_RETURN_NULL();
   PG_RETURN_POINTER(state);
 }

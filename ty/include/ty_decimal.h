@@ -168,22 +168,26 @@ int ty_decimal64_div(const ty_decimal64_t* a, const ty_decimal64_t* b,
 /*
  * The functions of the exponent of a decimal128, at rscale places, which
  * the caller picks (0 to 36): sqrt is made a digit at a time, rounded half
- * up; the others are computed in long double and rounded. Each takes no
- * more than 128 bits, and a result of more than 36 digits before the point
- * is TY_ERR_RANGE. A result that has more than 36 digits at rscale places
- * has fewer places, rounded. *result is not set on an error.
+ * up; the others are computed in double, some 15 digits, and rounded. Each
+ * takes no more than 128 bits, and a result of more than 36 digits before
+ * the point is TY_ERR_RANGE. A result that has more than 36 digits at
+ * rscale places has fewer places, rounded. *result is not set on an error.
  *
  *   - sqrt fails with TY_ERR_INVALID if a is negative.
+ *   - exp and the powers fail with TY_ERR_RANGE where a double overflows,
+ *     and with TY_ERR_UNDERFLOW where it underflows: a result that is
+ *     not zero, but is zero or below the smallest normal double.
  *   - ln and log fail with TY_ERR_INVALID if an argument is not above
  *     zero; log fails with TY_ERR_DIVZERO if the base is 1.
  *   - pow_int takes an integer power exactly while it fits 128 bits, then
- *     in long double; base is not zero. pow_real is for a real exponent:
- *     the base is above zero, or below it and the exponent a whole number.
- *   - to_ld and from_ld convert through the text, so that a value is
- *     rounded once.
+ *     in double; base is not zero. pow_real is for a real exponent: the
+ *     base is above zero, or below it and the exponent a whole number.
+ *   - to_double is a value as a double, rounded once; from_double is a
+ *     double as a value at rscale places. TY_ERR_RANGE if it is not
+ *     finite or has 37 digits before the point.
  */
-long double ty_decimal128_to_ld(const ty_decimal128_t* a);
-int ty_decimal128_from_ld(long double x, int rscale, ty_decimal128_t* result);
+double ty_decimal128_to_double(const ty_decimal128_t* a);
+int ty_decimal128_from_double(double x, int rscale, ty_decimal128_t* result);
 int ty_decimal128_sqrt(const ty_decimal128_t* a, int rscale,
                        ty_decimal128_t* result);
 int ty_decimal128_exp(const ty_decimal128_t* a, int rscale,

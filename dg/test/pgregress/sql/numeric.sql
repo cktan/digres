@@ -1898,17 +1898,25 @@ SELECT * FROM pg_input_error_info('0x1234.567', 'numeric');
 -- Test some corner cases for multiplication
 --
 
---dg-differs: the result
---dg select 4790999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+--dg-approx: 15
+select 4790999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+--dg-approx-end
 
---dg-differs: the result
---dg select 4789999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
 
---dg-differs: the result
---dg select 4770999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+--dg-approx: 15
+select 4789999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+--dg-approx-end
 
---dg-differs: the result
---dg select 4769999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+
+--dg-approx: 15
+select 4770999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+--dg-approx-end
+
+
+--dg-approx: 15
+select 4769999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+--dg-approx-end
+
 
 --dg-skip: "?" is out of range for type double precision
 --dg select trim_scale((0.1 - 2e-16383) * (0.1 - 3e-16383));
@@ -1931,8 +1939,10 @@ SELECT * FROM pg_input_error_info('0x1234.567', 'numeric');
 --dg select div(-9999999999999999999999::numeric,1000000000000000000000)*1000000000000000000000 + mod(-9999999999999999999999::numeric,1000000000000000000000);
 select mod (70.0,70) ;
 select div (70.0,70) ;
---dg-differs: the result
---dg select 70.0 / 70 ;
+--dg-approx: 15
+select 70.0 / 70 ;
+--dg-approx-end
+
 select 12345678901234567890 % 123;
 select 12345678901234567890 / 123;
 select div(12345678901234567890, 123);
@@ -1948,10 +1958,14 @@ select div(539913372912345678, 539913372912345678);
 
 select sqrt(1.000000000000003::numeric);
 select sqrt(1.000000000000004::numeric);
---dg-differs: the result
---dg select sqrt(96627521408608.56340355805::numeric);
---dg-differs: the result
---dg select sqrt(96627521408608.56340355806::numeric);
+--dg-approx: 15
+select sqrt(96627521408608.56340355805::numeric);
+--dg-approx-end
+
+--dg-approx: 15
+select sqrt(96627521408608.56340355806::numeric);
+--dg-approx-end
+
 --dg-skip: value overflows numeric format
 --dg select sqrt(515549506212297735.073688290367::numeric);
 --dg-skip: value overflows numeric format
@@ -1965,28 +1979,44 @@ select sqrt(1.000000000000004::numeric);
 -- Test code path for raising to integer powers
 --
 
---dg-differs: the result
+--dg-skip: value underflows numeric format
 --dg select 10.0 ^ -2147483648 as rounds_to_zero;
---dg-differs: the result
+--dg-skip: value underflows numeric format
 --dg select 10.0 ^ -2147483647 as rounds_to_zero;
 select 10.0 ^ 2147483647 as overflows;
 select 117743296169.0 ^ 1000000000 as overflows;
 
 -- cases that used to return inaccurate results
+--dg-approx: 15
 select 3.789 ^ 21.0000000000000000;
+--dg-approx-end
+
+--dg-approx: 15
+select 3.789 ^ 35.0000000000000000;
+--dg-approx-end
+
 --dg-differs: the result
---dg select 3.789 ^ 35.0000000000000000;
-select 1.2 ^ 345;
+--dg select 1.2 ^ 345;
+--dg-approx: 15
 select 0.12 ^ (-20);
-select 1.000000000123 ^ (-2147483648);
-select coalesce(nullif(0.9999999999 ^ 23300000000000, 0), 0) as rounds_to_zero;
+--dg-approx-end
+
+--dg-differs: the result
+--dg select 1.000000000123 ^ (-2147483648);
+--dg-skip: value underflows numeric format
+--dg select coalesce(nullif(0.9999999999 ^ 23300000000000, 0), 0) as rounds_to_zero;
 --dg-skip: "?" is out of range for type double precision
 --dg select round(((1 - 1.500012345678e-1000) ^ 1.45e1003) * 1e1000);
 
 -- cases that used to error out
+--dg-approx: 15
 select 0.12 ^ (-25);
-select 0.5678 ^ (-85);
-select coalesce(nullif(0.9999999999 ^ 70000000000000, 0), 0) as underflows;
+--dg-approx-end
+
+--dg-differs: the result
+--dg select 0.5678 ^ (-85);
+--dg-skip: value underflows numeric format
+--dg select coalesce(nullif(0.9999999999 ^ 70000000000000, 0), 0) as underflows;
 
 -- negative base to integer powers
 select (-1.0) ^ 2147483646;
@@ -2027,8 +2057,10 @@ select 0.0 ^ (-12.34);
 select (-12.34) ^ 1.2;
 
 -- cases that used to generate inaccurate results
-select 32.1 ^ 9.8;
-select 32.1 ^ (-9.8);
+--dg-differs: the result
+--dg select 32.1 ^ 9.8;
+--dg-differs: the result
+--dg select 32.1 ^ (-9.8);
 --dg-skip: value overflows numeric format
 --dg select 12.3 ^ 45.6;
 --dg-differs: the result
@@ -2044,7 +2076,10 @@ select 32.1 ^ (-9.8);
 
 -- special cases
 select exp(0.0);
+--dg-approx: 15
 select exp(1.0);
+--dg-approx-end
+
 --dg-skip: NUMERIC precision N must be between N and N
 --dg select exp(1.0::numeric(71,70));
 --dg-skip: invalid input syntax for type ?
@@ -2053,12 +2088,20 @@ select exp(1.0);
 --dg select exp('inf'::numeric);
 --dg-skip: invalid input syntax for type ?
 --dg select exp('-inf'::numeric);
-select coalesce(nullif(exp(-5000::numeric), 0), 0) as rounds_to_zero;
-select coalesce(nullif(exp(-10000::numeric), 0), 0) as underflows;
+--dg-skip: value underflows numeric format
+--dg select coalesce(nullif(exp(-5000::numeric), 0), 0) as rounds_to_zero;
+--dg-skip: value underflows numeric format
+--dg select coalesce(nullif(exp(-10000::numeric), 0), 0) as underflows;
 
 -- cases that used to generate inaccurate results
+--dg-approx: 15
 select exp(32.999);
+--dg-approx-end
+
+--dg-approx: 15
 select exp(-32.999);
+--dg-approx-end
+
 --dg-skip: value overflows numeric format
 --dg select exp(123.456);
 --dg-differs: the result
@@ -2108,17 +2151,28 @@ select ln(-12.34);
 select ln(0.0);
 
 -- Some random tests
---dg-differs: the result
---dg select ln(1.2345678e-28);
+--dg-approx: 15
+select ln(1.2345678e-28);
+--dg-approx-end
+
+--dg-approx: 15
 select ln(0.0456789);
+--dg-approx-end
+
+--dg-approx: 15
+select ln(0.349873948359354029493948309745709580730482050975);
+--dg-approx-end
+
 --dg-differs: the result
---dg select ln(0.349873948359354029493948309745709580730482050975);
-select ln(0.99949452);
-select ln(1.00049687395);
+--dg select ln(0.99949452);
+--dg-differs: the result
+--dg select ln(1.00049687395);
 select ln(1234.567890123456789);
 select ln(5.80397490724e5);
---dg-differs: the result
---dg select ln(9.342536355e34);
+--dg-approx: 15
+select ln(9.342536355e34);
+--dg-approx-end
+
 
 --
 -- Tests for LOG() (base 10)
@@ -2131,9 +2185,14 @@ select ln(5.80397490724e5);
 --dg select log(0.0);
 
 -- some random tests
---dg-differs: the result
---dg select log(1.234567e-89);
+--dg-approx: 15
+select log(1.234567e-89);
+--dg-approx-end
+
+--dg-approx: 15
 select log(3.4634998359873254962349856073435545);
+--dg-approx-end
+
 select log(9.999999999999999999);
 select log(10.00000000000000000);
 select log(10.00000000000000001);

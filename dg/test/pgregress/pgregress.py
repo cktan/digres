@@ -42,6 +42,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -60,7 +61,13 @@ DLPATH = os.path.join(PG18, 'src', 'test', 'regress')
 WORK = os.path.join(DG, 'build', 'test', 'pgregress')
 ENC = 'latin-1'  # reads and writes every byte as it is
 TIMEOUT = 180
-HEADER = re.compile(r'^--dg-(skip|cascade|differs|crash|unstable)(?:: (.*))?$')
+HEADER = re.compile(
+    r'^--dg-(skip|cascade|differs|crash|unstable|approx)(?:: (.*))?$')
+APPROX_END = '--dg-approx-end'
+# A number in an output, for a result that agrees but for its last digits.
+NUMBER = re.compile(r'-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?')
+# Significant digits a double result is held to (--dg-approx).
+APPROX_DIGITS = 15
 MARK = re.compile(r'^@@dg (\d+)@@$')
 LOST = re.compile(r'server closed the connection unexpectedly|'
                   r'connection to server was lost|no connection to the server')
@@ -286,12 +293,20 @@ def load(path):
             continue
         start = pos
         i += 1
-        while i < len(lines) and (lines[i] == '--dg' or
-                                  lines[i].startswith('--dg ')):
-            line = lines[i][5:]
-            orig.append(line)
-            pos += len(line) + 1
+        if m.group(1) == 'approx':
+            # The statement stays in, as it is, up to the end marker.
+            while i < len(lines) and lines[i] != APPROX_END:
+                orig.append(lines[i])
+                pos += len(lines[i]) + 1
+                i += 1
             i += 1
+        else:
+            while i < len(lines) and (lines[i] == '--dg' or
+                                      lines[i].startswith('--dg ')):
+                line = lines[i][5:]
+                orig.append(line)
+                pos += len(line) + 1
+                i += 1
         blocks.append((start, pos, m.group(1), m.group(2) or ''))
     text = '\n'.join(orig)
     units = split(text)
@@ -327,6 +342,11 @@ def render(text, units, off, marks=False):
             continue
         kind, why = off[k]
         out.append('--dg-%s%s\n' % (kind, ': ' + why if why else ''))
+        if kind == 'approx':
+            # Not taken out: it runs, and its output is held to its digits.
+            out.append(body if body.endswith('\n') else body + '\n')
+            out.append(APPROX_END + '\n')
+            continue
         lines = body.rstrip('\n').split('\n')
         out.append('\n'.join('--dg ' + l if l else '--dg' for l in lines))
         if body.endswith('\n'):
@@ -416,6 +436,55 @@ def same(a, b):
     return rowset(a) == rowset(b)
 
 
+def line_shape(line):
+    """A line of output as its text without white space, the numbers in
+    it as '#', and the numbers; a rule as one dash."""
+    t = line.strip()
+    if RULE.match(t):
+        return re.sub(r'-+', '-', t), []
+    return re.sub(r'\s+', '', NUMBER.sub('#', line)), NUMBER.findall(line)
+
+
+def approx_equal(a, b, digits=APPROX_DIGITS):
+    """Whether two outputs agree but for the digits of their numbers past
+    digits significant: the same words, in the same places, and each pair
+    of numbers within one unit of the last of those digits."""
+    la, lb = a.split('\n'), b.split('\n')
+    if len(la) != len(lb):
+        return False
+    for x, y in zip(la, lb):
+        (sx, nx), (sy, ny) = line_shape(x), line_shape(y)
+        if sx != sy or len(nx) != len(ny):
+            return False
+        for p, q in zip(nx, ny):
+            if p == q:
+                continue
+            dp, dq = Decimal(p), Decimal(q)
+            big = max(abs(dp), abs(dq))
+            if abs(dp - dq) > Decimal(10) ** (big.adjusted() - (digits - 1)):
+                return False
+    return True
+
+
+def approx_regions(text):
+    """text, an output, with the regions from a --dg-approx line to its end
+    line taken out: the rest, and the regions, as the lines between."""
+    rest, regions, cur = [], [], None
+    for line in text.split('\n'):
+        if cur is None:
+            rest.append(line)
+            if HEADER.match(line.strip()) and \
+                    HEADER.match(line.strip()).group(1) == 'approx':
+                cur = []
+        elif line.strip() == APPROX_END:
+            regions.append('\n'.join(cur))
+            rest.append(line)
+            cur = None
+        else:
+            cur.append(line)
+    return '\n'.join(rest), regions
+
+
 def first_error(block):
     """The first error in a unit's output, or None."""
     for line in (block or '').split('\n'):
@@ -486,6 +555,12 @@ def trim(w, name):
     text, units, off = load(path)
     n = len(units)
     setup = setup_text(name)
+    # What was taken out for a result, or from another's cascade, is
+    # judged again: it may agree to its significant digits now.
+    for k in [k for k, (kind, why) in off.items()
+              if kind == 'cascade' or (kind == 'differs' and
+                                       why == 'the result')]:
+        del off[k]
     keep = {k for k, u in enumerate(units)
             if u.kind == 'meta' and u.cmd in CONDITIONALS}
     # PostgreSQL's own answers, with nothing taken out, run twice: a unit
@@ -524,6 +599,11 @@ def trim(w, name):
                                'the server crashed')
                 break
             kind, why = classify(pg[k], dg[k])
+            if (kind == 'differs' and why == 'the result' and
+                    approx_equal(pg[k], dg[k])):
+                # A double's last digits: kept, and held to its digits.
+                took[k] = ('approx', str(APPROX_DIGITS))
+                continue
             if first or (kind == 'skip' and INTRINSIC.search(why)):
                 took[k] = (kind, why)
                 first = False
@@ -580,7 +660,12 @@ def test(w, name):
                 for line in rowset(t).split('\n')]
 
     w, g = bitmap_plans(want, as_postgres(out))
-    ok = not timed_out and norm(g) == norm(w)
+    # A --dg-approx statement's output is held to its significant digits,
+    # as a double's are; all the rest, as it is.
+    w, wr = approx_regions(w)
+    g, gr = approx_regions(g)
+    ok = (not timed_out and norm(g) == norm(w) and len(wr) == len(gr) and
+          all(approx_equal(x, y) for x, y in zip(wr, gr)))
     diff = os.path.join(dir, name + '.diff')
     if ok:
         if os.path.exists(diff):

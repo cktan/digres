@@ -800,23 +800,23 @@ TEST_CASE("decimal128 sqrt is made a digit at a time") {
   CHECK(TY_ERR_INVALID == ty_errnum());
 }
 
-// Verify exp, ln, log and the powers, in long double.
-// 1. Take exp(1) and ln(10) at 20 places; log(2, 8) at 10 places.
+// Verify exp, ln, log and the powers, in double.
+// 1. Take exp(1) and ln(10) at 12 places; log(2, 8) at 10 places.
 // 2. Take a zero base's log, and a base of 1: TY_ERR_INVALID, DIVZERO.
 // 3. Take integer powers: 2^100 exactly, 2^-3, and a power too large for
-//    128 bits, which is rounded from long double.
+//    128 bits, which is rounded from double.
 // 4. Take a real power: 2^0.5; and (-2)^3 by its sign.
+// 5. Take an overflow and an underflow of a double: errors.
 TEST_CASE("decimal128 exp, ln, log and powers") {
   ty_decimal128_t r;
 
-  // 1. Take exp(1) and ln(10) at 20 places; log(2, 8) at 10 places.
+  // 1. Take exp(1) and ln(10) at 12 places; log(2, 8) at 10 places.
   ty_decimal128_t a = {1, 0};
-  CHECK(0 == ty_decimal128_exp(&a, 20, &r));
-  ty_int128_t e20 = (ty_int128_t)2718281828459045 * ten_to(5) + 23536;
-  CHECK(e20 == r.value);
+  CHECK(0 == ty_decimal128_exp(&a, 12, &r));
+  CHECK(2718281828459 == r.value);
   a = {10, 0};
-  CHECK(0 == ty_decimal128_ln(&a, 20, &r));
-  CHECK((ty_int128_t)2302585092994045 * ten_to(5) + 68402 == r.value);
+  CHECK(0 == ty_decimal128_ln(&a, 12, &r));
+  CHECK(2302585092994 == r.value);
   ty_decimal128_t base = {2, 0};
   ty_decimal128_t eight = {8, 0};
   CHECK(0 == ty_decimal128_log(&base, &eight, 10, &r));
@@ -831,7 +831,7 @@ TEST_CASE("decimal128 exp, ln, log and powers") {
   CHECK(TY_ERR_DIVZERO == ty_errnum());
 
   // 3. Take integer powers: 2^100 exactly, 2^-3, and a power too large for
-  //    128 bits, which is rounded from long double.
+  //    128 bits, which is rounded from double.
   ty_int128_t p2 = 1;
   for (int i = 0; i < 100; i++) {
     p2 *= 2;
@@ -853,6 +853,17 @@ TEST_CASE("decimal128 exp, ln, log and powers") {
   ty_decimal128_t three = {3, 0};
   CHECK(0 == ty_decimal128_pow_real(&neg2, &three, 3, &r));
   CHECK(-8000 == r.value);
+
+  // 5. Take an overflow and an underflow of a double: errors.
+  ty_decimal128_t big = {1000, 0};
+  ty_decimal128_t small = {-1000, 0};
+  CHECK(-1 == ty_decimal128_exp(&big, 5, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(-1 == ty_decimal128_exp(&small, 5, &r));
+  CHECK(TY_ERR_UNDERFLOW == ty_errnum());
+  ty_decimal128_t ten = {10, 0};
+  CHECK(-1 == ty_decimal128_pow_int(&ten, 400, 0, &r));
+  CHECK(TY_ERR_RANGE == ty_errnum());
 }
 
 // Verify factorial and width_bucket.

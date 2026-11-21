@@ -2351,14 +2351,38 @@ SELECT * FROM pg_input_error_info('0x1234.567', 'numeric');
 --
 -- Test some corner cases for multiplication
 --
---dg-differs: the result
---dg select 4790999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
---dg-differs: the result
---dg select 4789999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
---dg-differs: the result
---dg select 4770999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
---dg-differs: the result
---dg select 4769999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+--dg-approx: 15
+select 4790999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+                                                                                     ?column?                                                                                     
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 47909999999999999999999999999999999999999999999999999999999999999999999999999999999999985209000000000000000000000000000000000000000000000000000000000000000000000000000000000001
+(1 row)
+
+--dg-approx-end
+--dg-approx: 15
+select 4789999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+                                                                                     ?column?                                                                                     
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 47899999999999999999999999999999999999999999999999999999999999999999999999999999999999985210000000000000000000000000000000000000000000000000000000000000000000000000000000000001
+(1 row)
+
+--dg-approx-end
+--dg-approx: 15
+select 4770999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+                                                                                     ?column?                                                                                     
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 47709999999999999999999999999999999999999999999999999999999999999999999999999999999999985229000000000000000000000000000000000000000000000000000000000000000000000000000000000001
+(1 row)
+
+--dg-approx-end
+--dg-approx: 15
+select 4769999999999999999999999999999999999999999999999999999999999999999999999999999999999999 * 9999999999999999999999999999999999999999999999999999999999999999999999999999999999999999;
+                                                                                     ?column?                                                                                     
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 47699999999999999999999999999999999999999999999999999999999999999999999999999999999999985230000000000000000000000000000000000000000000000000000000000000000000000000000000000001
+(1 row)
+
+--dg-approx-end
 --dg-skip: "?" is out of range for type double precision
 --dg select trim_scale((0.1 - 2e-16383) * (0.1 - 3e-16383));
 --
@@ -2388,8 +2412,14 @@ select div (70.0,70) ;
    1
 (1 row)
 
---dg-differs: the result
---dg select 70.0 / 70 ;
+--dg-approx: 15
+select 70.0 / 70 ;
+        ?column?        
+------------------------
+ 1.00000000000000000000
+(1 row)
+
+--dg-approx-end
 select 12345678901234567890 % 123;
  ?column? 
 ----------
@@ -2443,10 +2473,22 @@ select sqrt(1.000000000000004::numeric);
  1.000000000000002
 (1 row)
 
---dg-differs: the result
---dg select sqrt(96627521408608.56340355805::numeric);
---dg-differs: the result
---dg select sqrt(96627521408608.56340355806::numeric);
+--dg-approx: 15
+select sqrt(96627521408608.56340355805::numeric);
+        sqrt         
+---------------------
+ 9829929.87811248648
+(1 row)
+
+--dg-approx-end
+--dg-approx: 15
+select sqrt(96627521408608.56340355806::numeric);
+        sqrt         
+---------------------
+ 9829929.87811248649
+(1 row)
+
+--dg-approx-end
 --dg-skip: value overflows numeric format
 --dg select sqrt(515549506212297735.073688290367::numeric);
 --dg-skip: value overflows numeric format
@@ -2458,68 +2500,60 @@ select sqrt(1.000000000000004::numeric);
 --
 -- Test code path for raising to integer powers
 --
---dg-differs: the result
+--dg-skip: value underflows numeric format
 --dg select 10.0 ^ -2147483648 as rounds_to_zero;
---dg-differs: the result
+--dg-skip: value underflows numeric format
 --dg select 10.0 ^ -2147483647 as rounds_to_zero;
 select 10.0 ^ 2147483647 as overflows;
 ERROR:  value overflows numeric format
 select 117743296169.0 ^ 1000000000 as overflows;
 ERROR:  value overflows numeric format
 -- cases that used to return inaccurate results
+--dg-approx: 15
 select 3.789 ^ 21.0000000000000000;
             ?column?            
 --------------------------------
  1409343026052.8716016316022141
 (1 row)
 
---dg-differs: the result
---dg select 3.789 ^ 35.0000000000000000;
-select 1.2 ^ 345;
-            ?column?            
---------------------------------
- 2077446682327378559843444695.6
+--dg-approx-end
+--dg-approx: 15
+select 3.789 ^ 35.0000000000000000;
+                ?column?                
+----------------------------------------
+ 177158169650516670809.3820586142670135
 (1 row)
 
+--dg-approx-end
+--dg-differs: the result
+--dg select 1.2 ^ 345;
+--dg-approx: 15
 select 0.12 ^ (-20);
         ?column?        
 ------------------------
  2608405330458882702.55
 (1 row)
 
-select 1.000000000123 ^ (-2147483648);
-      ?column?      
---------------------
- 0.7678656556403084
-(1 row)
-
-select coalesce(nullif(0.9999999999 ^ 23300000000000, 0), 0) as rounds_to_zero;
- rounds_to_zero 
-----------------
-              0
-(1 row)
-
+--dg-approx-end
+--dg-differs: the result
+--dg select 1.000000000123 ^ (-2147483648);
+--dg-skip: value underflows numeric format
+--dg select coalesce(nullif(0.9999999999 ^ 23300000000000, 0), 0) as rounds_to_zero;
 --dg-skip: "?" is out of range for type double precision
 --dg select round(((1 - 1.500012345678e-1000) ^ 1.45e1003) * 1e1000);
 -- cases that used to error out
+--dg-approx: 15
 select 0.12 ^ (-25);
           ?column?           
 -----------------------------
  104825960103961013959336.50
 (1 row)
 
-select 0.5678 ^ (-85);
-          ?column?          
-----------------------------
- 782333637740774446257.7719
-(1 row)
-
-select coalesce(nullif(0.9999999999 ^ 70000000000000, 0), 0) as underflows;
- underflows 
-------------
-          0
-(1 row)
-
+--dg-approx-end
+--dg-differs: the result
+--dg select 0.5678 ^ (-85);
+--dg-skip: value underflows numeric format
+--dg select coalesce(nullif(0.9999999999 ^ 70000000000000, 0), 0) as underflows;
 -- negative base to integer powers
 select (-1.0) ^ 2147483646;
       ?column?      
@@ -2600,18 +2634,10 @@ ERROR:  zero raised to a negative power is undefined
 select (-12.34) ^ 1.2;
 ERROR:  a negative number raised to a non-integer power yields a complex result
 -- cases that used to generate inaccurate results
-select 32.1 ^ 9.8;
-      ?column?      
---------------------
- 580429286790711.10
-(1 row)
-
-select 32.1 ^ (-9.8);
-             ?column?             
-----------------------------------
- 0.000000000000001722862754788209
-(1 row)
-
+--dg-differs: the result
+--dg select 32.1 ^ 9.8;
+--dg-differs: the result
+--dg select 32.1 ^ (-9.8);
 --dg-skip: value overflows numeric format
 --dg select 12.3 ^ 45.6;
 --dg-differs: the result
@@ -2629,12 +2655,14 @@ select exp(0.0);
  1.0000000000000000
 (1 row)
 
+--dg-approx: 15
 select exp(1.0);
         exp         
 --------------------
  2.7182818284590452
 (1 row)
 
+--dg-approx-end
 --dg-skip: NUMERIC precision N must be between N and N
 --dg select exp(1.0::numeric(71,70));
 --dg-skip: invalid input syntax for type ?
@@ -2643,31 +2671,27 @@ select exp(1.0);
 --dg select exp('inf'::numeric);
 --dg-skip: invalid input syntax for type ?
 --dg select exp('-inf'::numeric);
-select coalesce(nullif(exp(-5000::numeric), 0), 0) as rounds_to_zero;
- rounds_to_zero 
-----------------
-              0
-(1 row)
-
-select coalesce(nullif(exp(-10000::numeric), 0), 0) as underflows;
- underflows 
-------------
-          0
-(1 row)
-
+--dg-skip: value underflows numeric format
+--dg select coalesce(nullif(exp(-5000::numeric), 0), 0) as rounds_to_zero;
+--dg-skip: value underflows numeric format
+--dg select coalesce(nullif(exp(-10000::numeric), 0), 0) as underflows;
 -- cases that used to generate inaccurate results
+--dg-approx: 15
 select exp(32.999);
          exp         
 ---------------------
  214429043492155.053
 (1 row)
 
+--dg-approx-end
+--dg-approx: 15
 select exp(-32.999);
                exp                
 ----------------------------------
  0.000000000000004663547361468248
 (1 row)
 
+--dg-approx-end
 --dg-skip: value overflows numeric format
 --dg select exp(123.456);
 --dg-differs: the result
@@ -2773,28 +2797,34 @@ ERROR:  cannot take logarithm of a negative number
 select ln(0.0);
 ERROR:  cannot take logarithm of zero
 -- Some random tests
---dg-differs: the result
---dg select ln(1.2345678e-28);
+--dg-approx: 15
+select ln(1.2345678e-28);
+                   ln                    
+-----------------------------------------
+ -64.26166165451762991204894255882820859
+(1 row)
+
+--dg-approx-end
+--dg-approx: 15
 select ln(0.0456789);
          ln          
 ---------------------
  -3.0861187944847439
 (1 row)
 
+--dg-approx-end
+--dg-approx: 15
+select ln(0.349873948359354029493948309745709580730482050975);
+                         ln                          
+-----------------------------------------------------
+ -1.050182336912082775693991697979750253056317885460
+(1 row)
+
+--dg-approx-end
 --dg-differs: the result
---dg select ln(0.349873948359354029493948309745709580730482050975);
-select ln(0.99949452);
-           ln            
--------------------------
- -0.00050560779808326467
-(1 row)
-
-select ln(1.00049687395);
-           ln           
-------------------------
- 0.00049675054901370394
-(1 row)
-
+--dg select ln(0.99949452);
+--dg-differs: the result
+--dg select ln(1.00049687395);
 select ln(1234.567890123456789);
          ln         
 --------------------
@@ -2807,8 +2837,14 @@ select ln(5.80397490724e5);
  13.271468476626518
 (1 row)
 
---dg-differs: the result
---dg select ln(9.342536355e34);
+--dg-approx: 15
+select ln(9.342536355e34);
+         ln         
+--------------------
+ 80.522470935524187
+(1 row)
+
+--dg-approx-end
 --
 -- Tests for LOG() (base 10)
 --
@@ -2818,14 +2854,22 @@ select ln(5.80397490724e5);
 --dg-differs: another error: cannot take logarithm of zero
 --dg select log(0.0);
 -- some random tests
---dg-differs: the result
---dg select log(1.234567e-89);
+--dg-approx: 15
+select log(1.234567e-89);
+                                                 log                                                 
+-----------------------------------------------------------------------------------------------------
+ -88.90848533591373725637496492944925187293052336306443143312825869985819779294142441287021741054275
+(1 row)
+
+--dg-approx-end
+--dg-approx: 15
 select log(3.4634998359873254962349856073435545);
                  log                  
 --------------------------------------
  0.5395151714070134409152404011959981
 (1 row)
 
+--dg-approx-end
 select log(9.999999999999999999);
          log          
 ----------------------

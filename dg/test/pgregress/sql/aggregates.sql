@@ -55,7 +55,10 @@ SELECT var_samp(b) FROM aggtest;
 SELECT stddev_pop(b::numeric) FROM aggtest;
 SELECT stddev_samp(b::numeric) FROM aggtest;
 SELECT var_pop(b::numeric) FROM aggtest;
+--dg-approx: 15
 SELECT var_samp(b::numeric) FROM aggtest;
+--dg-approx-end
+
 
 -- population variance is defined for a single tuple, sample variance
 -- is not
@@ -1649,11 +1652,14 @@ SET enable_indexonlyscan = off;
 --dg       UNION ALL SELECT * FROM tenk1
 --dg       UNION ALL SELECT * FROM tenk1) u;
 
+--dg-approx: 15
 SELECT variance(unique1::int4), sum(unique1::int8), regr_count(unique1::float8, unique1::float8)
 FROM (SELECT * FROM tenk1
       UNION ALL SELECT * FROM tenk1
       UNION ALL SELECT * FROM tenk1
       UNION ALL SELECT * FROM tenk1) u;
+--dg-approx-end
+
 
 -- variance(int8) covers numeric_combine
 -- avg(numeric) covers numeric_avg_combine
@@ -1665,11 +1671,14 @@ FROM (SELECT * FROM tenk1
 --dg       UNION ALL SELECT * FROM tenk1
 --dg       UNION ALL SELECT * FROM tenk1) u;
 
+--dg-approx: 15
 SELECT variance(unique1::int8), avg(unique1::numeric)
 FROM (SELECT * FROM tenk1
       UNION ALL SELECT * FROM tenk1
       UNION ALL SELECT * FROM tenk1
       UNION ALL SELECT * FROM tenk1) u;
+--dg-approx-end
+
 
 ROLLBACK;
 

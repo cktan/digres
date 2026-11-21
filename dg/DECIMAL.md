@@ -273,17 +273,27 @@ Results are exact or an error, never silently wrong.
 - **`%`, `div`, `abs`, `sign`, `ceil`, `floor`, `round(x, n)`,
   `trunc(x, n)`, `gcd`, `lcm`, `factorial`, `min`, `max`**:
   exact, as PostgreSQL's, or an error past 36 digits.
-- **`sqrt`, `ln`, `log`, `exp`, `power`**: computed in
-  `long double`, 128-bit IEEE on this aarch64 (some 33
-  digits), and rounded to PostgreSQL's choice of scale. Not
-  PostgreSQL's arbitrary precision; enough (§4.3). They are in
-  ty, in 128 bits (`ty_decimal128_sqrt`, `_exp`, `_ln`, `_log`,
-  `_pow_int`, `_pow_real`): `sqrt` a digit at a time, rounded
-  half up; the rest in `long double`. PostgreSQL's choice of
-  scale and its errors stay in `decimal.c`. A power with an
-  integer exponent is exact while its value fits 128 bits, and
-  past that it is in `long double`; it was exact to about 150
-  digits.
+- **`sqrt`, `ln`, `log`, `exp`, `power`**: `sqrt` is exact: a
+  digit at a time, rounded half up. The others are computed in
+  `double` (decided 2026-11-20; no `long double`, which is a
+  software quad on aarch64), some 15 digits, and rounded to
+  PostgreSQL's choice of scale. This is not PostgreSQL's
+  arbitrary precision (`exp_var`, `ln_var`, `power_var`): the
+  digits past the 15th of a result are the binary expansion of
+  the double. DuckDB computes in `double` too (§4.3). They are
+  in ty, in 128 bits (`ty_decimal128_sqrt`, `_exp`, `_ln`,
+  `_log`, `_pow_int`, `_pow_real`). PostgreSQL's choice of scale
+  and its errors stay in `decimal.c`.
+  - **Overflow and underflow are errors**: a result the double
+    cannot hold, or that is not zero but is zero or below the
+    smallest normal double, is "value overflows numeric format"
+    or "value underflows numeric format". PostgreSQL gives 0 for
+    the second, as in `0.1 ^ 1000`.
+  - `log` with base 10 or 2 is `log10` or `log2`, so that a
+    power of the base is exact: `log(1000)` is 3.
+  - A power with an integer exponent is exact while its value
+    fits 128 bits, and past that it is in `double`; it was exact
+    to about 150 digits.
   `generate_series` (it ends when its next value would pass 36
   digits), `width_bucket` (`ty_decimal128_width_bucket`, one bit
   of the count at a time), `inc`, the factorial and the window
@@ -305,7 +315,12 @@ Results are exact or an error, never silently wrong.
   sum when its scale changes or it is read.
 - **`avg` of integers and numerics** divides by the count at
   `/`'s scale (§2.5).
-- **`stddev`, `variance`** of them: in `long double`.
+- **`stddev`, `variance`** of them: in `double`, as DuckDB's
+  are, and not exact as PostgreSQL's are. The state keeps the
+  sum exact to 36 digits, and the sum of the squares of the
+  stored words as a `double`; a sum that is not finite is an
+  error. A result that is no more than the noise of the
+  difference `N * sumX2 - sumX^2` is 0.
 
 ### 2.7 What else used numeric
 
@@ -361,8 +376,7 @@ Everything else, `sqrt`, `ln`, `log`, `exp`, `power`, `div`,
 reached by the implicit cast: one 16-byte palloc for the
 argument. Their results need more than 17 digits as often as
 not, so a `decimal64` version of them would save only that
-cast, next to a computation in `long double` and the wide
-path.
+cast, next to a computation in `double`.
 
 ## 3. Order of work
 
@@ -396,8 +410,11 @@ path.
    it showed that this refuses `1e300` as a float, so it is a
    `float8`, as in DuckDB. Text cast to numeric past 36 digits
    is still an error.
-3. **`sqrt`, `ln`, `exp`, `power`** in `long double`, some 33
-   digits, are enough.
+3. **`ln`, `exp`, `power`** in `double`, some 15 digits, are
+   enough (decided 2026-11-20; first `long double`, some 33
+   digits). `sqrt` is exact. The ported PostgreSQL files mark
+   what a double's last digits change with `--dg-approx`, held
+   to 15 significant digits.
 4. **jsonb**: a number with an exponent is a `float8`, one
    without a numeric (an error past 36 digits). This replaced
    the first answer, to keep each number's text as written.

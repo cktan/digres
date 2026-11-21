@@ -45,6 +45,8 @@ const char *ty_errname(ty_errnum_t code) {
     return "TY_ERR_RANGE";
   case TY_ERR_DIVZERO:
     return "TY_ERR_DIVZERO";
+  case TY_ERR_UNDERFLOW:
+    return "TY_ERR_UNDERFLOW";
   }
   return "TY_ERR_UNKNOWN";
 }

@@ -4126,6 +4126,7 @@ SELECT i,COUNT(*) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOW
  4 |     1
 (4 rows)
 
+--dg-approx: 15
 SELECT VAR_POP(n::bigint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
         var_pop        
@@ -4137,6 +4138,8 @@ SELECT VAR_POP(n::bigint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDE
                      0
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VAR_POP(n::int) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
         var_pop        
@@ -4148,6 +4151,8 @@ SELECT VAR_POP(n::int) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED F
                      0
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VAR_POP(n::smallint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
         var_pop        
@@ -4159,6 +4164,8 @@ SELECT VAR_POP(n::smallint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUN
                      0
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VAR_POP(n::numeric) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
         var_pop        
@@ -4170,6 +4177,8 @@ SELECT VAR_POP(n::numeric) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUND
                      0
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VAR_SAMP(n::bigint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
        var_samp        
@@ -4181,6 +4190,8 @@ SELECT VAR_SAMP(n::bigint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUND
                       
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VAR_SAMP(n::int) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
        var_samp        
@@ -4192,6 +4203,8 @@ SELECT VAR_SAMP(n::int) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED 
                       
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VAR_SAMP(n::smallint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
        var_samp        
@@ -4203,6 +4216,8 @@ SELECT VAR_SAMP(n::smallint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOU
                       
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VAR_SAMP(n::numeric) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
        var_samp        
@@ -4214,6 +4229,8 @@ SELECT VAR_SAMP(n::numeric) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUN
                       
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VARIANCE(n::bigint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
        variance        
@@ -4225,6 +4242,8 @@ SELECT VARIANCE(n::bigint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUND
                       
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VARIANCE(n::int) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
        variance        
@@ -4236,6 +4255,8 @@ SELECT VARIANCE(n::int) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED 
                       
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VARIANCE(n::smallint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
        variance        
@@ -4247,6 +4268,8 @@ SELECT VARIANCE(n::smallint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOU
                       
 (5 rows)
 
+--dg-approx-end
+--dg-approx: 15
 SELECT VARIANCE(n::numeric) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,600),(2,470),(3,170),(4,430),(5,300)) r(i,n);
        variance        
@@ -4258,6 +4281,7 @@ SELECT VARIANCE(n::numeric) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUN
                       
 (5 rows)
 
+--dg-approx-end
 SELECT STDDEV_POP(n::bigint) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
   FROM (VALUES(1,NULL),(2,600),(3,470),(4,170),(5,430),(6,300)) r(i,n);
      stddev_pop      

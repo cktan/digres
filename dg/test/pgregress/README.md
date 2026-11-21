@@ -66,6 +66,7 @@ line that says why:
 | `--dg-differs: WHAT` | digres runs it but answers differently: `another error`, `no error where PostgreSQL has`, `the plan` or `the result` |
 | `--dg-crash: WHAT` | digres crashed or hung on it |
 | `--dg-unstable` | PostgreSQL itself answers it differently each run |
+| `--dg-approx: N` | not taken out: it runs, between this line and a `--dg-approx-end` line, and its output must agree with PostgreSQL's but for the digits of its numbers past N significant (15): a double's last digits |
 
 So the backlog is a grep away:
 

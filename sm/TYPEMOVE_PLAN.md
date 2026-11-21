@@ -317,7 +317,10 @@ copied from PostgreSQL keeps its copyright notice
    a chunk of places at a time in 128 bits. `where a / (b + 1) >
    1` fell 80.0% on `numeric(30,4)` and 81.7% on `numeric(10,2)`.
    The exponent group is in ty too, in 128 bits: `sqrt` a digit
-   at a time, `exp`, `ln`, `log` and the powers in `long double`.
+   at a time, `exp`, `ln`, `log` and the powers in `double`
+   (decided 2026-11-20: no `long double`; an overflow or an
+   underflow is an error; `log` with base 10 or 2 is `log10` or
+   `log2`).
    `where sqrt(a) > 5` fell 96.7%, `where ln(a + 1) > 1` 44.0%
    and `where power(a, 2) > 100` 50.7%, on `numeric(30,4)`.
    `generate_series`, `width_bucket`, `inc`, the factorial and

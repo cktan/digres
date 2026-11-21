@@ -314,9 +314,9 @@ def main():
         emit("d128.sqrt", (v, s, r), do_sqrt(v, s, r))
     for v, s, r in ((2, 0, 20), (3, 0, 1), (1600, 2, 2), (0, 3, 3), (D128, 0, 0), (D128, 36, 36), (-4, 0, 2), (10 ** 35, 0, 1)):
         emit("d128.sqrt", (v, s, r), do_sqrt(v, s, r))
-    # exp, ln, log and the powers, to at most 16 places: ty computes them in
-    # long double, some 33 digits, so a result of that many places is exact
-    # but for a value on the very edge of a rounding.
+    # exp, ln, log and the powers, to at most 12 digits: ty computes them in
+    # double, some 15 digits, so a result of that many digits is exact but
+    # for a value on the very edge of a rounding.
     def dec(v, s):
         return Decimal(v).scaleb(-s)
 
@@ -324,37 +324,55 @@ def main():
         q = x.quantize(Decimal(1).scaleb(-r), rounding=ROUND_HALF_UP)
         return (int(q.scaleb(r)), r)
 
+    def places(x):
+        """A number of places that leaves a result of at most 12 digits."""
+        ip = len(str(int(abs(x))))
+        return random.randint(0, max(0, 12 - ip))
+
     for _ in range(120):
-        v, s = random.randint(-30000, 30000), 3
-        r = random.randint(0, 16)
-        emit("d128.exp", (v, s, r), at(dec(v, s).exp(), r))
+        v, s = random.randint(-20000, 20000), 3
+        x = dec(v, s).exp()
+        r = places(x)
+        emit("d128.exp", (v, s, r), at(x, r))
     for _ in range(120):
         v, s = random.randint(1, 10 ** 12), random.choice([0, 2, 4, 6])
-        r = random.randint(0, 16)
-        emit("d128.ln", (v, s, r), at(dec(v, s).ln(), r))
+        x = dec(v, s).ln()
+        r = places(x)
+        emit("d128.ln", (v, s, r), at(x, r))
     for _ in range(120):
         b, bs = random.randint(2, 10 ** 6), random.choice([0, 2])
         v, s = random.randint(1, 10 ** 9), random.choice([0, 3])
-        r = random.randint(0, 16)
         if dec(b, bs) == 1:
             continue
-        emit("d128.log", (b, bs, v, s, r), at(dec(v, s).ln() / dec(b, bs).ln(), r))
+        x = dec(v, s).ln() / dec(b, bs).ln()
+        r = places(x)
+        emit("d128.log", (b, bs, v, s, r), at(x, r))
     for _ in range(150):
         v, s = random.choice([-1, 1]) * random.randint(1, 99999), random.choice([0, 1, 2, 3])
         n = random.randint(-12, 12)
-        r = random.randint(0, 14)
         x = dec(v, s) ** n
-        if abs(x) >= 10 ** 15 or (abs(x) < Decimal(10) ** -12 and x != 0):
+        if abs(x) >= 10 ** 12 or (abs(x) < Decimal(10) ** -12 and x != 0):
             continue
+        r = places(x)
         emit("d128.powi", (v, s, n, r), at(x, r))
     for _ in range(120):
         v, s = random.randint(1, 99999), random.choice([0, 1, 2])
         ev, es = random.choice([5, 15, 25, 125, -5, -15, 314159, 2718, -75]), random.choice([1, 1, 2, 3, 1, 1, 5, 3, 2])
-        r = random.randint(0, 14)
         x = (dec(v, s).ln() * dec(ev, es)).exp()
-        if abs(x) >= 10 ** 15 or x < Decimal(10) ** -12:
+        if abs(x) >= 10 ** 12 or x < Decimal(10) ** -12:
             continue
+        r = places(x)
         emit("d128.powr", (v, s, ev, es, r), at(x, r))
+    # A power of the base is exact, for the bases 10 and 2.
+    for e in range(0, 13):
+        emit("d128.log", (10, 0, 10 ** e, 0, 6), (e * 10 ** 6, 6))
+    for e in range(0, 21):
+        emit("d128.log", (2, 0, 2 ** e, 0, 6), (e * 10 ** 6, 6))
+    # Overflow and underflow of a double are errors.
+    emit("d128.exp", (1000, 0, 5), ("E", "RANGE"))
+    emit("d128.exp", (-1000, 0, 5), ("E", "UNDERFLOW"))
+    emit("d128.powi", (10, 0, 400, 0), ("E", "RANGE"))
+    emit("d128.powi", (1, 1, 400, 0), ("E", "UNDERFLOW"))
     # Factorial.
     for n in list(range(0, 36)) + [-1, 40, 100]:
         f = math.factorial(n) if n >= 0 else None

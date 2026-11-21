@@ -129,7 +129,12 @@ Why per thread, and not per process:
 
 - ty has its own codes, in `include/ty_error.h`:
   `TY_ERR_INVALID`, `TY_ERR_NOMEM`, `TY_ERR_EXCEPTION`,
-  `TY_ERR_RANGE` and `TY_ERR_DIVZERO` today.
+  `TY_ERR_RANGE`, `TY_ERR_DIVZERO` and `TY_ERR_UNDERFLOW`
+  today. The last is a result of `exp` or a power that is not
+  zero, but is zero or below the smallest normal double.
+- `exp`, `ln`, `log` and the powers are computed in `double`,
+  never `long double`: some 15 digits. `ty_decimal128_to_double`
+  and `_from_double` convert a value, rounded once.
 - A type adds its own kinds when it moves: out of range,
   division by zero, bad text. Each is appended, and no value is
   reused.

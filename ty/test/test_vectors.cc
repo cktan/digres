@@ -77,6 +77,9 @@ ty_errnum_t errnum_of(const std::string &name) {
   if (name == "DIVZERO") {
     return TY_ERR_DIVZERO;
   }
+  if (name == "UNDERFLOW") {
+    return TY_ERR_UNDERFLOW;
+  }
   return TY_ERR_INVALID;
 }
 
