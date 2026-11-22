@@ -27,22 +27,22 @@
  * not end in NUL. Sets *r and returns 0; or returns -1 with
  * TY_ERR_INVALID, and *r is not set.
  */
-int ty_bool_parse(const char* s, size_t len, bool* r);
+int ty_bool_parse(const char *s, size_t len, bool *r);
 
 /*
  * Parse SQL's boolean input: the len bytes at s with the space at both ends
  * skipped (a space, tab, newline, vertical tab, form feed or return), then
  * as ty_bool_parse() reads them.
  */
-int ty_bool_parse_text(const char* s, size_t len, bool* r);
+int ty_bool_parse_text(const char *s, size_t len, bool *r);
 
 /*
  * The text of a bool: "t" or "f" as the type's output (ty_bool_out), and
  * "true" or "false" as the cast to text (ty_bool_text). They are literals,
  * not to be freed.
  */
-static inline const char* ty_bool_out(bool b) { return b ? "t" : "f"; }
-static inline const char* ty_bool_text(bool b) { return b ? "true" : "false"; }
+static inline const char *ty_bool_out(bool b) { return b ? "t" : "f"; }
+static inline const char *ty_bool_text(bool b) { return b ? "true" : "false"; }
 
 /* Compare two bools, false below true: -1, 0 or 1; and the predicates. */
 static inline int ty_bool_cmp(bool a, bool b) { return (int)a - (int)b; }

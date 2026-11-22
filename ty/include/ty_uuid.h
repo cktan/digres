@@ -20,7 +20,7 @@
 #include "ty.h"
 
 typedef struct ty_uuid_t {
-    uint8_t data[16];
+  uint8_t data[16];
 } ty_uuid_t;
 
 /* The size of the buffer ty_uuid_format() needs: 36 characters and a NUL. */
@@ -32,14 +32,14 @@ typedef struct ty_uuid_t {
  * s need not end in NUL. Sets *u and returns 0; or returns -1 with
  * TY_ERR_INVALID, and *u is not set.
  */
-int ty_uuid_parse(const char* s, size_t len, ty_uuid_t* u);
+int ty_uuid_parse(const char *s, size_t len, ty_uuid_t *u);
 
 /* Write u as 8-4-4-4-12 lowercase digits and a NUL, to out. */
-void ty_uuid_format(const ty_uuid_t* u, char out[TY_UUID_TEXT_SIZE]);
+void ty_uuid_format(const ty_uuid_t *u, char out[TY_UUID_TEXT_SIZE]);
 
 /* Negative, zero or positive as a is below, equal to or above b. */
-static inline int ty_uuid_cmp(const ty_uuid_t* a, const ty_uuid_t* b) {
-    return memcmp(a->data, b->data, 16);
+static inline int ty_uuid_cmp(const ty_uuid_t *a, const ty_uuid_t *b) {
+  return memcmp(a->data, b->data, 16);
 }
 
 /*
@@ -47,33 +47,33 @@ static inline int ty_uuid_cmp(const ty_uuid_t* a, const ty_uuid_t* b) {
  * sets *r and returns 0. All ones has no successor, and all zeros no
  * predecessor: -1 with TY_ERR_RANGE, and *r is not set.
  */
-int ty_uuid_increment(const ty_uuid_t* a, ty_uuid_t* r);
-int ty_uuid_decrement(const ty_uuid_t* a, ty_uuid_t* r);
+int ty_uuid_increment(const ty_uuid_t *a, ty_uuid_t *r);
+int ty_uuid_decrement(const ty_uuid_t *a, ty_uuid_t *r);
 
 /*
  * A 64-bit hash of u by a seed; the low 32 bits with seed 0 are the
  * standard 32-bit hash. It cannot fail.
  */
-uint64_t ty_uuid_hash(const ty_uuid_t* u, uint64_t seed);
+uint64_t ty_uuid_hash(const ty_uuid_t *u, uint64_t seed);
 
 /*
  * The version of u, 1 to 8 (0 to 15 as its bits say), or -1 if its variant
  * is not RFC 9562's.
  */
-int ty_uuid_version(const ty_uuid_t* u);
+int ty_uuid_version(const ty_uuid_t *u);
 
 /*
  * The time a version 1 or version 7 uuid holds, in microseconds since the
  * Unix epoch: sets *us and returns 0. For another version, or another
  * variant, it returns 1 and sets nothing.
  */
-int ty_uuid_unix_us(const ty_uuid_t* u, int64_t* us);
+int ty_uuid_unix_us(const ty_uuid_t *u, int64_t *us);
 
 /*
  * Make a version 4 uuid, of random bytes from the system. Returns 0, or -1
  * with TY_ERR_EXCEPTION if the system gives none.
  */
-int ty_uuid_v4(ty_uuid_t* u);
+int ty_uuid_v4(ty_uuid_t *u);
 
 /*
  * Make a version 7 uuid: unix_ms, 48 bits of the time in milliseconds
@@ -83,6 +83,6 @@ int ty_uuid_v4(ty_uuid_t* u);
  * TY_ERR_EXCEPTION if the system gives no random bytes, or TY_ERR_RANGE
  * if unix_ms does not fit 48 bits or sub_ms_ns is over 999,999.
  */
-int ty_uuid_v7(uint64_t unix_ms, uint32_t sub_ms_ns, ty_uuid_t* u);
+int ty_uuid_v7(uint64_t unix_ms, uint32_t sub_ms_ns, ty_uuid_t *u);
 
 #endif /* TY_UUID_H */

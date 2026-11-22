@@ -113,6 +113,6 @@ clean:
 	$(RM) -r $(BUILD)
 
 format:
-	clang-format -i src/*.cc src/*.h test/*.cc
+	clang-format -i src/*.cc src/*.h test/*.cc include/*.h
 
 -include $(LIB_OBJS:.o=.d) $(TEST_OBJS:.o=.d) $(REL_OBJS:.o=.d)

@@ -114,37 +114,40 @@
 #define TY_INT32_TEXT_SIZE 12
 #define TY_INT64_TEXT_SIZE 21
 
-int ty_int16_parse(const char* s, size_t len, int16_t* r);
-int ty_int32_parse(const char* s, size_t len, int32_t* r);
-int ty_int64_parse(const char* s, size_t len, int64_t* r);
+int ty_int16_parse(const char *s, size_t len, int16_t *r);
+int ty_int32_parse(const char *s, size_t len, int32_t *r);
+int ty_int64_parse(const char *s, size_t len, int64_t *r);
 
 /* The same for a string that ends at its NUL, which saves the host a strlen. */
-int ty_int16_parse_z(const char* s, int16_t* r);
-int ty_int32_parse_z(const char* s, int32_t* r);
-int ty_int64_parse_z(const char* s, int64_t* r);
-size_t ty_int16_format(int16_t a, char* out);
-size_t ty_int32_format(int32_t a, char* out);
-size_t ty_int64_format(int64_t a, char* out);
-size_t ty_uint32_format_n(uint32_t v, char* out);
-size_t ty_uint64_format_n(uint64_t v, char* out);
+int ty_int16_parse_z(const char *s, int16_t *r);
+int ty_int32_parse_z(const char *s, int32_t *r);
+int ty_int64_parse_z(const char *s, int64_t *r);
+size_t ty_int16_format(int16_t a, char *out);
+size_t ty_int32_format(int32_t a, char *out);
+size_t ty_int64_format(int64_t a, char *out);
+size_t ty_uint32_format_n(uint32_t v, char *out);
+size_t ty_uint64_format_n(uint64_t v, char *out);
 
 /* The hash of an int64, and so of every width: out of line. */
 uint64_t ty_int64_hash(int64_t a, uint64_t seed);
 
 /* The out-of-line parts: gcd and lcm. */
-int ty_int16_gcd(int16_t a, int16_t b, int16_t* r);
-int ty_int32_gcd(int32_t a, int32_t b, int32_t* r);
-int ty_int64_gcd(int64_t a, int64_t b, int64_t* r);
-int ty_int16_lcm(int16_t a, int16_t b, int16_t* r);
-int ty_int32_lcm(int32_t a, int32_t b, int32_t* r);
-int ty_int64_lcm(int64_t a, int64_t b, int64_t* r);
-int ty_int64_from_double(double d, int64_t* r);
+int ty_int16_gcd(int16_t a, int16_t b, int16_t *r);
+int ty_int32_gcd(int32_t a, int32_t b, int32_t *r);
+int ty_int64_gcd(int64_t a, int64_t b, int64_t *r);
+int ty_int16_lcm(int16_t a, int16_t b, int16_t *r);
+int ty_int32_lcm(int32_t a, int32_t b, int32_t *r);
+int ty_int64_lcm(int64_t a, int64_t b, int64_t *r);
+int ty_int64_from_double(double d, int64_t *r);
 
 /*
  * The in-line operations of one width: N is the number of bits, T the
  * type, MIN its smallest value, and U its unsigned type, which does the
  * shift left without leaving C's defined cases.
  */
+/* clang-format 18 moves the comments in this macro body, though
+ * SkipMacroDefinitionBody is set: keep it out of the formatter. */
+/* clang-format off */
 #define TY_INT_OPS(N, T, MIN, U)                                             \
     static inline int ty_int##N##_add(T a, T b, T* r) {                      \
         T v;                                                                 \
@@ -240,6 +243,7 @@ int ty_int64_from_double(double d, int64_t* r);
         *r = (T)(a >> n);                                                    \
         return 0;                                                            \
     }
+/* clang-format on */
 
 TY_INT_OPS(16, int16_t, INT16_MIN, uint16_t)
 TY_INT_OPS(32, int32_t, INT32_MIN, uint32_t)
@@ -248,28 +252,28 @@ TY_INT_OPS(64, int64_t, INT64_MIN, uint64_t)
 #undef TY_INT_OPS
 
 /* Narrow a value: RANGE if it does not fit the smaller type. */
-static inline int ty_int32_to_int16(int32_t a, int16_t* r) {
-    if (TY_UNLIKELY(a < INT16_MIN || a > INT16_MAX)) {
-        return ty_err_range();
-    }
-    *r = (int16_t)a;
-    return 0;
+static inline int ty_int32_to_int16(int32_t a, int16_t *r) {
+  if (TY_UNLIKELY(a < INT16_MIN || a > INT16_MAX)) {
+    return ty_err_range();
+  }
+  *r = (int16_t)a;
+  return 0;
 }
 
-static inline int ty_int64_to_int32(int64_t a, int32_t* r) {
-    if (TY_UNLIKELY(a < INT32_MIN || a > INT32_MAX)) {
-        return ty_err_range();
-    }
-    *r = (int32_t)a;
-    return 0;
+static inline int ty_int64_to_int32(int64_t a, int32_t *r) {
+  if (TY_UNLIKELY(a < INT32_MIN || a > INT32_MAX)) {
+    return ty_err_range();
+  }
+  *r = (int32_t)a;
+  return 0;
 }
 
-static inline int ty_int64_to_int16(int64_t a, int16_t* r) {
-    if (TY_UNLIKELY(a < INT16_MIN || a > INT16_MAX)) {
-        return ty_err_range();
-    }
-    *r = (int16_t)a;
-    return 0;
+static inline int ty_int64_to_int16(int64_t a, int16_t *r) {
+  if (TY_UNLIKELY(a < INT16_MIN || a > INT16_MAX)) {
+    return ty_err_range();
+  }
+  *r = (int16_t)a;
+  return 0;
 }
 
 /*
@@ -277,34 +281,34 @@ static inline int ty_int64_to_int16(int64_t a, int16_t* r) {
  * see above.
  */
 static inline int ty_int_in_range(int64_t val, int64_t base, int64_t offset,
-                                  int sub, int less, int* r) {
-    int64_t sum;
+                                  int sub, int less, int *r) {
+  int64_t sum;
 
-    if (TY_UNLIKELY(offset < 0)) {
-        return ty_err_invalid("invalid preceding or following size");
-    }
-    if (sub) {
-        offset = -offset; /* cannot overflow: offset is not negative */
-    }
-    if (TY_UNLIKELY(__builtin_add_overflow(base, offset, &sum))) {
-        /*
-         * Without sub the true sum is more than any val, with it less, so
-         * the answer is that of a far bound.
-         */
-        *r = sub ? !less : less;
-        return 0;
-    }
-    *r = less ? val <= sum : val >= sum;
+  if (TY_UNLIKELY(offset < 0)) {
+    return ty_err_invalid("invalid preceding or following size");
+  }
+  if (sub) {
+    offset = -offset; /* cannot overflow: offset is not negative */
+  }
+  if (TY_UNLIKELY(__builtin_add_overflow(base, offset, &sum))) {
+    /*
+     * Without sub the true sum is more than any val, with it less, so
+     * the answer is that of a far bound.
+     */
+    *r = sub ? !less : less;
     return 0;
+  }
+  *r = less ? val <= sum : val >= sum;
+  return 0;
 }
 
 /* The hash of an int16 or an int32: that of the int64 of its value. */
 static inline uint64_t ty_int16_hash(int16_t a, uint64_t seed) {
-    return ty_int64_hash(a, seed);
+  return ty_int64_hash(a, seed);
 }
 
 static inline uint64_t ty_int32_hash(int32_t a, uint64_t seed) {
-    return ty_int64_hash(a, seed);
+  return ty_int64_hash(a, seed);
 }
 
 /* An int64 as a double: the nearest, as C converts it. */

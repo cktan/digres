@@ -49,22 +49,22 @@ typedef struct ty_varlena_t ty_varlena_t;
 #endif
 
 /* The bytes of the value, after the header. */
-static inline const char* ty_vl_data(const ty_varlena_t* v) {
-    const unsigned char* p = (const unsigned char*)v;
+static inline const char *ty_vl_data(const ty_varlena_t *v) {
+  const unsigned char *p = (const unsigned char *)v;
 
-    return (const char*)p + (TY_VL_SHORT(p[0]) ? 1 : 4);
+  return (const char *)p + (TY_VL_SHORT(p[0]) ? 1 : 4);
 }
 
 /* The number of bytes of the value, the header not counted. */
-static inline size_t ty_vl_len(const ty_varlena_t* v) {
-    const unsigned char* p = (const unsigned char*)v;
-    uint32_t h;
+static inline size_t ty_vl_len(const ty_varlena_t *v) {
+  const unsigned char *p = (const unsigned char *)v;
+  uint32_t h;
 
-    if (TY_VL_SHORT(p[0])) {
-        return TY_VL_SHORT_SIZE(p[0]) - 1;
-    }
-    memcpy(&h, p, 4);
-    return TY_VL_LONG_SIZE(h) - 4;
+  if (TY_VL_SHORT(p[0])) {
+    return TY_VL_SHORT_SIZE(p[0]) - 1;
+  }
+  memcpy(&h, p, 4);
+  return TY_VL_LONG_SIZE(h) - 4;
 }
 
 /*
@@ -78,40 +78,41 @@ int ty_vl_new_error(size_t len);
  * of its bytes, which the caller writes. -1 with the thread's error set if
  * len passes TY_VARLENA_MAX_LEN or the alloc function returns NULL.
  */
-static inline int ty_vl_new(size_t len, ty_varlena_t** out, char** data) {
-    unsigned char* p;
-    uint32_t h;
+static inline int ty_vl_new(size_t len, ty_varlena_t **out, char **data) {
+  unsigned char *p;
+  uint32_t h;
 
-    if (TY_UNLIKELY(len > TY_VARLENA_MAX_LEN)) {
-        return ty_vl_new_error(len);
-    }
-    p = (unsigned char*)ty_alloc(len + 4);
-    if (TY_UNLIKELY(p == NULL)) {
-        return ty_vl_new_error(len);
-    }
-    h = TY_VL_LONG_HEADER(len + 4);
-    memcpy(p, &h, 4);
-    *out = (ty_varlena_t*)p;
-    *data = (char*)p + 4;
-    return 0;
+  if (TY_UNLIKELY(len > TY_VARLENA_MAX_LEN)) {
+    return ty_vl_new_error(len);
+  }
+  p = (unsigned char *)ty_alloc(len + 4);
+  if (TY_UNLIKELY(p == NULL)) {
+    return ty_vl_new_error(len);
+  }
+  h = TY_VL_LONG_HEADER(len + 4);
+  memcpy(p, &h, 4);
+  *out = (ty_varlena_t *)p;
+  *data = (char *)p + 4;
+  return 0;
 }
 
 /* Set the length of a value that ty_vl_new made, to len or less. */
-static inline void ty_vl_set_len(ty_varlena_t* v, size_t len) {
-    uint32_t h = TY_VL_LONG_HEADER(len + 4);
+static inline void ty_vl_set_len(ty_varlena_t *v, size_t len) {
+  uint32_t h = TY_VL_LONG_HEADER(len + 4);
 
-    memcpy((void*)v, &h, 4);
+  memcpy((void *)v, &h, 4);
 }
 
 /* A new value that is a copy of len bytes at s; as ty_vl_new. */
-static inline int ty_vl_new_copy(const char* s, size_t len, ty_varlena_t** out) {
-    char* d;
+static inline int ty_vl_new_copy(const char *s, size_t len,
+                                 ty_varlena_t **out) {
+  char *d;
 
-    if (ty_vl_new(len, out, &d) != 0) {
-        return -1;
-    }
-    memcpy(d, s, len);
-    return 0;
+  if (ty_vl_new(len, out, &d) != 0) {
+    return -1;
+  }
+  memcpy(d, s, len);
+  return 0;
 }
 
 #endif /* TY_VARLENA_H */

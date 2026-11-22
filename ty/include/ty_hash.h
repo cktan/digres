@@ -21,8 +21,8 @@
 #include <stdint.h>
 
 /* The standard hash of the n bytes at k, and the extended hash by a seed. */
-uint32_t ty_hash_bytes_std(const uint8_t* k, size_t n);
-uint64_t ty_hash_bytes(const uint8_t* k, size_t n, uint64_t seed);
+uint32_t ty_hash_bytes_std(const uint8_t *k, size_t n);
+uint64_t ty_hash_bytes(const uint8_t *k, size_t n, uint64_t seed);
 
 /*
  * The standard hash of a 32-bit value, and the extended hash by a seed. The

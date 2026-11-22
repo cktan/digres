@@ -39,10 +39,10 @@
 ty_errnum_t ty_errnum(void);
 
 /* The calling thread's last error message; "no error" if none. */
-const char* ty_errmsg(void);
+const char *ty_errmsg(void);
 
 /* The name of code, such as "TY_ERR_NOMEM". */
-const char* ty_errname(ty_errnum_t code);
+const char *ty_errname(ty_errnum_t code);
 
 /*
  * Record TY_ERR_RANGE, or TY_ERR_DIVZERO, as the thread's error, and
@@ -54,7 +54,7 @@ int ty_err_divzero(void);
 int ty_err_underflow(void);
 
 /* Record TY_ERR_INVALID with msg as the thread's error; returns -1. */
-int ty_err_invalid(const char* msg);
+int ty_err_invalid(const char *msg);
 
 /* A branch that is taken on the rare failure. */
 #define TY_UNLIKELY(x) __builtin_expect((x) != 0, 0)
@@ -77,8 +77,8 @@ int ty_err_invalid(const char* msg);
  *     the caller frees it as its alloc function suggests, one
  *     piece with free, or all at once, as a memory context does.
  */
-typedef void* (*ty_alloc_fn)(size_t size);
-typedef void (*ty_free_fn)(void* ptr);
+typedef void *(*ty_alloc_fn)(size_t size);
+typedef void (*ty_free_fn)(void *ptr);
 
 /*
  * Set the alloc and free functions of the calling thread; other
@@ -105,17 +105,17 @@ extern TY_THREAD_LOCAL ty_alloc_fn ty_t_alloc;
 extern TY_THREAD_LOCAL ty_free_fn ty_t_free;
 
 /* size bytes from the thread's alloc function, or malloc; NULL if it fails. */
-static inline void* ty_alloc(size_t size) {
-    return ty_t_alloc ? ty_t_alloc(size) : malloc(size);
+static inline void *ty_alloc(size_t size) {
+  return ty_t_alloc ? ty_t_alloc(size) : malloc(size);
 }
 
 /* Give ptr, which ty_alloc returned, to the thread's free function. */
-static inline void ty_free(void* ptr) {
-    if (ty_t_free) {
-        ty_t_free(ptr);
-    } else {
-        free(ptr);
-    }
+static inline void ty_free(void *ptr) {
+  if (ty_t_free) {
+    ty_t_free(ptr);
+  } else {
+    free(ptr);
+  }
 }
 
 #endif /* TY_H */

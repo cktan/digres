@@ -47,29 +47,29 @@
 #define TY_END_DATE (2147483494 - 2451545)
 
 static inline int ty_date_finite(int32_t d) {
-    return d != TY_DATE_NOBEGIN && d != TY_DATE_NOEND;
+  return d != TY_DATE_NOBEGIN && d != TY_DATE_NOEND;
 }
 static inline int ty_date_valid(int32_t d) {
-    return TY_MIN_DATE <= d && d < TY_END_DATE;
+  return TY_MIN_DATE <= d && d < TY_END_DATE;
 }
 static inline int ty_timestamp_finite(int64_t t) {
-    return t != TY_TIMESTAMP_NOBEGIN && t != TY_TIMESTAMP_NOEND;
+  return t != TY_TIMESTAMP_NOBEGIN && t != TY_TIMESTAMP_NOEND;
 }
 static inline int ty_timestamp_valid(int64_t t) {
-    return TY_MIN_TIMESTAMP <= t && t < TY_END_TIMESTAMP;
+  return TY_MIN_TIMESTAMP <= t && t < TY_END_TIMESTAMP;
 }
 
 /* Broken-down time: the fields of PostgreSQL's pg_tm that these use. */
 typedef struct ty_tm_t {
-    int32_t year, mon, mday, hour, min, sec;
+  int32_t year, mon, mday, hour, min, sec;
 } ty_tm_t;
 
 /* The calendar: the Julian day of a date, and back; the weekday (0 Sunday). */
 int ty_date2j(int year, int mon, int mday);
-void ty_j2date(int jd, int* year, int* mon, int* mday);
+void ty_j2date(int jd, int *year, int *mon, int *mday);
 int ty_j2day(int jd);
 static inline int ty_isleap(int y) {
-    return (y % 4) == 0 && ((y % 100) != 0 || (y % 400) == 0);
+  return (y % 4) == 0 && ((y % 100) != 0 || (y % 400) == 0);
 }
 
 /* The days in a month (1 to 12) of a year. */
@@ -81,7 +81,7 @@ int ty_days_in_month(int year, int mon);
  * is TY_ERR_INVALID ("date field value out of range: Y-M-D"); a date that
  * is out of the range of dates is TY_ERR_RANGE ("date out of range: Y-M-D").
  */
-int ty_date_make(int32_t year, int32_t mon, int32_t mday, int32_t* out);
+int ty_date_make(int32_t year, int32_t mon, int32_t mday, int32_t *out);
 
 /*
  * date + days and date - days; infinity stays. TY_ERR_RANGE ("date out of
@@ -91,41 +91,41 @@ int ty_date_make(int32_t year, int32_t mon, int32_t mday, int32_t* out);
 int ty_date_range_error(void);
 int ty_date_infinite_error(void);
 
-static inline int ty_date_add_days(int32_t d, int32_t days, int32_t* out) {
-    int32_t r;
+static inline int ty_date_add_days(int32_t d, int32_t days, int32_t *out) {
+  int32_t r;
 
-    if (!ty_date_finite(d)) {
-        *out = d;
-        return 0;
-    }
-    if (TY_UNLIKELY(__builtin_add_overflow(d, days, &r) || !ty_date_valid(r))) {
-        return ty_date_range_error();
-    }
-    *out = r;
+  if (!ty_date_finite(d)) {
+    *out = d;
     return 0;
+  }
+  if (TY_UNLIKELY(__builtin_add_overflow(d, days, &r) || !ty_date_valid(r))) {
+    return ty_date_range_error();
+  }
+  *out = r;
+  return 0;
 }
 
-static inline int ty_date_sub_days(int32_t d, int32_t days, int32_t* out) {
-    int32_t r;
+static inline int ty_date_sub_days(int32_t d, int32_t days, int32_t *out) {
+  int32_t r;
 
-    if (!ty_date_finite(d)) {
-        *out = d;
-        return 0;
-    }
-    if (TY_UNLIKELY(__builtin_sub_overflow(d, days, &r) || !ty_date_valid(r))) {
-        return ty_date_range_error();
-    }
-    *out = r;
+  if (!ty_date_finite(d)) {
+    *out = d;
     return 0;
+  }
+  if (TY_UNLIKELY(__builtin_sub_overflow(d, days, &r) || !ty_date_valid(r))) {
+    return ty_date_range_error();
+  }
+  *out = r;
+  return 0;
 }
 
 /* date - date, in days; an infinite date is TY_ERR_RANGE. */
-static inline int ty_date_diff(int32_t a, int32_t b, int32_t* out) {
-    if (TY_UNLIKELY(!ty_date_finite(a) || !ty_date_finite(b))) {
-        return ty_date_infinite_error();
-    }
-    *out = (int32_t)((uint32_t)a - (uint32_t)b);
-    return 0;
+static inline int ty_date_diff(int32_t a, int32_t b, int32_t *out) {
+  if (TY_UNLIKELY(!ty_date_finite(a) || !ty_date_finite(b))) {
+    return ty_date_infinite_error();
+  }
+  *out = (int32_t)((uint32_t)a - (uint32_t)b);
+  return 0;
 }
 
 /*
@@ -133,7 +133,7 @@ static inline int ty_date_diff(int32_t a, int32_t b, int32_t* out) {
  * as make_time does; a field out of range is TY_ERR_INVALID. time_make_usec
  * is the same with the seconds as microseconds.
  */
-int ty_time_make(int32_t hour, int32_t min, double sec, int64_t* out);
+int ty_time_make(int32_t hour, int32_t min, double sec, int64_t *out);
 int ty_time_overflows(int hour, int min, int sec, int32_t fsec);
 
 /* The error of time + or - an infinite interval: cold, out of line. */
@@ -141,11 +141,11 @@ int ty_time_interval_error(int sub);
 
 /* t reduced to within a day, as PostgreSQL does it. */
 static inline int64_t ty_time_wrap_day(int64_t t) {
-    t -= t / INT64_C(86400000000) * INT64_C(86400000000);
-    if (t < 0) {
-        t += INT64_C(86400000000);
-    }
-    return t;
+  t -= t / INT64_C(86400000000) * INT64_C(86400000000);
+  if (t < 0) {
+    t += INT64_C(86400000000);
+  }
+  return t;
 }
 
 /*
@@ -153,42 +153,42 @@ static inline int64_t ty_time_wrap_day(int64_t t) {
  * microseconds of the interval count; an infinite one is an error. The sum
  * wraps in two's complement, as PostgreSQL's does.
  */
-static inline int ty_time_add_interval(int64_t t, const ty_interval_t* span,
-                                       int64_t* out) {
-    if (TY_UNLIKELY(ty_interval_not_finite(span))) {
-        return ty_time_interval_error(0);
-    }
-    *out = ty_time_wrap_day((int64_t)((uint64_t)t + (uint64_t)span->time));
-    return 0;
+static inline int ty_time_add_interval(int64_t t, const ty_interval_t *span,
+                                       int64_t *out) {
+  if (TY_UNLIKELY(ty_interval_not_finite(span))) {
+    return ty_time_interval_error(0);
+  }
+  *out = ty_time_wrap_day((int64_t)((uint64_t)t + (uint64_t)span->time));
+  return 0;
 }
-static inline int ty_time_sub_interval(int64_t t, const ty_interval_t* span,
-                                       int64_t* out) {
-    if (TY_UNLIKELY(ty_interval_not_finite(span))) {
-        return ty_time_interval_error(1);
-    }
-    *out = ty_time_wrap_day((int64_t)((uint64_t)t - (uint64_t)span->time));
-    return 0;
+static inline int ty_time_sub_interval(int64_t t, const ty_interval_t *span,
+                                       int64_t *out) {
+  if (TY_UNLIKELY(ty_interval_not_finite(span))) {
+    return ty_time_interval_error(1);
+  }
+  *out = ty_time_wrap_day((int64_t)((uint64_t)t - (uint64_t)span->time));
+  return 0;
 }
 
 /* time - time, as an interval of microseconds. */
-void ty_time_diff(int64_t a, int64_t b, ty_interval_t* out);
+void ty_time_diff(int64_t a, int64_t b, ty_interval_t *out);
 
 /*
  * A timestamp as broken-down time: TY_ERR_RANGE if its day is not a
  * Julian day that fits (fsec is the microseconds of the second); and back,
  * with the range check of a timestamp.
  */
-int ty_timestamp_to_tm(int64_t ts, ty_tm_t* tm, int32_t* fsec);
-int ty_tm_to_timestamp(const ty_tm_t* tm, int32_t fsec, int64_t* out);
+int ty_timestamp_to_tm(int64_t ts, ty_tm_t *tm, int32_t *fsec);
+int ty_tm_to_timestamp(const ty_tm_t *tm, int32_t fsec, int64_t *out);
 
 /* timestamp + interval and - interval: the months first, then the days. */
-int ty_timestamp_add_interval(int64_t ts, const ty_interval_t* span,
-                              int64_t* out);
-int ty_timestamp_sub_interval(int64_t ts, const ty_interval_t* span,
-                              int64_t* out);
+int ty_timestamp_add_interval(int64_t ts, const ty_interval_t *span,
+                              int64_t *out);
+int ty_timestamp_sub_interval(int64_t ts, const ty_interval_t *span,
+                              int64_t *out);
 
 /* timestamp - timestamp, as an interval with the hours justified. */
-int ty_timestamp_diff(int64_t a, int64_t b, ty_interval_t* out);
+int ty_timestamp_diff(int64_t a, int64_t b, ty_interval_t *out);
 
 /*
  * time with time zone: the time of day in microseconds, and the zone as
@@ -196,22 +196,22 @@ int ty_timestamp_diff(int64_t a, int64_t b, ty_interval_t* out);
  * interval is that of time (ty_time_add_interval), the zone kept.
  */
 typedef struct ty_timetz_t {
-    int64_t time;
-    int32_t zone;
+  int64_t time;
+  int32_t zone;
 } ty_timetz_t;
 
 /*
  * The order of two timetz: by the time in UTC, then by the zone, so that
  * two are equal only if the time and the zone are.
  */
-static inline int ty_timetz_cmp(const ty_timetz_t* a, const ty_timetz_t* b) {
-    int64_t t1 = a->time + (int64_t)a->zone * 1000000;
-    int64_t t2 = b->time + (int64_t)b->zone * 1000000;
+static inline int ty_timetz_cmp(const ty_timetz_t *a, const ty_timetz_t *b) {
+  int64_t t1 = a->time + (int64_t)a->zone * 1000000;
+  int64_t t2 = b->time + (int64_t)b->zone * 1000000;
 
-    if (t1 != t2) {
-        return t1 > t2 ? 1 : -1;
-    }
-    return (a->zone > b->zone) - (a->zone < b->zone);
+  if (t1 != t2) {
+    return t1 > t2 ? 1 : -1;
+  }
+  return (a->zone > b->zone) - (a->zone < b->zone);
 }
 
 /*
@@ -219,17 +219,17 @@ static inline int ty_timetz_cmp(const ty_timetz_t* a, const ty_timetz_t* b) {
  * the zone folded together by xor. The low 32 bits of the hash with seed 0
  * are the standard 32-bit hash.
  */
-uint64_t ty_timetz_hash(const ty_timetz_t* a, uint64_t seed);
+uint64_t ty_timetz_hash(const ty_timetz_t *a, uint64_t seed);
 
 /*
  * Whether val is within offset of base, for a window frame of RANGE offsets
  * of a time (r is the answer). Only the time of the offset is used, and a
  * negative one is TY_ERR_INVALID. The sum does not wrap at midnight.
  */
-int ty_time_in_range(int64_t val, int64_t base, const ty_interval_t* offset,
-                     int sub, int less, int* r);
-int ty_timetz_in_range(const ty_timetz_t* val, const ty_timetz_t* base,
-                       const ty_interval_t* offset, int sub, int less, int* r);
+int ty_time_in_range(int64_t val, int64_t base, const ty_interval_t *offset,
+                     int sub, int less, int *r);
+int ty_timetz_in_range(const ty_timetz_t *val, const ty_timetz_t *base,
+                       const ty_interval_t *offset, int sub, int less, int *r);
 
 /*
  * date to timestamp: midnight. The infinities map to the infinities. A date
@@ -239,24 +239,24 @@ int ty_timetz_in_range(const ty_timetz_t* val, const ty_timetz_t* base,
  */
 #define TY_TIMESTAMP_END_JULIAN 109203528 /* date2j(294277, 1, 1) */
 int ty_date_to_ts_error(void);
-static inline int ty_date_to_timestamp(int32_t d, int64_t* out, int* overflow) {
-    if (overflow) {
-        *overflow = 0;
-    }
-    if (!ty_date_finite(d)) {
-        *out = d == TY_DATE_NOBEGIN ? TY_TIMESTAMP_NOBEGIN : TY_TIMESTAMP_NOEND;
-        return 0;
-    }
-    if (TY_UNLIKELY(d >= TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE)) {
-        if (overflow) {
-            *overflow = 1;
-            *out = TY_TIMESTAMP_NOEND;
-            return 0;
-        }
-        return ty_date_to_ts_error();
-    }
-    *out = (int64_t)d * (TY_USECS_PER_HOUR * 24);
+static inline int ty_date_to_timestamp(int32_t d, int64_t *out, int *overflow) {
+  if (overflow) {
+    *overflow = 0;
+  }
+  if (!ty_date_finite(d)) {
+    *out = d == TY_DATE_NOBEGIN ? TY_TIMESTAMP_NOBEGIN : TY_TIMESTAMP_NOEND;
     return 0;
+  }
+  if (TY_UNLIKELY(d >= TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE)) {
+    if (overflow) {
+      *overflow = 1;
+      *out = TY_TIMESTAMP_NOEND;
+      return 0;
+    }
+    return ty_date_to_ts_error();
+  }
+  *out = (int64_t)d * (TY_USECS_PER_HOUR * 24);
+  return 0;
 }
 
 /*
@@ -265,27 +265,27 @@ static inline int ty_date_to_timestamp(int32_t d, int64_t* out, int* overflow) {
  * none: the caller makes it null). TY_ERR_RANGE if a timestamp is out of
  * range.
  */
-int ty_timestamp_to_date(int64_t ts, int32_t* out);
-int ty_timestamp_to_time(int64_t ts, int64_t* out);
-int ty_datetime_to_timestamp(int32_t date, int64_t time, int64_t* out);
+int ty_timestamp_to_date(int64_t ts, int32_t *out);
+int ty_timestamp_to_time(int64_t ts, int64_t *out);
+int ty_datetime_to_timestamp(int32_t date, int64_t time, int64_t *out);
 
 /*
  * An interval to a time of day: the part of the days, 0 to a day; the months
  * and days are dropped. An infinite interval is TY_ERR_RANGE.
  */
 int ty_interval_to_time_error(void);
-static inline int ty_interval_to_time(const ty_interval_t* iv, int64_t* out) {
-    int64_t r;
+static inline int ty_interval_to_time(const ty_interval_t *iv, int64_t *out) {
+  int64_t r;
 
-    if (TY_UNLIKELY(ty_interval_not_finite(iv))) {
-        return ty_interval_to_time_error();
-    }
-    r = iv->time % (TY_USECS_PER_HOUR * 24);
-    if (r < 0) {
-        r += TY_USECS_PER_HOUR * 24;
-    }
-    *out = r;
-    return 0;
+  if (TY_UNLIKELY(ty_interval_not_finite(iv))) {
+    return ty_interval_to_time_error();
+  }
+  r = iv->time % (TY_USECS_PER_HOUR * 24);
+  if (r < 0) {
+    r += TY_USECS_PER_HOUR * 24;
+  }
+  *out = r;
+  return 0;
 }
 
 /*
@@ -296,7 +296,7 @@ int ty_date2isoweek(int year, int mon, int mday);
 int ty_date2isoyear(int year, int mon, int mday);
 int ty_date2isoyearday(int year, int mon, int mday);
 int ty_isoweek2j(int year, int week);
-void ty_isoweek2date(int woy, int* year, int* mon, int* mday);
+void ty_isoweek2date(int woy, int *year, int *mon, int *mday);
 
 /*
  * A unit of time as a word of the host's SQL: 1 and the unit's code
@@ -305,7 +305,7 @@ void ty_isoweek2date(int woy, int* year, int* mon, int* mday);
  * second 18, minute 19, hour 20, day 21) if the lower-case word is one,
  * 0 if it is not.
  */
-int ty_datetime_unit(const char* lowtoken, int* code);
+int ty_datetime_unit(const char *lowtoken, int *code);
 
 /*
  * date_trunc of a timestamp: the timestamp cut at a unit (see above). An
@@ -313,21 +313,21 @@ int ty_datetime_unit(const char* lowtoken, int* code);
  * code that is no unit of a timestamp (dow, epoch, ...) is TY_ERR_INVALID
  * ("unit not supported"). A result out of range is TY_ERR_RANGE.
  */
-int ty_timestamp_trunc(int code, int64_t ts, int64_t* out);
+int ty_timestamp_trunc(int code, int64_t ts, int64_t *out);
 
 /*
  * The cut of broken-down time, with its microseconds, at a unit: what
  * ty_timestamp_trunc does to the fields, for a caller that has them (a
  * timestamptz in a zone). An unsupported unit is TY_ERR_INVALID.
  */
-int ty_tm_trunc(int code, ty_tm_t* tm, int32_t* fsec);
+int ty_tm_trunc(int code, ty_tm_t *tm, int32_t *fsec);
 
 /*
  * date_trunc of an interval: cut at a unit as ty_timestamp_trunc does. A
  * week, and a code that is no unit of an interval, is TY_ERR_INVALID
  * ("unit not supported"); a result out of range is TY_ERR_RANGE.
  */
-int ty_interval_trunc(int code, const ty_interval_t* iv, ty_interval_t* out);
+int ty_interval_trunc(int code, const ty_interval_t *iv, ty_interval_t *out);
 
 /*
  * The SQL OVERLAPS operator on two periods. A null end is a null pointer.
@@ -335,10 +335,10 @@ int ty_interval_trunc(int code, const ty_interval_t* iv, ty_interval_t* out);
  * SQL standard, which gives a result for some inputs that have nulls.
  * Timestamp and time compare as int64; timetz as ty_timetz_cmp.
  */
-int ty_overlaps_i64(const int64_t* ts1, const int64_t* te1, const int64_t* ts2,
-                    const int64_t* te2);
-int ty_overlaps_timetz(const ty_timetz_t* ts1, const ty_timetz_t* te1,
-                       const ty_timetz_t* ts2, const ty_timetz_t* te2);
+int ty_overlaps_i64(const int64_t *ts1, const int64_t *te1, const int64_t *ts2,
+                    const int64_t *te2);
+int ty_overlaps_timetz(const ty_timetz_t *ts1, const ty_timetz_t *te1,
+                       const ty_timetz_t *ts2, const ty_timetz_t *te2);
 
 /*
  * date_bin: the start of the bin of timestamp, of stride, from origin. The
@@ -346,55 +346,52 @@ int ty_overlaps_timetz(const ty_timetz_t* ts1, const ty_timetz_t* te1,
  * months, TY_ERR_INVALID ("timestamps cannot be binned into intervals
  * containing months or years").
  */
-int ty_timestamp_bin_error(const ty_interval_t* stride, int64_t ts,
+int ty_timestamp_bin_error(const ty_interval_t *stride, int64_t ts,
                            int64_t origin); /* cold: says which error */
-static inline int ty_timestamp_bin(const ty_interval_t* stride, int64_t ts,
-                                   int64_t origin, int64_t* out) {
-    int64_t stride_usecs, tm_diff, tm_modulo, result;
+static inline int ty_timestamp_bin(const ty_interval_t *stride, int64_t ts,
+                                   int64_t origin, int64_t *out) {
+  int64_t stride_usecs, tm_diff, tm_modulo, result;
 
-    if (!ty_timestamp_finite(ts)) {
-        *out = ts;
-        return 0;
-    }
-    /* the rare cases, and every error, are in the cold function */
-    if (TY_UNLIKELY(!ty_timestamp_finite(origin) ||
-                    ty_interval_not_finite(stride) || stride->month != 0 ||
-                    __builtin_mul_overflow((int64_t)stride->day,
-                                           TY_USECS_PER_HOUR * 24,
-                                           &stride_usecs) ||
-                    __builtin_add_overflow(stride_usecs, stride->time,
-                                           &stride_usecs) ||
-                    stride_usecs <= 0 ||
-                    __builtin_sub_overflow(ts, origin, &tm_diff))) {
-        return ty_timestamp_bin_error(stride, ts, origin);
-    }
-    tm_modulo = tm_diff % stride_usecs;
-    result = origin + (tm_diff - tm_modulo);
-    /* round toward minus infinity: this can overflow */
-    if (tm_modulo < 0) {
-        if (TY_UNLIKELY(__builtin_sub_overflow(result, stride_usecs,
-                                               &result) ||
-                        !ty_timestamp_valid(result))) {
-            return ty_timestamp_bin_error(stride, ts, origin);
-        }
-    }
-    *out = result;
+  if (!ty_timestamp_finite(ts)) {
+    *out = ts;
     return 0;
+  }
+  /* the rare cases, and every error, are in the cold function */
+  if (TY_UNLIKELY(
+          !ty_timestamp_finite(origin) || ty_interval_not_finite(stride) ||
+          stride->month != 0 ||
+          __builtin_mul_overflow((int64_t)stride->day, TY_USECS_PER_HOUR * 24,
+                                 &stride_usecs) ||
+          __builtin_add_overflow(stride_usecs, stride->time, &stride_usecs) ||
+          stride_usecs <= 0 || __builtin_sub_overflow(ts, origin, &tm_diff))) {
+    return ty_timestamp_bin_error(stride, ts, origin);
+  }
+  tm_modulo = tm_diff % stride_usecs;
+  result = origin + (tm_diff - tm_modulo);
+  /* round toward minus infinity: this can overflow */
+  if (tm_modulo < 0) {
+    if (TY_UNLIKELY(__builtin_sub_overflow(result, stride_usecs, &result) ||
+                    !ty_timestamp_valid(result))) {
+      return ty_timestamp_bin_error(stride, ts, origin);
+    }
+  }
+  *out = result;
+  return 0;
 }
 
 /*
  * age(a, b) of two timestamps: the years, months, days and time from b to a,
  * the borrow of a month taking the days of the month of the earlier one.
  */
-int ty_timestamp_age(int64_t a, int64_t b, ty_interval_t* out);
+int ty_timestamp_age(int64_t a, int64_t b, ty_interval_t *out);
 
 /*
  * The core of age: the symbolic difference of two broken-down times, from
  * the first and the second, with neg set if the first instant is the
  * earlier. TY_ERR_RANGE if the interval does not fit.
  */
-int ty_age_of_fields(const ty_tm_t* tm1, int32_t fsec1, const ty_tm_t* tm2,
-                     int32_t fsec2, int neg, ty_interval_t* out);
+int ty_age_of_fields(const ty_tm_t *tm1, int32_t fsec1, const ty_tm_t *tm2,
+                     int32_t fsec2, int neg, ty_interval_t *out);
 
 /*
  * extract and date_part. A unit is a word as PostgreSQL knows it, in lower
@@ -425,9 +422,9 @@ int ty_age_of_fields(const ty_tm_t* tm1, int32_t fsec1, const ty_tm_t* tm2,
 #define TY_UNIT_TZ_MINUTE 35
 #define TY_UNIT_ISOYEAR 36
 #define TY_UNIT_ISODOW 37
-int ty_datetime_part_unit(const char* lowtoken, int epoch_only, int* code);
+int ty_datetime_part_unit(const char *lowtoken, int epoch_only, int *code);
 /* The same, from the tables of words only (the tests compare the two). */
-int ty_datetime_part_unit_slow(const char* lowtoken, int epoch_only, int* code);
+int ty_datetime_part_unit_slow(const char *lowtoken, int epoch_only, int *code);
 
 /*
  * The result of a part, as the exact value and as a float8. The value is by
@@ -444,11 +441,11 @@ int ty_datetime_part_unit_slow(const char* lowtoken, int epoch_only, int* code);
 #define TY_PART_SUM 2
 #define TY_PART_JULIAN 3
 typedef struct ty_part_t {
-    int kind;
-    int scale;
-    int64_t num;
-    int64_t num2;
-    double f;
+  int kind;
+  int scale;
+  int64_t num;
+  int64_t num2;
+  double f;
 } ty_part_t;
 
 /*
@@ -456,14 +453,15 @@ typedef struct ty_part_t {
  * the unit word was reserved (see above). A unit that the type has no part
  * for is TY_ERR_INVALID; a timestamp that is out of range, TY_ERR_RANGE.
  */
-int ty_timestamp_part(int reserved, int code, int64_t ts, ty_part_t* out);
+int ty_timestamp_part(int reserved, int code, int64_t ts, ty_part_t *out);
 
-/* The part of broken-down time, as ty_timestamp_part takes it of a timestamp. */
-int ty_tm_part(int code, const ty_tm_t* tm, int32_t fsec, ty_part_t* out);
-int ty_date_part(int reserved, int code, int32_t date, ty_part_t* out);
-int ty_time_part(int reserved, int code, int64_t t, ty_part_t* out);
-int ty_interval_part(int reserved, int code, const ty_interval_t* iv,
-                     ty_part_t* out);
+/* The part of broken-down time, as ty_timestamp_part takes it of a timestamp.
+ */
+int ty_tm_part(int code, const ty_tm_t *tm, int32_t fsec, ty_part_t *out);
+int ty_date_part(int reserved, int code, int32_t date, ty_part_t *out);
+int ty_time_part(int reserved, int code, int64_t t, ty_part_t *out);
+int ty_interval_part(int reserved, int code, const ty_interval_t *iv,
+                     ty_part_t *out);
 
 /*
  * Make a timestamp fit its precision (0 to 6; -1 or 6 leaves it): rounded to
@@ -472,36 +470,36 @@ int ty_interval_part(int reserved, int code, const ty_interval_t* iv,
  * An infinite timestamp is not changed.
  */
 int ty_timestamp_typmod_error(int32_t typmod); /* cold */
-static inline int ty_timestamp_adjust_typmod(int64_t* ts, int32_t typmod) {
-    static const int64_t scales[7] = {1000000, 100000, 10000, 1000, 100, 10, 1};
-    static const int64_t offsets[7] = {500000, 50000, 5000, 500, 50, 5, 0};
+static inline int ty_timestamp_adjust_typmod(int64_t *ts, int32_t typmod) {
+  static const int64_t scales[7] = {1000000, 100000, 10000, 1000, 100, 10, 1};
+  static const int64_t offsets[7] = {500000, 50000, 5000, 500, 50, 5, 0};
 
-    if (!ty_timestamp_finite(*ts) || typmod == -1 || typmod == 6) {
-        return 0;
-    }
-    if (TY_UNLIKELY(typmod < 0 || typmod > 6)) {
-        return ty_timestamp_typmod_error(typmod);
-    }
-    if (*ts >= 0) {
-        *ts = ((*ts + offsets[typmod]) / scales[typmod]) * scales[typmod];
-    } else {
-        *ts = -((((-*ts) + offsets[typmod]) / scales[typmod]) * scales[typmod]);
-    }
+  if (!ty_timestamp_finite(*ts) || typmod == -1 || typmod == 6) {
     return 0;
+  }
+  if (TY_UNLIKELY(typmod < 0 || typmod > 6)) {
+    return ty_timestamp_typmod_error(typmod);
+  }
+  if (*ts >= 0) {
+    *ts = ((*ts + offsets[typmod]) / scales[typmod]) * scales[typmod];
+  } else {
+    *ts = -((((-*ts) + offsets[typmod]) / scales[typmod]) * scales[typmod]);
+  }
+  return 0;
 }
 
 /* Make a time fit its precision (0 to 6; anything else leaves it). */
-static inline void ty_time_adjust_typmod(int64_t* t, int32_t typmod) {
-    static const int64_t scales[7] = {1000000, 100000, 10000, 1000, 100, 10, 1};
-    static const int64_t offsets[7] = {500000, 50000, 5000, 500, 50, 5, 0};
+static inline void ty_time_adjust_typmod(int64_t *t, int32_t typmod) {
+  static const int64_t scales[7] = {1000000, 100000, 10000, 1000, 100, 10, 1};
+  static const int64_t offsets[7] = {500000, 50000, 5000, 500, 50, 5, 0};
 
-    if (typmod >= 0 && typmod <= 6) {
-        if (*t >= 0) {
-            *t = ((*t + offsets[typmod]) / scales[typmod]) * scales[typmod];
-        } else {
-            *t = -((((-*t) + offsets[typmod]) / scales[typmod]) * scales[typmod]);
-        }
+  if (typmod >= 0 && typmod <= 6) {
+    if (*t >= 0) {
+      *t = ((*t + offsets[typmod]) / scales[typmod]) * scales[typmod];
+    } else {
+      *t = -((((-*t) + offsets[typmod]) / scales[typmod]) * scales[typmod]);
     }
+  }
 }
 
 /*
@@ -514,35 +512,46 @@ static inline void ty_time_adjust_typmod(int64_t* t, int32_t typmod) {
  */
 #define TY_DATETIME_TEXT_MAX 128
 
-enum { TY_DATES_POSTGRES, TY_DATES_ISO, TY_DATES_SQL, TY_DATES_GERMAN, TY_DATES_XSD };
+enum {
+  TY_DATES_POSTGRES,
+  TY_DATES_ISO,
+  TY_DATES_SQL,
+  TY_DATES_GERMAN,
+  TY_DATES_XSD
+};
 enum { TY_DATEORDER_YMD, TY_DATEORDER_DMY, TY_DATEORDER_MDY };
-enum { TY_INTSTYLE_POSTGRES, TY_INTSTYLE_POSTGRES_VERBOSE, TY_INTSTYLE_SQL_STANDARD, TY_INTSTYLE_ISO_8601 };
+enum {
+  TY_INTSTYLE_POSTGRES,
+  TY_INTSTYLE_POSTGRES_VERBOSE,
+  TY_INTSTYLE_SQL_STANDARD,
+  TY_INTSTYLE_ISO_8601
+};
 
 /* An interval in parts, as PostgreSQL's pg_itm. */
 typedef struct ty_itm_t {
-    int64_t hour;
-    int32_t mday, mon, year, min, sec, usec;
+  int64_t hour;
+  int32_t mday, mon, year, min, sec, usec;
 } ty_itm_t;
 
 /* The parts of a finite interval. */
-void ty_interval_to_itm(const ty_interval_t* span, ty_itm_t* itm);
+void ty_interval_to_itm(const ty_interval_t *span, ty_itm_t *itm);
 
 /* A date: "2000-01-31" in ISO, and the other styles. */
-size_t ty_date_format(const ty_tm_t* tm, int style, int order, char* out);
+size_t ty_date_format(const ty_tm_t *tm, int style, int order, char *out);
 
 /*
  * A time of day, and a timestamp. print_tz writes the zone: tzn is its name
  * (or NULL), tz the offset in seconds west of Greenwich (the sign PostgreSQL
  * uses); isdst below 0 means the zone is not known, and nothing is written.
  */
-size_t ty_time_format(const ty_tm_t* tm, int32_t fsec, int print_tz, int tz,
-                      int style, char* out);
-size_t ty_timestamp_format(const ty_tm_t* tm, int32_t fsec, int print_tz,
-                           int tz, const char* tzn, int isdst, int style,
-                           int order, char* out);
+size_t ty_time_format(const ty_tm_t *tm, int32_t fsec, int print_tz, int tz,
+                      int style, char *out);
+size_t ty_timestamp_format(const ty_tm_t *tm, int32_t fsec, int print_tz,
+                           int tz, const char *tzn, int isdst, int style,
+                           int order, char *out);
 
 /* An interval, in an interval style. */
-size_t ty_interval_format(const ty_itm_t* itm, int style, char* out);
+size_t ty_interval_format(const ty_itm_t *itm, int style, char *out);
 
 /*
  * The text in of date, time and timestamp, as date_in, time_in and
@@ -572,10 +581,10 @@ size_t ty_interval_format(const ty_itm_t* itm, int style, char* out);
  * a host whose lookup gives them need not translate each word.
  */
 enum {
-    TY_ABBREV_TZ = 5,     /* a fixed offset, standard time */
-    TY_ABBREV_DTZ = 6,    /* a fixed offset, daylight time */
-    TY_ABBREV_DYNTZ = 7,  /* a zone's own: its offset depends on the date */
-    TY_ABBREV_NONE = 31   /* not an abbreviation */
+  TY_ABBREV_TZ = 5,    /* a fixed offset, standard time */
+  TY_ABBREV_DTZ = 6,   /* a fixed offset, daylight time */
+  TY_ABBREV_DYNTZ = 7, /* a zone's own: its offset depends on the date */
+  TY_ABBREV_NONE = 31  /* not an abbreviation */
 };
 
 /*
@@ -586,9 +595,9 @@ enum {
  * names it (the second). A string is the host's, or in buf.
  */
 typedef struct ty_dtin_extra_t {
-    const char* timezone;
-    const char* abbrev;
-    char buf[136];
+  const char *timezone;
+  const char *abbrev;
+  char buf[136];
 } ty_dtin_extra_t;
 
 /*
@@ -610,31 +619,30 @@ typedef struct ty_dtin_extra_t {
  * offset: The offset in seconds west of Greenwich of a zone at a local time
  *   (what PostgreSQL's DetermineTimeZoneOffset gives); tz is the zone from
  *   the hook zone, or NULL for the session's zone. A time of day with no
- *   date has mday 0: the date is then today's, in the session's zone. NULL for a text of a type
- *   with no zone (date, time, timestamp), which reads no offset: then none
- *   is asked for.
- * abbrev_offset: The same for a dynamic abbreviation (DetermineTimeZoneAbbrev
- *   Offset): abbrev is the lower-case word, tz the zone the hook abbrev gave;
- *   mday is 0 for no date, as above.
+ *   date has mday 0: the date is then today's, in the session's zone. NULL for
+ * a text of a type with no zone (date, time, timestamp), which reads no offset:
+ * then none is asked for. abbrev_offset: The same for a dynamic abbreviation
+ * (DetermineTimeZoneAbbrev Offset): abbrev is the lower-case word, tz the zone
+ * the hook abbrev gave; mday is 0 for no date, as above.
  */
 typedef struct ty_dtzone_t {
-    void* ctx;
-    int (*abbrev)(void* ctx, int field, const char* lowtoken, int* type,
-                  int* offset, const void** tz, ty_dtin_extra_t* extra);
-    const void* (*zone)(void* ctx, const char* name);
-    int (*zone_fixed)(void* ctx, const void* tz, long* gmtoff);
-    void (*now)(void* ctx, ty_tm_t* tm, int32_t* fsec, int* tz);
-    int (*offset)(void* ctx, const ty_tm_t* tm, const void* tz);
-    int (*abbrev_offset)(void* ctx, const ty_tm_t* tm, const char* abbrev,
-                         const void* tz);
+  void *ctx;
+  int (*abbrev)(void *ctx, int field, const char *lowtoken, int *type,
+                int *offset, const void **tz, ty_dtin_extra_t *extra);
+  const void *(*zone)(void *ctx, const char *name);
+  int (*zone_fixed)(void *ctx, const void *tz, long *gmtoff);
+  void (*now)(void *ctx, ty_tm_t *tm, int32_t *fsec, int *tz);
+  int (*offset)(void *ctx, const ty_tm_t *tm, const void *tz);
+  int (*abbrev_offset)(void *ctx, const ty_tm_t *tm, const char *abbrev,
+                       const void *tz);
 } ty_dtzone_t;
 
-int ty_date_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
-                  int32_t* out, int* dterr, ty_dtin_extra_t* extra);
-int ty_time_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
-                  int64_t* out, int* dterr, ty_dtin_extra_t* extra);
-int ty_timestamp_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
-                       int64_t* out, int* dterr, ty_dtin_extra_t* extra);
+int ty_date_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
+                  int32_t *out, int *dterr, ty_dtin_extra_t *extra);
+int ty_time_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
+                  int64_t *out, int *dterr, ty_dtin_extra_t *extra);
+int ty_timestamp_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
+                       int64_t *out, int *dterr, ty_dtin_extra_t *extra);
 
 /*
  * The text in of timestamptz and timetz (timestamptz_in and timetz_in), up to
@@ -643,10 +651,10 @@ int ty_timestamp_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
  * is the instant, in UTC. A timetz is the time as written, with its zone in
  * seconds west of Greenwich.
  */
-int ty_timestamptz_parse(const char* str, int dateorder,
-                         const ty_dtzone_t* zone, int64_t* out, int* dterr,
-                         ty_dtin_extra_t* extra);
-int ty_timetz_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
-                    ty_timetz_t* out, int* dterr, ty_dtin_extra_t* extra);
+int ty_timestamptz_parse(const char *str, int dateorder,
+                         const ty_dtzone_t *zone, int64_t *out, int *dterr,
+                         ty_dtin_extra_t *extra);
+int ty_timetz_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
+                    ty_timetz_t *out, int *dterr, ty_dtin_extra_t *extra);
 
 #endif

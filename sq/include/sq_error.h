@@ -18,19 +18,19 @@
 #define SQ_ERROR_H
 
 typedef enum sq_errnum_t {
-    SQ_OK            = 0,
+  SQ_OK = 0,
 
-    SQ_ERR_PARSE     = 1,   /* the SQL was refused; see sq_sqlstate() */
-    SQ_ERR_NOMEM     = 2,   /* out of memory */
+  SQ_ERR_PARSE = 1, /* the SQL was refused; see sq_sqlstate() */
+  SQ_ERR_NOMEM = 2, /* out of memory */
 
-    /*
-     * An exception other than std::bad_alloc reached a call's
-     * catch-all, which means a bug.
-     */
-    SQ_ERR_EXCEPTION = 3,
+  /*
+   * An exception other than std::bad_alloc reached a call's
+   * catch-all, which means a bug.
+   */
+  SQ_ERR_EXCEPTION = 3,
 
-    /* The highest code; move it when one is appended. */
-    SQ_ERR_LAST      = SQ_ERR_EXCEPTION
+  /* The highest code; move it when one is appended. */
+  SQ_ERR_LAST = SQ_ERR_EXCEPTION
 } sq_errnum_t;
 
 #endif /* SQ_ERROR_H */

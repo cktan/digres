@@ -65,24 +65,24 @@ struct tree_access_t;
  * destroying it destroys them all. The nodes are in sq_nodes.h.
  */
 struct sq_tree_t {
-    /*
-     * The statements, in the order written. Each has the statement
-     * itself, and where in the text it begins and how long it is.
-     */
-    std::vector<sq_raw_stmt_t*> stmts;
+  /*
+   * The statements, in the order written. Each has the statement
+   * itself, and where in the text it begins and how long it is.
+   */
+  std::vector<sq_raw_stmt_t *> stmts;
 
-    sq_tree_t();
-    ~sq_tree_t();
-    sq_tree_t(sq_tree_t&& other) noexcept;
-    sq_tree_t& operator=(sq_tree_t&& other) noexcept;
-    sq_tree_t(const sq_tree_t&) = delete;
-    sq_tree_t& operator=(const sq_tree_t&) = delete;
+  sq_tree_t();
+  ~sq_tree_t();
+  sq_tree_t(sq_tree_t &&other) noexcept;
+  sq_tree_t &operator=(sq_tree_t &&other) noexcept;
+  sq_tree_t(const sq_tree_t &) = delete;
+  sq_tree_t &operator=(const sq_tree_t &) = delete;
 
 private:
-    friend struct sq::tree_access_t;
+  friend struct sq::tree_access_t;
 
-    /* What the tree owns; NULL until something is made for it. */
-    sq::store_t* m_store = nullptr;
+  /* What the tree owns; NULL until something is made for it. */
+  sq::store_t *m_store = nullptr;
 };
 
 /* ---- errors: the calling thread's error state ---- */
@@ -91,10 +91,10 @@ private:
 sq_errnum_t sq_errnum(void);
 
 /* Its message; never NULL, valid until the thread's next error. */
-const char* sq_errmsg(void);
+const char *sq_errmsg(void);
 
 /* Its SQLSTATE, five characters; "00000" when there is no error. */
-const char* sq_sqlstate(void);
+const char *sq_sqlstate(void);
 
 /*
  * Where in the text it was found, counted in characters from 1,
@@ -103,31 +103,28 @@ const char* sq_sqlstate(void);
 int sq_errpos(void);
 
 /* Its detail, or "" when it has none. */
-const char* sq_errdetail(void);
+const char *sq_errdetail(void);
 
 /* Its hint, or "" when it has none. */
-const char* sq_errhint(void);
+const char *sq_errhint(void);
 
 /*
  * The compiler flags the library was built with: "-O0 -g", or
  * "-O2 -DNDEBUG" for libsq-release.a.
  */
-const char* sq_build_flags(void);
+const char *sq_build_flags(void);
 
 /* ---- options, and notices ---- */
 
 /* PostgreSQL's backslash_quote: whether \' may stand for a quote. */
 enum sq_backslash_quote_t {
-    SQ_BACKSLASH_QUOTE_OFF           = 0,
-    SQ_BACKSLASH_QUOTE_ON            = 1,
-    SQ_BACKSLASH_QUOTE_SAFE_ENCODING = 2   /* on: the text is UTF-8 */
+  SQ_BACKSLASH_QUOTE_OFF = 0,
+  SQ_BACKSLASH_QUOTE_ON = 1,
+  SQ_BACKSLASH_QUOTE_SAFE_ENCODING = 2 /* on: the text is UTF-8 */
 };
 
 /* How serious a notice is: PostgreSQL's NOTICE and WARNING. */
-enum sq_notice_level_t {
-    SQ_NOTICE  = 0,
-    SQ_WARNING = 1
-};
+enum sq_notice_level_t { SQ_NOTICE = 0, SQ_WARNING = 1 };
 
 /*
  * Something a parse has to say that is not an error, such as an
@@ -135,11 +132,11 @@ enum sq_notice_level_t {
  * only during the call that hands them over.
  */
 struct sq_notice_t {
-    sq_notice_level_t level;
-    const char*       sqlstate;   /* five characters */
-    const char*       message;
-    const char*       hint;       /* or NULL */
-    int               pos;        /* in characters from 1, or 0 */
+  sq_notice_level_t level;
+  const char *sqlstate; /* five characters */
+  const char *message;
+  const char *hint; /* or NULL */
+  int pos;          /* in characters from 1, or 0 */
 };
 
 /*
@@ -147,7 +144,7 @@ struct sq_notice_t {
  * runs inside the parse, on the calling thread: it must return
  * normally, and must not throw or longjmp.
  */
-typedef void (*sq_notice_fn)(void* arg, const sq_notice_t* notice);
+typedef void (*sq_notice_fn)(void *arg, const sq_notice_t *notice);
 
 /*
  * How to parse. The first three are PostgreSQL's settings of the
@@ -181,28 +178,28 @@ typedef void (*sq_notice_fn)(void* arg, const sq_notice_t* notice);
  * arena is malloc's, and the tree frees it.
  */
 struct sq_allocator_t {
-    void* (*alloc)(size_t size);
-    void  (*free)(void* ptr);
+  void *(*alloc)(size_t size);
+  void (*free)(void *ptr);
 };
 
 struct sq_options_t {
-    bool                 standard_conforming_strings = true;
-    sq_backslash_quote_t backslash_quote = SQ_BACKSLASH_QUOTE_SAFE_ENCODING;
-    bool                 escape_string_warning = true;
+  bool standard_conforming_strings = true;
+  sq_backslash_quote_t backslash_quote = SQ_BACKSLASH_QUOTE_SAFE_ENCODING;
+  bool escape_string_warning = true;
 
-    /*
-     * The access method of a CREATE INDEX, or of an EXCLUDE, that
-     * names none: PostgreSQL's DEFAULT_INDEX_TYPE. The parse copies
-     * it into the tree.
-     */
-    const char*          default_index_type = "btree";
+  /*
+   * The access method of a CREATE INDEX, or of an EXCLUDE, that
+   * names none: PostgreSQL's DEFAULT_INDEX_TYPE. The parse copies
+   * it into the tree.
+   */
+  const char *default_index_type = "btree";
 
-    /* Called for each notice, or NULL to drop them. */
-    sq_notice_fn         notice = nullptr;
-    void*                notice_arg = nullptr;
+  /* Called for each notice, or NULL to drop them. */
+  sq_notice_fn notice = nullptr;
+  void *notice_arg = nullptr;
 
-    /* Where the tree's nodes go, or NULL for the tree's own arena. */
-    const sq_allocator_t* allocator = nullptr;
+  /* Where the tree's nodes go, or NULL for the tree's own arena. */
+  const sq_allocator_t *allocator = nullptr;
 };
 
 /* ---- parsing ---- */
@@ -213,15 +210,15 @@ struct sq_options_t {
  * The text must be UTF-8. A parse is all or nothing: on -1, out is
  * empty.
  */
-int sq_parse(std::string_view sql, const sq_options_t* opt, sq_tree_t& out);
+int sq_parse(std::string_view sql, const sq_options_t *opt, sq_tree_t &out);
 
 /*
  * Parse text as one type name, such as "numeric(10,2)" or
  * "pg_catalog.int4[]", making it in tree and handing it back in
  * *out. The tree's own list of statements is left empty.
  */
-int sq_parse_type_name(std::string_view text, const sq_options_t* opt,
-                       sq_tree_t& tree, sq_type_name_t** out);
+int sq_parse_type_name(std::string_view text, const sq_options_t *opt,
+                       sq_tree_t &tree, sq_type_name_t **out);
 
 /* ---- printing ---- */
 
@@ -232,13 +229,13 @@ int sq_parse_type_name(std::string_view text, const sq_options_t* opt,
  * is written as -1, so that two parses of the same statement print
  * the same. A NULL node is "<>".
  */
-int sq_to_string(const sq_node_t* node, std::string& out);
+int sq_to_string(const sq_node_t *node, std::string &out);
 
 /*
  * The same, with every location written as it is: a byte offset into
  * the text parsed, or -1. This is PostgreSQL's
  * nodeToStringWithLocations().
  */
-int sq_to_string_with_locations(const sq_node_t* node, std::string& out);
+int sq_to_string_with_locations(const sq_node_t *node, std::string &out);
 
 #endif /* SQ_H */

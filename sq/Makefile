@@ -168,6 +168,6 @@ clean:
 	rm -rf build
 
 format:
-	clang-format -i src/*.cc src/*.h test/*.cc test/tool/*.cc
+	clang-format -i src/*.cc src/*.h test/*.cc test/tool/*.cc include/sq.h include/sq_error.h
 
 -include $(LIB_OBJS:.o=.d) $(TEST_OBJS:.o=.d) $(TOOLS:=.d) $(REL_OBJS:.o=.d)
