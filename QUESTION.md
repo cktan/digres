@@ -44,8 +44,11 @@ Also built, and to know:
 Built after: RG compaction no longer tries each row's lock, as a
 row lock on `_id` survives the renumbering; a `FOR SHARE` holder no
 longer stops it. Elimination keeps the tries: its write of the
-row's delta key would wait for the holder. Next: the restart pass
-of the cleanup.
+row's delta key would wait for the holder. The restart pass of
+the cleanup is built too: the sealer's first pass finds the old
+versions whose hints a restart lost. A prepared writer still
+holds the watermark back after a restart, so the cleanup waits
+for it.
 
 ## 6. COLSTORE2: what versioned compaction keeps of the old one (2026-11-21)
 

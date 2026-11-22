@@ -25,8 +25,8 @@
 namespace sm3 {
 
 /*
- * The relids of a column store table's keys (../COLSTORE.md §4.3,
- * ../COLSTORE2.md §4). An RG lock's is a lock-table name alone.
+ * The relids of a column store table's keys (../COLSTORE.md §4.3).
+ * An RG lock's is a lock-table name alone.
  */
 constexpr uint16_t marker_relid = 2;
 constexpr uint16_t validmap_relid = 3;
@@ -62,7 +62,7 @@ struct rg_col_t {
 /*
  * A row group's metadata: the value of its RG key. A version past 0
  * holds the rows of version 0 not in dropped, in their order
- * (../COLSTORE2.md §6.4).
+ * (../COLSTORE.md §8.1).
  */
 struct rg_meta_t {
   uint32_t rows = 0;
@@ -72,18 +72,18 @@ struct rg_meta_t {
   std::string dropped;        /* a bit for each of rows0: not held here */
 };
 
-/* The version of file set fsid, and its row group (../COLSTORE2.md §3). */
+/* The version of file set fsid, and its row group (../COLSTORE.md §4.5). */
 inline uint32_t fsid_version(uint64_t fsid) {
   return static_cast<uint32_t>(fsid & 3);
 }
 inline uint64_t fsid_rg(uint64_t fsid) { return fsid >> 2; }
 
-/* The newest version of a row group (../COLSTORE2.md §3). */
+/* The last version of a row group (../COLSTORE.md §11). */
 constexpr uint32_t rg_last_version = 3;
 
 /*
  * The rno in version to of the row at rno in version from, of one row
- * group (../COLSTORE2.md §6.4): false if to does not hold the row.
+ * group (../COLSTORE.md §8.1): false if to does not hold the row.
  */
 bool rg_map_rno(const rg_meta_t &from, uint32_t rno, const rg_meta_t &to,
                 uint32_t &out);
@@ -103,7 +103,7 @@ std::string rg_file_name(int32_t attnum);
 struct rg_build_t {
   table_t *table = nullptr;
   /* Set: the next flush writes this version of a row group, with
-     these rows0 and dropped (../COLSTORE2.md §6.7); 0: a new one. */
+     these rows0 and dropped (../COLSTORE.md §11.2); 0: a new one. */
   uint64_t fsid = 0;
   uint32_t rows0 = 0;
   std::string dropped;
@@ -222,7 +222,7 @@ inline place_t col_scan_place(const col_scan_t *c) {
 
 /*
  * The rnos of the delete markers of file set fsid that the
- * transaction sees, into rnos: its rows deleted (../COLSTORE2.md §4).
+ * transaction sees, into rnos: its rows deleted (../COLSTORE.md §4.3).
  */
 int col_markers(table_t *table, uint64_t fsid, std::vector<uint32_t> &rnos);
 
@@ -238,18 +238,18 @@ int col_bytes(table_t *table, uint64_t &bytes);
  */
 int tbl_scan_delta(table_t *table, scan_t *&out);
 
-/* The key of the delete marker of the row at place (../COLSTORE2.md §4). */
+/* The key of the delete marker of the row at place (../COLSTORE.md §4.3). */
 std::string marker_key(place_t place);
 
-/* The key of file set fsid's validmap (../COLSTORE2.md §4). */
+/* The key of file set fsid's validmap (../COLSTORE.md §4.3). */
 std::string validmap_key(uint64_t fsid);
 
-/* The lock-table name of row group rg_id (../COLSTORE2.md §4, §5). */
+/* The lock-table name of row group rg_id (../COLSTORE.md §4.3, §9.1). */
 std::string rg_lock_key(uint64_t rg_id);
 
 /*
  * Whether bit rno of a validmap's bytes is set: the row is deleted
- * (../COLSTORE2.md §4).
+ * (../COLSTORE.md §4.3).
  */
 inline bool validmap_test(std::string_view bits, uint32_t rno) {
   return rno / 8 < bits.size() &&
@@ -282,7 +282,7 @@ int col_meta_seen(table_t *table, uint64_t fsid, rg_meta_t &meta);
 /*
  * Erase the delete markers, shadow markers among them, and the
  * validmap of file set fsid of table, an old version that RG
- * compaction replaced in place (../COLSTORE2.md §6.9), in the
+ * compaction replaced in place (../COLSTORE.md §11.4), in the
  * caller's transaction: once no snapshot sees the version, as its
  * _id CG's filter key, erased in the compaction's commit, says. done
  * false, with nothing written, while one may. Returns 0 or -1.
@@ -290,8 +290,16 @@ int col_meta_seen(table_t *table, uint64_t fsid, rg_meta_t &meta);
 int col_cleanup(table_t *table, uint64_t fsid, bool &done);
 
 /*
+ * The file sets of table that have delete markers or a validmap and no
+ * RG key, at the newest committed state, into fsids: old versions a
+ * cleanup has not erased yet, whose hints a restart lost
+ * (../COLSTORE.md §11.4). Returns 0 or -1.
+ */
+int col_orphans(table_t *table, std::set<uint64_t> &fsids);
+
+/*
  * Fold the delete markers of file set fsid of table into its
- * validmap (../COLSTORE2.md §6.6), in the caller's transaction, at
+ * validmap (../COLSTORE.md §11.1), in the caller's transaction, at
  * the newest committed state: X on the row group, if it can be had
  * now; then a new validmap, with a bit for each marker, and the
  * markers erased. A writer of the row group in flight or prepared
@@ -312,13 +320,13 @@ int col_find_latest(table_t *table, uint64_t id, place_t &place);
 /*
  * col_find_latest, as the transaction sees it: the place its own
  * reads give the row, which a writer hides by a shadow marker when it
- * wrote the row at another (../COLSTORE2.md §6.3). 0, 1, or -1.
+ * wrote the row at another (../COLSTORE.md §9). 0, 1, or -1.
  */
 int col_find_seen(table_t *table, uint64_t id, place_t &place);
 
 /*
  * Compact file set fsid of table, a row group's version below the
- * last, into its next version (../COLSTORE2.md §6.7), in the caller's
+ * last, into its next version (../COLSTORE.md §11.2), in the caller's
  * transaction, at the newest committed state: its live rows alone, in
  * their order; then the version's RG key and filter keys erased. A
  * writer of the row group makes it give up, done false, with nothing
@@ -333,7 +341,7 @@ using movein_fn = std::function<int(uint64_t id, std::span<const sm2::datum_t>,
 
 /*
  * Eliminate file set fsid of table, a row group's newest version
- * (../COLSTORE2.md §6.8), in the caller's transaction, at the newest
+ * (../COLSTORE.md §11.3), in the caller's transaction, at the newest
  * committed state: each live row given to movein, which puts it into
  * the delta store under its _id as a moved-in version; then the RG
  * key and filter keys erased. Its markers and validmap stay for the
@@ -361,7 +369,7 @@ void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t fsid,
 /* Queue the row group of file set fsid of table oid for its compaction. */
 void sealer_enqueue_rg(const catalog_t *cat, uint64_t oid, uint64_t fsid);
 
-/* Queue file set fsid of table oid for its fold (../COLSTORE2.md §6.6). */
+/* Queue file set fsid of table oid for its fold (../COLSTORE.md §11.1). */
 void sealer_enqueue_fold(const catalog_t *cat, uint64_t oid, uint64_t fsid);
 
 /* Queue table oid for its seal; a no-op with no sealer. */

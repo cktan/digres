@@ -1830,7 +1830,7 @@ Errors as `sm1::insert`'s.
 
 `sm1::insert` of a row that a move of sm's own takes into `key`
 from elsewhere, unchanged, a moved-in version
-([`../COLSTORE2.md`](../COLSTORE2.md) §6.8): it goes in over a
+([`../COLSTORE.md`](../COLSTORE.md) §11.3): it goes in over a
 sealed tombstone, or where no version is. A reader sees it as any
 version. A write or a row lock that meets it as the key's newest
 committed version is judged by the committed version under it,
@@ -1844,8 +1844,8 @@ version, and `sm1::read_latest` returns it. Errors as
 Whether the session's last write, of any store, went over a
 moved-in version that its snapshot does not see: the row was
 elsewhere for the snapshot, where the caller may hide it from the
-transaction's own reads ([`../COLSTORE2.md`](../COLSTORE2.md)
-§6.3). Valid after a write that succeeded.
+transaction's own reads ([`../COLSTORE.md`](../COLSTORE.md)
+§9). Valid after a write that succeeded.
 
 ---
 

@@ -3,7 +3,7 @@
 #
 # S seals R1, as the Column Store's seal moves a row into a row
 # group; E then moves it back in, unchanged, as elimination puts
-# a row of an RG into the delta store (COLSTORE2.md §6.8). E
+# a row of an RG into the delta store (COLSTORE.md §11.3). E
 # moves R2 in too, a key with no version, as for a row of a bulk
 # load. T1's snapshot is older than both, but the rows' own
 # commits are older than T1: no conflict. T1 updates R1 and

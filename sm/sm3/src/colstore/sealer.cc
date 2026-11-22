@@ -14,7 +14,7 @@
  * validmap, compacts a row group that delete markers committed on it
  * have made a fifth dead into its next version, eliminates one at its
  * last version or under half live, and cleans up the versions no
- * snapshot sees (../../COLSTORE2.md §6.6 to §6.10).
+ * snapshot sees (../../COLSTORE.md §11.1 to §10.4).
  */
 
 #include "colstore.h"
@@ -28,6 +28,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <shared_mutex>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
@@ -56,7 +57,7 @@ struct sealer_t {
   std::map<std::pair<uint64_t, uint64_t>, uint64_t> marks;
   std::map<std::pair<uint64_t, uint64_t>, uint64_t> fold_marks;
   /* Old versions to clean up, by (table, fsid), once no snapshot
-     sees them (../../COLSTORE2.md §6.9): tried each second. */
+     sees them (../../COLSTORE.md §11.4): tried each second. */
   std::set<std::pair<uint64_t, uint64_t>> cleanups;
   std::unordered_map<uint64_t, uint64_t> counts; /* delta rows put */
   bool stop = false;
@@ -148,7 +149,7 @@ enum rg_plan_t : int { plan_none = 0, plan_compact = 1, plan_eliminate = 2 };
 
 /*
  * What to do with file set fsid of table t, a row group's version,
- * into plan (../../COLSTORE2.md §6.7, §6.8):
+ * into plan (../../COLSTORE.md §11.2, §11.3):
  * 1. Gone, as a job before took it: nothing.
  * 2. Under half a row group's rows live: eliminate it, so its rows
  *    are sealed again with others.
@@ -222,7 +223,7 @@ void compact_rg(sealer_t *z, session_t *ss, uint64_t oid, uint64_t fsid) {
 }
 
 /*
- * Fold file set fsid of table oid (../../COLSTORE2.md §6.6), in a
+ * Fold file set fsid of table oid (../../COLSTORE.md §11.1), in a
  * READ COMMITTED transaction of its own. A writer in flight makes it
  * give up: the next delete markers committed on it, or a scan, queue
  * it again.
@@ -252,7 +253,7 @@ void fold_rg(session_t *ss, uint64_t oid, uint64_t fsid) {
 }
 
 /*
- * Clean up old version fsid of table oid (../../COLSTORE2.md §6.9), in
+ * Clean up old version fsid of table oid (../../COLSTORE.md §11.4), in
  * a READ COMMITTED transaction of its own: true when it is done, or
  * the table is gone; false to try it again.
  */
@@ -298,8 +299,67 @@ void cleanup_pass(sealer_t *z,
   }
 }
 
+/*
+ * The first pass, at the sealer's start (../../COLSTORE.md §11.4): a
+ * restart lost the cleanups' hints, so each column store table's old
+ * versions with markers or a validmap left are found again.
+ * 1. List the column store tables of the catalog.
+ * 2. For each, in a READ COMMITTED transaction, find its old versions.
+ * 3. Give each a cleanup hint.
+ */
+void restart_pass(sealer_t *z) {
+  // 1. The column store tables.
+  std::vector<uint64_t> oids;
+  {
+    std::shared_lock<std::shared_mutex> l(z->cat->mu);
+    for (const auto &[oid, def] : z->cat->tables) {
+      if (def->column_store) {
+        oids.push_back(oid);
+      }
+    }
+  }
+  if (oids.empty()) {
+    return;
+  }
+  // 2. Their old versions, in a session of the sealer's own.
+  std::set<std::pair<uint64_t, uint64_t>> found;
+  sm1::session_t *s = z->open();
+  session_t *ss = nullptr;
+  if (s && session_open(z->cat, s, ss) == 0) {
+    for (uint64_t oid : oids) {
+      if (begin(ss, sm1::xctlevel_t::read_committed) != 0) {
+        break;
+      }
+      table_t *t = nullptr;
+      std::set<uint64_t> fsids;
+      int rc = tbl_open(ss, oid, sm1::SM_LOCKMODE_IS, t);
+      if (rc == 0) {
+        rc = col_orphans(t, fsids);
+        tbl_close(t);
+      }
+      if (rc == 0 && commit(ss) == 0) {
+        for (uint64_t fsid : fsids) {
+          found.insert({oid, fsid});
+        }
+        continue;
+      }
+      // A table dropped since is passed over.
+      abort(ss);
+    }
+    session_close(ss);
+  }
+  if (s) {
+    sm1::closedb(s);
+  }
+  // 3. The hints.
+  std::lock_guard<std::mutex> g(z->mu);
+  z->cleanups.insert(found.begin(), found.end());
+}
+
 /* The worker: take a job from the queue, and do it. */
 void work(sealer_t *z) {
+  // The cleanups a restart lost, found again first.
+  restart_pass(z);
   std::unique_lock<std::mutex> g(z->mu);
   for (;;) {
     // With cleanups to try, it wakes each second, as the reapers do.
@@ -424,7 +484,7 @@ void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t fsid,
     enqueue_locked(z, oid, fsid, job_compact);
     return;
   }
-  // 1% of its rows (../COLSTORE2.md §3): fold its markers.
+  // 1% of its rows (../COLSTORE.md §11.1): fold its markers.
   if (f >= std::max<uint64_t>(1, rg_rows(cat) / 100)) {
     z->fold_marks.erase({oid, fsid});
     enqueue_locked(z, oid, fsid, job_fold);

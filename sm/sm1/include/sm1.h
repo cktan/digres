@@ -1297,7 +1297,7 @@ int insert_sealed(session_t* session, uint64_t storeid,
 /*
  * sm1::insert of a row that a move of sm's own takes into key from
  * elsewhere, changing nothing in it, a moved-in version
- * (../COLSTORE2.md §6.8): it goes in over a sealed tombstone, or
+ * (../COLSTORE.md §11.3): it goes in over a sealed tombstone, or
  * where no version is. A reader sees it as any version. A write or
  * a row lock that meets it as the key's newest committed version
  * judges first-committer-wins by the committed version under it,
@@ -1556,7 +1556,7 @@ int chain_insert_sealed(session_t* session, uint64_t storeid,
  * over a moved-in version (sm1::insert_moved_in) that its snapshot
  * does not see: the row was elsewhere for the snapshot, where the
  * caller may hide it from the transaction's own reads
- * (../COLSTORE2.md §6.3). Valid after a write that succeeded.
+ * (../COLSTORE.md §9). Valid after a write that succeeded.
  */
 bool wrote_over_moved_in(const session_t* session);
 

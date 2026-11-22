@@ -287,7 +287,7 @@ int rg_build_flush(rg_build_t &b) {
   const table_def_t &def = tbl_def(t);
   sm1::session_t *s = tbl_session(t)->sm1;
   // 1. Draw the row group's id: never used again (../COLSTORE.md §4.1).
-  //    Its first version is 0 (../COLSTORE2.md §3). A compaction
+  //    Its first version is 0 (../COLSTORE.md §4.5). A compaction
   //    names the next version of its row group instead.
   uint64_t fsid = b.fsid;
   if (0 == fsid) {
@@ -433,7 +433,7 @@ int rg_read_open(table_t *table, uint64_t fsid, rg_meta_t meta,
     return corrupt("file set " + std::to_string(fsid) + " has no _id CG");
   }
   // 3. Its rows deleted, at the transaction's view, as a bitmap by
-  //    rno: its validmap's, and its markers' (../COLSTORE2.md §6.2).
+  //    rno: its validmap's, and its markers' (../COLSTORE.md §12).
   return col_dead(table, fsid, sm2::cg_rows(r.ids), r.deleted, r.ndeleted,
                   r.nmarkers);
 }
@@ -686,7 +686,7 @@ int col_scan_next(col_scan_t *c, uint64_t &id, std::string_view &tuple) {
       // A row group a fifth dead is queued for its compaction, and
       // one whose markers are 1% of its rows for its fold: a restart
       // loses the markers' counts (../COLSTORE.md §11.1,
-      // ../COLSTORE2.md §6.10).
+      // ../COLSTORE.md §10.4).
       const catalog_t *cat = tbl_session(c->table)->cat;
       if (static_cast<uint64_t>(c->rg.ndeleted) * 5 >= c->rg.meta.rows) {
         sealer_enqueue_rg(cat, tbl_def(c->table).oid, fsid);
@@ -1016,6 +1016,56 @@ int col_eliminate(table_t *table, uint64_t fsid, const movein_fn &movein,
     return -1;
   }
   done = true;
+  return 0;
+}
+
+/*
+ * The old versions with markers or a validmap left; see colstore.h:
+ * 1. Read the newest committed state.
+ * 2. Scan the keys of delete markers and of validmaps, for their fsids.
+ * 3. Take away each fsid that has an RG key.
+ */
+int col_orphans(table_t *table, std::set<uint64_t> &fsids) {
+  fsids.clear();
+  const table_def_t &def = tbl_def(table);
+  sm1::session_t *s = tbl_session(table)->sm1;
+  // 1. The newest committed state.
+  bool was = false;
+  if (sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  defer { sm1::view_latest(s, was); };
+  // 2. The fsids of markers and validmaps: be16(relid) || be64(fsid).
+  for (uint16_t relid : {marker_relid, validmap_relid}) {
+    std::string lo, hi;
+    put_be16(lo, relid);
+    put_be16(hi, relid);
+    hi.append(12, static_cast<char>(0xFF));
+    sm1::scan_t *c = nullptr;
+    if (sm1::scan(s, def.storeid, lo.data(), lo.size(), 1, hi.data(), hi.size(),
+                  1, c) != 0) {
+      return -1;
+    }
+    std::string_view k, d;
+    int rc;
+    while ((rc = sm1::scannxt(c, k, d)) == 0) {
+      if (k.size() >= 10) {
+        fsids.insert(sm0::get_be64(k.data() + 2));
+      }
+    }
+    sm1::scanend(c);
+    if (rc < 0) {
+      return -1;
+    }
+  }
+  // 3. Less the live versions.
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  if (sm1::fileset_list(s, def.storeid, sets) != 0) {
+    return -1;
+  }
+  for (const auto &[id, v] : sets) {
+    fsids.erase(id);
+  }
   return 0;
 }
 

@@ -707,7 +707,7 @@ int rel_reinsert_at(rel_t* rel, uint64_t id, std::span<const datum_t> datums,
 /*
  * rel_reinsert_at of a row that a move of sm's own takes into the
  * delta store, unchanged: the Column Store's elimination
- * (../COLSTORE2.md §6.8). The row goes in as a moved-in version
+ * (../COLSTORE.md §11.3). The row goes in as a moved-in version
  * (sm1::insert_moved_in), over the seal's tombstone or where no
  * version is, so a writer of it is judged by the row's own commit.
  * A datum too big goes out of line, as an insert's does.

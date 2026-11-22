@@ -14,6 +14,7 @@
 #include "doctest.h"
 #include "sm3.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -22,6 +23,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -1178,7 +1180,7 @@ void delete_in(col_db_t &db, uint64_t c, uint64_t rg, size_t n) {
 
 // Verify the sealer eliminates a row group under half live: its
 // rows go into the delta store, and the seal takes them again with
-// others (../COLSTORE2.md §6.8).
+// others (../COLSTORE.md §11.3).
 // 1. Load 10,000 rows; attach a sealer; delete 6,000: the row group
 //    is queued, and, 4,000 live, eliminated.
 // 2. No row group: the 4,000 rows are in the delta store, once each.
@@ -2709,4 +2711,88 @@ TEST_CASE("a write by _id in a statement marks its row once") {
   CHECK(rows.size() == 99);
   CHECK(rows.count(5) == 0);
   CHECK(rows[6] == "u");
+}
+
+// Verify the sealer's first pass finds an old version whose cleanup
+// a restart lost, and cleans it up.
+// 1. Load 10,000 rows; delete a = 0 .. 1,999, and compact with no
+//    sealer attached: version 0 keeps its 2,000 markers, and no
+//    cleanup is queued, as after a restart.
+// 2. Attach a sealer: its first pass finds version 0, and the cleanup
+//    erases its markers.
+TEST_CASE("the sealer's first pass cleans up an old version a restart left") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. Version 0 left.
+  load_rows(db, c, 10000);
+  uint64_t v0 = where(db, c, 5000).first.fsid;
+  delete_rows(db, c, 0, 2000);
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(compact(ss3, c, v0));
+  REQUIRE(markers_of(db, c, v0) == 2000);
+  // 2. The sealer; the cleanup comes within a pass or two.
+  sm1::env_t *env = db.env();
+  REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+            sm1::session_t *s = nullptr;
+            return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+          }) == 0);
+  size_t left = markers_of(db, c, v0);
+  for (int i = 0; i < 100 && left != 0; i++) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    left = markers_of(db, c, v0);
+  }
+  CHECK(left == 0);
+  CHECK(scan_rows(db, c).size() == 8000);
+  sm3::sealer_detach(db.cat);
+  sm3::session_close(ss3);
+}
+
+// Verify the cleanup of an old version waits for a prepared writer of
+// its row group across a restart, whose snapshot no longer holds the
+// watermark back, and does not block on its shadow marker.
+// 1. Load 10,000 rows; R (REPEATABLE READ) finds a = 5,000. Delete
+//    a = 0 .. 1,999, and compact: version 1.
+// 2. R deletes a = 5,000 by its old place, a shadow marker in version
+//    0, and prepares. Restart.
+// 3. The cleanup of version 0 gives up while R is prepared.
+// 4. COMMIT PREPARED: the cleanup erases version 0's markers; 7,999
+//    rows.
+TEST_CASE("the cleanup waits for a prepared writer across a restart") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. R; version 1.
+  load_rows(db, c, 10000);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p0, id0] = where_in(ss2, c, 5000);
+  delete_rows(db, c, 0, 2000);
+  REQUIRE(compact(ss3, c, p0.fsid));
+  // 2. R's delete, prepared; the restart.
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t, p0, id0) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  REQUIRE_MESSAGE(sm3::prepare(ss2, "gc") == 0, sm1::errmsg());
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+  db.reload();
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  // 3. Not while R is prepared.
+  CHECK_FALSE(cleanup(ss3, c, p0.fsid));
+  CHECK(markers_of(db, c, p0.fsid) == 2000);
+  // 4. Now.
+  REQUIRE_MESSAGE(sm3::commit_prepared(db.ss, "gc") == 0, sm1::errmsg());
+  CHECK(cleanup(ss3, c, p0.fsid));
+  CHECK(markers_of(db, c, p0.fsid) == 0);
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 7999);
+  CHECK(rows.count(5000) == 0);
+  sm3::session_close(ss3);
 }

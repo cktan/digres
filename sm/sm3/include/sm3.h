@@ -1670,7 +1670,7 @@ int tbl_delete(table_t* table, uint64_t id, pin_ref_t& ref,
                std::string_view& old);
 
 /*
- * A row's place in a column store table (../COLSTORE2.md §2): the
+ * A row's place in a column store table (../COLSTORE.md §2): the
  * file set of the row group's version it was read from, and its
  * position there. fsid 0 is a row of the delta store.
  */
@@ -1681,7 +1681,7 @@ struct place_t {
     bool operator==(const place_t&) const = default;
 };
 
-/* The fsid of version version of row group rg_id (../COLSTORE2.md §3). */
+/* The fsid of version version of row group rg_id (../COLSTORE.md §4.5). */
 inline uint64_t fsid_of(uint64_t rg_id, uint32_t version) {
     return rg_id << 2 | version;
 }
@@ -1716,7 +1716,7 @@ int tbl_seal(table_t* table, bool& sealed);
 
 /*
  * Compact file set fsid of a column store table, a row group's newest
- * version (../COLSTORE2.md §6.7, §6.8), in the caller's transaction,
+ * version (../COLSTORE.md §11.2, §11.3), in the caller's transaction,
  * at READ COMMITTED: below version 3, into its next version, with its
  * live rows alone; at version 3, by elimination (tbl_eliminate_rg).
  * A writer of the row group makes it give up: done is false, and
@@ -1728,7 +1728,7 @@ int tbl_compact_rg(table_t* table, uint64_t fsid, bool& done);
 
 /*
  * Eliminate file set fsid of a column store table, a row group's
- * newest version (../COLSTORE2.md §6.8), in the caller's transaction,
+ * newest version (../COLSTORE.md §11.3), in the caller's transaction,
  * at READ COMMITTED: its live rows put into the delta store, under
  * their _ids, as moved-in versions, and the row group gone. A writer
  * of the row group, or a holder of a live row's lock, makes it give
@@ -1983,7 +1983,7 @@ int tbl_scan_columns(table_t* table, std::vector<bool> cols,
 
 /*
  * Fold the delete markers of file set fsid of a column store table
- * into its validmap (../COLSTORE2.md §6.6), in the caller's
+ * into its validmap (../COLSTORE.md §11.1), in the caller's
  * transaction, at READ COMMITTED: X on the row group if no writer
  * holds IX, a new validmap, and the markers erased. A writer in
  * flight or prepared gives up: done is false, and nothing is
@@ -1994,7 +1994,7 @@ int tbl_fold(table_t* table, uint64_t fsid, bool& done);
 /*
  * Erase the delete markers and validmap of file set fsid of a column
  * store table, an old version that RG compaction replaced in place
- * (../COLSTORE2.md §6.9), in the caller's transaction, once no
+ * (../COLSTORE.md §11.4), in the caller's transaction, once no
  * snapshot sees the version: done false, with nothing written, until
  * then.
  */

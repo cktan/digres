@@ -70,7 +70,7 @@ constexpr uint8_t version_sealed = 0x40;
 /*
  * A sealed live version that a move of sm's own wrote into the key
  * the row lives at from now on, a moved-in version
- * (../COLSTORE2.md §6.8): always with version_sealed. A write and a
+ * (../COLSTORE.md §11.3): always with version_sealed. A write and a
  * row lock judge first-committer-wins by the version under it, as
  * for any sealed version, and then write over it as over any live
  * version.

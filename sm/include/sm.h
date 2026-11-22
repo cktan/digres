@@ -709,7 +709,7 @@ int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, const void** tuple,
 int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, sm_pin_ref_t* ref);
 
 /*
- * A column store table's row's place (../COLSTORE2.md §6.11): the
+ * A column store table's row's place (../COLSTORE.md §8): the
  * file set of the version of the row group it was read from, and
  * its position there. fsid 0 is a row of the delta store.
  */

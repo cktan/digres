@@ -10063,8 +10063,8 @@ static TM_Result write_result(Relation rel, const std::string &key, int rc,
 /*
  * The place of tbl's row at key, if tbl is a column store table and the
  * scan in *scan is on that row, read from a row group: a write names the
- * row by it, and sm looks for none (../../../../../sm/COLSTORE.md §8,
- * ../../../../../sm/COLSTORE2.md §6.11).  fsid 0 otherwise, and sm finds
+ * row by it, and sm looks for none (../../../../../sm/COLSTORE.md §8).
+ * fsid 0 otherwise, and sm finds
  * the row by its _id.  fsid 0 too after a write found the row changed, as
  * its newest version is elsewhere.
  */

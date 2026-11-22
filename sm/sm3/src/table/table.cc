@@ -1649,7 +1649,7 @@ static int col_reread(table_t *table, uint64_t id, bool latest, int rc,
 /*
  * Hide row id, just written at another place than written, from the
  * transaction's own reads of the version its snapshot sees, by a
- * shadow marker there (../COLSTORE2.md §6.3): for a writer older than
+ * shadow marker there (../COLSTORE.md §9): for a writer older than
  * the RG compaction or the elimination that moved the row. A row the
  * snapshot sees in no row group, or at written, whose marker the
  * running statement does not see yet, needs none.
@@ -1840,7 +1840,7 @@ static int lock_row(table_t *table, uint64_t id, sm1::lockmode_t mode,
  * Whether the row at place is deleted by a bit of its validmap: 0 if
  * not; else -1, with SM_ERR_NOTFOUND if the transaction's view sees
  * the bit, or at read committed, and SM_ERR_CONFLICT if a fold since
- * the snapshot set it (../COLSTORE2.md §6.3).
+ * the snapshot set it (../COLSTORE.md §9).
  */
 static int need_not_folded(table_t *table, place_t place) {
   sm1::session_t *s = table->session->sm1;
@@ -1877,7 +1877,7 @@ static int need_not_folded(table_t *table, place_t place) {
 
 /*
  * The newest place of row id, read at place, a row group's place
- * (../COLSTORE2.md §6.3, §6.4):
+ * (../COLSTORE.md §9, §8.1):
  * 1. Its row group's newest version is place's: the row is there.
  * 2. A newer version, and the transaction sees place's: the row's rno
  *    there, and shadow set to place, for the transaction's own reads.
@@ -1948,7 +1948,7 @@ static int row_gone(table_t *table, uint64_t id) {
 
 /*
  * Delete row id, at place in a row group, by its marker
- * (../COLSTORE.md §9, ../COLSTORE2.md §6.3):
+ * (../COLSTORE.md §9):
  * 1. Take the row's exclusive lock, on its _id, as any write of it
  *    does: a FOR UPDATE holder is waited for.
  * 2. Take IX on the row group, which keeps its fold, its compaction
@@ -1997,7 +1997,7 @@ static int mark_deleted(table_t *table, place_t place, uint64_t id) {
   // 5. The marker.
   if (sm1::insert(s, table->def->storeid, marker_key(place), "") == 0) {
     // A shadow marker at the place the snapshot sees, for the
-    // transaction's own reads of that version (../COLSTORE2.md §6.3).
+    // transaction's own reads of that version (../COLSTORE.md §9).
     if (0 != shadow.fsid &&
         sm1::insert(s, table->def->storeid, marker_key(shadow), "") != 0) {
       return -1;
@@ -2031,7 +2031,7 @@ static int mark_deleted(table_t *table, place_t place, uint64_t id) {
 
 /*
  * A write of row id in the delta store, by write, after its row group
- * was eliminated (../COLSTORE2.md §6.3): the row lives there, a
+ * was eliminated (../COLSTORE.md §9): the row lives there, a
  * moved-in version or a newer one. No live row there, or in a row
  * group it was sealed into since, is a row gone since the snapshot.
  */
@@ -2185,7 +2185,7 @@ int tbl_seal(table_t *table, bool &sealed) {
 /*
  * Eliminate file set fsid of a column store table, each live row put
  * into its delta store as a moved-in version, counted toward its seal
- * at the commit (../COLSTORE2.md §6.8).
+ * at the commit (../COLSTORE.md §11.3).
  */
 static int eliminate(table_t *table, uint64_t fsid, bool &done) {
   uint64_t n = 0;
