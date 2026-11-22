@@ -48,6 +48,12 @@ bool wal_release_is_wsl(const std::string &release);
 /* Whether this kernel is WSL's: only there are new logs zero-filled. */
 bool wal_on_wsl();
 
+/*
+ * For the tests: make wal_on_wsl() answer 1 (WSL) or 0 (not WSL) whatever
+ * the kernel is, or -1 to ask the kernel again, which is the default.
+ */
+void wal_set_wsl_for_test(int answer);
+
 /* Whether a sync that grows a file costs enough more to zero-fill. */
 bool wal_prealloc_pays(double append_us, double overwrite_us);
 

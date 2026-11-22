@@ -1071,7 +1071,9 @@ business:
 
 A probe that fails zero-fills nothing and keeps nothing, so the
 next attach probes again. A home moved to another file system
-keeps its first answer.
+keeps its first answer. A home moved off WSL keeps it too, but
+every attach asks `wal_on_wsl()` again: off WSL no log is
+zero-filled, and the zeroing thread does not run.
 
 ---
 

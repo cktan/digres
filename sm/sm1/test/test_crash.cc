@@ -22,6 +22,7 @@
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -31,6 +32,7 @@
 #include <fstream>
 #include <random>
 #include <string>
+#include <utility>
 
 using namespace sm1_internal;
 
@@ -116,6 +118,11 @@ bool read_full(int fd, void *buf, size_t n) {
  * index to stdout. Runs until killed.
  */
 int crash_child_main(const char *homedir) {
+  // The test that started this process says what the kernel is, as a new
+  // process does not inherit what it set (walfs.h).
+  if (const char *wsl = getenv("SM1_TEST_WSL")) {
+    wal_set_wsl_for_test(atoi(wsl));
+  }
   sm1::env_t *env = attach(homedir);
   if (!env) {
     return 2;
@@ -239,6 +246,12 @@ uint64_t prealloc_kept(sm1::env_t *env) {
   return n;
 }
 
+/* Make wal_on_wsl() answer as given while this lives (walfs.h). */
+struct wsl_is_t {
+  explicit wsl_is_t(int answer) { wal_set_wsl_for_test(answer); }
+  ~wsl_is_t() { wal_set_wsl_for_test(-1); }
+};
+
 /* Keep bytes as the home's decision, as a first attach would. */
 void prealloc_keep(sm1::env_t *env, uint64_t bytes) {
   std::string v(8, '\0');
@@ -252,13 +265,20 @@ void prealloc_keep(sm1::env_t *env, uint64_t bytes) {
 } // namespace
 
 TEST_CASE("a home's first attach decides whether new logs are zero-filled") {
-  // Verify the decision of ../DBMGR.md: made once, kept, obeyed.
+  // Verify the decision of ../DBMGR.md: made once, kept, obeyed on WSL.
   // 1. A new home's first attach times its syncs and keeps the
   //    answer, 0 or 64 MB; a second attach keeps it unchanged.
   // 2. With 4 MB kept, a database made after the next attach has its
-  //    log zero-filled to 4 MB; with 0 kept, its log is its records.
-  for (uint64_t kept : {uint64_t(4) << 20, uint64_t(0)}) {
+  //    log zero-filled to 4 MB on WSL; with 0 kept, its log is its
+  //    records.
+  // 3. With 4 MB kept and a kernel that is not WSL's, as for a home
+  //    moved off WSL, its log is its records too: no zeroing thread.
+  for (auto [kept, wsl] : {std::pair<uint64_t, int>{uint64_t(4) << 20, 1},
+                           std::pair<uint64_t, int>{uint64_t(0), 1},
+                           std::pair<uint64_t, int>{uint64_t(4) << 20, 0}}) {
     CAPTURE(kept);
+    CAPTURE(wsl);
+    wsl_is_t kernel(wsl);
     tmpdir_t tmp;
     REQUIRE(sm1::init(tmp.path()) == 0);
     sm1::env_t *env = attach(tmp.path());
@@ -282,7 +302,7 @@ TEST_CASE("a home's first attach decides whether new logs are zero-filled") {
     REQUIRE(sm1::insert(s, store, "k", "v") == 0);
     REQUIRE(sm1::commit(s) == 0);
     uintmax_t size = largest_wal(tmp.path());
-    if (kept > 0) {
+    if (kept > 0 && wsl) {
       CHECK(size == kept);
     } else {
       CHECK(size > 0);
@@ -499,6 +519,8 @@ TEST_CASE("a record torn in a zero-filled log's tail is the end of the log") {
   //    claims 100 bytes, a bad checksum, and 20 bytes of it.
   // 3. Reattach: the database opens, and its keys are k0..k(n-1)
   //    with every acknowledged commit among them.
+  // The kept answer is obeyed only on WSL: say this kernel is.
+  wsl_is_t kernel(1);
   tmpdir_t tmp;
   REQUIRE(sm1::init(tmp.path()) == 0);
   {
@@ -526,6 +548,8 @@ TEST_CASE("a record torn in a zero-filled log's tail is the end of the log") {
     dup2(fds[1], 1);
     close(fds[0]);
     close(fds[1]);
+    // The child's kernel is WSL's, too: its log is zero-filled.
+    setenv("SM1_TEST_WSL", "1", 1);
     execl("/proc/self/exe", "test_sm1", "--crash-child", tmp.path(),
           (char *)nullptr);
     _exit(127);

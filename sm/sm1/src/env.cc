@@ -116,7 +116,9 @@ bool parse_dbid(const char *name, uint64_t *dbid) {
  *    in base/. A probe that fails zero-fills nothing and keeps
  *    nothing, so the next attach probes again.
  * 4. Keep the answer in the root db, so every attach after reads it.
- * 5. Make env->wal_env if the logs are zero-filled.
+ * 5. Make env->wal_env if the logs are zero-filled and this kernel is
+ *    WSL's: a home moved to another machine keeps its answer, but its
+ *    logs are not zero-filled there, and no zeroing thread runs.
  */
 int wal_prealloc(sm1::env_t *env) {
   std::string val;
@@ -161,7 +163,8 @@ int wal_prealloc(sm1::env_t *env) {
       return set_status_error(s, "write root db");
     }
   }
-  if (bytes > 0) {
+  // The answer may be from a home that was on WSL: ask this kernel too.
+  if (bytes > 0 && wal_on_wsl()) {
     env->wal_env = walfs_env(bytes);
   }
   return 0;
@@ -466,11 +469,11 @@ void db_reaper_main(sm1::env_t *env) {
         ++it;
       }
     }
+    // The pass is done: nothing of ty's from it is live.
+    arena.reset();
     if (next == std::chrono::steady_clock::time_point::max()) {
       env->idle_cv.wait(guard);
     } else {
-    // The pass is done: nothing of ty's from it is live.
-    arena.reset();
       env->idle_cv.wait_until(guard, next);
     }
   }

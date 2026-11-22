@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <mutex>
 #include <set>
@@ -265,8 +266,20 @@ bool wal_release_is_wsl(const std::string &release) {
   return lower.find("microsoft") != std::string::npos;
 }
 
+/* What a test says the kernel is: -1 for ask it; see walfs.h. */
+std::atomic<int> g_wsl_for_test{-1};
+
+/* Set the answer of wal_on_wsl() for a test; see walfs.h. */
+void wal_set_wsl_for_test(int answer) {
+  g_wsl_for_test.store(answer, std::memory_order_relaxed);
+}
+
 /* Whether this kernel is WSL's; see walfs.h. */
 bool wal_on_wsl() {
+  int forced = g_wsl_for_test.load(std::memory_order_relaxed);
+  if (forced >= 0) {
+    return forced != 0;
+  }
   // WSL's kernels name themselves here, in both of its versions.
   char buf[256];
   int fd = open("/proc/sys/kernel/osrelease", O_RDONLY | O_CLOEXEC);
