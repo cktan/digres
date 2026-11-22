@@ -1,5 +1,149 @@
 # Questions
 
+## 8. A delete older than the seal: how it hides the delta row (2026-11-22)
+
+**Branch:** `wip-colstore2-1`.
+
+**Question.** A REPEATABLE READ writer whose snapshot is older than
+the seal of a row deleted it in its row group, and then still saw
+it: its snapshot reads the delta row, live, and not the row group
+(`COLSTORE.md` §16.1 asked this). How does the writer hide the
+delta row from its own reads?
+
+```sql
+-- R: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) -> 100
+-- The seal moves the 100 delta rows into RG 1.
+DELETE FROM ev WHERE _id = 5;   -- R: the marker in RG 1
+SELECT count(*) FROM ev;        -- R: 100 before, 99 now
+```
+
+| Option | What changes | Cost |
+| --- | --- | --- |
+| A. Two writes of sm1 as it is: an empty version over the seal's tombstone, then its erase (`sm2::rel_hide_sealed`) | sm2 and sm3 | two writes, only for a delete by a writer older than the seal of its row |
+| B. A new write of sm1, a tombstone over a sealed tombstone | a rule of sm1, and an mvcc scenario | one write; sm1 grows a fourth kind of sealed write |
+
+**Recommendation, built:** A. It needs no rule of sm1: an insert
+goes in over a sealed tombstone already (`s01`), and the erase is
+of the transaction's own version. No other transaction sees the
+empty version. An update needed nothing: its new version at the
+delta key hides the old one.
+
+## 7. COLSTORE2: elimination takes the small RGs too (2026-11-21)
+
+**Branch:** `wip-colstore2-1`.
+
+**Question.** Elimination (`COLSTORE2.md` §6.8) is built. It now
+also does what the merge of small RGs did, so the merge and its
+moved markers are gone. Is this rule right for a small RG?
+
+```sql
+-- ev: rg 7, version 0, 10,000 rows; DELETE of 6,000 commits.
+-- The sealer's job on rg 7: 4,000 live, under half of 10k, so
+-- rg 7 is eliminated: its 4,000 rows go to the delta store as
+-- moved-in versions, and rg 7 is gone. The next seal puts them
+-- into a new RG with 6,000 other rows.
+-- Before: rg 7 was merged with the small RGs next to it into a
+-- new RG, with a moved marker for each row.
+```
+
+| Option | What changes | Cost |
+| --- | --- | --- |
+| A. Eliminate an RG under half live, as built | `rg_plan()` in `sm3/src/colstore/sealer.cc`; `merge_set()` and the old path of `col_compact` are gone | the rows of a small RG wait in the delta store, as rows, until the next seal |
+| B. Keep the merge for small RGs | the old path stays, with its moved markers | moved markers are never erased (a sealed version); two kinds of compaction to keep correct |
+
+**Recommendation, taken (the user said "eliminate only, no
+merging"):** A. It has one way to move rows out of an RG. A writer older than the move finds the row by its `_id` in
+the delta store, and first-committer-wins sees through the
+moved-in version. Moved markers no longer leak.
+
+Also built, and to know:
+
+- **A writer by `_id` alone now hides the row from its own
+  snapshot** after a compaction or an elimination, with a shadow
+  marker. Before, its own scans of the old version still showed
+  the row. The cost is one lookup by `_id` at the snapshot, only
+  for a write that found the row in an RG. A write over a
+  moved-in version is told by `sm1::wrote_over_moved_in`, at no
+  cost to other writes.
+- **`sm1::insert_sealed`** is no longer used by sm3. The mvcc
+  scenario `s06` still tests it. Keep it until you decide; removing
+  it removes `s06`, which needs your approval.
+
+Built after: RG compaction no longer tries each row's lock, as a
+row lock on `_id` survives the renumbering; a `FOR SHARE` holder no
+longer stops it. Elimination keeps the tries: its write of the
+row's delta key would wait for the holder. The restart pass of
+the cleanup is built too: the sealer's first pass finds the old
+versions whose hints a restart lost. A prepared writer still
+holds the watermark back after a restart, so the cleanup waits
+for it.
+
+## 6. COLSTORE2: what versioned compaction keeps of the old one (2026-11-21)
+
+**Branch:** `wip-colstore2-1`.
+
+**Question.** RG compaction now writes the next version of a row
+group in place (`COLSTORE2.md` §6.7). Three parts of the old
+compaction stay for now. Are they to go next, in this order?
+
+```sql
+-- ev: rg 7, version 0, 10,000 rows; 2,000 deleted.
+-- The sealer compacts rg 7: version 1, fsid(7, 1), 8,000 rows,
+-- renumbered; no moved marker. A FOR SHARE holder of one of its
+-- rows makes the compaction give up, as before.
+```
+
+| Kept | Why | What would replace it |
+| --- | --- | --- |
+| a try of each live row's lock on delta key `_id` | row locks stay on `_id` (question 5), so a `FOR SHARE` holder still holds compaction off, as the tests of it say | nothing needed: a renumbering moves no `_id` lock; drop the tries, and change those tests |
+| the old path, new row groups and moved markers, for a merge of small row groups and for version 3 | elimination (`COLSTORE2.md` §6.8) needs the moved-in version in sm1 | elimination, with `sm1::chain_insert_moved_in` and its mvcc scenarios |
+| the moved markers of a row group that the old path compacted, never erased | a moved marker is a sealed version: `sm1::erase` fails on it | elimination, which writes no moved marker |
+
+The cleanup of a version replaced in place is built (§6.9): the
+sealer tries it each second, once no snapshot sees the version,
+by `sm1::read_settled_versioned` on the version's `_id` filter
+key. A restart loses its hints, and leaves those markers.
+
+**Recommendation, built:** keep all three for this step: each is
+correct, and the old path is what the tests cover. Next:
+elimination; then drop the row-lock tries; then the restart pass
+of the cleanup.
+
+## 5. COLSTORE2: the place at insert waits (2026-11-21)
+
+**Branch:** `wip-colstore2-1`, from `main` at `7e954535`.
+
+**Question.** The plan of `sm/COLSTORE2.md` §9 draws a row's
+place, `(rg_id, rno)`, at its insert, as its third step. A delta
+row's value then begins with its place (§4). That changes the
+value of every delta row, which sm2's row store paths read for
+the column store and the row store alike: `tbl_read`, the scans,
+TOAST, the seal. The other way is a second key for each delta
+row, which costs every insert one more write. Is the place at
+insert to be built before the validmap, the RG locks and the
+versions?
+
+```sql
+-- With the place at insert: _id 900 is at (rg 7, rno 899) from
+-- its INSERT; the seal keeps it, and its lock's name with it.
+-- Without it: the row has no rno until the seal; its lock is on
+-- delta key _id 900, before the seal and after it.
+```
+
+| Option | What changes | Cost |
+| --- | --- | --- |
+| A. Build it later; row locks stay on delta key `_id` | nothing in the delta store | the seal still try-locks each row and passes over a locked one; an insert still waits on nothing |
+| B. Build it now, the place at the head of the value | every read of a delta row strips 12 bytes | a change across sm2's and sm3's row paths |
+| C. Build it now, a key of its own for each delta row | the insert writes a second key | one more RocksDB write for every insert, a hot path |
+
+**Recommendation, built:** A. The validmap, the fold, the RG
+locks and versioned compaction need no place at insert. A row
+lock on delta key `_id` does not move when RG compaction
+renumbers a row group, so versioned compaction keeps every row
+lock as it is. The steps built on this branch are, in order: the
+place in the scan and the writes (§6.11) with markers keyed by
+`(fsid, rno)`; then the RG lock, the validmap and the fold.
+
 ## 4. TABLESAMPLE on a column store table (2026-11-20)
 
 **Branch:** `wip-colstore-31`, from `wip-colstore-30`.

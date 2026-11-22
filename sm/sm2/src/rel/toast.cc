@@ -67,11 +67,16 @@ bool parse_toast_ptr(std::string_view v, toast_ptr_t &out) {
 
 /* Write a datum's chunks; see toast.h. */
 int toast_write(sm1::session_t *session, const toast_ptr_t &p,
-                std::string_view data) {
+                std::string_view data, bool moved_in) {
   for (uint32_t seq = 0; !data.empty(); seq++) {
     std::string_view chunk = data.substr(0, toast_chunk);
-    // One chunk, a row of the store in the caller's transaction.
-    if (sm1::insert(session, p.storeid, chunk_key(p.id, seq), chunk) != 0) {
+    // One chunk, a row of the store in the caller's transaction; a
+    // moved-in row's, moved-in too, so a writer older than the move
+    // erases it with no conflict (../../COLSTORE.md §11.3).
+    if ((moved_in ? sm1::insert_moved_in(session, p.storeid,
+                                         chunk_key(p.id, seq), chunk)
+                  : sm1::insert(session, p.storeid, chunk_key(p.id, seq),
+                                chunk)) != 0) {
       return -1;
     }
     data.remove_prefix(chunk.size());

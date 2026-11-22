@@ -387,6 +387,9 @@ value = flags   (1B)   bit0 = tombstone (this version is a delete)
                        bit2 = a move's tombstone (sm1::erase_moved)
                        bit6 = a move of sm's own (sm1::erase_sealed,
                               sm1::insert_sealed; ../COLSTORE.md §10.2)
+                       bit7 = a moved-in version, with bit6
+                              (sm1::insert_moved_in;
+                              ../COLSTORE.md §11.3)
       | xid     (8B)   the writer, while unstamped
         commit_ts (8B) in its place once stamped
       | payload (variable, absent for a tombstone)

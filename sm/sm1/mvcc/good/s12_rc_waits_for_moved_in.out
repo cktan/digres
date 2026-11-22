@@ -1,0 +1,26 @@
+# s12 -- READ COMMITTED: a writer waits for a moved-in version in
+# flight, then writes over it.
+#
+# E's moved-in version, in flight, is its lock: T1 blocks on it.
+# E commits; T1's write then judges first-committer-wins by the
+# seed, under the moved-in version and the sealed tombstone,
+# which committed before T1's statement: no `updated`, and the
+# write goes on over the moved-in version.
+
+
+== pairing RR/RR == T1=RC S=RC E=RC
+@1 S begin -> ok
+@2 S seal R1 -> ok
+@3 S commit -> ok
+@4 E begin -> ok
+@5 E movein R1 0 -> ok
+@6 T1 begin -> ok
+@7 T1 write R1 1 blocks -> blocked
+@8 E commit -> ok
+@7 T1 write R1 1 blocks -> ok (resumed)
+@9 check last T1 ok -> satisfied
+@10 T1 readlatest R1 -> 1
+@10 check last T1 1 -> satisfied
+@11 T1 commit -> ok
+@12 check committed S E T1 -> satisfied
+@12 check row R1 1 -> satisfied

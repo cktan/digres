@@ -1826,6 +1826,28 @@ sealed tombstone; every write that passes, an insert too, then
 fails with `SM_ERR_SEALED`, and so does `sm1::read_latest`.
 Errors as `sm1::insert`'s.
 
+### int sm1::insert_moved_in(sm1::session_t* session, uint64_t storeid, std::string_view key, std::string_view data)
+
+`sm1::insert` of a row that a move of sm's own takes into `key`
+from elsewhere, unchanged, a moved-in version
+([`../COLSTORE.md`](../COLSTORE.md) §11.3): it goes in over a
+sealed tombstone, or where no version is. A reader sees it as any
+version. A write or a row lock that meets it as the key's newest
+committed version is judged by the committed version under it,
+past sealed ones, as over a sealed version; none under it is no
+conflict. A write that passes goes on over it as over any live
+version, and `sm1::read_latest` returns it. Errors as
+`sm1::insert`'s.
+
+### bool sm1::wrote_over_moved_in(sm1::session_t* session)
+
+Whether a write of the session that succeeded, of any store, since
+the last call or since its transaction began, went over a moved-in
+version that its snapshot does not see: the row was elsewhere for
+the snapshot, where the caller may hide it from the transaction's
+own reads ([`../COLSTORE.md`](../COLSTORE.md) §9). The call clears
+it, so a later write of TOAST chunks does not hide it.
+
 ---
 
 ## Bulk load API
@@ -2171,7 +2193,7 @@ Each call is the call of its name without `chain_`, with the
 same checks, conflicts, waits and errors (`sm1::insert`,
 `sm1::insert_new`, `sm1::update`, `sm1::erase`,
 `sm1::erase_moved`, `sm1::erase_sealed`, `sm1::insert_sealed`,
-`sm1::read`, `sm1::read_latest`,
+`sm1::insert_moved_in`, `sm1::read`, `sm1::read_latest`,
 `sm1::lock_row` and `sm1::trylock_row`), and
 `SM_ERR_INVALID` besides on a store that is not chained. An
 abort leaves its versions for readers to pass and GC to
@@ -2200,6 +2222,8 @@ int chain_erase_sealed(session_t* session, uint64_t storeid,
                        std::string_view& old);
 int chain_insert_sealed(session_t* session, uint64_t storeid,
                         std::string_view key, std::string_view data);
+int chain_insert_moved_in(session_t* session, uint64_t storeid,
+                          std::string_view key, std::string_view data);
 int chain_read(session_t* session, uint64_t storeid,
                std::string_view key, rawpin_t* pin,
                std::string_view& data);

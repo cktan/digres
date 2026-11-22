@@ -136,6 +136,13 @@ int row_insert_sealed(sm1::session_t *s, uint64_t store, std::string_view key,
                    : sm1::insert_sealed(s, store, key, data);
 }
 
+/* sm1::insert_moved_in, or sm1::chain_insert_moved_in in chained mode. */
+int row_insert_moved_in(sm1::session_t *s, uint64_t store, std::string_view key,
+                        std::string_view data) {
+  return g_chained ? sm1::chain_insert_moved_in(s, store, key, data)
+                   : sm1::insert_moved_in(s, store, key, data);
+}
+
 /* sm1::scan, or sm1::chain_scan in chained mode. */
 int row_scan(sm1::session_t *s, uint64_t store, const char *skey, size_t sklen,
              int skey_inclusive, const char *ekey, size_t eklen,
@@ -283,6 +290,12 @@ std::string execute(worker_t *w, const item_t &it) {
     // sealput <row> <value>: the insert of a moved marker, a live
     // version a move of sm's own writes (sm1::insert_sealed).
     int rc = row_insert_sealed(w->sess, w->store, a[0], a[1]);
+    return 0 == rc ? "ok" : error_name();
+  }
+  if (it.verb == "movein") {
+    // movein <row> <value>: the insert of a moved-in version, a row
+    // a move of sm's own takes into this key (sm1::insert_moved_in).
+    int rc = row_insert_moved_in(w->sess, w->store, a[0], a[1]);
     return 0 == rc ? "ok" : error_name();
   }
   if (it.verb == "update-where") {

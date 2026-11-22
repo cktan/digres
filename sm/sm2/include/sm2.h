@@ -705,6 +705,27 @@ int rel_reinsert_at(rel_t* rel, uint64_t id, std::span<const datum_t> datums,
                     std::span<const bool> isnull);
 
 /*
+ * rel_reinsert_at of a row that a move of sm's own takes into the
+ * delta store, unchanged: the Column Store's elimination
+ * (../COLSTORE.md §11.3). The row goes in as a moved-in version
+ * (sm1::insert_moved_in), over the seal's tombstone or where no
+ * version is, so a writer of it is judged by the row's own commit.
+ * A datum too big goes out of line, as an insert's does.
+ */
+int rel_movein_at(rel_t* rel, uint64_t id, std::span<const datum_t> datums,
+                  std::span<const bool> isnull);
+
+/*
+ * Put a tombstone of the transaction's own over the seal's tombstone
+ * at key, for its own reads: the Column Store's delete of a row
+ * whose snapshot is older than the seal (../COLSTORE.md §9). An
+ * empty version goes in over the seal's tombstone, as an insert
+ * does, and is erased at once, as a delete is; neither touches a
+ * datum out of line, nor is seen by another transaction.
+ */
+int rel_hide_sealed(rel_t* rel, std::string_view key);
+
+/*
  * Read the row at key as the transaction sees it: 0 with tuple set,
  * and id if wanted, a keyless row's _id from its key or 0 for a
  * keyed row, 1 if there is none, -1 on error, as sm1::read.

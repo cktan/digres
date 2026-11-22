@@ -6,7 +6,7 @@
 #    every row, after a restart too.
 # 2. A SERIALIZABLE transaction cannot read it, and it takes no
 #    index; the other levels read it.
-# 3. A row of a row group is deleted by its name (rg_id, _id); an
+# 3. A row of a row group is deleted by its name (place, _id); an
 #    aborted delete leaves it.
 # 4. 12,000 rows inserted one at a time: the commit queues the
 #    table, and the seal's job seals a row group of them; a seal by
@@ -28,6 +28,21 @@
 #    and b "zz", b < 'b' and b IN ('zz') each read one.
 # 10. 10,000 rows inserted one at a time and prepared: COMMIT PREPARED
 #     counts them toward the seal, which seals them.
+# 11. 150 rows of a row group deleted by name: the sealer folds their
+#     markers into the validmap; the count is the same, and a delete
+#     of a folded row finds no row.
+# 12. 2,000 rows of a row group of 10,000 deleted: the sealer compacts
+#     it into version 1 of the same row group. A REPEATABLE READ
+#     session older than the compaction still counts 10,000 rows,
+#     deletes a row by its old place, and no longer sees it.
+# 13. 3,000 more rows of that version deleted: under half its rows
+#     live, the sealer eliminates it, and its rows go into the delta
+#     store. A REPEATABLE READ session older than the elimination
+#     still counts the version's rows, deletes a row by its place
+#     there, and no longer sees it.
+# 14. A FOR SHARE holder of a row does not stop RG compaction, which
+#     keeps the lock on the row's _id: a FOR UPDATE of the row is
+#     still blocked after it.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -86,8 +101,8 @@
 (def id7 (get ids 7))
 (def id8 (get ids 8))
 (begin :rc)
-    (def rg7 (rg-of ev id7))
-    (assert-eq (> rg7 0) true "a loaded row is in a row group")
+    (def rg7 (place-of ev id7))
+    (assert-eq (> (get rg7 0) 0) true "a loaded row is in a row group")
     (delete-at ev rg7 id7)
 (commit)
 (begin :rr)
@@ -95,7 +110,7 @@
     (assert-nil (rg-of ev id7) "no row has its _id")
 (commit)
 (begin :rc)
-    (delete-at ev (rg-of ev id8) id8)
+    (delete-at ev (place-of ev id8) id8)
 (abort)
 (begin :rr)
     (assert-eq (scan-count ev) 24999 "an aborted delete leaves the row")
@@ -233,6 +248,140 @@
     (assert-eq (> (rg-of tq 1) 0) true
                "COMMIT PREPARED's rows are sealed")
 (commit)
+
+# 11. Deletes by name of 150 rows of a row group of 10,000, past 1%
+# of its rows: the sealer folds their markers into its validmap.
+# Every snapshot counts each row once, and a delete of a folded row
+# fails as a delete of a deleted one.
+(begin :rc)
+    (table-create tf
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (def fids (load tf (map (fn [i] [i "f"]) (range 10000))))
+(commit)
+(begin :rc)
+    (def fplaces (map (fn [i] (place-of tf (get fids i))) (range 150)))
+    (assert-eq (> (get (get fplaces 0) 0) 0) true "a loaded row is in a row group")
+(commit)
+(begin :rr)
+    (assert-eq (scan-count tf) 10000 "before the deletes")
+(commit)
+(begin :rc)
+    (for i 0 150
+      (delete-at tf (get fplaces i) (get fids i)))
+(commit)
+(seal-wait)
+(begin :rr)
+    (assert-eq (scan-count tf) 9850 "the deleted rows are gone, once folded")
+    (assert-nil (rg-of tf (get fids 0)) "no row has a folded row's _id")
+(commit)
+(begin :rc)
+    (assert-eq (says (err-of (delete-at tf (get fplaces 0) (get fids 0)))
+                     "ERR_NOTFOUND")
+               true "a delete of a folded row finds no row")
+(abort)
+
+# 12. A compaction into the next version, and a writer older than it.
+(begin :rc)
+    (table-create tv
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (def vids (load tv (map (fn [i] [i "v"]) (range 10000))))
+(commit)
+(def v0 (do (begin :rc) (def p (places tv)) (commit) p))
+(session-open s2 "csdb")
+(session-use s2)
+(begin :rr)
+    (assert-eq (scan-count tv) 10000 "s2's snapshot, before the deletes")
+(session-use default)
+(begin :rc)
+    (for i 0 2000
+      (delete-at tv (get v0 (get vids i)) (get vids i)))
+(commit)
+(seal-wait)
+(begin :rc)
+    (def vid (get vids 5000))
+    (assert-eq (rg-of tv vid) (+ (get (get v0 vid) 0) 1)
+               "the row group is in its next version")
+    (assert-eq (get (place-of tv vid) 1) 3000 "the rows are renumbered")
+(commit)
+(session-use s2)
+    (assert-eq (scan-count tv) 10000 "s2 reads the version it saw")
+    (delete-at tv (get v0 vid) vid)
+    (assert-eq (scan-count tv) 9999 "s2 no longer sees the row it deleted")
+(commit)
+(session-use default)
+(begin :rr)
+    (assert-eq (scan-count tv) 7999 "the delete went to the newest version")
+    (assert-nil (rg-of tv vid) "no row has the deleted _id")
+(commit)
+(session-close s2)
+
+# 13. An elimination, and a writer older than it.
+(def v1 (do (begin :rc) (def p (places tv)) (commit) p))
+(session-open s3 "csdb")
+(session-use s3)
+(begin :rr)
+    (assert-eq (scan-count tv) 7999 "s3's snapshot, before the deletes")
+(session-use default)
+(begin :rc)
+    (for i 2000 5000
+      (delete-at tv (get v1 (get vids i)) (get vids i)))
+(commit)
+(seal-wait)
+(begin :rc)
+    (def eid (get vids 7000))
+    (assert-eq (scan-count tv) 4999 "the live rows, once each")
+    (assert-eq (rg-of tv eid) 0 "the rows are in the delta store")
+(commit)
+(session-use s3)
+    (assert-eq (scan-count tv) 7999 "s3 reads the version it saw")
+    (delete-at tv (get v1 eid) eid)
+    (assert-eq (scan-count tv) 7998 "s3 no longer sees the row it deleted")
+(commit)
+(session-use default)
+(begin :rr)
+    (assert-eq (scan-count tv) 4998 "the delete went to the delta store")
+    (assert-nil (rg-of tv eid) "no row has the deleted _id")
+(commit)
+(session-close s3)
+
+# 14. A FOR SHARE holder across an RG compaction.
+(begin :rc)
+    (table-create tl
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (def lids (load tl (map (fn [i] [i "l"]) (range 10000))))
+(commit)
+(def l0 (do (begin :rc) (def p (places tl)) (commit) p))
+(def lid (get lids 5000))
+(session-open s4 "csdb")
+(session-use s4)
+(begin :rc)
+    (lock-row tl lid :shared)
+(session-use default)
+(begin :rc)
+    (for i 0 2000
+      (delete-at tl (get l0 (get lids i)) (get lids i)))
+(commit)
+(seal-wait)
+(begin :rc)
+    (assert-eq (rg-of tl lid) (+ (get (get l0 lid) 0) 1)
+               "RG compaction went on past the FOR SHARE holder")
+    (qa-nowait true)
+    (assert-err :err-blocked (lock-row tl lid :exclusive))
+    (qa-nowait false)
+(commit)
+(session-use s4)
+(commit)
+(session-use default)
+(session-close s4)
 
 (db-close)
 (env-detach :force true)

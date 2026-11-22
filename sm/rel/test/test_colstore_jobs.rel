@@ -1,0 +1,335 @@
+# test_colstore_jobs.rel -- the Column Store's jobs run by hand
+# through sm.h (../../COLSTORE.md §11), on row groups of 1,000
+# rows: the fold, RG compaction into versions, elimination and the
+# cleanup, with readers and writers of other snapshots. Each
+# version keeps under 10 markers, so the sealer's own jobs, which
+# start at 1%, leave the row group to the test.
+#
+# 1. The fold: 5 markers into the validmap; a snapshot older than
+#    it counts the same rows as a new one.
+# 2. The fold gives up on a writer of the row group in flight; a
+#    second writer of another row of it does not wait.
+# 3. A delete of a folded row by its old place finds no row.
+# 4. RG compaction into versions 1 and 2; a REPEATABLE READ writer
+#    older than both deletes a row by its old place, and no longer
+#    sees it.
+# 5. RG compaction of version 3 eliminates it; a REPEATABLE READ
+#    writer older than it updates a row by its old place, and sees
+#    the row once. The cleanup of version 3 waits for it.
+# 6. The cleanup of versions 0 and 2: their markers go.
+# 7. A FOR SHARE holder stops elimination, not RG compaction.
+# 8. A writer whose row changed since: SM_ERR_CONFLICT at
+#    REPEATABLE READ, SM_ERR_UPDATED at READ COMMITTED.
+# 9. A prepared delete holds off RG compaction across a restart,
+#    until COMMIT PREPARED.
+# 10. A REPEATABLE READ session older than the seal of a row
+#     deletes it by its _id: it no longer sees it.
+# 11. At READ COMMITTED, the newest version of a sealed row is read
+#     from its row group; a write by its old place of a row updated
+#     since and folded is SM_ERR_UPDATED, and the retry by _id goes.
+# 12. A REPEATABLE READ delete by _id alone of a row deleted since
+#     its snapshot is SM_ERR_CONFLICT.
+
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp")
+                      "/sm_rel_test_colstore_jobs"))
+(rm-rf test-dir)
+(env-init test-dir)
+(env-attach test-dir)
+(db-create "cjdb")
+(db-open "cjdb")
+(set-rg-rows 1000)
+
+# The versions of cj's row groups, in a transaction of their own.
+(defn rgs-of [t]
+  (begin :rc)
+  (def r (_row-groups t))
+  (commit)
+  r)
+
+# The places of t's rows, in a transaction of their own.
+(defn places-of [t]
+  (begin :rc)
+  (def p (_places t))
+  (commit)
+  p)
+
+# Delete rows from .. to - 1 of t by their places p, in one
+# transaction.
+(defn del-rows [t ids p from to]
+  (begin :rc)
+  (for i from to
+    (_delete-at t (get p (get ids i)) (get ids i)))
+  (commit))
+
+# Run job on file set fsid of t, in a transaction of its own.
+(defn job [f t fsid]
+  (begin :rc)
+  (def done (f t fsid))
+  (commit)
+  done)
+
+# The rows of t with a = a, in the transaction.
+(defn rows-with [t a]
+  (filter (fn [r] (= (get (get r 1) 0) a)) (_scan t)))
+
+(begin :rc)
+    (table-create cj (columns (a :int4) (b :text)) :column-store)
+(commit)
+(begin :rc)
+    (def ids (load cj (map (fn [i] [i "j"]) (range 1000))))
+(commit)
+(def f0 (get (get (rgs-of "cj") 0) :fsid))
+(assert-eq (length (rgs-of "cj")) 1 "one row group of 1,000 rows")
+(assert-eq (get (get (rgs-of "cj") 0) :rows) 1000)
+(def p0 (places-of "cj"))
+(session-open s2 "cjdb")
+(session-open s3 "cjdb")
+(session-open s4 "cjdb")
+
+# 1. The fold.
+(session-use s2)
+(begin :rr)
+    (assert-eq (scan-count cj) 1000 "s2's snapshot, before the deletes")
+(session-use default)
+(del-rows "cj" ids p0 0 5)
+(def r (get (rgs-of "cj") 0))
+(assert-eq [(get r :dead) (get r :markers)] [5 5] "5 markers")
+(assert-eq (job _fold-rg "cj" f0) true "the fold")
+(def r (get (rgs-of "cj") 0))
+(assert-eq [(get r :dead) (get r :markers)] [5 0] "folded into the validmap")
+(session-use s2)
+    (assert-eq (scan-count cj) 1000 "s2 counts as before the fold")
+(commit)
+(session-use default)
+(begin :rr)
+    (assert-eq (scan-count cj) 995 "a new snapshot counts 995")
+(commit)
+
+# 2. A writer in flight.
+(session-use s2)
+(begin :rc)
+    (delete-at cj (get p0 (get ids 5)) (get ids 5))
+(session-use default)
+(assert-eq (job _fold-rg "cj" f0) false "the fold gives up on a writer")
+(qa-nowait true)
+(del-rows "cj" ids p0 6 7)
+(qa-nowait false)
+(session-use s2)
+(commit)
+(session-use default)
+(assert-eq (job _fold-rg "cj" f0) true "and folds after it")
+
+# 3. A folded row.
+(begin :rc)
+    (assert-err :notfound (delete-at cj (get p0 (get ids 0)) (get ids 0)))
+(abort)
+
+# 4. Two compactions, and a writer older than both.
+(def id500 (get ids 500))
+(session-use s3)
+(begin :rr)
+    (assert-eq (scan-count cj) 993 "s3's snapshot, of version 0")
+(session-use default)
+(assert-eq (job _compact-rg "cj" f0) true "version 1")
+(assert-eq (get (get (rgs-of "cj") 0) :fsid) (+ f0 1))
+(assert-eq (get (get (rgs-of "cj") 0) :rows) 993 "its live rows alone")
+(del-rows "cj" ids (places-of "cj") 7 10)
+(assert-eq (job _compact-rg "cj" (+ f0 1)) true "version 2")
+(assert-eq (get (get (rgs-of "cj") 0) :rows) 990)
+(session-use s3)
+    (delete-at cj (get p0 id500) id500)
+    (assert-eq (scan-count cj) 992 "s3 no longer sees the row it deleted")
+(commit)
+(session-use default)
+(begin :rr)
+    (assert-eq (scan-count cj) 989 "the delete went to version 2")
+    (assert-nil (rg-of cj id500) "no row has the deleted _id")
+(commit)
+
+# 5. Version 3, and its elimination.
+(del-rows "cj" ids (places-of "cj") 10 13)
+(assert-eq (job _compact-rg "cj" (+ f0 2)) true "version 3")
+(assert-eq (get (get (rgs-of "cj") 0) :rows) 986)
+(def id600 (get ids 600))
+(session-use s4)
+(begin :rr)
+    (def p3 (_places "cj"))
+    (assert-eq (get (get p3 id600) 0) (+ f0 3) "s4 sees version 3")
+(session-use default)
+(assert-eq (job _compact-rg "cj" (+ f0 3)) true "version 3 is eliminated")
+(assert-eq (length (rgs-of "cj")) 0 "no row group")
+(begin :rc)
+    (assert-eq (rg-of cj id600) 0 "the rows are in the delta store")
+    (assert-eq (scan-count cj) 986 "once each")
+(commit)
+(session-use s4)
+    (assert-eq (scan-count cj) 986 "s4 reads version 3")
+    (update-at cj (get p3 id600) id600 [600 "s4"])
+    (assert-eq (scan-count cj) 986 "s4 sees the row once")
+    (assert-eq (length (rows-with "cj" 600)) 1)
+    (assert-eq (get (get (get (rows-with "cj" 600) 0) 1) 1) "s4")
+(session-use default)
+(assert-eq (job _cleanup-rg "cj" (+ f0 3)) false
+           "the cleanup of version 3 waits for s4")
+(session-use s4)
+(commit)
+(session-use default)
+(assert-eq (> (job _markers-of "cj" (+ f0 3)) 0) true "s4's shadow marker")
+(assert-eq (job _cleanup-rg "cj" (+ f0 3)) true "the cleanup of version 3")
+(assert-eq (job _markers-of "cj" (+ f0 3)) 0)
+(begin :rr)
+    (assert-eq (scan-count cj) 986)
+    (assert-eq (get (get (get (rows-with "cj" 600) 0) 1) 1) "s4")
+(commit)
+
+# 6. The cleanup of versions 0 and 2.
+(assert-eq (> (job _markers-of "cj" f0) 0) true "s3's shadow marker")
+(assert-eq (job _markers-of "cj" (+ f0 2)) 4 "version 2's markers")
+(assert-eq (job _cleanup-rg "cj" f0) true)
+(assert-eq (job _cleanup-rg "cj" (+ f0 2)) true)
+(assert-eq (job _markers-of "cj" f0) 0)
+(assert-eq (job _markers-of "cj" (+ f0 2)) 0)
+
+# 7. FOR SHARE.
+(begin :rc)
+    (table-create ck (columns (a :int4) (b :text)) :column-store)
+(commit)
+(begin :rc)
+    (def kids (load ck (map (fn [i] [i "k"]) (range 1000))))
+(commit)
+(def k0 (get (get (rgs-of "ck") 0) :fsid))
+(session-use s2)
+(begin :rc)
+    (lock-row ck (get kids 5) :shared)
+(session-use default)
+(assert-eq (job _eliminate-rg "ck" k0) false "elimination gives up")
+(assert-eq (job _compact-rg "ck" k0) true "RG compaction goes on")
+(session-use s2)
+(commit)
+(session-use default)
+
+# 8. A row changed since.
+(def kp (places-of "ck"))
+(def k20 (get kids 20))
+(def k21 (get kids 21))
+(session-use s2)
+(begin :rr)
+    (assert-eq (scan-count ck) 1000)
+(session-use default)
+(begin :rc)
+    (update-at ck (get kp k20) k20 [20 "new"])
+(commit)
+(session-use s2)
+    (assert-err :err-conflict (update-at ck (get kp k20) k20 [20 "s2"]))
+(abort)
+(begin :rc)
+    (def kp2 (_places "ck"))
+(session-use default)
+(begin :rc)
+    (update-at ck (get kp2 k21) k21 [21 "new"])
+(commit)
+(session-use s2)
+    (assert-err :err-updated (delete-at ck (get kp2 k21) k21))
+(abort)
+(session-use default)
+
+# 9. A prepared delete across a restart.
+(def kp3 (places-of "ck"))
+(def k1 (get (get (rgs-of "ck") 0) :fsid))
+(session-use s2)
+(begin :rc)
+    (delete-at ck (get kp3 (get kids 30)) (get kids 30))
+(prepare "cj_p1")
+(session-use default)
+(session-close s2)
+(session-close s3)
+(session-close s4)
+(db-close)
+(env-detach :force true)
+(env-attach test-dir)
+(db-open "cjdb")
+(set-rg-rows 1000)
+(assert-eq (job _compact-rg "ck" k1) false "the prepared delete holds it off")
+(commit-prepared "cj_p1")
+(assert-eq (job _compact-rg "ck" k1) true "and then it goes on")
+(begin :rr)
+    (assert-eq (scan-count ck) 999)
+(commit)
+
+# 10. A delete older than the seal.
+(begin :rc)
+    (table-create cs (columns (a :int4) (b :text)) :column-store)
+(commit)
+(begin :rc)
+    (def sids (seq [i :range [0 999]] (insert cs [i "s"])))
+(commit)
+(session-open s2 "cjdb")
+(session-use s2)
+(begin :rr)
+    (assert-eq (scan-count cs) 999 "s2's snapshot, before the seal")
+(session-use default)
+(begin :rc)
+    (insert cs [999 "s"])
+(commit)
+(seal-wait)
+(begin :rc)
+    (assert-eq (> (rg-of cs (get sids 5)) 0) true "the rows are sealed")
+(commit)
+(session-use s2)
+    (delete cs (get sids 5))
+    (assert-eq (scan-count cs) 998 "s2 no longer sees the row it deleted")
+(commit)
+(session-use default)
+(session-close s2)
+(begin :rr)
+    (assert-eq (scan-count cs) 999 "the delete went to the row group")
+    (assert-nil (rg-of cs (get sids 5)))
+(commit)
+
+# 11. The newest version of a sealed row; a row updated and folded.
+(def s7 (get sids 7))
+(def cp (places-of "cs"))
+(session-open s2 "cjdb")
+(session-use s2)
+(begin :rc)
+    (lock-row cs s7 :exclusive)
+    (assert-eq (get (read-latest cs s7) 0) 7 "read from its row group")
+(commit)
+(begin :rc)
+(session-use default)
+(begin :rc)
+    (update-at cs (get cp s7) s7 [7 "w2"])
+(commit)
+(assert-eq (job _fold-rg "cs" (get (get cp s7) 0)) true "the fold")
+(session-use s2)
+    (assert-err :err-updated (update-at cs (get cp s7) s7 [7 "w1"]))
+    (assert-eq (get (read-latest cs s7) 1) "w2")
+    (update cs s7 [7 "w1"])
+(commit)
+(session-use default)
+(session-close s2)
+(begin :rr)
+    (assert-eq (length (rows-with "cs" 7)) 1)
+    (assert-eq (get (get (get (rows-with "cs" 7) 0) 1) 1) "w1")
+(commit)
+
+# 12. A row deleted since.
+(def s9 (get sids 9))
+(session-open s2 "cjdb")
+(session-use s2)
+(begin :rr)
+    (assert-eq (length (rows-with "cs" 9)) 1 "s2 sees a = 9")
+(session-use default)
+(begin :rc)
+    (delete cs s9)
+(commit)
+(session-use s2)
+    (assert-err :err-conflict (delete cs s9))
+(abort)
+(session-use default)
+(session-close s2)
+
+(db-close)
+(env-detach :force true)
+(rm-rf test-dir)
+(print "test_colstore_jobs.rel: PASSED")

@@ -709,11 +709,21 @@ int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, const void** tuple,
 int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, sm_pin_ref_t* ref);
 
 /*
- * The row group of a column store table's row that sm_row_scannxt
- * handed out last, 0 for a row of its delta store, and of any other
- * table.
+ * A column store table's row's place (../COLSTORE.md §8): the
+ * file set of the version of the row group it was read from, and
+ * its position there. fsid 0 is a row of the delta store.
  */
-uint64_t sm_row_scan_rg(const sm_row_scan_t* scan);
+typedef struct sm_row_place_t {
+    uint64_t fsid; /* rg_id << 2 | version; 0: the delta store */
+    uint32_t rno;
+} sm_row_place_t;
+
+/*
+ * The place of a column store table's row that sm_row_scannxt
+ * handed out last; fsid 0 for a row of its delta store, and of any
+ * other table.
+ */
+sm_row_place_t sm_row_scan_place(const sm_row_scan_t* scan);
 
 /* Move a cursor by _id, of a keyless table, forward to _id id. */
 int sm_row_scan_seek(sm_row_scan_t* scan, uint64_t id);
@@ -1588,14 +1598,14 @@ int sm_tbl_delete(sm_tbl_t* tbl, uint64_t id, sm_pin_ref_t* ref = nullptr,
                   const void** old = nullptr, size_t* len = nullptr);
 
 /*
- * A column store table's row by its name (rg_id, id), rg_id the row
- * group sm_row_scan_rg gave, 0 for the delta store
+ * A column store table's row by its name (place, id), place the one
+ * sm_row_scan_place gave, fsid 0 for the delta store
  * (../COLSTORE.md §8, §9): sm3's tbl_delete_at and tbl_update_at.
  * At read committed, a row updated since fails with SM_ERR_UPDATED;
- * the caller reads it again by (0, id).
+ * the caller reads it again by (fsid 0, id).
  */
-int sm_tbl_delete_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id);
-int sm_tbl_update_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id,
+int sm_tbl_delete_at(sm_tbl_t* tbl, sm_row_place_t place, uint64_t id);
+int sm_tbl_update_at(sm_tbl_t* tbl, sm_row_place_t place, uint64_t id,
                      const sm_datum_t* values, const bool* isnull, size_t n);
 
 /*
@@ -1604,6 +1614,56 @@ int sm_tbl_update_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id,
  * *sealed says whether one was.
  */
 int sm_tbl_seal(sm_tbl_t* tbl, bool* sealed);
+
+/*
+ * A version of a row group of a column store table, as the
+ * transaction sees it (../COLSTORE.md §4.4): for tests.
+ */
+typedef struct sm_rg_info_t {
+    uint64_t fsid;    /* rg_id << 2 | version */
+    uint32_t rows;    /* its rows */
+    uint32_t dead;    /* the rows its validmap and markers name */
+    uint32_t markers; /* its delete markers */
+} sm_rg_info_t;
+
+/*
+ * The versions of row groups of a column store table that the
+ * transaction sees, in fsid order: the first cap into out, and the
+ * count of all into *n. For tests.
+ */
+int sm_tbl_row_groups(sm_tbl_t* tbl, sm_rg_info_t* out, size_t cap,
+                      size_t* n);
+
+/* The jobs of the sealer (../COLSTORE.md §11), to run by hand. */
+typedef enum sm_rg_job_t {
+    SM_RG_FOLD,      /* the markers into the validmap (§11.1) */
+    SM_RG_COMPACT,   /* the next version, or elimination at the last (§11.2) */
+    SM_RG_ELIMINATE, /* the live rows into the delta store (§11.3) */
+    SM_RG_CLEANUP    /* an old version's markers and validmap (§11.4) */
+} sm_rg_job_t;
+
+/*
+ * Run job on file set fsid of a column store table, in the session's
+ * transaction, at read committed: *done says whether it did, false
+ * when it gave up on a writer or a lock holder, or must wait for the
+ * watermark. For tests.
+ */
+int sm_tbl_rg_job(sm_tbl_t* tbl, sm_rg_job_t job, uint64_t fsid,
+                  bool* done);
+
+/*
+ * The delete markers of file set fsid of a column store table that
+ * the transaction sees, of a version gone from it too, into *n. For
+ * tests.
+ */
+int sm_tbl_rg_markers(sm_tbl_t* tbl, uint64_t fsid, size_t* n);
+
+/*
+ * Give the column store tables of the session's catalog row groups
+ * of rows rows, 1 to 10,000 (../COLSTORE.md §7), before they have
+ * rows. For tests.
+ */
+int sm_set_rg_rows(sm_session_t* session, uint32_t rows);
 
 /*
  * Wait until the seal's job of the session's database has nothing

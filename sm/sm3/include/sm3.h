@@ -1183,9 +1183,9 @@ int cat_set_toast(catalog_t* cat, bool on);
 /*
  * Give the column store tables of the catalog row groups of rows
  * rows, fewer than the 10k they have (../COLSTORE.md §7), so that a
- * seal, an RG compaction and a merge come sooner: for tests. Once,
- * before any session uses the catalog. 0, or -1 with SM_ERR_INVALID
- * for rows 0 or past 10k.
+ * seal, an RG compaction and an elimination come sooner: for tests.
+ * Before the tables have rows. 0, or -1 with SM_ERR_INVALID for rows
+ * 0 or past 10k.
  */
 int cat_set_rg_rows(catalog_t* cat, uint32_t rows);
 
@@ -1670,22 +1670,39 @@ int tbl_delete(table_t* table, uint64_t id, pin_ref_t& ref,
                std::string_view& old);
 
 /*
- * The row of a column store table named (rg_id, id) (../COLSTORE.md
- * §8): rg_id is the row group it was read from, 0 for the delta
- * store; tbl_scan_rg gives it for a scan's last row.
+ * A row's place in a column store table (../COLSTORE.md §2): the
+ * file set of the row group's version it was read from, and its
+ * position there. fsid 0 is a row of the delta store.
+ */
+struct place_t {
+    uint64_t fsid = 0; /* rg_id << 2 | version; 0: the delta store */
+    uint32_t rno  = 0;
+
+    bool operator==(const place_t&) const = default;
+};
+
+/* The fsid of version version of row group rg_id (../COLSTORE.md §4.5). */
+inline uint64_t fsid_of(uint64_t rg_id, uint32_t version) {
+    return rg_id << 2 | version;
+}
+
+/*
+ * The row of a column store table named (place, id) (../COLSTORE.md
+ * §8): place is where it was read from, fsid 0 for the delta store;
+ * tbl_scan_place gives it for a scan's last row.
  *
- * tbl_delete_at with rg_id 0 is tbl_delete. With a row group's, it
+ * tbl_delete_at with fsid 0 is tbl_delete. With a row group's, it
  * takes the row's exclusive lock, on its _id, then puts the row's
- * delete marker. tbl_update_at deletes so, then inserts values
+ * delete marker, at its place. tbl_update_at deletes so, then inserts values
  * into the delta store under the same _id. Above read committed, a
  * marker or a new version of the row committed since the snapshot
  * fails with SM_ERR_CONFLICT. At read committed, a row deleted since
  * fails with SM_ERR_NOTFOUND, and a row updated since, which lives
  * on in the delta store, with SM_ERR_UPDATED: the caller reads it
  * with tbl_read_latest, under the lock now held, and names it
- * (0, id).
+ * (place_t{}, id).
  */
-int tbl_delete_at(table_t* table, uint64_t rg_id, uint64_t id);
+int tbl_delete_at(table_t* table, place_t place, uint64_t id);
 
 /*
  * Seal a row group of a column store table's delta store
@@ -1698,17 +1715,28 @@ int tbl_delete_at(table_t* table, uint64_t rg_id, uint64_t id);
 int tbl_seal(table_t* table, bool& sealed);
 
 /*
- * Compact row groups rgs of a column store table into new ones
- * (../COLSTORE.md §11), in the caller's transaction, at READ
- * COMMITTED: their live rows, each marked moved in its old row group,
- * into new row groups of at most rg_max_rows rows, and the old row
- * groups gone. A row with a writer in flight or prepared gives up:
- * done is false, and nothing is left written. A writer of a moved
- * row follows it to its new row group.
+ * Compact file set fsid of a column store table, a row group's newest
+ * version (../COLSTORE.md §11.2, §11.3), in the caller's transaction,
+ * at READ COMMITTED: below version 3, into its next version, with its
+ * live rows alone; at version 3, by elimination (tbl_eliminate_rg).
+ * A writer of the row group makes it give up: done is false, and
+ * nothing is left written. A holder of a row's lock keeps it, as the
+ * lock is on the row's _id. A writer of a row of an older version
+ * writes the row's newest place.
  */
-int tbl_compact_rgs(table_t* table, std::span<const uint64_t> rgs,
-                    bool& done);
-int tbl_update_at(table_t* table, uint64_t rg_id, uint64_t id,
+int tbl_compact_rg(table_t* table, uint64_t fsid, bool& done);
+
+/*
+ * Eliminate file set fsid of a column store table, a row group's
+ * newest version (../COLSTORE.md §11.3), in the caller's transaction,
+ * at READ COMMITTED: its live rows put into the delta store, under
+ * their _ids, as moved-in versions, and the row group gone. A writer
+ * of the row group, or a holder of a live row's lock, makes it give
+ * up: done is false, and nothing is left written. A writer of a row
+ * of the row group writes it in the delta store.
+ */
+int tbl_eliminate_rg(table_t* table, uint64_t fsid, bool& done);
+int tbl_update_at(table_t* table, place_t place, uint64_t id,
                   std::span<const sm2::datum_t> values,
                   std::span<const bool> isnull);
 
@@ -1953,8 +1981,49 @@ int tbl_scan_columns(table_t* table, std::vector<bool> cols,
                      std::vector<col_bound_t> bounds, uint64_t first,
                      uint64_t last, scan_t*& out);
 
-/* The rg_id of the row a scan handed out last; 0 for the delta's. */
-uint64_t tbl_scan_rg(const scan_t* scan);
+/*
+ * Fold the delete markers of file set fsid of a column store table
+ * into its validmap (../COLSTORE.md §11.1), in the caller's
+ * transaction, at READ COMMITTED: X on the row group if no writer
+ * holds IX, a new validmap, and the markers erased. A writer in
+ * flight or prepared gives up: done is false, and nothing is
+ * written.
+ */
+int tbl_fold(table_t* table, uint64_t fsid, bool& done);
+
+/* A version of a row group, as a transaction sees it: for tests. */
+struct rg_info_t {
+  uint64_t fsid = 0;    /* rg_id << 2 | version */
+  uint32_t rows = 0;    /* its rows */
+  uint32_t dead = 0;    /* the rows its validmap and markers name */
+  uint32_t markers = 0; /* its delete markers */
+};
+
+/*
+ * The versions of row groups of a column store table that the
+ * transaction sees, in fsid order, into out (../COLSTORE.md §4.4):
+ * for tests.
+ */
+int tbl_row_groups(table_t* table, std::vector<rg_info_t>& out);
+
+/*
+ * The delete markers of file set fsid of a column store table that
+ * the transaction sees, of a version gone from it too, into n
+ * (../COLSTORE.md §11.4): for tests.
+ */
+int tbl_rg_markers(table_t* table, uint64_t fsid, size_t& n);
+
+/*
+ * Erase the delete markers and validmap of file set fsid of a column
+ * store table, an old version that RG compaction replaced in place
+ * (../COLSTORE.md §11.4), in the caller's transaction, once no
+ * snapshot sees the version: done false, with nothing written, until
+ * then.
+ */
+int tbl_cleanup(table_t* table, uint64_t fsid, bool& done);
+
+/* The place of the row a scan handed out last; fsid 0 for the delta's. */
+place_t tbl_scan_place(const scan_t* scan);
 
 /*
  * Open a cursor over the rows of index, the table's primary key or

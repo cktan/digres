@@ -2743,6 +2743,99 @@ static Janet cfun_seal_wait(int32_t argc, Janet *argv) {
   return janet_wrap_nil();
 }
 
+/*
+ * (row-groups table): the versions of row groups of a column store
+ * table that the transaction sees, an array of tables of :fsid
+ * :rows :dead :markers, in fsid order.
+ */
+static Janet cfun_row_groups(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 1);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef =
+      need_table(s, identifier_of(argv[0]), SM_LOCKMODE_IS, "row-groups");
+  size_t n = 0;
+  if (sm_tbl_row_groups(p_tdef->tbl, nullptr, 0, &n) != 0) {
+    panic_sm_error("row-groups sm_tbl_row_groups");
+  }
+  std::vector<sm_rg_info_t> rgs(n);
+  if (n != 0 && sm_tbl_row_groups(p_tdef->tbl, rgs.data(), n, &n) != 0) {
+    panic_sm_error("row-groups sm_tbl_row_groups");
+  }
+  JanetArray *out = janet_array(static_cast<int32_t>(rgs.size()));
+  for (const sm_rg_info_t &r : rgs) {
+    JanetTable *t = janet_table(4);
+    janet_table_put(t, janet_ckeywordv("fsid"),
+                    janet_wrap_number(static_cast<double>(r.fsid)));
+    janet_table_put(t, janet_ckeywordv("rows"), janet_wrap_number(r.rows));
+    janet_table_put(t, janet_ckeywordv("dead"), janet_wrap_number(r.dead));
+    janet_table_put(t, janet_ckeywordv("markers"),
+                    janet_wrap_number(r.markers));
+    janet_array_push(out, janet_wrap_table(t));
+  }
+  return janet_wrap_array(out);
+}
+
+/* Run a job of the sealer by hand on table argv[0], fsid argv[1]. */
+static Janet rg_job(int32_t argc, Janet *argv, sm_rg_job_t job,
+                    const char *op) {
+  janet_fixarity(argc, 2);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef =
+      need_table(s, identifier_of(argv[0]), SM_LOCKMODE_IX, op);
+  uint64_t fsid = static_cast<uint64_t>(janet_getinteger64(argv, 1));
+  bool done = false;
+  if (sm_tbl_rg_job(p_tdef->tbl, job, fsid, &done) != 0) {
+    abort_failed_write(s);
+    panic_sm_error(op);
+  }
+  return janet_wrap_boolean(done);
+}
+
+/* (fold-rg table fsid): fold the version's markers; whether it did. */
+static Janet cfun_fold_rg(int32_t argc, Janet *argv) {
+  return rg_job(argc, argv, SM_RG_FOLD, "fold-rg");
+}
+
+/* (compact-rg table fsid): compact the version; whether it did. */
+static Janet cfun_compact_rg(int32_t argc, Janet *argv) {
+  return rg_job(argc, argv, SM_RG_COMPACT, "compact-rg");
+}
+
+/* (eliminate-rg table fsid): eliminate the version; whether it did. */
+static Janet cfun_eliminate_rg(int32_t argc, Janet *argv) {
+  return rg_job(argc, argv, SM_RG_ELIMINATE, "eliminate-rg");
+}
+
+/* (cleanup-rg table fsid): clean up an old version; whether it did. */
+static Janet cfun_cleanup_rg(int32_t argc, Janet *argv) {
+  return rg_job(argc, argv, SM_RG_CLEANUP, "cleanup-rg");
+}
+
+/* (markers-of table fsid): the delete markers of the file set. */
+static Janet cfun_markers_of(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 2);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef =
+      need_table(s, identifier_of(argv[0]), SM_LOCKMODE_IS, "markers-of");
+  uint64_t fsid = static_cast<uint64_t>(janet_getinteger64(argv, 1));
+  size_t n = 0;
+  if (sm_tbl_rg_markers(p_tdef->tbl, fsid, &n) != 0) {
+    panic_sm_error("markers-of sm_tbl_rg_markers");
+  }
+  return janet_wrap_number(static_cast<double>(n));
+}
+
+/* (set-rg-rows n): the rows of a full row group, for tests. */
+static Janet cfun_set_rg_rows(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 1);
+  session_ctx_t *s = require_session();
+  uint32_t rows = static_cast<uint32_t>(janet_getinteger64(argv, 0));
+  if (sm_set_rg_rows(s->session, rows) != 0) {
+    panic_sm_error("set-rg-rows sm_set_rg_rows");
+  }
+  return janet_wrap_nil();
+}
+
 /* (seal table): seal a row group of a column store table. */
 static Janet cfun_seal(int32_t argc, Janet *argv) {
   janet_fixarity(argc, 1);
@@ -2758,44 +2851,156 @@ static Janet cfun_seal(int32_t argc, Janet *argv) {
 }
 
 /*
- * (rg-of table id): the row group a scan finds the row with _id id
- * in, 0 for the delta store; nil if no row has it.
+ * The place a scan of the column store table argv[0] finds the row
+ * with _id argv[1] at, into place; false if no row has it. who names
+ * the caller in an error.
  */
-static Janet cfun_rg_of(int32_t argc, Janet *argv) {
+static bool place_of(int32_t argc, Janet *argv, const char *who,
+                     sm_row_place_t &place) {
   janet_fixarity(argc, 2);
   session_ctx_t *s = require_session();
   table_def_t *p_tdef = nullptr;
   Janet tbl = argv[0];
-  sm_row_scan_t *rscan = open_row_cursor(s, 1, &tbl, "rg-of", p_tdef);
+  sm_row_scan_t *rscan = open_row_cursor(s, 1, &tbl, who, p_tdef);
   uint64_t want = static_cast<uint64_t>(janet_getinteger64(argv, 1));
   uint64_t rowno = 0;
   sm_pin_ref_t ref;
   int rc;
-  Janet out = janet_wrap_nil();
+  bool found = false;
   while ((rc = sm_row_scannxt(rscan, &rowno, &ref)) == 0) {
     if (rowno == want) {
-      out = janet_wrap_number(static_cast<double>(sm_row_scan_rg(rscan)));
+      place = sm_row_scan_place(rscan);
+      found = true;
     }
   }
   if (rc < 0) {
     if (!engine_aborted()) {
       sm_row_scanclose(rscan);
     }
-    panic_sm_error("rg-of sm_row_scannxt");
+    panic_sm_error("sm_row_scannxt");
   }
   sm_row_scanclose(rscan);
-  return out;
+  return found;
 }
 
-/* (delete-at table rg id): delete a column store table's row by name. */
+/*
+ * (rg-of table id): the file set of the row group a scan finds the
+ * row with _id id in, 0 for the delta store; nil if no row has it.
+ */
+static Janet cfun_rg_of(int32_t argc, Janet *argv) {
+  sm_row_place_t p;
+  if (!place_of(argc, argv, "rg-of", p)) {
+    return janet_wrap_nil();
+  }
+  return janet_wrap_number(static_cast<double>(p.fsid));
+}
+
+/*
+ * (place-of table id): the place a scan finds the row with _id id
+ * at, as [fsid rno], fsid 0 for the delta store; nil if no row has
+ * it.
+ */
+static Janet cfun_place_of(int32_t argc, Janet *argv) {
+  sm_row_place_t p;
+  if (!place_of(argc, argv, "place-of", p)) {
+    return janet_wrap_nil();
+  }
+  Janet *t = janet_tuple_begin(2);
+  t[0] = janet_wrap_number(static_cast<double>(p.fsid));
+  t[1] = janet_wrap_number(static_cast<double>(p.rno));
+  return janet_wrap_tuple(janet_tuple_end(t));
+}
+
+/*
+ * (places table): the place of each row a scan of the column store
+ * table finds, as a table of _id to [fsid rno], in one scan.
+ */
+static Janet cfun_places(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 1);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef = nullptr;
+  Janet tbl = argv[0];
+  sm_row_scan_t *rscan = open_row_cursor(s, 1, &tbl, "places", p_tdef);
+  JanetTable *out = janet_table(0);
+  uint64_t rowno = 0;
+  sm_pin_ref_t ref;
+  int rc;
+  while ((rc = sm_row_scannxt(rscan, &rowno, &ref)) == 0) {
+    sm_row_place_t p = sm_row_scan_place(rscan);
+    Janet *t = janet_tuple_begin(2);
+    t[0] = janet_wrap_number(static_cast<double>(p.fsid));
+    t[1] = janet_wrap_number(static_cast<double>(p.rno));
+    janet_table_put(out, janet_wrap_number(static_cast<double>(rowno)),
+                    janet_wrap_tuple(janet_tuple_end(t)));
+  }
+  if (rc < 0) {
+    if (!engine_aborted()) {
+      sm_row_scanclose(rscan);
+    }
+    panic_sm_error("places sm_row_scannxt");
+  }
+  sm_row_scanclose(rscan);
+  return janet_wrap_table(out);
+}
+
+/*
+ * (delete-at table place id): delete a column store table's row by
+ * name, place the [fsid rno] place-of gives.
+ */
+static Janet cfun_delete_at(int32_t argc, Janet *argv);
+
+/*
+ * (update-at table place id row): update a column store table's row
+ * by name, place the [fsid rno] place-of gives.
+ */
+static Janet cfun_update_at(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 4);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef =
+      need_table(s, identifier_of(argv[0]), SM_LOCKMODE_IX, "update-at");
+  JanetView pv = janet_getindexed(argv, 1);
+  if (pv.len != 2) {
+    janet_panic("update-at: a place is [fsid rno]");
+  }
+  sm_row_place_t place;
+  place.fsid = static_cast<uint64_t>(janet_getinteger64(pv.items, 0));
+  place.rno = static_cast<uint32_t>(janet_getinteger64(pv.items, 1));
+  uint64_t id = static_cast<uint64_t>(janet_getinteger64(argv, 2));
+  JanetView rv = janet_getindexed(argv, 3);
+  if (static_cast<size_t>(rv.len) != p_tdef->columns.size()) {
+    janet_panicf("update-at: expected %d values, got %d",
+                 static_cast<int>(p_tdef->columns.size()), rv.len);
+  }
+  row_values_t row(rv.len);
+  for (int32_t i = 0; i < rv.len; i++) {
+    if (janet_to_value(rv.items[i], p_tdef->columns[i], row.bufs[i],
+                       &row.values[i], &row.isnull[i]) != 0) {
+      janet_panicf("update-at: invalid value for column '%s'",
+                   p_tdef->columns[i].name.c_str());
+    }
+  }
+  if (sm_tbl_update_at(p_tdef->tbl, place, id, row.values.data(),
+                       row.isnull.get(), row.values.size()) != 0) {
+    abort_failed_write(s);
+    panic_sm_error("update-at sm_tbl_update_at");
+  }
+  return janet_wrap_nil();
+}
+
 static Janet cfun_delete_at(int32_t argc, Janet *argv) {
   janet_fixarity(argc, 3);
   session_ctx_t *s = require_session();
   table_def_t *p_tdef =
       need_table(s, identifier_of(argv[0]), SM_LOCKMODE_IX, "delete-at");
-  uint64_t rg = static_cast<uint64_t>(janet_getinteger64(argv, 1));
+  JanetView pv = janet_getindexed(argv, 1);
+  if (pv.len != 2) {
+    janet_panic("delete-at: a place is [fsid rno]");
+  }
+  sm_row_place_t place;
+  place.fsid = static_cast<uint64_t>(janet_getinteger64(pv.items, 0));
+  place.rno = static_cast<uint32_t>(janet_getinteger64(pv.items, 1));
   uint64_t id = static_cast<uint64_t>(janet_getinteger64(argv, 2));
-  if (sm_tbl_delete_at(p_tdef->tbl, rg, id) != 0) {
+  if (sm_tbl_delete_at(p_tdef->tbl, place, id) != 0) {
     abort_failed_write(s);
     panic_sm_error("delete-at sm_tbl_delete_at");
   }
@@ -3708,7 +3913,18 @@ static const JanetReg s_rel_cfuns[] = {
     {"seal-wait", cfun_seal_wait,
      "(seal-wait) -- wait until the seal's job is idle"},
     {"_rg-of", cfun_rg_of, "internal"},
+    {"_place-of", cfun_place_of, "internal"},
+    {"_places", cfun_places, "internal"},
     {"_delete-at", cfun_delete_at, "internal"},
+    {"_update-at", cfun_update_at, "internal"},
+    {"_row-groups", cfun_row_groups, "internal"},
+    {"_fold-rg", cfun_fold_rg, "internal"},
+    {"_compact-rg", cfun_compact_rg, "internal"},
+    {"_eliminate-rg", cfun_eliminate_rg, "internal"},
+    {"_cleanup-rg", cfun_cleanup_rg, "internal"},
+    {"_markers-of", cfun_markers_of, "internal"},
+    {"set-rg-rows", cfun_set_rg_rows,
+     "(set-rg-rows n) -- the rows of a full row group, for tests"},
     {"_scan", cfun_scan, "internal"},
     {"_scan-count", cfun_scan_count, "internal"},
     {"_scan-columns", cfun_scan_columns, "internal"},
@@ -3883,9 +4099,28 @@ static const char *s_prelude = R"janet(
 
 (defmacro rg-of [tbl id]
   ~(_rg-of (string ',tbl) ,id))
+(defmacro place-of [tbl id]
+  ~(_place-of (string ',tbl) ,id))
 
-(defmacro delete-at [tbl rg id]
-  ~(_delete-at (string ',tbl) ,rg ,id))
+(defmacro places [tbl]
+  ~(_places (string ',tbl)))
+
+(defmacro delete-at [tbl place id]
+  ~(_delete-at (string ',tbl) ,place ,id))
+(defmacro update-at [tbl place id row]
+  ~(_update-at (string ',tbl) ,place ,id ,row))
+(defmacro row-groups [tbl]
+  ~(_row-groups (string ',tbl)))
+(defmacro fold-rg [tbl fsid]
+  ~(_fold-rg (string ',tbl) ,fsid))
+(defmacro compact-rg [tbl fsid]
+  ~(_compact-rg (string ',tbl) ,fsid))
+(defmacro eliminate-rg [tbl fsid]
+  ~(_eliminate-rg (string ',tbl) ,fsid))
+(defmacro cleanup-rg [tbl fsid]
+  ~(_cleanup-rg (string ',tbl) ,fsid))
+(defmacro markers-of [tbl fsid]
+  ~(_markers-of (string ',tbl) ,fsid))
 
 (defmacro idx-scan [idx & rest]
   ~(_idx-scan (string ',idx) ,;rest))

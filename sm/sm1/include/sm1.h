@@ -1295,6 +1295,20 @@ int insert_sealed(session_t* session, uint64_t storeid,
                   std::string_view key, std::string_view data);
 
 /*
+ * sm1::insert of a row that a move of sm's own takes into key from
+ * elsewhere, changing nothing in it, a moved-in version
+ * (../COLSTORE.md §11.3): it goes in over a sealed tombstone, or
+ * where no version is. A reader sees it as any version. A write or
+ * a row lock that meets it as the key's newest committed version
+ * judges first-committer-wins by the committed version under it,
+ * past sealed ones, as over a sealed version; with none, it does not
+ * conflict. A write that passes then goes on over it as over any
+ * live version, and sm1::read_latest returns it.
+ */
+int insert_moved_in(session_t* session, uint64_t storeid,
+                    std::string_view key, std::string_view data);
+
+/*
  * Read one key.
  *
  * Returns 0 if the key exists, and data then views the value.
@@ -1537,6 +1551,19 @@ int chain_erase_sealed(session_t* session, uint64_t storeid,
 /* sm1::insert_sealed, of a chained key. */
 int chain_insert_sealed(session_t* session, uint64_t storeid,
                         std::string_view key, std::string_view data);
+/*
+ * Whether a write of session that succeeded, of any store, chained
+ * or not, since the last call or since its transaction began, went
+ * over a moved-in version (sm1::insert_moved_in) that its snapshot
+ * does not see: the row was elsewhere for the snapshot, where the
+ * caller may hide it from the transaction's own reads
+ * (../COLSTORE.md §9). The call clears it.
+ */
+bool wrote_over_moved_in(session_t* session);
+
+/* sm1::insert_moved_in, of a chained key. */
+int chain_insert_moved_in(session_t* session, uint64_t storeid,
+                          std::string_view key, std::string_view data);
 /* sm1::read, of a chained key; with pin, the row read into it. */
 int chain_read(session_t* session, uint64_t storeid,
                std::string_view key, rawpin_t* pin,

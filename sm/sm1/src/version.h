@@ -67,6 +67,15 @@ constexpr uint8_t version_key_kept = 0x08;
  * moves to OLD, so this flag is apart from them.
  */
 constexpr uint8_t version_sealed = 0x40;
+/*
+ * A sealed live version that a move of sm's own wrote into the key
+ * the row lives at from now on, a moved-in version
+ * (../COLSTORE.md §11.3): always with version_sealed. A write and a
+ * row lock judge first-committer-wins by the version under it, as
+ * for any sealed version, and then write over it as over any live
+ * version.
+ */
+constexpr uint8_t version_moved_in = 0x80;
 
 /* A version key or value, decoded. Slices borrow the input. */
 struct version_t {

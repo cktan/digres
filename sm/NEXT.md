@@ -502,6 +502,11 @@ Owed, and blocking nothing above:
   `sm1/src/db.cc`), is the likely cause; not confirmed. The
   diff is kept in
   `../bench/build/evidence/generated_virtual-2026-11-20.diff`.
+  It failed so again in `alter_table` (2026-11-21, debug build,
+  `wip-colstore2-1`): `DROP TABLE attmp2` and the next `CREATE
+  TABLE` failed with the same message, and the rerun passed. That
+  diff is in
+  `../bench/build/evidence/alter_table-2026-11-21.diff`.
   Next: a test that truncates and writes a table from one
   session while others drop stores.
 - **The Column Store's parts not built**

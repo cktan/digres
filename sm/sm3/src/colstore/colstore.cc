@@ -13,13 +13,14 @@
 
 #include "sm0_codec.h"
 #include "sm0_crc.h"
+#include "sm0_defer.h"
 
 #include <cstring>
 
 namespace {
 
 /* The version of an RG key's value. */
-constexpr uint32_t rg_meta_version = 1;
+constexpr uint32_t rg_meta_version = 2;
 
 /* Fail with SM_ERR_CORRUPT: what is wrong with a row group. */
 int corrupt(const std::string &what) {
@@ -32,32 +33,51 @@ void put_be16(std::string &k, uint16_t v) {
   k.push_back(static_cast<char>(v & 0xFF));
 }
 
-/* The key of a filter: relid, rg_id, and the column, _id's 0. */
-std::string filter_key(uint64_t rg_id, int32_t attnum) {
+/* The key of a filter: relid, fsid, and the column, _id's 0. */
+std::string filter_key(uint64_t fsid, int32_t attnum) {
   std::string k;
   put_be16(k, sm3::filter_relid);
-  sm0::put_be64(k, rg_id);
+  sm0::put_be64(k, fsid);
   put_be16(k, static_cast<uint16_t>(attnum + 1));
   return k;
 }
 
-/* The bounds of row group rg_id's delete markers' keys. */
-std::string marker_bound(uint64_t rg_id, unsigned char fill) {
+/* The bounds of the keys of file set fsid's delete markers. */
+std::string marker_bound(uint64_t fsid, unsigned char fill) {
   std::string k;
   put_be16(k, sm3::marker_relid);
-  sm0::put_be64(k, rg_id);
-  k.append(8, static_cast<char>(fill));
+  sm0::put_be64(k, fsid);
+  k.append(4, static_cast<char>(fill));
   return k;
 }
+
+/* The length of a delete marker's key: relid, fsid and rno. */
+constexpr size_t marker_key_len = 2 + 8 + 4;
 
 } // namespace
 
 /* The key of a row's delete marker; see colstore.h. */
-std::string sm3::marker_key(uint64_t rg_id, uint64_t id) {
+std::string sm3::marker_key(place_t place) {
   std::string k;
   put_be16(k, sm3::marker_relid);
+  sm0::put_be64(k, place.fsid);
+  sm0::put_be32(k, place.rno);
+  return k;
+}
+
+/* The key of a file set's validmap; see colstore.h. */
+std::string sm3::validmap_key(uint64_t fsid) {
+  std::string k;
+  put_be16(k, sm3::validmap_relid);
+  sm0::put_be64(k, fsid);
+  return k;
+}
+
+/* The lock-table name of a row group; see colstore.h. */
+std::string sm3::rg_lock_key(uint64_t rg_id) {
+  std::string k;
+  put_be16(k, sm3::rglock_relid);
   sm0::put_be64(k, rg_id);
-  sm0::put_be64(k, id);
   return k;
 }
 
@@ -128,6 +148,8 @@ void rg_meta_encode(const rg_meta_t &meta, std::string &out) {
     sm2::cg_stats_encode(c.stats, st);
     put_str(out, st);
   }
+  sm0::put_be32(out, meta.rows0);
+  put_str(out, meta.dropped);
 }
 
 /* Decode an RG key's value; see colstore.h. */
@@ -161,7 +183,55 @@ int rg_meta_decode(std::string_view in, rg_meta_t &meta) {
     in.remove_prefix(len);
     meta.cols.push_back(std::move(c));
   }
+  if (in.size() < 8) {
+    return corrupt("an RG key's dropped rows are cut short");
+  }
+  meta.rows0 = sm0::get_be32(in.data());
+  uint32_t dl = sm0::get_be32(in.data() + 4);
+  in.remove_prefix(8);
+  if (in.size() < dl) {
+    return corrupt("an RG key's dropped rows are cut short");
+  }
+  meta.dropped.assign(in.data(), dl);
   return 0;
+}
+
+/* Map an rno to another version; see colstore.h. */
+bool rg_map_rno(const rg_meta_t &from, uint32_t rno, const rg_meta_t &to,
+                uint32_t &out) {
+  // 1. To version 0: the rno-th row of version 0 not in from's
+  //    dropped set.
+  uint32_t rno0 = rno;
+  if (from.rows0 != 0) {
+    uint32_t k = 0;
+    rno0 = UINT32_MAX;
+    for (uint32_t i = 0; i < from.rows0; i++) {
+      if (validmap_test(from.dropped, i)) {
+        continue;
+      }
+      if (k++ == rno) {
+        rno0 = i;
+        break;
+      }
+    }
+    if (rno0 == UINT32_MAX) {
+      return false;
+    }
+  }
+  // 2. Not in to, if to dropped it; else past to's dropped rows below.
+  if (to.rows0 == 0) {
+    out = rno0;
+    return true;
+  }
+  if (validmap_test(to.dropped, rno0)) {
+    return false;
+  }
+  uint32_t below = 0;
+  for (uint32_t i = 0; i < rno0; i++) {
+    below += validmap_test(to.dropped, i) ? 1 : 0;
+  }
+  out = rno0 - below;
+  return true;
 }
 
 /* Begin building row groups; see colstore.h. */
@@ -217,12 +287,20 @@ int rg_build_flush(rg_build_t &b) {
   const table_def_t &def = tbl_def(t);
   sm1::session_t *s = tbl_session(t)->sm1;
   // 1. Draw the row group's id: never used again (../COLSTORE.md §4.1).
-  uint64_t rg_id = 0;
-  if (sm1::nextseq(s, rg_seq_name(def.oid), rg_id) != 0) {
-    return -1;
+  //    Its first version is 0 (../COLSTORE.md §4.5). A compaction
+  //    names the next version of its row group instead.
+  uint64_t fsid = b.fsid;
+  if (0 == fsid) {
+    uint64_t rg_id = 0;
+    if (sm1::nextseq(s, rg_seq_name(def.oid), rg_id) != 0) {
+      return -1;
+    }
+    fsid = fsid_of(rg_id, 0);
   }
   rg_meta_t meta;
   meta.rows = static_cast<uint32_t>(n);
+  meta.rows0 = b.rows0;
+  meta.dropped = b.dropped;
   meta.id_min = UINT64_MAX;
   // 2. The CG of each column, _id's first, and its filter key.
   auto write_cg = [&](int32_t attnum, const sm2::cg_column_t &col,
@@ -232,7 +310,7 @@ int rg_build_flush(rg_build_t &b) {
       return -1;
     }
     std::string name = rg_file_name(attnum);
-    if (sm1::fileset_write(s, def.storeid, rg_id, name, built.file) != 0) {
+    if (sm1::fileset_write(s, def.storeid, fsid, name, built.file) != 0) {
       return -1;
     }
     rg_col_t c;
@@ -240,7 +318,7 @@ int rg_build_flush(rg_build_t &b) {
     c.size = built.file.size();
     c.crc = sm0::crc32c(built.file);
     c.stats = std::move(built.stats);
-    if (sm1::insert_new(s, def.storeid, filter_key(rg_id, attnum),
+    if (sm1::insert_new(s, def.storeid, filter_key(fsid, attnum),
                         built.filter) != 0) {
       return -1;
     }
@@ -277,10 +355,13 @@ int rg_build_flush(rg_build_t &b) {
   // 3. The RG key, once its files are durable (../COLSTORE.md §13).
   std::string payload;
   rg_meta_encode(meta, payload);
-  if (sm1::fileset_put(s, def.storeid, rg_id, payload) != 0) {
+  if (sm1::fileset_put(s, def.storeid, fsid, payload) != 0) {
     return -1;
   }
-  // 4. The next row group starts empty.
+  // 4. The next row group starts empty, and new.
+  b.fsid = 0;
+  b.rows0 = 0;
+  b.dropped.clear();
   b.ids.clear();
   for (size_t i = 0; i < b.vals.size(); i++) {
     b.vals[i].clear();
@@ -299,12 +380,12 @@ void rg_read_close(rg_read_t &r) {
 }
 
 /* Read a row group for a scan; see colstore.h. */
-int rg_read_open(table_t *table, uint64_t rg_id, rg_meta_t meta,
+int rg_read_open(table_t *table, uint64_t fsid, rg_meta_t meta,
                  const std::vector<bool> &cols, rg_read_t &r) {
   rg_read_close(r);
   const table_def_t &def = tbl_def(table);
   sm1::session_t *s = tbl_session(table)->sm1;
-  r.rg_id = rg_id;
+  r.fsid = fsid;
   r.meta = std::move(meta);
   r.cgs.assign(def.columns.size(), nullptr);
   std::vector<bool> in_rg(def.columns.size(), false);
@@ -320,12 +401,12 @@ int rg_read_open(table_t *table, uint64_t rg_id, rg_meta_t meta,
       continue;
     }
     std::string file;
-    if (sm1::fileset_read(s, def.storeid, rg_id, rg_file_name(c.attnum), 0,
+    if (sm1::fileset_read(s, def.storeid, fsid, rg_file_name(c.attnum), 0,
                           UINT64_MAX, file) != 0) {
       return -1;
     }
     if (file.size() != c.size || sm0::crc32c(file) != c.crc) {
-      return corrupt("row group " + std::to_string(rg_id) + "'s CG " +
+      return corrupt("file set " + std::to_string(fsid) + "'s CG " +
                      rg_file_name(c.attnum) + " is not what its key names");
     }
     sm2::cg_t *cg = nullptr;
@@ -349,15 +430,53 @@ int rg_read_open(table_t *table, uint64_t rg_id, rg_meta_t meta,
                  (cols.empty() || (a < cols.size() && cols[a]));
   }
   if (!r.ids) {
-    return corrupt("row group " + std::to_string(rg_id) + " has no _id CG");
+    return corrupt("file set " + std::to_string(fsid) + " has no _id CG");
   }
-  // 3. Its delete markers, at the transaction's view.
-  return col_markers(table, rg_id, r.deleted);
+  // 3. Its rows deleted, at the transaction's view, as a bitmap by
+  //    rno: its validmap's, and its markers' (../COLSTORE.md §12).
+  return col_dead(table, fsid, sm2::cg_rows(r.ids), r.deleted, r.ndeleted,
+                  r.nmarkers);
 }
 
-/* A row group's delete markers; see colstore.h. */
-int col_markers(table_t *table, uint64_t rg_id, std::set<uint64_t> &ids) {
-  std::string lo = marker_bound(rg_id, 0x00), hi = marker_bound(rg_id, 0xFF);
+/* A file set's rows deleted; see colstore.h. */
+int col_dead(table_t *table, uint64_t fsid, uint32_t rows,
+             std::vector<bool> &dead, uint32_t &ndead, uint32_t &markers) {
+  dead.assign(rows, false);
+  ndead = 0;
+  markers = 0;
+  // 1. The validmap, if a fold wrote one.
+  std::string_view bits;
+  int r = sm1::read(tbl_session(table)->sm1, tbl_def(table).storeid,
+                    validmap_key(fsid), bits);
+  if (r < 0) {
+    return -1;
+  }
+  if (r == 0) {
+    for (uint32_t i = 0; i < rows; i++) {
+      if (validmap_test(bits, i)) {
+        dead[i] = true;
+        ndead++;
+      }
+    }
+  }
+  // 2. The markers not folded yet.
+  std::vector<uint32_t> rnos;
+  if (col_markers(table, fsid, rnos) != 0) {
+    return -1;
+  }
+  for (uint32_t rno : rnos) {
+    if (rno < rows && !dead[rno]) {
+      dead[rno] = true;
+      ndead++;
+      markers++;
+    }
+  }
+  return 0;
+}
+
+/* A file set's delete markers; see colstore.h. */
+int col_markers(table_t *table, uint64_t fsid, std::vector<uint32_t> &rnos) {
+  std::string lo = marker_bound(fsid, 0x00), hi = marker_bound(fsid, 0xFF);
   sm1::scan_t *c = nullptr;
   if (sm1::scan(tbl_session(table)->sm1, tbl_def(table).storeid, lo.data(),
                 lo.size(), 1, hi.data(), hi.size(), 1, c) != 0) {
@@ -366,8 +485,8 @@ int col_markers(table_t *table, uint64_t rg_id, std::set<uint64_t> &ids) {
   std::string_view k, d;
   int rc;
   while ((rc = sm1::scannxt(c, k, d)) == 0) {
-    if (k.size() == 18) {
-      ids.insert(sm0::get_be64(k.data() + 10));
+    if (k.size() == marker_key_len) {
+      rnos.push_back(sm0::get_be32(k.data() + 10));
     }
   }
   sm1::scanend(c);
@@ -382,7 +501,7 @@ int col_bytes(table_t *table, uint64_t &bytes) {
       0) {
     return -1;
   }
-  for (const auto &[rg_id, value] : rgs) {
+  for (const auto &[fsid, value] : rgs) {
     rg_meta_t meta;
     if (rg_meta_decode(value, meta) != 0) {
       return -1;
@@ -411,7 +530,7 @@ int rg_read_next(table_t *table, rg_read_t &r, uint64_t &id,
     uint64_t row_id;
     memcpy(&row_id, d.data(), 8);
     // A row its delete marker names is gone from this row group.
-    if (r.deleted.count(row_id)) {
+    if (i < r.deleted.size() && r.deleted[i]) {
       continue;
     }
     for (size_t c = 0; c < def.columns.size(); c++) {
@@ -429,6 +548,7 @@ int rg_read_next(table_t *table, rg_read_t &r, uint64_t &id,
       isnull[c] = false;
     }
     id = row_id;
+    r.last = i;
     return 0;
   }
   return 1;
@@ -486,12 +606,12 @@ int col_scan_open(table_t *table, std::vector<bool> cols,
 namespace {
 
 /*
- * Whether row group rg_id, with metadata meta, may hold a row of
- * scan c: its _id range, then each bound against its CG's zonemap,
- * and its filter for an equality or IN (../COLSTORE.md §6.2).
- * 1, 0, or -1.
+ * Whether the row group of file set fsid, with metadata meta, may
+ * hold a row of scan c: its _id range, then each bound against its
+ * CG's zonemap, and its filter for an equality or IN
+ * (../COLSTORE.md §6.2). 1, 0, or -1.
  */
-int may_hold(col_scan_t *c, uint64_t rg_id, const rg_meta_t &meta) {
+int may_hold(col_scan_t *c, uint64_t fsid, const rg_meta_t &meta) {
   if (meta.id_max < c->id_lo || meta.id_min > c->id_hi) {
     return 0;
   }
@@ -519,7 +639,7 @@ int may_hold(col_scan_t *c, uint64_t rg_id, const rg_meta_t &meta) {
               (b.bound.has_lo && b.bound.has_hi && b.bound.lo == b.bound.hi);
     if (eq) {
       std::string_view d;
-      int r = sm1::read(s, def.storeid, filter_key(rg_id, b.attnum), d);
+      int r = sm1::read(s, def.storeid, filter_key(fsid, b.attnum), d);
       if (r < 0) {
         return -1;
       }
@@ -547,27 +667,33 @@ int col_scan_next(col_scan_t *c, uint64_t &id, std::string_view &tuple) {
       if (c->next >= c->rgs.size()) {
         return 1;
       }
-      auto &[rg_id, value] = c->rgs[c->next++];
+      auto &[fsid, value] = c->rgs[c->next++];
       rg_meta_t meta;
       if (rg_meta_decode(value, meta) != 0) {
         return -1;
       }
-      int m = may_hold(c, rg_id, meta);
+      int m = may_hold(c, fsid, meta);
       if (m < 0) {
         return -1;
       }
       if (m == 0) {
         continue;
       }
-      if (rg_read_open(c->table, rg_id, std::move(meta), c->cols, c->rg) != 0) {
+      if (rg_read_open(c->table, fsid, std::move(meta), c->cols, c->rg) != 0) {
         return -1;
       }
       c->open = true;
-      // A row group a fifth dead is queued for its compaction: a
-      // restart loses the markers' counts (../COLSTORE.md §11.1).
-      if (c->rg.deleted.size() * 5 >= c->rg.meta.rows) {
-        sealer_enqueue_rg(tbl_session(c->table)->cat, tbl_def(c->table).oid,
-                          rg_id);
+      // A row group a fifth dead is queued for its compaction, and
+      // one whose markers are 1% of its rows for its fold: a restart
+      // loses the markers' counts (../COLSTORE.md §11.1,
+      // ../COLSTORE.md §10.4).
+      const catalog_t *cat = tbl_session(c->table)->cat;
+      if (static_cast<uint64_t>(c->rg.ndeleted) * 5 >= c->rg.meta.rows) {
+        sealer_enqueue_rg(cat, tbl_def(c->table).oid, fsid);
+      } else if (c->rg.nmarkers > 0 &&
+                 static_cast<uint64_t>(c->rg.nmarkers) * 100 >=
+                     c->rg.meta.rows) {
+        sealer_enqueue_fold(cat, tbl_def(c->table).oid, fsid);
       }
     }
     int r = rg_read_next(c->table, c->rg, id, c->values,
@@ -593,13 +719,15 @@ int col_scan_next(col_scan_t *c, uint64_t &id, std::string_view &tuple) {
   }
 }
 
-/* The row group of row id's live copy, newest committed; see colstore.h. */
-int col_find_latest(table_t *table, uint64_t id, uint64_t &rg_id) {
-  rg_id = 0;
+namespace {
+
+/* The place of row id's live copy: newest committed with latest. */
+int find_row(table_t *table, uint64_t id, bool latest, place_t &place) {
+  place = place_t();
   sm1::session_t *s = tbl_session(table)->sm1;
   // Read the newest committed state, then the view as it was.
   bool was = false;
-  if (sm1::view_latest(s, true, &was) != 0) {
+  if (latest && sm1::view_latest(s, true, &was) != 0) {
     return -1;
   }
   int rc = 1;
@@ -614,114 +742,449 @@ int col_find_latest(table_t *table, uint64_t id, uint64_t &rg_id) {
     if (r < 0) {
       rc = -1;
     } else if (r == 0) {
-      rg_id = col_scan_rg(c);
+      place = col_scan_place(c);
       rc = 0;
     }
     col_scan_close(c);
   }
-  sm1::view_latest(s, was);
+  if (latest) {
+    sm1::view_latest(s, was);
+  }
   return rc;
 }
 
-/* Compact row groups; see colstore.h. */
-int col_compact(table_t *table, std::span<const uint64_t> rgs, bool &done) {
-  done = false;
+} // namespace
+
+/* The place of row id's live copy, newest committed; see colstore.h. */
+int col_find_latest(table_t *table, uint64_t id, place_t &place) {
+  return find_row(table, id, true, place);
+}
+
+/* The place of row id's live copy, as seen; see colstore.h. */
+int col_find_seen(table_t *table, uint64_t id, place_t &place) {
+  return find_row(table, id, false, place);
+}
+
+/* The newest version of a row group; see colstore.h. */
+int col_newest_version(table_t *table, uint64_t rg_id, uint64_t &fsid,
+                       rg_meta_t &meta) {
   const table_def_t &def = tbl_def(table);
   sm1::session_t *s = tbl_session(table)->sm1;
-  // 1. A savepoint, so a give-up leaves nothing; the newest committed
-  //    state, so no delete committed since a snapshot is missed.
-  int depth = sm1::savepoint(s);
-  if (depth < 0) {
-    return -1;
-  }
   bool was = false;
   if (sm1::view_latest(s, true, &was) != 0) {
     return -1;
   }
-  auto give_up = [&](int rc) {
+  defer { sm1::view_latest(s, was); };
+  // 1. The version named on entry, by its _id CG's filter key, which
+  //    lives as long as its RG key: one read.
+  if (0 != fsid && fsid_rg(fsid) == rg_id) {
+    std::string_view d;
+    int r = sm1::read(s, def.storeid, filter_key(fsid, -1), d);
+    if (r < 0) {
+      return -1;
+    }
+    if (r == 0) {
+      return col_meta_seen(table, fsid, meta);
+    }
+  }
+  // 2. Else each file set, for the row group's.
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  if (sm1::fileset_list(s, def.storeid, sets) != 0) {
+    return -1;
+  }
+  for (const auto &[id, v] : sets) {
+    if (fsid_rg(id) == rg_id) {
+      fsid = id;
+      return rg_meta_decode(v, meta);
+    }
+  }
+  return 1;
+}
+
+/* A file set's metadata as the transaction sees it; see colstore.h. */
+int col_meta_seen(table_t *table, uint64_t fsid, rg_meta_t &meta) {
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  if (sm1::fileset_list(tbl_session(table)->sm1, tbl_def(table).storeid,
+                        sets) != 0) {
+    return -1;
+  }
+  for (const auto &[id, v] : sets) {
+    if (id == fsid) {
+      return rg_meta_decode(v, meta);
+    }
+  }
+  return 1;
+}
+
+namespace {
+
+/*
+ * A row group job on one version, compaction's or elimination's, in
+ * the caller's transaction at the newest committed state: a savepoint,
+ * so a give-up leaves nothing, and X on the row group.
+ */
+struct rg_job_t {
+  explicit rg_job_t(table_t *t) : table(t), s(tbl_session(t)->sm1) {}
+
+  table_t *table;
+  sm1::session_t *s;
+  int depth = -1;
+  bool was = false;
+  rg_meta_t meta;
+
+  /* Give up with rc: the view as it was, and nothing left written. */
+  int give_up(int rc) {
     sm1::view_latest(s, was);
-    if (sm1::rollback(s, depth) != 0) {
+    if (depth >= 0 && sm1::rollback(s, depth) != 0) {
       return -1;
     }
     return rc;
-  };
-  std::vector<std::pair<uint64_t, std::string>> sets;
-  if (sm1::fileset_list(s, def.storeid, sets) != 0) {
-    return give_up(-1);
+  }
+
+  /*
+   * Begin on file set fsid:
+   * 1. Set a savepoint, and read the newest committed state.
+   * 2. Take X on the row group, if no writer holds IX.
+   * 3. Read the version's RG key: gone is SM_ERR_NOTFOUND.
+   * Returns 0 to go on; 1, given up; or -1, given up.
+   */
+  int begin(uint64_t fsid) {
+    const table_def_t &def = tbl_def(table);
+    // 1. A savepoint; the newest committed state.
+    depth = sm1::savepoint(s);
+    if (depth < 0) {
+      return -1;
+    }
+    if (sm1::view_latest(s, true, &was) != 0) {
+      return -1;
+    }
+    // 2. X on the row group, NOWAIT: the sealer waits for no writer.
+    int got = sm1::trylock_row(s, def.storeid, rg_lock_key(fsid_rg(fsid)),
+                               sm1::SM_LOCKMODE_EX, false, rglock_relid);
+    if (got != 0) {
+      return got < 0 ? give_up(-1) : give_up(0) == 0 ? 1 : -1;
+    }
+    // 3. The version.
+    int f = col_meta_seen(table, fsid, meta);
+    if (f != 0) {
+      return give_up(f < 0 ? -1
+                           : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                                         "column store: no file set " +
+                                             std::to_string(fsid)));
+    }
+    return 0;
+  }
+
+  /*
+   * End on file set fsid: erase its RG key and filter keys; its
+   * markers and validmap stay for the snapshots that see it. The
+   * savepoint goes. Returns 0 or -1.
+   */
+  int end(uint64_t fsid) {
+    const table_def_t &def = tbl_def(table);
+    if (sm1::fileset_erase(s, def.storeid, fsid) != 0) {
+      return give_up(-1);
+    }
+    for (const rg_col_t &c : meta.cols) {
+      if (sm1::erase(s, def.storeid, filter_key(fsid, c.attnum)) != 0) {
+        return give_up(-1);
+      }
+    }
+    sm1::view_latest(s, was);
+    return sm1::forget(s, depth);
+  }
+};
+
+} // namespace
+
+/*
+ * Compact a version into its next; see colstore.h:
+ * 1. Begin the job: X on the row group.
+ * 2. Read the version's live rows. A row lock is on the row's _id,
+ *    which the next version keeps, so a holder of one stays.
+ * 3. The next version's dropped set: this one's, and its dead rows.
+ * 4. Write the next version with the live rows alone, in their order.
+ * 5. End the job: this version's RG key and filter keys erased.
+ */
+int col_compact(table_t *table, uint64_t fsid, bool &done) {
+  done = false;
+  if (fsid_version(fsid) >= rg_last_version) {
+    return sm1::seterr(sm1::SM_ERR_INVALID,
+                       "column store: file set " + std::to_string(fsid) +
+                           " is a row group's last version");
+  }
+  // 1. X on the row group.
+  rg_job_t j(table);
+  int rc = j.begin(fsid);
+  if (rc != 0) {
+    return rc < 0 ? -1 : 0;
+  }
+  const rg_meta_t &meta = j.meta;
+  // 2. The live rows.
+  rg_read_t r;
+  defer { rg_read_close(r); };
+  if (rg_read_open(table, fsid, meta, {}, r) != 0) {
+    return j.give_up(-1);
   }
   rg_build_t b;
   rg_build_begin(b, table);
-  const size_t ncols = def.columns.size();
+  const size_t ncols = tbl_def(table).columns.size();
   std::vector<sm2::datum_t> values(ncols);
   std::unique_ptr<bool[]> isnull(new bool[ncols]);
-  std::vector<rg_meta_t> olds;
-  for (uint64_t rg_id : rgs) {
-    const std::string *value = nullptr;
-    for (const auto &[id, v] : sets) {
-      if (id == rg_id) {
-        value = &v;
-      }
-    }
-    if (!value) {
-      return give_up(
-          sm1::seterr(sm1::SM_ERR_NOTFOUND,
-                      "column store: no row group " + std::to_string(rg_id)));
-    }
-    rg_meta_t meta;
-    if (rg_meta_decode(*value, meta) != 0) {
-      return give_up(-1);
-    }
-    olds.push_back(meta);
-    rg_read_t r;
-    if (rg_read_open(table, rg_id, std::move(meta), {}, r) != 0) {
-      rg_read_close(r);
-      return give_up(-1);
-    }
-    // 2. Each live row: its lock, its moved marker, its values.
-    uint64_t id;
-    int rc;
-    while ((rc = rg_read_next(table, r, id, values,
-                              std::span<bool>(isnull.get(), ncols))) == 0) {
-      int got = tbl_trylock(table, id, sm1::SM_LOCKMODE_EX);
-      if (got != 0) {
-        rg_read_close(r);
-        return give_up(got < 0 ? -1 : 0);
-      }
-      if (sm1::insert_sealed(s, def.storeid, marker_key(rg_id, id), "") != 0 ||
-          rg_build_add(b, id, values,
-                       std::span<const bool>(isnull.get(), ncols)) != 0) {
-        rg_read_close(r);
-        return give_up(-1);
-      }
-      if (b.ids.size() >= rg_rows(tbl_session(table)->cat) &&
-          rg_build_flush(b) != 0) {
-        rg_read_close(r);
-        return give_up(-1);
-      }
-    }
-    rg_read_close(r);
-    if (rc < 0) {
-      return give_up(-1);
+  uint64_t id;
+  while ((rc = rg_read_next(table, r, id, values,
+                            std::span<bool>(isnull.get(), ncols))) == 0) {
+    if (rg_build_add(b, id, values,
+                     std::span<const bool>(isnull.get(), ncols)) != 0) {
+      return j.give_up(-1);
     }
   }
-  // 3. The new row group, then the old ones' keys and filters.
+  if (rc < 0) {
+    return j.give_up(-1);
+  }
+  // 3. The dropped set, of version 0's rows.
+  const uint32_t rows0 = meta.rows0 != 0 ? meta.rows0 : meta.rows;
+  std::string dropped = meta.dropped;
+  dropped.resize((rows0 + 7) / 8, '\0');
+  for (uint32_t i = 0, k = 0; i < rows0; i++) {
+    if (meta.rows0 != 0 && validmap_test(meta.dropped, i)) {
+      continue;
+    }
+    if (k < r.deleted.size() && r.deleted[k]) {
+      dropped[i / 8] = static_cast<char>(
+          static_cast<unsigned char>(dropped[i / 8]) | (1u << (i % 8)));
+    }
+    k++;
+  }
+  // 4. The next version; none if no row is left.
+  b.fsid = fsid + 1;
+  b.rows0 = rows0;
+  b.dropped = std::move(dropped);
   if (rg_build_flush(b) != 0) {
-    return give_up(-1);
+    return j.give_up(-1);
   }
-  for (size_t i = 0; i < olds.size(); i++) {
-    uint64_t rg_id = rgs[i];
-    if (sm1::fileset_erase(s, def.storeid, rg_id) != 0) {
-      return give_up(-1);
+  // 5. This version's keys.
+  if (j.end(fsid) != 0) {
+    return -1;
+  }
+  done = true;
+  return 0;
+}
+
+/*
+ * Eliminate a row group's newest version; see colstore.h:
+ * 1. Begin the job: X on the row group.
+ * 2. Read the version's live rows; try each row's lock, as the write
+ *    of its delta key would wait for it: a holder makes it give up.
+ * 3. Give each to movein, a moved-in version in the delta store.
+ * 4. End the job: the version's RG key and filter keys erased.
+ */
+int col_eliminate(table_t *table, uint64_t fsid, const movein_fn &movein,
+                  bool &done) {
+  done = false;
+  // 1. X on the row group.
+  rg_job_t j(table);
+  int rc = j.begin(fsid);
+  if (rc != 0) {
+    return rc < 0 ? -1 : 0;
+  }
+  // 2. The live rows, each one's lock tried; 3. each moved in.
+  rg_read_t r;
+  defer { rg_read_close(r); };
+  if (rg_read_open(table, fsid, j.meta, {}, r) != 0) {
+    return j.give_up(-1);
+  }
+  const size_t ncols = tbl_def(table).columns.size();
+  std::vector<sm2::datum_t> values(ncols);
+  std::unique_ptr<bool[]> isnull(new bool[ncols]);
+  uint64_t id;
+  while ((rc = rg_read_next(table, r, id, values,
+                            std::span<bool>(isnull.get(), ncols))) == 0) {
+    int lk = tbl_trylock(table, id, sm1::SM_LOCKMODE_EX);
+    if (lk != 0) {
+      return j.give_up(lk < 0 ? -1 : 0);
     }
-    for (const rg_col_t &c : olds[i].cols) {
-      if (sm1::erase(s, def.storeid, filter_key(rg_id, c.attnum)) != 0) {
-        return give_up(-1);
+    if (movein(id, values, std::span<const bool>(isnull.get(), ncols)) != 0) {
+      return j.give_up(-1);
+    }
+  }
+  if (rc < 0) {
+    return j.give_up(-1);
+  }
+  // 4. The version's keys.
+  if (j.end(fsid) != 0) {
+    return -1;
+  }
+  done = true;
+  return 0;
+}
+
+/*
+ * The old versions with markers or a validmap left; see colstore.h:
+ * 1. Read the newest committed state.
+ * 2. Scan the keys of delete markers and of validmaps, for their fsids.
+ * 3. Take away each fsid that has an RG key.
+ */
+int col_orphans(table_t *table, std::set<uint64_t> &fsids) {
+  fsids.clear();
+  const table_def_t &def = tbl_def(table);
+  sm1::session_t *s = tbl_session(table)->sm1;
+  // 1. The newest committed state.
+  bool was = false;
+  if (sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  defer { sm1::view_latest(s, was); };
+  // 2. The fsids of markers and validmaps: be16(relid) || be64(fsid).
+  for (uint16_t relid : {marker_relid, validmap_relid}) {
+    std::string lo, hi;
+    put_be16(lo, relid);
+    put_be16(hi, relid);
+    hi.append(12, static_cast<char>(0xFF));
+    sm1::scan_t *c = nullptr;
+    if (sm1::scan(s, def.storeid, lo.data(), lo.size(), 1, hi.data(), hi.size(),
+                  1, c) != 0) {
+      return -1;
+    }
+    std::string_view k, d;
+    int rc;
+    while ((rc = sm1::scannxt(c, k, d)) == 0) {
+      if (k.size() >= 10) {
+        fsids.insert(sm0::get_be64(k.data() + 2));
       }
     }
+    sm1::scanend(c);
+    if (rc < 0) {
+      return -1;
+    }
   }
-  sm1::view_latest(s, was);
+  // 3. Less the live versions.
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  if (sm1::fileset_list(s, def.storeid, sets) != 0) {
+    return -1;
+  }
+  for (const auto &[id, v] : sets) {
+    fsids.erase(id);
+  }
+  return 0;
+}
+
+/* Erase an old version's markers and validmap; see colstore.h. */
+int col_cleanup(table_t *table, uint64_t fsid, bool &done) {
+  done = false;
+  const table_def_t &def = tbl_def(table);
+  sm1::session_t *s = tbl_session(table)->sm1;
+  // 1. Settled gone: no snapshot sees the version, so no reader reads
+  //    its markers and no writer adds a shadow marker to them.
+  sm1::rawpin_t *pin = sm1::rawpin_new();
+  defer { sm1::rawpin_free(pin); };
+  std::string_view d;
+  int r =
+      sm1::read_settled_versioned(s, def.storeid, filter_key(fsid, -1), pin, d);
+  if (r != 1) {
+    return r < 0 ? -1 : 0;
+  }
+  // 2. Its markers and its validmap, at the newest committed state.
+  bool was = false;
+  if (sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  defer { sm1::view_latest(s, was); };
+  std::vector<uint32_t> rnos;
+  if (col_markers(table, fsid, rnos) != 0) {
+    return -1;
+  }
+  for (uint32_t rno : rnos) {
+    if (sm1::erase(s, def.storeid, marker_key({fsid, rno})) != 0) {
+      return -1;
+    }
+  }
+  r = sm1::read(s, def.storeid, validmap_key(fsid), d);
+  if (r < 0 ||
+      (r == 0 && sm1::erase(s, def.storeid, validmap_key(fsid)) != 0)) {
+    return -1;
+  }
   done = true;
-  return sm1::forget(s, depth);
+  return 0;
+}
+
+/* Fold a file set's markers into its validmap; see colstore.h. */
+int col_fold(table_t *table, uint64_t fsid, bool &done) {
+  done = false;
+  const table_def_t &def = tbl_def(table);
+  sm1::session_t *s = tbl_session(table)->sm1;
+  // 1. X on the row group, if no writer holds IX: no marker is then
+  //    in flight, and each one read below is committed.
+  int got = sm1::trylock_row(s, def.storeid, rg_lock_key(fsid >> 2),
+                             sm1::SM_LOCKMODE_EX, false, rglock_relid);
+  if (got != 0) {
+    return got < 0 ? -1 : 0;
+  }
+  // 2. The newest committed state, then the view as it was.
+  bool was = false;
+  if (sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  defer { sm1::view_latest(s, was); };
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  if (sm1::fileset_list(s, def.storeid, sets) != 0) {
+    return -1;
+  }
+  const std::string *value = nullptr;
+  for (const auto &[id, v] : sets) {
+    if (id == fsid) {
+      value = &v;
+    }
+  }
+  if (!value) {
+    done = true;
+    return 0;
+  }
+  rg_meta_t meta;
+  if (rg_meta_decode(*value, meta) != 0) {
+    return -1;
+  }
+  // 3. Its validmap and its markers.
+  std::string bits;
+  {
+    std::string_view d;
+    int r = sm1::read(s, def.storeid, validmap_key(fsid), d);
+    if (r < 0) {
+      return -1;
+    }
+    if (r == 0) {
+      bits.assign(d.data(), d.size());
+    }
+  }
+  const bool had = !bits.empty();
+  std::vector<uint32_t> rnos;
+  if (col_markers(table, fsid, rnos) != 0) {
+    return -1;
+  }
+  if (rnos.empty()) {
+    done = true;
+    return 0;
+  }
+  // 4. A new validmap: the old bits, and a bit for each marker.
+  bits.resize((meta.rows + 7) / 8, '\0');
+  for (uint32_t rno : rnos) {
+    if (rno < meta.rows) {
+      bits[rno / 8] = static_cast<char>(
+          static_cast<unsigned char>(bits[rno / 8]) | (1u << (rno % 8)));
+    }
+  }
+  if ((had ? sm1::update(s, def.storeid, validmap_key(fsid), bits)
+           : sm1::insert(s, def.storeid, validmap_key(fsid), bits)) != 0) {
+    return -1;
+  }
+  // 5. The markers it holds now, erased.
+  for (uint32_t rno : rnos) {
+    if (sm1::erase(s, def.storeid, marker_key({fsid, rno})) != 0) {
+      return -1;
+    }
+  }
+  done = true;
+  return 0;
 }
 
 /* Close the row group part of a scan; see colstore.h. */

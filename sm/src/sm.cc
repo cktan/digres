@@ -1285,10 +1285,13 @@ int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, const void **tuple,
 }
 
 /* The next row, in the cursor's pin, which *ref then names. */
-/* The row group of a scan's last row; see sm.h. */
-uint64_t sm_row_scan_rg(const sm_row_scan_t *scan) {
-  return scan ? sm3::tbl_scan_rg(rel_scan_of(const_cast<sm_row_scan_t *>(scan)))
-              : 0;
+/* The place of a scan's last row; see sm.h. */
+sm_row_place_t sm_row_scan_place(const sm_row_scan_t *scan) {
+  sm3::place_t p;
+  if (scan) {
+    p = sm3::tbl_scan_place(rel_scan_of(const_cast<sm_row_scan_t *>(scan)));
+  }
+  return {p.fsid, p.rno};
 }
 
 int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, sm_pin_ref_t *ref) {
@@ -2161,23 +2164,24 @@ int sm_tbl_update(sm_tbl_t *tbl, uint64_t id, const sm_datum_t *values,
 
 /* Delete a row and its index entries. */
 /* Delete a column store table's row by its name; see sm.h. */
-int sm_tbl_delete_at(sm_tbl_t *tbl, uint64_t rg_id, uint64_t id) {
+int sm_tbl_delete_at(sm_tbl_t *tbl, sm_row_place_t place, uint64_t id) {
   return guard(tbl ? tbl->session : nullptr, [&] {
     if (!tbl) {
       return null_arg("sm_tbl_delete_at", "tbl");
     }
-    return sm3::tbl_delete_at(tbl->table, rg_id, id);
+    return sm3::tbl_delete_at(tbl->table, {place.fsid, place.rno}, id);
   });
 }
 
 /* Update a column store table's row by its name; see sm.h. */
-int sm_tbl_update_at(sm_tbl_t *tbl, uint64_t rg_id, uint64_t id,
+int sm_tbl_update_at(sm_tbl_t *tbl, sm_row_place_t place, uint64_t id,
                      const sm_datum_t *values, const bool *isnull, size_t n) {
   return guard(tbl ? tbl->session : nullptr, [&] {
     if (check_row("sm_tbl_update_at", tbl, values, isnull, n) != 0) {
       return -1;
     }
-    return sm3::tbl_update_at(tbl->table, rg_id, id, {values, n}, {isnull, n});
+    return sm3::tbl_update_at(tbl->table, {place.fsid, place.rno}, id,
+                              {values, n}, {isnull, n});
   });
 }
 
@@ -2189,6 +2193,64 @@ int sm_seal_wait(sm_session_t *session) {
     }
     sm3::sealer_wait_idle(sm3::session_cat(session->sm3));
     return 0;
+  });
+}
+
+/* The row groups' versions a transaction sees; see sm.h. */
+int sm_tbl_row_groups(sm_tbl_t *tbl, sm_rg_info_t *out, size_t cap, size_t *n) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl || !n || (cap != 0 && !out)) {
+      return null_arg("sm_tbl_row_groups", "tbl, out or n");
+    }
+    std::vector<sm3::rg_info_t> rgs;
+    if (sm3::tbl_row_groups(tbl->table, rgs) != 0) {
+      return -1;
+    }
+    *n = rgs.size();
+    for (size_t i = 0; i < rgs.size() && i < cap; i++) {
+      out[i] = {rgs[i].fsid, rgs[i].rows, rgs[i].dead, rgs[i].markers};
+    }
+    return 0;
+  });
+}
+
+/* Run a job of the sealer by hand; see sm.h. */
+int sm_tbl_rg_job(sm_tbl_t *tbl, sm_rg_job_t job, uint64_t fsid, bool *done) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl || !done) {
+      return null_arg("sm_tbl_rg_job", "tbl or done");
+    }
+    switch (job) {
+    case SM_RG_FOLD:
+      return sm3::tbl_fold(tbl->table, fsid, *done);
+    case SM_RG_COMPACT:
+      return sm3::tbl_compact_rg(tbl->table, fsid, *done);
+    case SM_RG_ELIMINATE:
+      return sm3::tbl_eliminate_rg(tbl->table, fsid, *done);
+    case SM_RG_CLEANUP:
+      return sm3::tbl_cleanup(tbl->table, fsid, *done);
+    }
+    return sm1::seterr(sm1::SM_ERR_INVALID, "sm_tbl_rg_job: no such job");
+  });
+}
+
+/* The delete markers of a file set; see sm.h. */
+int sm_tbl_rg_markers(sm_tbl_t *tbl, uint64_t fsid, size_t *n) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl || !n) {
+      return null_arg("sm_tbl_rg_markers", "tbl or n");
+    }
+    return sm3::tbl_rg_markers(tbl->table, fsid, *n);
+  });
+}
+
+/* Set the catalog's row group size; see sm.h. */
+int sm_set_rg_rows(sm_session_t *session, uint32_t rows) {
+  return guard(session, [&] {
+    if (!session) {
+      return null_arg("sm_set_rg_rows", "session");
+    }
+    return sm3::cat_set_rg_rows(sm3::session_cat(session->sm3), rows);
   });
 }
 
