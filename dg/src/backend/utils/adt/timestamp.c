@@ -1397,34 +1397,20 @@ void dt2time(Timestamp jd, int *hour, int *min, int *sec, fsec_t *fsec) {
  */
 int timestamp2tm(Timestamp dt, int *tzp, struct pg_tm *tm, fsec_t *fsec,
                  const char **tzn, pg_tz *attimezone) {
-  Timestamp date;
-  Timestamp time;
-  pg_time_t utime;
-
-  /* Use session timezone if caller asks for default */
-  if (attimezone == NULL)
-    attimezone = session_timezone;
-
-  time = dt;
-  TMODULO(time, date, USECS_PER_DAY);
-
-  if (time < INT64CONST(0)) {
-    time += USECS_PER_DAY;
-    date -= 1;
-  }
-
-  /* add offset to go from J2000 back to standard Julian date */
-  date += POSTGRES_EPOCH_JDATE;
-
-  /* Julian day routine does not work for negative Julian days */
-  if (date < 0 || date > (Timestamp)INT_MAX)
-    return -1;
-
-  j2date((int)date, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
-  dt2time(time, &tm->tm_hour, &tm->tm_min, &tm->tm_sec, fsec);
+  ty_tm_t t;
+  int32_t f;
 
   /* Done if no TZ conversion wanted */
   if (tzp == NULL) {
+    if (ty_timestamp_to_tm(dt, &t, &f) != 0)
+      return -1;
+    tm->tm_year = t.year;
+    tm->tm_mon = t.mon;
+    tm->tm_mday = t.mday;
+    tm->tm_hour = t.hour;
+    tm->tm_min = t.min;
+    tm->tm_sec = t.sec;
+    *fsec = f;
     tm->tm_isdst = -1;
     tm->tm_gmtoff = 0;
     tm->tm_zone = NULL;
@@ -1433,47 +1419,32 @@ int timestamp2tm(Timestamp dt, int *tzp, struct pg_tm *tm, fsec_t *fsec,
     return 0;
   }
 
-  /*
-   * If the time falls within the range of pg_time_t, use pg_localtime() to
-   * rotate to the local time zone.
-   *
-   * First, convert to an integral timestamp, avoiding possibly
-   * platform-specific roundoff-in-wrong-direction errors, and adjust to
-   * Unix epoch.  Then see if we can convert to pg_time_t without loss. This
-   * coding avoids hardwiring any assumptions about the width of pg_time_t,
-   * so it should behave sanely on machines without int64.
-   */
-  dt = (dt - *fsec) / USECS_PER_SEC +
-       (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY;
-  utime = (pg_time_t)dt;
-  if ((Timestamp)utime == dt) {
-    struct pg_tm *tx = pg_localtime(&utime, attimezone);
+  /* Use session timezone if caller asks for default */
+  if (attimezone == NULL)
+    attimezone = session_timezone;
 
-    tm->tm_year = tx->tm_year + 1900;
-    tm->tm_mon = tx->tm_mon + 1;
-    tm->tm_mday = tx->tm_mday;
-    tm->tm_hour = tx->tm_hour;
-    tm->tm_min = tx->tm_min;
-    tm->tm_sec = tx->tm_sec;
-    tm->tm_isdst = tx->tm_isdst;
-    tm->tm_gmtoff = tx->tm_gmtoff;
-    tm->tm_zone = tx->tm_zone;
-    *tzp = -tm->tm_gmtoff;
+  /* ty rotates the instant to the zone: the fields, the offset, the name */
+  {
+    int west, isdst;
+    const char *abbrev;
+
+    if (ty_timestamptz_to_local(attimezone, dt, &t, &f, &west, &isdst,
+                                &abbrev) != 0)
+      return -1;
+    tm->tm_year = t.year;
+    tm->tm_mon = t.mon;
+    tm->tm_mday = t.mday;
+    tm->tm_hour = t.hour;
+    tm->tm_min = t.min;
+    tm->tm_sec = t.sec;
+    *fsec = f;
+    tm->tm_isdst = isdst;
+    tm->tm_gmtoff = -west;
+    tm->tm_zone = abbrev;
+    *tzp = west;
     if (tzn != NULL)
-      *tzn = tm->tm_zone;
-  } else {
-    /*
-     * When out of range of pg_time_t, treat as GMT
-     */
-    *tzp = 0;
-    /* Mark this as *no* time zone available */
-    tm->tm_isdst = -1;
-    tm->tm_gmtoff = 0;
-    tm->tm_zone = NULL;
-    if (tzn != NULL)
-      *tzn = NULL;
+      *tzn = abbrev;
   }
-
   return 0;
 }
 
