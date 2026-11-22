@@ -41,6 +41,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/ps_status.h"
+#include "utils/ty_thread.h"
 #include "sm.h"
 #include "sq.h"
 
@@ -113,6 +114,9 @@ int main(int argc, char *argv[]) {
    */
   MyProcPid = getpid();
   MemoryContextInit();
+
+  /* ty keeps its alloc per thread: this thread's is palloc. */
+  ty_thread_init();
 
   /*
    * Set reference point for stack-depth checking.  (There's no point in

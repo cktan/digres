@@ -509,7 +509,7 @@ copied from PostgreSQL keeps its copyright notice
      The first version was +4.26% on the date arithmetic: the
      calls were not in line.
    - **Every thread of digres sets ty's alloc; `a || b` moved
-     (2026-11-21).** `MemoryContextInit()` calls
+     (2026-11-21).** `ty_thread_init()` calls
      `ty_set_alloc(palloc_extended with MCXT_ALLOC_NO_OOM,
      pfree)`, so the main, session and adopted threads all have
      it. `ty_text_concat` makes `a || b` in the thread's alloc

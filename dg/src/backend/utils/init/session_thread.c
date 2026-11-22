@@ -48,6 +48,7 @@
 #include "utils/session_thread.h"
 #include "utils/hooks.h"
 #include "utils/snapmgr.h"
+#include "utils/ty_thread.h"
 
 /* What a parent hands its new thread, in malloc'd memory the thread frees. */
 typedef struct session_start_t {
@@ -122,6 +123,9 @@ static void session_thread_main(session_start_t *p) {
   /* Errors and allocations need the memory contexts, so they come first. */
   MemoryContextInit();
 
+  /* ty keeps its alloc per thread: this thread's is palloc. */
+  ty_thread_init();
+
   /* The settings are built for this thread, then given the parent's. */
   InitializeGUCOptions();
   if (start.settings_len > 0) {
@@ -191,6 +195,9 @@ void session_thread_adopt(void) {
 
   /* Errors and allocations need the memory contexts, so they come first. */
   MemoryContextInit();
+
+  /* ty keeps its alloc per thread: this thread's is palloc. */
+  ty_thread_init();
   InitializeGUCOptions();
 
   /* The caches the catalogs are read through, empty; then whose reads. */

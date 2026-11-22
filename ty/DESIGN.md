@@ -99,7 +99,7 @@ returns NULL.
 - Both arguments NULL restores that default. Only one NULL fails
   with `TY_ERR_INVALID` and changes nothing.
 - The host calls it at the start of each of its threads. digres
-  calls it in `MemoryContextInit()`, which the main thread, each
+  calls it in `ty_thread_init()`, which the main thread, each
   session thread and each adopted thread run: the functions are
   `palloc_extended()` with `MCXT_ALLOC_NO_OOM` (and NULL past
   `MaxAllocSize`, so that none throws) and `pfree()`, so a result
