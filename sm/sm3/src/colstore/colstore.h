@@ -310,15 +310,37 @@ int col_fold(table_t *table, uint64_t fsid, bool &done);
 int col_find_latest(table_t *table, uint64_t id, place_t &place);
 
 /*
- * Compact row groups rgs of table, by their fsids, into new ones
- * (../COLSTORE.md §11),
- * at the newest committed state: each live row locked if free now,
- * marked moved in its old row group, and added to the new; then the
- * old row groups' keys erased. A row with a writer in flight or
- * prepared makes it give up, done false, with nothing left written.
- * Returns 0 or -1.
+ * col_find_latest, as the transaction sees it: the place its own
+ * reads give the row, which a writer hides by a shadow marker when it
+ * wrote the row at another (../COLSTORE2.md §6.3). 0, 1, or -1.
  */
-int col_compact(table_t *table, std::span<const uint64_t> rgs, bool &done);
+int col_find_seen(table_t *table, uint64_t id, place_t &place);
+
+/*
+ * Compact file set fsid of table, a row group's version below the
+ * last, into its next version (../COLSTORE2.md §6.7), in the caller's
+ * transaction, at the newest committed state: its live rows alone, in
+ * their order; then the version's RG key and filter keys erased. A
+ * writer of the row group, or a holder of a live row's lock, makes it
+ * give up, done false, with nothing left written. Returns 0 or -1.
+ */
+int col_compact(table_t *table, uint64_t fsid, bool &done);
+
+/* Put a live row of an eliminated row group into the delta store. */
+using movein_fn = std::function<int(uint64_t id, std::span<const sm2::datum_t>,
+                                    std::span<const bool>)>;
+
+/*
+ * Eliminate file set fsid of table, a row group's newest version
+ * (../COLSTORE2.md §6.8), in the caller's transaction, at the newest
+ * committed state: each live row given to movein, which puts it into
+ * the delta store under its _id as a moved-in version; then the RG
+ * key and filter keys erased. Its markers and validmap stay for the
+ * snapshots that see it. A give-up is as col_compact's. Returns 0 or
+ * -1.
+ */
+int col_eliminate(table_t *table, uint64_t fsid, const movein_fn &movein,
+                  bool &done);
 
 /*
  * Count rows put into table oid's delta store; at rg_max_rows the

@@ -1,5 +1,49 @@
 # Questions
 
+## 7. COLSTORE2: elimination takes the small RGs too (2026-11-21)
+
+**Branch:** `wip-colstore2-1`.
+
+**Question.** Elimination (`COLSTORE2.md` §6.8) is built. It now
+also does what the merge of small RGs did, so the merge and its
+moved markers are gone. Is this rule right for a small RG?
+
+```sql
+-- ev: rg 7, version 0, 10,000 rows; DELETE of 6,000 commits.
+-- The sealer's job on rg 7: 4,000 live, under half of 10k, so
+-- rg 7 is eliminated: its 4,000 rows go to the delta store as
+-- moved-in versions, and rg 7 is gone. The next seal puts them
+-- into a new RG with 6,000 other rows.
+-- Before: rg 7 was merged with the small RGs next to it into a
+-- new RG, with a moved marker for each row.
+```
+
+| Option | What changes | Cost |
+| --- | --- | --- |
+| A. Eliminate an RG under half live, as built | `rg_plan()` in `sm3/src/colstore/sealer.cc`; `merge_set()` and the old path of `col_compact` are gone | the rows of a small RG wait in the delta store, as rows, until the next seal |
+| B. Keep the merge for small RGs | the old path stays, with its moved markers | moved markers are never erased (a sealed version); two kinds of compaction to keep correct |
+
+**Recommendation, built:** A. It has one way to move rows out of
+an RG. A writer older than the move finds the row by its `_id` in
+the delta store, and first-committer-wins sees through the
+moved-in version. Moved markers no longer leak.
+
+Also built, and to know:
+
+- **A writer by `_id` alone now hides the row from its own
+  snapshot** after a compaction or an elimination, with a shadow
+  marker. Before, its own scans of the old version still showed
+  the row. The cost is one lookup by `_id` at the snapshot, only
+  for a write that found the row in an RG. A write over a
+  moved-in version is told by `sm1::wrote_over_moved_in`, at no
+  cost to other writes.
+- **`sm1::insert_sealed`** is no longer used by sm3. The mvcc
+  scenario `s06` still tests it. Keep it until you decide; removing
+  it removes `s06`, which needs your approval.
+
+Next: drop the row-lock tries of compaction and elimination;
+then the restart pass of the cleanup.
+
 ## 6. COLSTORE2: what versioned compaction keeps of the old one (2026-11-21)
 
 **Branch:** `wip-colstore2-1`.

@@ -100,11 +100,18 @@ int next_id(sm2::rel_t *rel, uint64_t &id) {
  * Write tuple, already checked, under key. A keyless rel's key is
  * an _id drawn from its sequence, so it was never written before,
  * and goes in with no check that it is absent (sm1::insert_new); a
- * keyed row's is checked, as its key is its primary key's.
+ * keyed row's is checked, as its key is its primary key's. With
+ * moved_in, it is a moved-in version (sm1::insert_moved_in).
  */
 int write_new(sm2::rel_t *rel, std::string_view key, std::string_view tuple,
-              bool written = false) {
+              bool written = false, bool moved_in = false) {
   std::string k = row_key(rel->relid, key);
+  if (moved_in) {
+    return rel->chained
+               ? sm1::chain_insert_moved_in(rel->session, rel->storeid, k,
+                                            tuple)
+               : sm1::insert_moved_in(rel->session, rel->storeid, k, tuple);
+  }
   if (rel->chained) {
     return rel->key.empty() && !written
                ? sm1::chain_insert_new(rel->session, rel->storeid, k, tuple)
@@ -476,7 +483,8 @@ int key_of(sm2::rel_t *rel, uint64_t id, std::span<const sm2::datum_t> d,
  */
 int insert_row(sm2::rel_t *rel, std::span<const sm2::datum_t> datums,
                std::span<const bool> isnull, uint64_t &id, std::string &key,
-               uint64_t reserved = 0, bool written = false) {
+               uint64_t reserved = 0, bool written = false,
+               bool moved_in = false) {
   ready_t row;
   if (make_ready(rel, datums, isnull, false, row) != 0) {
     return -1;
@@ -496,7 +504,7 @@ int insert_row(sm2::rel_t *rel, std::span<const sm2::datum_t> datums,
     }
     k = sm2::id_key(r);
   }
-  if (write_new(rel, k, row.tuple, written) != 0 ||
+  if (write_new(rel, k, row.tuple, written, moved_in) != 0 ||
       write_moved(rel, row) != 0) {
     return -1;
   }
@@ -826,6 +834,17 @@ int rel_reinsert_at(rel_t *rel, uint64_t id, std::span<const datum_t> datums,
   uint64_t r;
   std::string k;
   return insert_row(rel, datums, isnull, r, k, id, true);
+}
+
+/* Move a row in under an _id, a moved-in version; see sm2.h. */
+int rel_movein_at(rel_t *rel, uint64_t id, std::span<const datum_t> datums,
+                  std::span<const bool> isnull) {
+  if (id == 0 || !rel->key.empty()) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "rel: no keyless _id given");
+  }
+  uint64_t r;
+  std::string k;
+  return insert_row(rel, datums, isnull, r, k, id, true, true);
 }
 
 /* Read the row at key: 0, 1 if absent, or -1. */

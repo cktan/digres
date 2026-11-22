@@ -654,13 +654,13 @@ TEST_CASE("the seal's job seals a delta store at a row group's worth") {
 
 namespace {
 
-/* Compact row groups rgs of c in a transaction of its own; done. */
-bool compact(sm3::session_t *ss, uint64_t c, std::vector<uint64_t> rgs) {
+/* Compact file set fsid of c in a transaction of its own; done. */
+bool compact(sm3::session_t *ss, uint64_t c, uint64_t fsid) {
   REQUIRE(sm3::begin(ss, sm1::xctlevel_t::read_committed) == 0);
   sm3::table_t *t = nullptr;
   REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
   bool done = false;
-  REQUIRE_MESSAGE(sm3::tbl_compact_rgs(t, rgs, done) == 0, sm1::errmsg());
+  REQUIRE_MESSAGE(sm3::tbl_compact_rg(t, fsid, done) == 0, sm1::errmsg());
   sm3::tbl_close(t);
   REQUIRE(sm3::commit(ss) == 0);
   return done;
@@ -1080,7 +1080,9 @@ TEST_CASE("a column store table's DDL") {
   REQUIRE_MESSAGE(sm3::drop_column(db.ss, c, "b") == 0, sm1::errmsg());
   db.commit();
   CHECK(cg_attnums(db, c) == std::set<int32_t>{0, 1});
-  REQUIRE(compact(db.ss, c, rg_ids(db, c)));
+  for (uint64_t fsid : rg_ids(db, c)) {
+    REQUIRE(compact(db.ss, c, fsid));
+  }
   CHECK(cg_attnums(db, c) == std::set<int32_t>{0, 2});
   z = scan_col(db, c, 2);
   CHECK(z.size() == 15000);
@@ -1158,53 +1160,44 @@ void delete_in(col_db_t &db, uint64_t c, uint64_t rg, size_t n) {
 
 } // namespace
 
-// Verify the sealer merges small row groups next to each other into
-// one (../COLSTORE.md §11.1), and leaves a row group with nothing to
-// gain as it is.
-// 1. Load 10,000 rows, delete 6,000, and compact by hand: a row group
-//    of 4,000, small.
-// 2. Load 10,000 more, delete 7,000, and compact: a second small row
-//    group, of 3,000, next to the first.
-// 3. Attach a sealer, and queue the first: both merge into one row
-//    group of 7,000 rows.
-// 4. Queue it again: not small, and no row dead, it stays.
-TEST_CASE("the sealer merges small row groups") {
+// Verify the sealer eliminates a row group under half live: its
+// rows go into the delta store, and the seal takes them again with
+// others (../COLSTORE2.md §6.8).
+// 1. Load 10,000 rows; attach a sealer; delete 6,000: the row group
+//    is queued, and, 4,000 live, eliminated.
+// 2. No row group: the 4,000 rows are in the delta store, once each.
+// 3. Insert 6,000 rows: the seal makes one row group of 10,000.
+TEST_CASE("the sealer eliminates a row group under half live") {
   col_db_t db;
   db.begin();
   uint64_t c = make(db, "c", true);
   db.commit();
-  // 1. The first small row group.
+  // 1. The rows; the sealer; the deletes.
   load_rows(db, c, 10000);
   std::vector<uint64_t> first = rg_ids(db, c);
   REQUIRE(first.size() == 1);
-  delete_in(db, c, first[0], 6000);
-  REQUIRE(compact(db.ss, c, first));
-  std::vector<uint64_t> small1 = rg_ids(db, c);
-  REQUIRE(small1.size() == 1);
-  // 2. The second.
-  load_rows(db, c, 10000);
-  std::vector<uint64_t> both = rg_ids(db, c);
-  REQUIRE(both.size() == 2);
-  uint64_t second = both[0] == small1[0] ? both[1] : both[0];
-  delete_in(db, c, second, 7000);
-  REQUIRE(compact(db.ss, c, {second}));
-  REQUIRE(rg_ids(db, c).size() == 2);
-  // 3. The merge.
   sm1::env_t *env = db.env();
   REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
             sm1::session_t *s = nullptr;
             return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
           }) == 0);
-  sm3::sealer_enqueue_rg(db.cat, c, small1[0]);
+  delete_in(db, c, first[0], 6000);
   sm3::sealer_wait_idle(db.cat);
-  std::vector<uint64_t> merged = rg_ids(db, c);
-  REQUIRE(merged.size() == 1);
-  CHECK(merged[0] != small1[0]);
-  CHECK(rg_rows(db, c) == 7000);
-  // 4. Nothing to gain.
-  sm3::sealer_enqueue_rg(db.cat, c, merged[0]);
+  // 2. In the delta store.
+  CHECK(row_groups(db, c) == 0);
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 4000);
+  CHECK(rows.count(5999) == 0);
+  CHECK(rows.count(6000) == 1);
+  CHECK(rows.count(9999) == 1);
+  CHECK(where(db, c, 6000).first.fsid == 0);
+  // 3. Sealed again.
+  insert_rows(db, c, 10000, 16000);
   sm3::sealer_wait_idle(db.cat);
-  CHECK(rg_ids(db, c) == merged);
+  CHECK(row_groups(db, c) == 1);
+  CHECK(rg_rows(db, c) == 10000);
+  CHECK(where(db, c, 6000).first.fsid != 0);
+  CHECK(scan_rows(db, c).size() == 10000);
   sm3::sealer_detach(db.cat);
 }
 
@@ -2497,4 +2490,193 @@ TEST_CASE("an old version's markers go once no snapshot sees it") {
   CHECK(rows.count(5000) == 0);
   sm3::session_close(ss2);
   sm3::session_close(ss3);
+}
+
+namespace {
+
+/* Compact c's row group three times, from its version 0: version 3. */
+uint64_t to_version3(col_db_t &db, sm3::session_t *ss, uint64_t c) {
+  uint64_t fsid = where(db, c, 9999).first.fsid;
+  REQUIRE(sm3::fsid_version(fsid) == 0);
+  // 10,000, then 8,000, 6,400 and 5,120 rows: a fifth each time.
+  delete_rows(db, c, 0, 2000);
+  REQUIRE(compact(ss, c, fsid));
+  delete_rows(db, c, 2000, 3600);
+  REQUIRE(compact(ss, c, fsid + 1));
+  delete_rows(db, c, 3600, 4880);
+  REQUIRE(compact(ss, c, fsid + 2));
+  return fsid + 3;
+}
+
+/* Update row a of c in ss's transaction, by place p and _id id. */
+int update_at(sm3::session_t *ss, uint64_t c, sm3::place_t p, uint64_t id,
+              int32_t a, const char *b) {
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r(a, b);
+  int rc = sm3::tbl_update_at(t, p, id, r.d, r.null);
+  sm3::tbl_close(t);
+  return rc;
+}
+
+} // namespace
+
+// Verify elimination puts a version 3's live rows into the delta
+// store, and that writers of snapshots older than it write the row
+// there, or fail where it changed since.
+// 1. Load 10,000 rows, and compact three times: version 3, of 5,120
+//    rows, a = 4,880 .. 9,999. R and R2 (REPEATABLE READ) see it.
+// 2. W updates a = 6,000 at its place, and commits. Compact version
+//    3: it is eliminated, its 5,120 live rows in the delta store.
+// 3. R reads version 3 still. R deletes a = 5,000 by its old place:
+//    R no longer sees it. R2's update of a = 6,000 fails with
+//    SM_ERR_CONFLICT.
+// 4. R commits: a new transaction finds no row group, 5,119 rows, in
+//    the delta store, and W's a = 6,000.
+// 5. No snapshot sees version 3: the cleanup erases its markers, R's
+//    shadow marker among them.
+TEST_CASE("an RR writer older than an elimination writes the moved-in row") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. Version 3; R and R2.
+  load_rows(db, c, 10000);
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  uint64_t v3 = to_version3(db, ss3, c);
+  sm3::session_t *ss2 = nullptr, *ss4 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss4) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  REQUIRE(sm3::begin(ss4, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p5, id5] = where_in(ss2, c, 5000);
+  auto [p6, id6] = where_in(ss4, c, 6000);
+  REQUIRE(p5.fsid == v3);
+  REQUIRE(p6.fsid == v3);
+  // 2. W's update; the elimination.
+  db.begin();
+  REQUIRE_MESSAGE(update_at(db.ss, c, p6, id6, 6000, "w") == 0, sm1::errmsg());
+  db.commit();
+  CHECK(compact(ss3, c, v3));
+  CHECK(row_groups(db, c) == 0);
+  CHECK(where(db, c, 5000).first.fsid == 0);
+  // 3. R and R2.
+  CHECK(count_in(ss2, c) == 5120);
+  sm3::table_t *t2 = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t2, p5, id5) == 0, sm1::errmsg());
+  sm3::tbl_close(t2);
+  CHECK_FALSE(sees(ss2, c, 5000));
+  CHECK(sees(ss2, c, 5001));
+  CHECK(count_in(ss2, c) == 5119);
+  CHECK(update_at(ss4, c, p6, id6, 6000, "r2") == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_CONFLICT);
+  sm3::abort(ss4);
+  // 4. Committed.
+  REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 5119);
+  CHECK(rows.count(5000) == 0);
+  CHECK(rows[6000] == "w");
+  CHECK(row_groups(db, c) == 0);
+  // 5. The cleanup.
+  CHECK(markers_of(db, c, v3) > 0);
+  CHECK(cleanup(ss3, c, v3));
+  CHECK(markers_of(db, c, v3) == 0);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+  sm3::session_close(ss4);
+}
+
+// Verify a writer by _id alone, as digres names a row it has not
+// just scanned, hides the row from its own reads of the version its
+// snapshot sees, after a compaction and after an elimination.
+// 1. Load 10,000 rows; R (REPEATABLE READ) sees version 0. Delete
+//    a = 0 .. 1,999, and compact into version 1.
+// 2. R deletes a = 5,000 by its _id: R no longer sees it, and counts
+//    9,999 rows.
+// 3. R2 (REPEATABLE READ) sees version 3, after two more
+//    compactions; version 3 is eliminated. R2 updates a = 6,000 by
+//    its _id: R2 counts 5,119 rows, and a = 6,000 once.
+TEST_CASE("a writer by _id older than a compaction hides the row it wrote") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. R; version 1.
+  load_rows(db, c, 10000);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr, *ss4 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss4) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p5, id5] = where_in(ss2, c, 5000);
+  REQUIRE(sm3::fsid_version(p5.fsid) == 0);
+  delete_rows(db, c, 0, 2000);
+  REQUIRE(compact(ss3, c, p5.fsid));
+  // 2. R's delete by _id.
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete(t, id5) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  CHECK_FALSE(sees(ss2, c, 5000));
+  CHECK(count_in(ss2, c) == 9999);
+  REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+  // 3. R2; version 3, eliminated; R2's update by _id.
+  delete_rows(db, c, 2000, 3600);
+  REQUIRE(compact(ss3, c, p5.fsid + 1));
+  delete_rows(db, c, 3600, 4880);
+  REQUIRE(compact(ss3, c, p5.fsid + 2));
+  REQUIRE(sm3::begin(ss4, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p6, id6] = where_in(ss4, c, 6000);
+  REQUIRE(p6.fsid == p5.fsid + 3);
+  CHECK(count_in(ss4, c) == 5119);
+  REQUIRE(compact(ss3, c, p5.fsid + 3));
+  REQUIRE(row_groups(db, c) == 0);
+  REQUIRE(sm3::tbl_open(ss4, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r(6000, "r2");
+  REQUIRE_MESSAGE(sm3::tbl_update(t, id6, r.d, r.null) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  CHECK(count_in(ss4, c) == 5119);
+  REQUIRE_MESSAGE(sm3::commit(ss4) == 0, sm1::errmsg());
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 5119);
+  CHECK(rows[6000] == "r2");
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+  sm3::session_close(ss4);
+}
+
+// Verify a delete and an update by _id alone of rows of a row group,
+// in one statement, write once each, as digres's DELETE ... WHERE _id
+// = n does: no shadow marker at the place just written, whose marker
+// the statement does not see yet.
+// 1. Load 100 rows: one row group.
+// 2. In a statement, delete a = 5 and update a = 6 by their _ids.
+// 3. Commit: 99 rows, a = 6 updated.
+TEST_CASE("a write by _id in a statement marks its row once") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  load_rows(db, c, 100);
+  uint64_t id5 = where(db, c, 5).second;
+  uint64_t id6 = where(db, c, 6).second;
+  // 2. The statement.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE(sm3::stmt_begin(db.ss) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete(t, id5) == 0, sm1::errmsg());
+  row_t r6(6, "u");
+  REQUIRE_MESSAGE(sm3::tbl_update(t, id6, r6.d, r6.null) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  db.commit();
+  // 3. Once each.
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 99);
+  CHECK(rows.count(5) == 0);
+  CHECK(rows[6] == "u");
 }

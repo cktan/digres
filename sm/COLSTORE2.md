@@ -497,26 +497,29 @@ sealer (§6.10), at READ COMMITTED, on version `v` of 0 to 2:
 
 ### 6.8 Elimination
 
-A pass of the sealer (§6.10), at READ COMMITTED, on version 3,
-at its 20% dead rows:
+A pass of the sealer (§6.10), at READ COMMITTED, on version 3
+at its 20% dead rows, or on any version with under half of an
+RG's rows live, 5,000 of 10k:
 
 1. Take X on the RG, NOWAIT. On a conflict, keep the hint for
    the next pass.
 2. Read the newest version at the newest state. If it is not
-   version 3, stop.
+   the hint's version, stop.
 3. Read its validmap and markers at the newest state.
 4. For each live row, draw a new place as an insert draws it
    (§6.1 steps 3 and 4), and put the row at delta key `_id` as
-   a moved-in version (`sm1::chain_insert_moved_in`, new). A
-   value over 2,000 bytes goes to TOAST, as an insert's does.
-5. Erase the RG key of `fsid(rg, 3)` and its filter keys.
-6. Give the sealer a hint to clean up `fsid(rg, 3)` (§6.9).
+   a moved-in version (`sm2::rel_movein_at`, through
+   `sm1::insert_moved_in`). A value over 2,000 bytes goes to
+   TOAST, as an insert's does.
+5. Erase the version's RG key and its filter keys.
+6. Give the sealer a hint to clean up the version (§6.9).
 7. Commit. The lock is held to the commit.
 
-**A moved-in version** is a new kind of version of a chained
-key, in sm1, as the sealed tombstone is
-([`COLSTORE.md`](COLSTORE.md) §10.2). Elimination changes no
-row's content, so it must not fail a user's transaction:
+**A moved-in version** is a kind of version of sm1, as the
+sealed tombstone is ([`COLSTORE.md`](COLSTORE.md) §10.2): a live
+version with the flags `version_sealed` and `version_moved_in`.
+Elimination changes no row's content, so it must not fail a
+user's transaction:
 
 - **A reader** sees it as any version.
 - **First-committer-wins sees through it**, and through a
@@ -526,6 +529,11 @@ row's content, so it must not fail a user's transaction:
 - **A write that passes** writes over it as over any version:
   it does not fail with `SM_ERR_SEALED`.
 - **The Garbage Collector** treats it as any version.
+- **A writer older than it is told**
+  (`sm1::wrote_over_moved_in`): the write went over a moved-in
+  version that its snapshot does not see. The writer then puts a
+  shadow marker at the place its snapshot sees the row in, as
+  §6.3 step 3.4 does.
 
 - **The rows are written twice**, into the delta store now, and
   into a new RG at the next seal. About 4,100 rows of 10,000
@@ -560,10 +568,6 @@ can add a shadow marker. The cleanup is a pass of the sealer
 - **sm1 needs no new call.** `sm1::read_settled` cannot judge a
   file set key, of class `0x05`. The filter key is a versioned
   key, and its erase commits with the RG key's.
-- **A moved marker is not erased.** It is a sealed version, and
-  `sm1::erase` fails on it with `SM_ERR_SEALED`. So the cleanup
-  is for a version that RG compaction replaced in place, whose
-  markers are delete markers and shadow markers alone.
 - **A restart loses the hints.** The sealer's first pass lists
   the `fsid`s of the marker and validmap keys that have no RG
   key, and gives a hint for each.
@@ -582,7 +586,8 @@ reapers.
    - a commit or a scan that counts markers on a version of 1%
      of its rows, 100 of 10k: fold it;
    - a commit or a scan that counts 20% of a version's rows
-     dead: compact it, or eliminate it at version 3;
+     dead: compact it, or eliminate it at version 3 or under
+     half of an RG's rows live;
    - RG compaction and elimination: clean up the old version.
 2. Each second, the thread looks at the queue, with no session.
    An empty queue ends the pass.
@@ -807,6 +812,6 @@ struct sm_row_place_t {
    range, which prunes a lookup by `_id` less.
 4. **The small RGs of a restart.** A restart closes open RGs
    that are not full, and the seal makes small RGs of them.
-   Elimination takes only a version 3. A rule to eliminate a
-   small RG, or to place its rows again before the seal, is not
-   decided.
+   Elimination takes an RG under half live, at its next job, so
+   their rows are sealed again with others; a job comes only
+   after markers, or a scan, queue one.

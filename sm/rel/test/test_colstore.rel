@@ -35,6 +35,11 @@
 #     it into version 1 of the same row group. A REPEATABLE READ
 #     session older than the compaction still counts 10,000 rows,
 #     deletes a row by its old place, and no longer sees it.
+# 13. 3,000 more rows of that version deleted: under half its rows
+#     live, the sealer eliminates it, and its rows go into the delta
+#     store. A REPEATABLE READ session older than the elimination
+#     still counts the version's rows, deletes a row by its place
+#     there, and no longer sees it.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -312,6 +317,35 @@
     (assert-nil (rg-of tv vid) "no row has the deleted _id")
 (commit)
 (session-close s2)
+
+# 13. An elimination, and a writer older than it.
+(def v1 (do (begin :rc) (def p (places tv)) (commit) p))
+(session-open s3 "csdb")
+(session-use s3)
+(begin :rr)
+    (assert-eq (scan-count tv) 7999 "s3's snapshot, before the deletes")
+(session-use default)
+(begin :rc)
+    (for i 2000 5000
+      (delete-at tv (get v1 (get vids i)) (get vids i)))
+(commit)
+(seal-wait)
+(begin :rc)
+    (def eid (get vids 7000))
+    (assert-eq (scan-count tv) 4999 "the live rows, once each")
+    (assert-eq (rg-of tv eid) 0 "the rows are in the delta store")
+(commit)
+(session-use s3)
+    (assert-eq (scan-count tv) 7999 "s3 reads the version it saw")
+    (delete-at tv (get v1 eid) eid)
+    (assert-eq (scan-count tv) 7998 "s3 no longer sees the row it deleted")
+(commit)
+(session-use default)
+(begin :rr)
+    (assert-eq (scan-count tv) 4998 "the delete went to the delta store")
+    (assert-nil (rg-of tv eid) "no row has the deleted _id")
+(commit)
+(session-close s3)
 
 (db-close)
 (env-detach :force true)

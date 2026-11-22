@@ -61,12 +61,13 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | seal | the transaction that moves rows from the delta store into a new RG |
 | sealed tombstone | the delta tombstone that the seal writes; a writer sees through it (§10.2) |
 | delete marker | a versioned key `(rg_id, _id)` that says the RG's copy of the row is deleted |
-| moved marker | a delete marker that RG compaction writes; a writer sees through it (§11) |
+| moved-in version | a delta row that elimination writes, from an RG; a writer sees through it (§11) |
 | RG key | the versioned key that holds an RG's metadata and the statistics of its CGs |
 | filter key | the versioned key that holds one CG's bloom filter or exact set |
 | zonemap | a CG's statistics in the RG key: min, max, null count and flags |
 | key bytes | a datum in its type's order-preserving key encoding (`type_t::key_encode`), of a varlena's payload past its header; memcmp order is SQL order |
-| RG compaction | the rewrite of an RG with many delete markers into a new RG |
+| RG compaction | the rewrite of an RG with many delete markers into its next version |
+| elimination | the move of an RG's live rows into the delta store, as moved-in versions |
 | the longest value | `col_max_value`, 2,048 bytes: the most a varlena value of a column store table may hold, its header not counted |
 
 ---
@@ -96,20 +97,20 @@ SELECT sum(amount) FROM ev WHERE kind = 'view';
 | the longest value | 2,048 bytes; a longer one is refused at its write, and goes into a row store table that a query joins | §5.4 |
 | RG size | 10k rows | §7 |
 | the seal | pessimistic; its tombstones are transparent to first-committer-wins | §10 |
-| RG compaction | moved markers, transparent in the same way | §11 |
+| RG compaction | the next version of the same RG, at most 3; then elimination, whose moved-in versions are transparent in the same way | §11 |
 
 The constants (10k rows, 2,048 bytes, 32 bytes, 4 KB, 20%, 50%)
 may change. An RG key records the real sizes of its CGs,
 so a change of a constant does not make an existing file wrong.
 A test can give a catalog smaller RGs (`sm3::cat_set_rg_rows`),
-so that a seal, an RG compaction and a merge come after a few
-hundred rows. The 20% and 50% are of the RG size set.
+so that a seal, an RG compaction and an elimination come after a
+few hundred rows. The 20% and 50% are of the RG size set.
 
 **Which level owns each part:**
 
 | Part | Level | Why |
 | --- | --- | --- |
-| the sealed tombstone, and the moved marker's rule in first-committer-wins | sm1 | rules of the write path; sm1 knows no table |
+| the sealed tombstone, and the moved-in version's rule in first-committer-wins | sm1 | rules of the write path; sm1 knows no table |
 | file sets: the file I/O of CGs, their key class, their GC and the sweep at open; later S3 and the local file cache | sm1, beside the Buffer Manager | sm1 owns the I/O of every byte, the order of fsync and RG key, and GC (§4.5) |
 | the CG file format, the encodings, the dictionary, the zonemap and the filter, and the pruning test on key bytes | sm2 | they need types and their key encodings; the pruning test compares key bytes and knows no type |
 | the RG keys, the seal, RG compaction, the scan, the lookup by `_id`, and the locks of §9.1 | sm3 | they need the table, its columns and predicates, as the `tbl_*` calls of a row store table do |
@@ -262,9 +263,8 @@ After the encoding, the CG is compressed with zstd. The tail
 tags the encoding, so a new encoding does not change the format
 of an existing file.
 
-The rows of an RG that RG compaction merged (§11.1) are in the
-order of the RGs merged, so its `_id` CG is not in ascending
-order, and gets plain encoding.
+The rows of an RG that `rewrite_table` wrote (§9.2) may not be in
+`_id` order, so its `_id` CG then gets plain encoding.
 
 ### 5.2 The dictionary
 
@@ -446,8 +446,8 @@ the RGs that it rewrites (§11).
   `_id` 900" is one question with one answer, wherever the row
   is.
 - **Each RG stores its rows' `_id`s as a hidden CG.** It is
-  sorted and delta-encoded in an RG of the seal or a bulk load.
-  In an RG that RG compaction merged (§11.1), or that
+  sorted and delta-encoded in an RG of the seal or a bulk load,
+  and RG compaction keeps its order. In an RG that
   `rewrite_table` wrote (§9.2), it may not be sorted, and is
   plain.
 - **The `_id` CG is like any other CG.** It has a zonemap and a
@@ -485,8 +485,7 @@ table. A write takes the `rg_id` from the scan instead:
    the row by its `_id`, and sm reads the delta key `n`. If the
    delta store has no version of it, or a seal's tombstone, sm
    looks up the row's RG as above, at the newest committed state.
-3. A follow after `SM_ERR_SEALED` or a moved marker is a lookup
-   too.
+3. A follow after `SM_ERR_SEALED` is a lookup too.
 
 - **`rg_id` is 0 for a row in the delta store.**
 - **A read by `_id` is the same**: the delta store, then the
@@ -520,8 +519,8 @@ table. A write takes the `rg_id` from the scan instead:
      deleted since (`SM_ERR_NOTFOUND`), or updated since,
      with its new version in the delta store (`SM_ERR_UPDATED`,
      which the caller answers by a read of the newest version).
-  4. Meets a moved marker (`SM_ERR_SEALED`): finds the row's new
-     RG, and tries there, at most 8 times (§11).
+  4. Finds the RG eliminated: writes the row at its delta key,
+     where the row is a moved-in version, or a newer one (§11).
 - **An update of a row in an RG writes two keys in one
   transaction.** The delta key may hold a sealed tombstone. The
   insert goes in over it, as over any tombstone.
@@ -708,76 +707,61 @@ no rw-edge.
 
 ## 11. RG compaction
 
-RG compaction rewrites an RG that has many delete markers. It
-puts the live rows into a new RG and erases the old RG key.
-It is GC, not a write path.
+RG compaction rewrites an RG that has many dead rows. It is GC,
+not a write path. The steps are in
+[`COLSTORE2.md`](COLSTORE2.md) §6.6 to §6.9:
 
-- **It writes a moved marker at `(old rg, _id)` for each row
-  that it moves.** A moved marker is a delete marker with the
-  flag `version_sealed`. It is transparent as a sealed
-  tombstone is (§10.2): first-committer-wins judges against the
-  row's own commit, and a writer follows `_id` to the new RG.
-- **The `rg_id` of the new RG is new.** Its files have new
-  names.
-- **It runs at READ COMMITTED**, as the seal does (§10.3).
+- **The fold** puts a version's delete markers into its
+  validmap, at 1% of its rows.
+- **RG compaction** writes the next version of the same RG, 1 to
+  3, with its live rows alone, renumbered. A snapshot older than
+  it reads the version it saw. A writer older than it maps the
+  row's `rno` to the newest version, and writes the marker there.
+- **Elimination** puts the live rows of version 3, or of an RG
+  under half live, into the delta store under their `_id`s, as
+  moved-in versions, and erases the RG. The seal takes them
+  again with other rows.
+- **The cleanup** erases an old version's markers and validmap
+  once no snapshot sees the version.
 
-**RG compaction cannot skip a row.** It erases the old RG key,
-so each row of the old RG must move or be dead. A row with a
-writer in flight or prepared is neither yet:
+Each holds X on the RG, NOWAIT: a writer of the RG holds IX, and
+makes the job give up. Each tries the lock of each live row, as
+a write of it would take it: a holder, a reader's `FOR SHARE`
+included, makes it give up. The next markers committed on the
+RG queue it again. Each runs at READ COMMITTED, as the seal does
+(§10.3).
 
-- If RG compaction copies the row and the writer's delete
-  commits, the copy is live: a lost delete.
-- If RG compaction leaves the row out and the writer aborts, the
-  row is gone: a lost row.
-
-So RG compaction (`col_compact`) does these steps, at the newest
-committed state:
-
-1. Set a savepoint.
-2. For each RG to compact, read its delete markers, then its
-   live rows.
-3. For each live row, try its exclusive lock. If another
-   transaction holds a lock on the row, a reader's `FOR SHARE`
-   included, roll back to the savepoint and give up: the next
-   markers committed on the RG queue it again.
-4. Write a moved marker for the row, and add it to the new RG.
-5. Write the CG files, put the new RG key and its filter keys,
-   erase each old RG key, and commit. The row locks are held to
-   the commit.
-
-- **A writer that comes after the lock waits on it**, then finds
-  the moved marker, and follows `_id` to the new RG (§10.2).
-- **A transaction that stays prepared for a long time keeps its
-  RG from RG compaction** for that time. RG compaction is GC, so
-  it can wait.
+**A moved-in version** is a live version with the flags
+`version_sealed` and `version_moved_in`. First-committer-wins
+judges a write over it by the committed version under it, past
+the seal's tombstone, as for a sealed tombstone (§10.2). A write
+that passes goes on over it, as over any live version. A writer
+whose snapshot is older than the elimination puts a shadow
+marker at the place that its snapshot sees, so its own reads of
+the old version do not see the row
+(`sm1::wrote_over_moved_in`).
 
 ### 11.1 When RG compaction runs
 
 - **At 20% dead rows.** A commit counts the delete markers it
-  committed on each RG, in memory; a prepared transaction's at
-  its `COMMIT PREPARED`, as its rows' (§10.4). When
-  they reach 20% of a full RG's rows, 2,000, it queues an RG
-  compaction job on the sealer's queue (§10.4). Below 20%, the
-  dead rows cost a scan less than a rewrite of the RG costs.
-- **A scan counts too.** A scan reads each RG's markers into a
-  set, so it counts them at no cost, and queues a job when they
-  are 20% of that RG's rows. The counts in memory start at 0
-  when the database opens, and a scan catches what they miss. A
-  scan also catches a small RG, whose 20% is under 2,000.
-- **Small RGs are merged.** When the job compacts an RG with
-  fewer than 50% of 10k rows live, it takes with it each small
-  RG next to it in `rg_id` order, after it and then before it,
-  while the live rows of all fit one RG. They go into one new
-  RG, by the steps above, with a moved marker for each row
-  (`merge_set()` in `sm3/src/colstore/sealer.cc`). RG compaction
-  can leave a small RG; a bulk load leaves none (§9.2). Without
-  merges, small files collect.
-- **An RG with nothing to gain is left.** A job for an RG that
-  merges with no other and is less than 20% dead does nothing.
+  committed on each version, in memory; a prepared transaction's
+  at its `COMMIT PREPARED`, as its rows' (§10.4). When they reach
+  20% of a full RG's rows, 2,000, it queues a job on the sealer's
+  queue (§10.4). Below 20%, the dead rows cost a scan less than a
+  rewrite of the RG costs.
+- **A scan counts too.** A scan reads each version's validmap and
+  markers, so it counts them at no cost, and queues a job when
+  they are 20% of that version's rows, or a fold at 1%. The
+  counts in memory start at 0 when the database opens, and a scan
+  catches what they miss.
+- **The job decides** (`rg_plan()` in
+  `sm3/src/colstore/sealer.cc`): an RG under half of 10k rows
+  live is eliminated; else one 20% dead is compacted, or
+  eliminated at version 3; else nothing is done.
 - **A snapshot needs nothing more.** An old snapshot sees the
-  old RG key, and not the new one. GC keeps the old RG's files
-  until the erase of its key is at or below the watermark
-  (§13).
+  old version's RG key, and not the new one. GC keeps the old
+  version's files until the erase of its key is at or below the
+  watermark (§13).
 
 ---
 
@@ -965,11 +949,12 @@ yet are in [`NEXT.md`](NEXT.md).
 
 ### 15.1 mvcc: the rules of sm1
 
-The scenarios `s01` to `s09` in `sm1/mvcc/in`. Each runs twice,
+The scenarios `s01` to `s12` in `sm1/mvcc/in`. Each runs twice,
 on versioned and on chained stores, as every scenario does. The
 driver has the verbs `seal <row>`, an erase with a sealed
-tombstone, and `sealput <row> <value>`, a moved marker. The
-sessions that seal run at READ COMMITTED.
+tombstone, `sealput <row> <value>`, a live sealed version, and
+`movein <row> <value>`, a moved-in version. The sessions that
+seal run at READ COMMITTED.
 
 | Scenario | Expected |
 | --- | --- |
@@ -982,6 +967,9 @@ sessions that seal run at READ COMMITTED.
 | `s07`: a plain erase in the seal's place (negative) | the RR writer gets `conflict` |
 | `s08`: a row lock over a sealed tombstone | judged by the version under it |
 | `s09`: a seal waits on a writer in flight, which commits, then on one that aborts | `updated`, and the row keeps the writer's value; then `ok`, and the row is sealed |
+| `s10`: a moved-in version, over a sealed tombstone and where no version is | a reader sees it; an RR writer older than it writes over it; an insert is `dupkey` |
+| `s11`: a moved-in version over a change committed after the writer's snapshot | `conflict`, for a write and for a row lock |
+| `s12`: an RC writer waits on a moved-in version in flight | `BLOCK`, then `ok` over it |
 
 The Column Store's notions above sm1, such as RGs, scans and
 pruning, cannot be expressed here. §15.3 and §15.4 test them.
@@ -1020,9 +1008,11 @@ random CGs and random bounds, against a test of every value.
 5. The seal: no partial RG; a locked row passed over; a writer
    that follows a sealed row; the job at an RG's worth of rows;
    an update's new version counted.
-6. RG compaction: the live rows rewritten; the give-up on a
-   writer; a writer that follows a moved row; the trigger at
-   20%; the merge of small RGs.
+6. RG compaction: the live rows rewritten into the next version;
+   the give-up on a writer; a writer older than one compaction,
+   and than two; the trigger at 20%; the fold; the cleanup; the
+   elimination of version 3 and of an RG under half live, with
+   writers older than it, by place and by `_id`.
 7. `ANALYZE`: the sample of RGs and of the delta store.
 8. DDL: `TRUNCATE`, `ADD COLUMN`, `DROP COLUMN` and a rewrite.
 9. A changed byte in a CG file fails a scan of its column, and

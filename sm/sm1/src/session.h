@@ -173,6 +173,9 @@ struct sm1::session_t {
   uint32_t stmt_seq = 0;
   /* sm1::view_latest: reads see the newest committed state. */
   bool view_latest = false;
+  /* The last write went over a moved-in version that its snapshot
+     does not see (sm1::wrote_over_moved_in). */
+  bool over_moved_in = false;
 
   /*
    * The undo list (../XCTMGR.md §6): every version written while a
@@ -415,7 +418,8 @@ struct view_t {
  * WRITE_MOVE a delete of a row that moved (sm1::erase_moved);
  * WRITE_SEAL a delete whose tombstone is sealed (sm1::erase_sealed);
  * WRITE_INSERT_SEALED an insert of a sealed version
- * (sm1::insert_sealed).
+ * (sm1::insert_sealed); WRITE_INSERT_MOVED_IN an insert of a
+ * moved-in version (sm1::insert_moved_in).
  */
 enum write_op_t {
   WRITE_INSERT,
@@ -424,7 +428,8 @@ enum write_op_t {
   WRITE_DELETE,
   WRITE_MOVE,
   WRITE_SEAL,
-  WRITE_INSERT_SEALED
+  WRITE_INSERT_SEALED,
+  WRITE_INSERT_MOVED_IN
 };
 
 /* Fail with NOTRANS unless session has an active transaction. */

@@ -1715,16 +1715,25 @@ int tbl_delete_at(table_t* table, place_t place, uint64_t id);
 int tbl_seal(table_t* table, bool& sealed);
 
 /*
- * Compact row groups rgs of a column store table into new ones
- * (../COLSTORE.md §11), in the caller's transaction, at READ
- * COMMITTED: their live rows, each marked moved in its old row group,
- * into new row groups of at most rg_max_rows rows, and the old row
- * groups gone. A row with a writer in flight or prepared gives up:
- * done is false, and nothing is left written. A writer of a moved
- * row follows it to its new row group.
+ * Compact file set fsid of a column store table, a row group's newest
+ * version (../COLSTORE2.md §6.7, §6.8), in the caller's transaction,
+ * at READ COMMITTED: below version 3, into its next version, with its
+ * live rows alone; at version 3, by elimination (tbl_eliminate_rg).
+ * A writer of the row group, or a holder of a live row's lock, makes
+ * it give up: done is false, and nothing is left written. A writer of
+ * a row of an older version writes the row's newest place.
  */
-int tbl_compact_rgs(table_t* table, std::span<const uint64_t> rgs,
-                    bool& done);
+int tbl_compact_rg(table_t* table, uint64_t fsid, bool& done);
+
+/*
+ * Eliminate file set fsid of a column store table, a row group's
+ * newest version (../COLSTORE2.md §6.8), in the caller's transaction,
+ * at READ COMMITTED: its live rows put into the delta store, under
+ * their _ids, as moved-in versions, and the row group gone. A give-up
+ * is as tbl_compact_rg's. A writer of a row of the row group writes
+ * it in the delta store.
+ */
+int tbl_eliminate_rg(table_t* table, uint64_t fsid, bool& done);
 int tbl_update_at(table_t* table, place_t place, uint64_t id,
                   std::span<const sm2::datum_t> values,
                   std::span<const bool> isnull);

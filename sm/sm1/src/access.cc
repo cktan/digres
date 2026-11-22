@@ -182,13 +182,15 @@ bool reusable(const sm1::session_t *s, const sm1::rawpin_t &pin,
  * left in the iterator the pin then holds. With sealed given, it
  * is set to whether the committed version that decides is sealed
  * (version_sealed), and *sealed_key, if given, to that version's
- * key, for under_commit_ts(). Returns 0 or -1.
+ * key, for under_commit_ts(); *moved_in, if given, to whether it is
+ * a moved-in version (version_moved_in). Returns 0 or -1.
  */
 int latest_version(sm1::session_t *s, const store_t &st, rocksdb::Slice key,
                    bool *live, uint64_t *commit_ts, std::string *value,
                    uint32_t *own_seq = nullptr, uint64_t *inflight = nullptr,
                    sm1::rawpin_t *pin = nullptr, bool *moved = nullptr,
-                   bool *sealed = nullptr, std::string *sealed_key = nullptr) {
+                   bool *sealed = nullptr, std::string *sealed_key = nullptr,
+                   bool *moved_in = nullptr) {
   // Assume no version until one is found.
   *live = false;
   *commit_ts = 0;
@@ -197,6 +199,9 @@ int latest_version(sm1::session_t *s, const store_t &st, rocksdb::Slice key,
   }
   if (sealed) {
     *sealed = false;
+  }
+  if (moved_in) {
+    *moved_in = false;
   }
   if (own_seq) {
     *own_seq = 0;
@@ -276,6 +281,9 @@ int latest_version(sm1::session_t *s, const store_t &st, rocksdb::Slice key,
         *sealed = true;
         if (sealed_key) {
           sealed_key->assign(it->key().data(), it->key().size());
+        }
+        if (moved_in) {
+          *moved_in = v.flags & version_moved_in;
         }
       }
       *commit_ts = ts;
@@ -634,14 +642,14 @@ int read_latest_row(sm1::session_t *s, uint64_t storeid, const char *key,
   if (!st.cf) {
     return -1;
   }
-  bool live, moved, sealed;
+  bool live, moved, sealed, moved_in;
   uint64_t commit_ts;
   uint32_t own_seq;
   // Read the newest version into the pin, ignoring the snapshot;
   // it is emptied again unless a row is handed out.
   sm0::scope_guard_t put([&] { sm1::unpin(pin); });
   if (0 != latest_version(s, st, k, &live, &commit_ts, nullptr, &own_seq,
-                          nullptr, pin, &moved, &sealed)) {
+                          nullptr, pin, &moved, &sealed, nullptr, &moved_in)) {
     return -1;
   }
   // Only read committed has a snapshot to look past. Above it the
@@ -673,8 +681,9 @@ int read_latest_row(sm1::session_t *s, uint64_t storeid, const char *key,
   if (moved) {
     return set_error(sm1::SM_ERR_MOVED, "the row moved to another key");
   }
-  // A move of sm's own took it: the caller follows the row.
-  if (sealed) {
+  // A move of sm's own took it: the caller follows the row. A
+  // moved-in version is the row, here.
+  if (sealed && !moved_in) {
     return set_error(sm1::SM_ERR_SEALED, "a move took the row elsewhere");
   }
   // Absent, or deleted.
@@ -1063,12 +1072,13 @@ int access_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
   // Check the key and put the version under its latch, so no
   // other write of it comes between (../LOCKMGR.md §1.7).
   std::unique_lock<std::mutex> latch(lock_latch(s->db, storeid, key));
-  bool live, moved = false, sealed = false;
+  bool live, moved = false, sealed = false, moved_in = false;
   std::string sealed_key;
   uint64_t commit_ts;
   uint32_t own_seq;
-  const bool inserting =
-      op == WRITE_INSERT || op == WRITE_INSERT_NEW || op == WRITE_INSERT_SEALED;
+  const bool inserting = op == WRITE_INSERT || op == WRITE_INSERT_NEW ||
+                         op == WRITE_INSERT_SEALED ||
+                         op == WRITE_INSERT_MOVED_IN;
   const bool erasing =
       op == WRITE_DELETE || op == WRITE_MOVE || op == WRITE_SEAL;
   for (;;) {
@@ -1100,7 +1110,8 @@ int access_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
       // Find the version this write checks against, keeping it in
       // pin when the caller asked for the old image.
       if (0 != latest_version(s, st, key, &live, &commit_ts, nullptr, &own_seq,
-                              &inflight, pin, &moved, &sealed, &sealed_key)) {
+                              &inflight, pin, &moved, &sealed, &sealed_key,
+                              &moved_in)) {
         return -1;
       }
       // Done looking: this write goes on with the latch held.
@@ -1125,7 +1136,9 @@ int access_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
                      "the row was already changed by this statement");
   }
   // A move of sm's own changed no row: first-committer-wins judges
-  // the version under it (../COLSTORE.md §10.2).
+  // the version under it (../COLSTORE.md §10.2). A moved-in version
+  // the snapshot does not see is told to the caller.
+  s->over_moved_in = moved_in && commit_ts > s->snapshot_ts;
   if (sealed && 0 != under_commit_ts(s, st, key, sealed_key, &commit_ts)) {
     return -1;
   }
@@ -1156,8 +1169,9 @@ int access_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
     }
   }
   // Over a move's version the row is elsewhere, and the caller
-  // follows it; only an insert goes in over a sealed tombstone.
-  if (sealed && (live || !inserting)) {
+  // follows it; only an insert goes in over a sealed tombstone. A
+  // moved-in version is the row, here: a write goes on over it.
+  if (sealed && !moved_in && (live || !inserting)) {
     return set_error(sm1::SM_ERR_SEALED, "a move took the row elsewhere");
   }
   // An insert needs the key absent.
@@ -1185,10 +1199,12 @@ int access_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
   // A delete writes a tombstone version, a move's marked so; a
   // move of sm's own seals its version.
   uint8_t flags = op == WRITE_INSERT_SEALED ? version_sealed
-                  : !erasing                ? 0
-                  : op == WRITE_MOVE        ? version_tombstone | version_moved
-                  : op == WRITE_SEAL        ? version_tombstone | version_sealed
-                                            : version_tombstone;
+                  : op == WRITE_INSERT_MOVED_IN
+                      ? version_sealed | version_moved_in
+                  : !erasing         ? 0
+                  : op == WRITE_MOVE ? version_tombstone | version_moved
+                  : op == WRITE_SEAL ? version_tombstone | version_sealed
+                                     : version_tombstone;
   // Allocate the write timestamp now that no other writer of the
   // key is in flight, so it sorts after every committed version
   // of the key (../XCTMGR.md §2.1, ../LOCKMGR.md §1.7).
@@ -1399,6 +1415,18 @@ int sm1::erase_sealed(sm1::session_t *session, uint64_t storeid,
 int sm1::insert_sealed(sm1::session_t *session, uint64_t storeid,
                        std::string_view key, std::string_view data) {
   return write_row(session, WRITE_INSERT_SEALED, storeid, key.data(),
+                   key.size(), data.data(), data.size());
+}
+
+/* Whether the last write went over an unseen moved-in version; see sm1.h. */
+bool sm1::wrote_over_moved_in(const sm1::session_t *session) {
+  return session->over_moved_in;
+}
+
+/* Insert a version a move of sm's own moves in; see sm1.h. */
+int sm1::insert_moved_in(sm1::session_t *session, uint64_t storeid,
+                         std::string_view key, std::string_view data) {
+  return write_row(session, WRITE_INSERT_MOVED_IN, storeid, key.data(),
                    key.size(), data.data(), data.size());
 }
 
