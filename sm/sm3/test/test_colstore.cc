@@ -2425,3 +2425,76 @@ TEST_CASE("writers of a row on each side of a compaction conflict") {
   sm3::session_close(ss2);
   sm3::session_close(ss3);
 }
+
+namespace {
+
+/* Clean up old version fsid of c in a transaction of its own; done. */
+bool cleanup(sm3::session_t *ss, uint64_t c, uint64_t fsid) {
+  REQUIRE(sm3::begin(ss, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  bool done = false;
+  REQUIRE_MESSAGE(sm3::tbl_cleanup(t, fsid, done) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss) == 0);
+  return done;
+}
+
+/* The delete markers of file set fsid of c a new transaction sees. */
+size_t markers_of(col_db_t &db, uint64_t c, uint64_t fsid) {
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  std::vector<uint32_t> rnos;
+  REQUIRE(sm3::col_markers(t, fsid, rnos) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  return rnos.size();
+}
+
+} // namespace
+
+// Verify the markers of an old version, a shadow marker among them,
+// go once no snapshot sees the version, and not before.
+// 1. Load 10,000 rows; R (REPEATABLE READ) finds a = 5,000.
+// 2. Delete a = 0 .. 1,999, and compact: version 0 keeps 2,000
+//    markers. R deletes a = 5,000 by its old place: a shadow marker
+//    in version 0 too.
+// 3. The cleanup of version 0 waits while R's snapshot sees it.
+// 4. R commits: the cleanup erases version 0's 2,001 markers, and the
+//    rows are as they were.
+TEST_CASE("an old version's markers go once no snapshot sees it") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R.
+  load_rows(db, c, 10000);
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p0, id0] = where_in(ss2, c, 5000);
+  // 2. The compaction; R's delete.
+  delete_rows(db, c, 0, 2000);
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  CHECK(compact(ss3, c, {p0.fsid}));
+  sm3::table_t *t2 = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t2, p0, id0) == 0, sm1::errmsg());
+  sm3::tbl_close(t2);
+  // 3. Not yet.
+  CHECK_FALSE(cleanup(ss3, c, p0.fsid));
+  CHECK(markers_of(db, c, p0.fsid) == 2000);
+  // 4. Now.
+  REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+  CHECK(markers_of(db, c, p0.fsid) == 2001);
+  CHECK(cleanup(ss3, c, p0.fsid));
+  CHECK(markers_of(db, c, p0.fsid) == 0);
+  CHECK(markers_of(db, c, p0.fsid + 1) == 1);
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 7999);
+  CHECK(rows.count(5000) == 0);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}

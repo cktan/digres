@@ -541,10 +541,12 @@ that sees the version reads them, and a writer of that snapshot
 can add a shadow marker. The cleanup is a pass of the sealer
 (§6.10):
 
-1. Ask sm1 whether the RG key of `fsid` is settled gone
-   (`sm1::fileset_settled`, new): its newest version is a
-   committed erase at or below the GC watermark. If not, keep the
-   hint for the next pass.
+1. Ask sm1 whether the version's `_id` filter key is settled
+   gone (`sm1::read_settled_versioned`): its newest version is a
+   committed erase at or below the GC watermark. RG compaction
+   erases it in the commit that erases the RG key, so no snapshot
+   then sees the version. If not, keep the hint for the next
+   pass.
 2. In a transaction, erase each key of `fsid` under relids
    `0x0002` and `0x0003`: its markers, shadow markers included,
    and its validmap. Commit.
@@ -555,11 +557,13 @@ can add a shadow marker. The cleanup is a pass of the sealer
   filter drops them and the keys under them later. sm1 has no
   range delete outside MVCC, and needs none: a version has at
   most a few thousand such keys.
-- **`sm1::fileset_settled` is new.** `sm1::read_settled` judges
-  a key of a store's own classes: in a chained store, a chained
-  key. A file set key is of class `0x05`. The new call does for
-  it what `read_settled` does for a versioned key
-  (`versioned_settled` in `sm1/src/access.cc`).
+- **sm1 needs no new call.** `sm1::read_settled` cannot judge a
+  file set key, of class `0x05`. The filter key is a versioned
+  key, and its erase commits with the RG key's.
+- **A moved marker is not erased.** It is a sealed version, and
+  `sm1::erase` fails on it with `SM_ERR_SEALED`. So the cleanup
+  is for a version that RG compaction replaced in place, whose
+  markers are delete markers and shadow markers alone.
 - **A restart loses the hints.** The sealer's first pass lists
   the `fsid`s of the marker and validmap keys that have no RG
   key, and gives a hint for each.
@@ -717,10 +721,9 @@ struct sm_row_place_t {
 5. **The validmap and the fold** (§6.2, §6.6) → verify: sm3
    unit tests, rel, dg.
 6. **RG compaction by versions**, with the dropped sets, the map
-   of §6.4, shadow markers, `sm1::fileset_settled` and the
-   cleanup (§6.7, §6.9) → verify: sm1's unit test of
-   `fileset_settled`, the compaction tests of
-   `sm3/test/test_colstore.cc`, the new ones of §10.
+   of §6.4, shadow markers and the cleanup (§6.7, §6.9) →
+   verify: the compaction tests of `sm3/test/test_colstore.cc`,
+   the new ones of §10.
 7. **The moved-in version in sm1** → verify: new mvcc
    scenarios (§10).
 8. **Elimination** (§6.8), in place of the merge of small RGs →
@@ -741,9 +744,6 @@ struct sm_row_place_t {
   - an RR writer older than a moved-in version over a version
     committed after its snapshot fails with `SM_ERR_CONFLICT`;
   - an RC writer that waited on the mover writes over it.
-- **sm1 unit tests:** `fileset_settled` is 2 for a file set key
-  that a snapshot still sees, and 1 once its erase is below the
-  watermark.
 - **sm3 unit tests** (`sm3/test/test_colstore.cc`):
   - an insert while the old open RG seals does not wait, and
     goes to the new open RG;

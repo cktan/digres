@@ -2148,6 +2148,19 @@ int tbl_fold(table_t *table, uint64_t fsid, bool &done) {
   return col_fold(table, fsid, done);
 }
 
+/* Clean up an old version of a column store table; see sm3.h. */
+int tbl_cleanup(table_t *table, uint64_t fsid, bool &done) {
+  done = false;
+  if (!table->def->column_store) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "table: " + table->def->name +
+                                                " is no column store table");
+  }
+  if (need_writable(table) != 0) {
+    return -1;
+  }
+  return col_cleanup(table, fsid, done);
+}
+
 /* The place of a scan's last row; see sm3.h. */
 place_t tbl_scan_place(const scan_t *scan) {
   return scan->col ? col_scan_place(scan->col) : place_t();

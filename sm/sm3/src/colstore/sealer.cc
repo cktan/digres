@@ -20,6 +20,7 @@
 #include "sm0_log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -52,6 +53,9 @@ struct sealer_t {
      its last compaction's job, and since its last fold's. */
   std::map<std::pair<uint64_t, uint64_t>, uint64_t> marks;
   std::map<std::pair<uint64_t, uint64_t>, uint64_t> fold_marks;
+  /* Old versions to clean up, by (table, fsid), once no snapshot
+     sees them (../../COLSTORE2.md §6.9): tried each second. */
+  std::set<std::pair<uint64_t, uint64_t>> cleanups;
   std::unordered_map<uint64_t, uint64_t> counts; /* delta rows put */
   bool stop = false;
   bool busy = false; /* a table is being sealed */
@@ -203,7 +207,7 @@ int merge_set(table_t *t, uint64_t rg_id, std::vector<uint64_t> &out) {
  * writer in flight makes it give up: the next delete markers committed
  * on the row group queue it again.
  */
-void compact_rg(session_t *ss, uint64_t oid, uint64_t rg_id) {
+void compact_rg(sealer_t *z, session_t *ss, uint64_t oid, uint64_t rg_id) {
   if (begin(ss, sm1::xctlevel_t::read_committed) != 0) {
     return;
   }
@@ -219,6 +223,12 @@ void compact_rg(session_t *ss, uint64_t oid, uint64_t rg_id) {
     tbl_close(t);
   }
   if (rc == 0 && commit(ss) == 0) {
+    // A version replaced in place leaves its markers and validmap to
+    // the snapshots that see it; they go after.
+    if (done && rgs.size() == 1 && fsid_version(rgs[0]) < rg_last_version) {
+      std::lock_guard<std::mutex> g(z->mu);
+      z->cleanups.insert({oid, rgs[0]});
+    }
     return;
   }
   // A row group gone since, by a compaction before, ends the job.
@@ -261,13 +271,76 @@ void fold_rg(session_t *ss, uint64_t oid, uint64_t fsid) {
   abort(ss);
 }
 
+/*
+ * Clean up old version fsid of table oid (../../COLSTORE2.md §6.9), in
+ * a READ COMMITTED transaction of its own: true when it is done, or
+ * the table is gone; false to try it again.
+ */
+bool cleanup_rg(session_t *ss, uint64_t oid, uint64_t fsid) {
+  if (begin(ss, sm1::xctlevel_t::read_committed) != 0) {
+    return false;
+  }
+  table_t *t = nullptr;
+  bool done = false;
+  int rc = tbl_open(ss, oid, sm1::SM_LOCKMODE_IX, t);
+  if (rc == 0) {
+    rc = tbl_cleanup(t, fsid, done);
+    tbl_close(t);
+  }
+  if (rc == 0 && commit(ss) == 0) {
+    return done;
+  }
+  bool gone = sm1::errnum() == sm1::SM_ERR_NOTFOUND;
+  abort(ss);
+  return gone;
+}
+
+/* One pass over z's cleanups, in a session of its own; not under z->mu. */
+void cleanup_pass(sealer_t *z,
+                  const std::set<std::pair<uint64_t, uint64_t>> &todo) {
+  sm1::session_t *s = z->open();
+  session_t *ss = nullptr;
+  std::set<std::pair<uint64_t, uint64_t>> finished;
+  if (s && session_open(z->cat, s, ss) == 0) {
+    for (const auto &[oid, fsid] : todo) {
+      if (cleanup_rg(ss, oid, fsid)) {
+        finished.insert({oid, fsid});
+      }
+    }
+    session_close(ss);
+  }
+  if (s) {
+    sm1::closedb(s);
+  }
+  std::lock_guard<std::mutex> g(z->mu);
+  for (const auto &c : finished) {
+    z->cleanups.erase(c);
+  }
+}
+
 /* The worker: take a job from the queue, and do it. */
 void work(sealer_t *z) {
   std::unique_lock<std::mutex> g(z->mu);
   for (;;) {
-    z->cv.wait(g, [&] { return z->stop || !z->queue.empty(); });
+    // With cleanups to try, it wakes each second, as the reapers do.
+    if (z->cleanups.empty()) {
+      z->cv.wait(g, [&] { return z->stop || !z->queue.empty(); });
+    } else {
+      z->cv.wait_for(g, std::chrono::seconds(1),
+                     [&] { return z->stop || !z->queue.empty(); });
+    }
     if (z->stop) {
       return;
+    }
+    if (z->queue.empty()) {
+      std::set<std::pair<uint64_t, uint64_t>> todo = z->cleanups;
+      z->busy = true;
+      g.unlock();
+      cleanup_pass(z, todo);
+      g.lock();
+      z->busy = false;
+      z->cv.notify_all();
+      continue;
     }
     job_t job = z->queue.front();
     auto [oid, rg_id, kind] = job;
@@ -282,7 +355,7 @@ void work(sealer_t *z) {
       if (job_seal == kind) {
         seal_table(z, ss, oid);
       } else if (job_compact == kind) {
-        compact_rg(ss, oid, rg_id);
+        compact_rg(z, ss, oid, rg_id);
       } else {
         fold_rg(ss, oid, rg_id);
       }

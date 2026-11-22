@@ -280,6 +280,16 @@ int col_newest_version(table_t *table, uint64_t rg_id, uint64_t &fsid,
 int col_meta_seen(table_t *table, uint64_t fsid, rg_meta_t &meta);
 
 /*
+ * Erase the delete markers, shadow markers among them, and the
+ * validmap of file set fsid of table, an old version that RG
+ * compaction replaced in place (../COLSTORE2.md §6.9), in the
+ * caller's transaction: once no snapshot sees the version, as its
+ * _id CG's filter key, erased in the compaction's commit, says. done
+ * false, with nothing written, while one may. Returns 0 or -1.
+ */
+int col_cleanup(table_t *table, uint64_t fsid, bool &done);
+
+/*
  * Fold the delete markers of file set fsid of table into its
  * validmap (../COLSTORE2.md §6.6), in the caller's transaction, at
  * the newest committed state: X on the row group, if it can be had

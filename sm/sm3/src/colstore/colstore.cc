@@ -1018,6 +1018,45 @@ int col_compact(table_t *table, std::span<const uint64_t> rgs, bool &done) {
   return sm1::forget(s, depth);
 }
 
+/* Erase an old version's markers and validmap; see colstore.h. */
+int col_cleanup(table_t *table, uint64_t fsid, bool &done) {
+  done = false;
+  const table_def_t &def = tbl_def(table);
+  sm1::session_t *s = tbl_session(table)->sm1;
+  // 1. Settled gone: no snapshot sees the version, so no reader reads
+  //    its markers and no writer adds a shadow marker to them.
+  sm1::rawpin_t *pin = sm1::rawpin_new();
+  defer { sm1::rawpin_free(pin); };
+  std::string_view d;
+  int r =
+      sm1::read_settled_versioned(s, def.storeid, filter_key(fsid, -1), pin, d);
+  if (r != 1) {
+    return r < 0 ? -1 : 0;
+  }
+  // 2. Its markers and its validmap, at the newest committed state.
+  bool was = false;
+  if (sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  defer { sm1::view_latest(s, was); };
+  std::vector<uint32_t> rnos;
+  if (col_markers(table, fsid, rnos) != 0) {
+    return -1;
+  }
+  for (uint32_t rno : rnos) {
+    if (sm1::erase(s, def.storeid, marker_key({fsid, rno})) != 0) {
+      return -1;
+    }
+  }
+  r = sm1::read(s, def.storeid, validmap_key(fsid), d);
+  if (r < 0 ||
+      (r == 0 && sm1::erase(s, def.storeid, validmap_key(fsid)) != 0)) {
+    return -1;
+  }
+  done = true;
+  return 0;
+}
+
 /* Fold a file set's markers into its validmap; see colstore.h. */
 int col_fold(table_t *table, uint64_t fsid, bool &done) {
   done = false;

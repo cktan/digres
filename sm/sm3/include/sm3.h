@@ -1980,6 +1980,15 @@ int tbl_scan_columns(table_t* table, std::vector<bool> cols,
  */
 int tbl_fold(table_t* table, uint64_t fsid, bool& done);
 
+/*
+ * Erase the delete markers and validmap of file set fsid of a column
+ * store table, an old version that RG compaction replaced in place
+ * (../COLSTORE2.md §6.9), in the caller's transaction, once no
+ * snapshot sees the version: done false, with nothing written, until
+ * then.
+ */
+int tbl_cleanup(table_t* table, uint64_t fsid, bool& done);
+
 /* The place of the row a scan handed out last; fsid 0 for the delta's. */
 place_t tbl_scan_place(const scan_t* scan);
 
