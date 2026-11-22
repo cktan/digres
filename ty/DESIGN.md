@@ -733,6 +733,15 @@ by an abbreviation); `ty_tz_fixed_offset`; and the data's release
 and names. A host with a file of zones may give ty a pack to use
 in place of its own, by `ty_tz_use_data`; ty checks it first.
 
+The operations of timestamptz that need a zone are in ty too, each
+taking the zone: `ty_timestamptz_to_local` (the fields of an instant
+in a zone, the offset and the abbreviation: `timestamp2tm` with a
+zone), `ty_timestamp_to_timestamptz` and `ty_timestamptz_to_timestamp`
+(the casts, and the full-zone branch of `AT TIME ZONE`),
+`ty_date_to_timestamptz` and `ty_timestamptz_to_date`. The infinities
+pass through, an overflow is an error or, if the caller asks, an
+infinity and a flag, and the messages are PostgreSQL's.
+
 The text in of timestamptz and timetz asks the host for the offset
 of a zone (section 19). The host may now answer from these calls.
 

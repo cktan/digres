@@ -672,6 +672,20 @@ copied from PostgreSQL keeps its copyright notice
      gap and a fold), hand tests of the lookup, the POSIX specs,
      the abbreviations, a bad pack and a pack of the host, and
      the tests of digres, which ran on the new zones.
+   - **The casts of timestamptz moved, with the zone
+     (2026-11-22).** `ty_timestamptz_to_local`,
+     `ty_timestamp_to_timestamptz`, `ty_timestamptz_to_timestamp`,
+     `ty_date_to_timestamptz` and `ty_timestamptz_to_date`: the casts
+     between timestamp, date and timestamptz, and the full-zone branch
+     of `AT TIME ZONE`, each taking the zone. The tests: the 16,618
+     lines of `tz_known.txt` also check each (the local fields, the
+     offset, the cast of every local time, the date), and hand tests
+     of the infinities and of the edges of the range; the pinned
+     `dg/test/select_timezone_ops.sql` prints what it did before.
+     Measured by callgrind over 100,000 rows, the statement (old, new):
+     `ts::timestamp` -2.2%; `ts::timestamp::timestamptz` -1.9%;
+     `ts::date` -2.4%; `date::timestamptz` -1.3%; `AT TIME ZONE` a
+     zone name -1.8%.
    - **The typmod of interval, timestamp and time, and
      `make_interval` moved (2026-11-21).**
      `ty_interval_adjust_typmod`, `ty_timestamp_adjust_typmod`,

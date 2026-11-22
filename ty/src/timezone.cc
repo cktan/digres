@@ -2349,6 +2349,186 @@ const char *ty_tz_next_abbrev(const ty_tz_t *tz, int *indx) {
   return result;
 }
 
+/*
+ * timestamp2tm with a zone: see ty_timezone.h.
+ * 1. Split the instant into a date and a time of day, as PostgreSQL does; a
+ *    date that is no Julian day is out of range.
+ * 2. Rotate to the zone with pg_localtime, on the seconds since 1970.
+ * (PostgreSQL also treats an instant that does not fit a 32-bit pg_time_t
+ * as UTC: here pg_time_t has 64 bits, and every timestamp fits.)
+ */
+int ty_timestamptz_to_local(const ty_tz_t *tz, int64_t ts, ty_tm_t *tm,
+                            int32_t *fsec, int *west, int *isdst,
+                            const char **abbrev) {
+  int64_t date, time = ts;
+  const int64_t usecs_per_day = INT64_C(86400000000);
+
+  date = time / usecs_per_day;
+  time -= date * usecs_per_day;
+  if (time < 0) {
+    time += usecs_per_day;
+    date -= 1;
+  }
+  /* add offset to go from J2000 back to standard Julian date */
+  date += TY_POSTGRES_EPOCH_JDATE;
+  /* Julian day routine does not work for negative Julian days */
+  if (date < 0 || date > (int64_t)INT_MAX) {
+    return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+  }
+  int32_t f = (int32_t)(time % 1000000);
+  pg_time_t utime =
+      (ts - f) / 1000000 +
+      (int64_t)(TY_POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY;
+  struct pg_tm *tx = pg_localtime(&utime, tz);
+
+  if (tx == nullptr) {
+    return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+  }
+  tm->year = tx->tm_year + TM_YEAR_BASE;
+  tm->mon = tx->tm_mon + 1;
+  tm->mday = tx->tm_mday;
+  tm->hour = tx->tm_hour;
+  tm->min = tx->tm_min;
+  tm->sec = tx->tm_sec;
+  *fsec = f;
+  *west = -(int)tx->tm_gmtoff;
+  if (isdst) {
+    *isdst = tx->tm_isdst;
+  }
+  if (abbrev) {
+    *abbrev = tx->tm_zone;
+  }
+  return 0;
+}
+
+/* timestamp2timestamptz_opt_overflow: see ty_timezone.h. */
+int ty_timestamp_to_timestamptz(const ty_tz_t *tz, int64_t ts, int64_t *out,
+                                int *overflow) {
+  ty_tm_t tm;
+  int32_t fsec;
+
+  if (overflow) {
+    *overflow = 0;
+  }
+  if (!ty_timestamp_finite(ts)) {
+    *out = ts;
+    return 0;
+  }
+  /* We don't expect this to fail, but check it pro forma */
+  if (ty_timestamp_to_tm(ts, &tm, &fsec) == 0) {
+    int isdst;
+    int offset = ty_tz_offset_for_local(tz, &tm, &isdst, nullptr);
+    int64_t result = ts + (int64_t)offset * 1000000;
+
+    if (ty_timestamp_valid(result)) {
+      *out = result;
+      return 0;
+    }
+    if (overflow) {
+      if (result < TY_MIN_TIMESTAMP) {
+        *overflow = -1;
+        *out = TY_TIMESTAMP_NOBEGIN;
+      } else {
+        *overflow = 1;
+        *out = TY_TIMESTAMP_NOEND;
+      }
+      return 0;
+    }
+  }
+  return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+}
+
+/* timestamptz2timestamp: see ty_timezone.h. */
+int ty_timestamptz_to_timestamp(const ty_tz_t *tz, int64_t ts, int64_t *out) {
+  ty_tm_t tm;
+  int32_t fsec;
+  int west;
+
+  if (!ty_timestamp_finite(ts)) {
+    *out = ts;
+    return 0;
+  }
+  if (ty_timestamptz_to_local(tz, ts, &tm, &fsec, &west, nullptr, nullptr) !=
+          0 ||
+      ty_tm_to_timestamp(&tm, fsec, out) != 0) {
+    return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+  }
+  return 0;
+}
+
+/* date2timestamptz_opt_overflow: see ty_timezone.h. */
+int ty_date_to_timestamptz(const ty_tz_t *tz, int32_t d, int64_t *out,
+                           int *overflow) {
+  int64_t midnight;
+  int over = 0;
+
+  if (overflow) {
+    *overflow = 0;
+  }
+  if (ty_date_to_timestamp(d, &midnight, &over) != 0) {
+    return -1; /* the error is "date out of range for timestamp" */
+  }
+  if (!ty_date_finite(d) || over != 0) {
+    if (over != 0 && overflow == nullptr) {
+      return ty_date_to_ts_error(); /* "date out of range for timestamp" */
+    }
+    if (overflow) {
+      *overflow = over;
+    }
+    *out = midnight;
+    return 0;
+  }
+  ty_tm_t tm = {};
+  int isdst;
+
+  ty_j2date(d + TY_POSTGRES_EPOCH_JDATE, &tm.year, &tm.mon, &tm.mday);
+  int offset = ty_tz_offset_for_local(tz, &tm, &isdst, nullptr);
+  int64_t result = midnight + (int64_t)offset * 1000000;
+
+  /*
+   * Since it is possible to go beyond allowed timestamptz range because of
+   * time zone, check for allowed timestamp range after adding tz.
+   */
+  if (!ty_timestamp_valid(result)) {
+    if (overflow) {
+      if (result < TY_MIN_TIMESTAMP) {
+        *overflow = -1;
+        *out = TY_TIMESTAMP_NOBEGIN;
+      } else {
+        *overflow = 1;
+        *out = TY_TIMESTAMP_NOEND;
+      }
+      return 0;
+    }
+    return ty_internal::set_error(TY_ERR_RANGE,
+                                  "date out of range for timestamp");
+  }
+  *out = result;
+  return 0;
+}
+
+/* timestamptz_date: see ty_timezone.h. */
+int ty_timestamptz_to_date(const ty_tz_t *tz, int64_t ts, int32_t *out) {
+  ty_tm_t tm;
+  int32_t fsec;
+  int west;
+
+  if (ts == TY_TIMESTAMP_NOBEGIN) {
+    *out = TY_DATE_NOBEGIN;
+    return 0;
+  }
+  if (ts == TY_TIMESTAMP_NOEND) {
+    *out = TY_DATE_NOEND;
+    return 0;
+  }
+  if (ty_timestamptz_to_local(tz, ts, &tm, &fsec, &west, nullptr, nullptr) !=
+      0) {
+    return -1;
+  }
+  *out = ty_date2j(tm.year, tm.mon, tm.mday) - TY_POSTGRES_EPOCH_JDATE;
+  return 0;
+}
+
 int ty_tz_file(const char *name, char *canonname, const unsigned char **data,
                size_t *size) {
   return pack_find(name, canonname, data, size);

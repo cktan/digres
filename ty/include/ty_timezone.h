@@ -109,6 +109,45 @@ unsigned ty_tz_name_count(void);
 const char *ty_tz_name_at(unsigned i);
 
 /*
+ * timestamptz operations that need a zone. A timestamptz is the UTC instant,
+ * as a timestamp is: microseconds since 2000-01-01. Each call takes the zone
+ * (the session's, or the one asked for), and a failure is -1 with
+ * TY_ERR_RANGE and PostgreSQL's message. The infinities pass through.
+ */
+
+/*
+ * The local fields of the instant ts in the zone (timestamp2tm with a
+ * zone): the fields, the microseconds, the offset west of Greenwich, whether
+ * it is daylight time, and the abbreviation (valid as long as the zone is).
+ * abbrev and isdst may be NULL.
+ */
+int ty_timestamptz_to_local(const ty_tz_t* tz, int64_t ts, ty_tm_t* tm,
+                            int32_t* fsec, int* west, int* isdst,
+                            const char** abbrev);
+
+/*
+ * timestamp to timestamptz: the local time in the zone as the instant
+ * (timestamp2timestamptz_opt_overflow). A result out of range is, if
+ * overflow is not NULL, an infinity with *overflow -1 or 1, else an error.
+ */
+int ty_timestamp_to_timestamptz(const ty_tz_t* tz, int64_t ts, int64_t* out,
+                                int* overflow);
+
+/* timestamptz to timestamp: the local time in the zone (timestamptz2timestamp). */
+int ty_timestamptz_to_timestamp(const ty_tz_t* tz, int64_t ts, int64_t* out);
+
+/*
+ * date to timestamptz: midnight in the zone (date2timestamptz_opt_overflow).
+ * A date with no timestamp, or whose midnight in the zone is out of range,
+ * is as above, with the message "date out of range for timestamp".
+ */
+int ty_date_to_timestamptz(const ty_tz_t* tz, int32_t d, int64_t* out,
+                           int* overflow);
+
+/* timestamptz to date: the date in the zone (timestamptz_date). */
+int ty_timestamptz_to_date(const ty_tz_t* tz, int64_t ts, int32_t* out);
+
+/*
  * PostgreSQL's own shapes, for a host whose code is PostgreSQL's (digres).
  * A ty_tz_pgtm_t is PostgreSQL's pg_tm: the month counts from 0 and the year
  * from 1900, as in the IANA library.

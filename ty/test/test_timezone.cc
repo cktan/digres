@@ -73,6 +73,34 @@ TEST_CASE("the zones of ty agree with zoneinfo on the same files") {
       CHECK(std::stoi(w[11]) == l.min);
       CHECK(std::stoi(w[12]) == l.sec);
       nl++;
+
+      // The same instant, as a timestamptz: the fields, the offset west,
+      // the timestamp of the local time, and its date.
+      int64_t ts = (std::stoll(w[2]) - 946684800) * 1000000; // from 2000
+      ty_tm_t tm;
+      int32_t fsec;
+      int west, isdst2;
+      const char *abbr;
+      int64_t local;
+      int32_t date;
+
+      REQUIRE(0 == ty_timestamptz_to_local(tz, ts, &tm, &fsec, &west, &isdst2,
+                                           &abbr));
+      CHECK(-std::stoi(w[4]) == west);
+      CHECK(std::stoi(w[5]) == isdst2);
+      CHECK(w[6] == abbr);
+      CHECK(std::stoi(w[7]) == tm.year);
+      CHECK(std::stoi(w[8]) == tm.mon);
+      CHECK(std::stoi(w[9]) == tm.mday);
+      CHECK(std::stoi(w[10]) == tm.hour);
+      CHECK(std::stoi(w[11]) == tm.min);
+      CHECK(std::stoi(w[12]) == tm.sec);
+      CHECK(0 == fsec);
+      REQUIRE(0 == ty_timestamptz_to_timestamp(tz, ts, &local));
+      CHECK(local == ts + (int64_t)std::stoi(w[4]) * 1000000);
+      REQUIRE(0 == ty_timestamptz_to_date(tz, ts, &date));
+      CHECK(date ==
+            ty_date2j(tm.year, tm.mon, tm.mday) - TY_POSTGRES_EPOCH_JDATE);
     } else {
       // O ZONE Y M D h m s => OFFSET_WEST ISDST
       ty_tm_t tm = {std::stoi(w[2]), std::stoi(w[3]), std::stoi(w[4]),
@@ -83,6 +111,24 @@ TEST_CASE("the zones of ty agree with zoneinfo on the same files") {
             ty_tz_offset_for_local(tz, &tm, &isdst, nullptr));
       CHECK(std::stoi(w[10]) == isdst);
       no++;
+
+      // The cast of that local time to timestamptz: the local time plus the
+      // offset; and the date's midnight in the zone, by the same rule.
+      int64_t local, utc;
+
+      REQUIRE(0 == ty_tm_to_timestamp(&tm, 0, &local));
+      REQUIRE(0 == ty_timestamp_to_timestamptz(tz, local, &utc, nullptr));
+      CHECK(utc == local + (int64_t)std::stoi(w[9]) * 1000000);
+      ty_tm_t midnight = {tm.year, tm.mon, tm.mday, 0, 0, 0};
+      int64_t mid_local, mid_utc, date_utc;
+      int32_t date =
+          ty_date2j(tm.year, tm.mon, tm.mday) - TY_POSTGRES_EPOCH_JDATE;
+
+      REQUIRE(0 == ty_tm_to_timestamp(&midnight, 0, &mid_local));
+      REQUIRE(0 ==
+              ty_timestamp_to_timestamptz(tz, mid_local, &mid_utc, nullptr));
+      REQUIRE(0 == ty_date_to_timestamptz(tz, date, &date_utc, nullptr));
+      CHECK(date_utc == mid_utc);
     }
   }
   CHECK(nl > 5000);
@@ -386,4 +432,50 @@ TEST_CASE("PostgreSQL's shapes of a zone agree with ty's own") {
   CHECK(nullptr == ty_tz_find("Nowhere/Land"));
   CHECK(nullptr == ty_tz_find("Nowhere/Land"));
   CHECK(tokyo == ty_tz_find("Asia/Tokyo"));
+}
+
+// Verify the casts of timestamptz at their edges.
+// 1. The infinities pass through every cast.
+// 2. A timestamp the zone moves out of range is an error, or an infinity
+//    and an overflow flag if one is asked for.
+// 3. A date with no timestamp is "date out of range for timestamp".
+TEST_CASE("the casts of timestamptz keep the infinities and the edges") {
+  const ty_tz_t *tokyo = ty_tz_find("Asia/Tokyo");
+  const ty_tz_t *ny = ty_tz_find("America/New_York");
+  int64_t out;
+  int32_t d;
+  int over;
+
+  REQUIRE(nullptr != tokyo);
+  // 1. The infinities pass through every cast.
+  CHECK(0 ==
+        ty_timestamp_to_timestamptz(tokyo, TY_TIMESTAMP_NOEND, &out, nullptr));
+  CHECK(TY_TIMESTAMP_NOEND == out);
+  CHECK(0 == ty_timestamptz_to_timestamp(tokyo, TY_TIMESTAMP_NOBEGIN, &out));
+  CHECK(TY_TIMESTAMP_NOBEGIN == out);
+  CHECK(0 == ty_timestamptz_to_date(tokyo, TY_TIMESTAMP_NOEND, &d));
+  CHECK(TY_DATE_NOEND == d);
+  CHECK(0 == ty_date_to_timestamptz(tokyo, TY_DATE_NOBEGIN, &out, nullptr));
+  CHECK(TY_TIMESTAMP_NOBEGIN == out);
+
+  // 2. The largest timestamp, in a zone east of UTC, is out of range.
+  int64_t last = TY_END_TIMESTAMP - 1;
+
+  CHECK(-1 == ty_timestamp_to_timestamptz(ny, last, &out, nullptr));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(std::string("timestamp out of range") == ty_errmsg());
+  CHECK(0 == ty_timestamp_to_timestamptz(ny, last, &out, &over));
+  CHECK(1 == over);
+  CHECK(TY_TIMESTAMP_NOEND == out);
+  CHECK(0 == ty_timestamp_to_timestamptz(tokyo, TY_MIN_TIMESTAMP, &out, &over));
+  CHECK(-1 == over); // Tokyo is ahead: its midnight is before the first instant
+  CHECK(TY_TIMESTAMP_NOBEGIN == out);
+
+  // 3. A date with no timestamp is "date out of range for timestamp".
+  int32_t big = TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE;
+
+  CHECK(-1 == ty_date_to_timestamptz(ny, big, &out, nullptr));
+  CHECK(std::string("date out of range for timestamp") == ty_errmsg());
+  CHECK(0 == ty_date_to_timestamptz(ny, big, &out, &over));
+  CHECK(1 == over);
 }

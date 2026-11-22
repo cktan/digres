@@ -35,6 +35,7 @@
 #include "utils/builtins.h"
 #include "utils/date.h"
 #include "ty_datetime.h"
+#include "ty_timezone.h"
 #include "utils/datetime.h"
 #include "utils/numeric.h"
 #include "utils/skipsupport.h"
@@ -487,61 +488,11 @@ static TimestampTz date2timestamp(DateADT dateVal) {
  */
 TimestampTz date2timestamptz_opt_overflow(DateADT dateVal, int *overflow) {
   TimestampTz result;
-  struct pg_tm tt, *tm = &tt;
-  int tz;
 
-  if (overflow)
-    *overflow = 0;
-
-  if (DATE_IS_NOBEGIN(dateVal))
-    TIMESTAMP_NOBEGIN(result);
-  else if (DATE_IS_NOEND(dateVal))
-    TIMESTAMP_NOEND(result);
-  else {
-    /*
-     * Since dates have the same minimum values as timestamps, only upper
-     * boundary need be checked for overflow.
-     */
-    if (dateVal >= (TIMESTAMP_END_JULIAN - POSTGRES_EPOCH_JDATE)) {
-      if (overflow) {
-        *overflow = 1;
-        TIMESTAMP_NOEND(result);
-        return result;
-      } else {
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("date out of range for timestamp")));
-      }
-    }
-
-    j2date(dateVal + POSTGRES_EPOCH_JDATE, &(tm->tm_year), &(tm->tm_mon),
-           &(tm->tm_mday));
-    tm->tm_hour = 0;
-    tm->tm_min = 0;
-    tm->tm_sec = 0;
-    tz = DetermineTimeZoneOffset(tm, session_timezone);
-
-    result = dateVal * USECS_PER_DAY + tz * USECS_PER_SEC;
-
-    /*
-     * Since it is possible to go beyond allowed timestamptz range because
-     * of time zone, check for allowed timestamp range after adding tz.
-     */
-    if (!IS_VALID_TIMESTAMP(result)) {
-      if (overflow) {
-        if (result < MIN_TIMESTAMP) {
-          *overflow = -1;
-          TIMESTAMP_NOBEGIN(result);
-        } else {
-          *overflow = 1;
-          TIMESTAMP_NOEND(result);
-        }
-      } else {
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("date out of range for timestamp")));
-      }
-    }
-  }
-
+  /* ty gives midnight in the session's zone, or the overflow */
+  if (ty_date_to_timestamptz(session_timezone, dateVal, &result, overflow))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
   return result;
 }
 
@@ -980,22 +931,11 @@ Datum date_timestamptz(PG_FUNCTION_ARGS) {
 Datum timestamptz_date(PG_FUNCTION_ARGS) {
   TimestampTz timestamp = PG_GETARG_TIMESTAMP(0);
   DateADT result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
-  int tz;
 
-  if (TIMESTAMP_IS_NOBEGIN(timestamp))
-    DATE_NOBEGIN(result);
-  else if (TIMESTAMP_IS_NOEND(timestamp))
-    DATE_NOEND(result);
-  else {
-    if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-
-    result =
-        date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) - POSTGRES_EPOCH_JDATE;
-  }
+  /* ty gives the date in the session's zone; the infinities pass */
+  if (ty_timestamptz_to_date(session_timezone, timestamp, &result))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
 
   PG_RETURN_DATEADT(result);
 }

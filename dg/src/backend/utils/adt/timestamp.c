@@ -44,6 +44,7 @@
 #include "utils/sortsupport.h"
 #include "ty_interval.h"
 #include "ty_datetime.h"
+#include "ty_timezone.h"
 
 /*
  * gcc's -ffast-math switch breaks routines that expect exact results from
@@ -3969,12 +3970,8 @@ Datum timestamp_zone(PG_FUNCTION_ARGS) {
     tz = -DetermineTimeZoneAbbrevOffset(&tm, tzname, tzp);
     result = dt2local(timestamp, tz);
   } else {
-    /* full zone name, rotate to that zone */
-    if (timestamp2tm(timestamp, NULL, &tm, &fsec, NULL, tzp) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-    tz = DetermineTimeZoneOffset(&tm, tzp);
-    if (tm2timestamp(&tm, fsec, &tz, &result) != 0)
+    /* full zone name, rotate to that zone: ty gives the instant */
+    if (ty_timestamp_to_timestamptz(tzp, timestamp, &result, NULL))
       ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
                       errmsg("timestamp out of range")));
   }
@@ -4059,40 +4056,13 @@ Datum timestamp_timestamptz(PG_FUNCTION_ARGS) {
 TimestampTz timestamp2timestamptz_opt_overflow(Timestamp timestamp,
                                                int *overflow) {
   TimestampTz result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
-  int tz;
 
-  if (overflow)
-    *overflow = 0;
-
-  if (TIMESTAMP_NOT_FINITE(timestamp))
-    return timestamp;
-
-  /* We don't expect this to fail, but check it pro forma */
-  if (timestamp2tm(timestamp, NULL, tm, &fsec, NULL, NULL) == 0) {
-    tz = DetermineTimeZoneOffset(tm, session_timezone);
-
-    result = dt2local(timestamp, -tz);
-
-    if (IS_VALID_TIMESTAMP(result)) {
-      return result;
-    } else if (overflow) {
-      if (result < MIN_TIMESTAMP) {
-        *overflow = -1;
-        TIMESTAMP_NOBEGIN(result);
-      } else {
-        *overflow = 1;
-        TIMESTAMP_NOEND(result);
-      }
-      return result;
-    }
-  }
-
-  ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                  errmsg("timestamp out of range")));
-
-  return 0;
+  /* ty gives the instant of the local time in the session's zone */
+  if (ty_timestamp_to_timestamptz(session_timezone, timestamp, &result,
+                                  overflow))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
+  return result;
 }
 
 /*
@@ -4113,20 +4083,11 @@ Datum timestamptz_timestamp(PG_FUNCTION_ARGS) {
 
 static Timestamp timestamptz2timestamp(TimestampTz timestamp) {
   Timestamp result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
-  int tz;
 
-  if (TIMESTAMP_NOT_FINITE(timestamp))
-    result = timestamp;
-  else {
-    if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-    if (tm2timestamp(tm, fsec, NULL, &result) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-  }
+  /* ty gives the local time in the session's zone; the infinities pass */
+  if (ty_timestamptz_to_timestamp(session_timezone, timestamp, &result))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
   return result;
 }
 
@@ -4164,14 +4125,8 @@ Datum timestamptz_zone(PG_FUNCTION_ARGS) {
     tz = DetermineTimeZoneAbbrevOffsetTS(timestamp, tzname, tzp, &isdst);
     result = dt2local(timestamp, tz);
   } else {
-    /* full zone name, rotate from that zone */
-    struct pg_tm tm;
-    fsec_t fsec;
-
-    if (timestamp2tm(timestamp, &tz, &tm, &fsec, NULL, tzp) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-    if (tm2timestamp(&tm, fsec, NULL, &result) != 0)
+    /* full zone name, rotate from that zone: ty gives the local time */
+    if (ty_timestamptz_to_timestamp(tzp, timestamp, &result))
       ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
                       errmsg("timestamp out of range")));
   }
