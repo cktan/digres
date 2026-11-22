@@ -2819,6 +2819,38 @@ static Janet cfun_place_of(int32_t argc, Janet *argv) {
 }
 
 /*
+ * (places table): the place of each row a scan of the column store
+ * table finds, as a table of _id to [fsid rno], in one scan.
+ */
+static Janet cfun_places(int32_t argc, Janet *argv) {
+  janet_fixarity(argc, 1);
+  session_ctx_t *s = require_session();
+  table_def_t *p_tdef = nullptr;
+  Janet tbl = argv[0];
+  sm_row_scan_t *rscan = open_row_cursor(s, 1, &tbl, "places", p_tdef);
+  JanetTable *out = janet_table(0);
+  uint64_t rowno = 0;
+  sm_pin_ref_t ref;
+  int rc;
+  while ((rc = sm_row_scannxt(rscan, &rowno, &ref)) == 0) {
+    sm_row_place_t p = sm_row_scan_place(rscan);
+    Janet *t = janet_tuple_begin(2);
+    t[0] = janet_wrap_number(static_cast<double>(p.fsid));
+    t[1] = janet_wrap_number(static_cast<double>(p.rno));
+    janet_table_put(out, janet_wrap_number(static_cast<double>(rowno)),
+                    janet_wrap_tuple(janet_tuple_end(t)));
+  }
+  if (rc < 0) {
+    if (!engine_aborted()) {
+      sm_row_scanclose(rscan);
+    }
+    panic_sm_error("places sm_row_scannxt");
+  }
+  sm_row_scanclose(rscan);
+  return janet_wrap_table(out);
+}
+
+/*
  * (delete-at table place id): delete a column store table's row by
  * name, place the [fsid rno] place-of gives.
  */
@@ -3749,6 +3781,7 @@ static const JanetReg s_rel_cfuns[] = {
      "(seal-wait) -- wait until the seal's job is idle"},
     {"_rg-of", cfun_rg_of, "internal"},
     {"_place-of", cfun_place_of, "internal"},
+    {"_places", cfun_places, "internal"},
     {"_delete-at", cfun_delete_at, "internal"},
     {"_scan", cfun_scan, "internal"},
     {"_scan-count", cfun_scan_count, "internal"},
@@ -3926,6 +3959,9 @@ static const char *s_prelude = R"janet(
   ~(_rg-of (string ',tbl) ,id))
 (defmacro place-of [tbl id]
   ~(_place-of (string ',tbl) ,id))
+
+(defmacro places [tbl]
+  ~(_places (string ',tbl)))
 
 (defmacro delete-at [tbl place id]
   ~(_delete-at (string ',tbl) ,place ,id))

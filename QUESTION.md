@@ -1,5 +1,31 @@
 # Questions
 
+## 6. COLSTORE2: what versioned compaction keeps of the old one (2026-11-21)
+
+**Branch:** `wip-colstore2-1`.
+
+**Question.** RG compaction now writes the next version of a row
+group in place (`COLSTORE2.md` §6.7). Three parts of the old
+compaction stay for now. Are they to go next, in this order?
+
+```sql
+-- ev: rg 7, version 0, 10,000 rows; 2,000 deleted.
+-- The sealer compacts rg 7: version 1, fsid(7, 1), 8,000 rows,
+-- renumbered; no moved marker. A FOR SHARE holder of one of its
+-- rows makes the compaction give up, as before.
+```
+
+| Kept | Why | What would replace it |
+| --- | --- | --- |
+| a try of each live row's lock on delta key `_id` | row locks stay on `_id` (question 5), so a `FOR SHARE` holder still holds compaction off, as the tests of it say | nothing needed: a renumbering moves no `_id` lock; drop the tries, and change those tests |
+| the old path, new row groups and moved markers, for a merge of small row groups and for version 3 | elimination (`COLSTORE2.md` §6.8) needs the moved-in version in sm1 | elimination, with `sm1::chain_insert_moved_in` and its mvcc scenarios |
+| the markers and validmap of an old version, never erased | the cleanup (§6.9) needs `sm1::fileset_settled` | the cleanup pass of the sealer |
+
+**Recommendation, built:** keep all three for this step: each is
+correct, and the old path is what the tests cover. Next: the
+cleanup, as it is small and ends a leak; then elimination; then
+drop the row-lock tries.
+
 ## 5. COLSTORE2: the place at insert waits (2026-11-21)
 
 **Branch:** `wip-colstore2-1`, from `main` at `7e954535`.

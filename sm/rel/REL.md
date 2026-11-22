@@ -893,6 +893,10 @@ with `_id` `id`, as `[fsid rno]`: the file set of its row group's
 version and its position there, `fsid` 0 for its delta store;
 `nil` if no row has it.
 
+### `(places table)`
+The place of every row a scan of the column store table finds, as
+a table of `_id` to `[fsid rno]`, in one scan.
+
 ### `(delete-at table place id)`
 Deletes a column store table's row by its name, its place from
 `place-of` and its `_id` (`sm_tbl_delete_at`).

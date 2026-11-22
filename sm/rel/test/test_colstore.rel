@@ -31,6 +31,10 @@
 # 11. 150 rows of a row group deleted by name: the sealer folds their
 #     markers into the validmap; the count is the same, and a delete
 #     of a folded row finds no row.
+# 12. 2,000 rows of a row group of 10,000 deleted: the sealer compacts
+#     it into version 1 of the same row group. A REPEATABLE READ
+#     session older than the compaction still counts 10,000 rows,
+#     deletes a row by its old place, and no longer sees it.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -270,6 +274,44 @@
                      "ERR_NOTFOUND")
                true "a delete of a folded row finds no row")
 (abort)
+
+# 12. A compaction into the next version, and a writer older than it.
+(begin :rc)
+    (table-create tv
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (def vids (load tv (map (fn [i] [i "v"]) (range 10000))))
+(commit)
+(def v0 (do (begin :rc) (def p (places tv)) (commit) p))
+(session-open s2 "csdb")
+(session-use s2)
+(begin :rr)
+    (assert-eq (scan-count tv) 10000 "s2's snapshot, before the deletes")
+(session-use default)
+(begin :rc)
+    (for i 0 2000
+      (delete-at tv (get v0 (get vids i)) (get vids i)))
+(commit)
+(seal-wait)
+(begin :rc)
+    (def vid (get vids 5000))
+    (assert-eq (rg-of tv vid) (+ (get (get v0 vid) 0) 1)
+               "the row group is in its next version")
+    (assert-eq (get (place-of tv vid) 1) 3000 "the rows are renumbered")
+(commit)
+(session-use s2)
+    (assert-eq (scan-count tv) 10000 "s2 reads the version it saw")
+    (delete-at tv (get v0 vid) vid)
+    (assert-eq (scan-count tv) 9999 "s2 no longer sees the row it deleted")
+(commit)
+(session-use default)
+(begin :rr)
+    (assert-eq (scan-count tv) 7999 "the delete went to the newest version")
+    (assert-nil (rg-of tv vid) "no row has the deleted _id")
+(commit)
+(session-close s2)
 
 (db-close)
 (env-detach :force true)

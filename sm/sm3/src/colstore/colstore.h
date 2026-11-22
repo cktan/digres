@@ -59,12 +59,34 @@ struct rg_col_t {
   sm2::cg_stats_t stats; /* its zonemap */
 };
 
-/* A row group's metadata: the value of its RG key. */
+/*
+ * A row group's metadata: the value of its RG key. A version past 0
+ * holds the rows of version 0 not in dropped, in their order
+ * (../COLSTORE2.md §6.4).
+ */
 struct rg_meta_t {
   uint32_t rows = 0;
   uint64_t id_min = 0, id_max = 0;
   std::vector<rg_col_t> cols; /* the _id CG first */
+  uint32_t rows0 = 0;         /* version 0's rows; 0 in version 0 */
+  std::string dropped;        /* a bit for each of rows0: not held here */
 };
+
+/* The version of file set fsid, and its row group (../COLSTORE2.md §3). */
+inline uint32_t fsid_version(uint64_t fsid) {
+  return static_cast<uint32_t>(fsid & 3);
+}
+inline uint64_t fsid_rg(uint64_t fsid) { return fsid >> 2; }
+
+/* The newest version of a row group (../COLSTORE2.md §3). */
+constexpr uint32_t rg_last_version = 3;
+
+/*
+ * The rno in version to of the row at rno in version from, of one row
+ * group (../COLSTORE2.md §6.4): false if to does not hold the row.
+ */
+bool rg_map_rno(const rg_meta_t &from, uint32_t rno, const rg_meta_t &to,
+                uint32_t &out);
 
 /* Encode and decode an RG key's value; decode fails SM_ERR_CORRUPT. */
 void rg_meta_encode(const rg_meta_t &meta, std::string &out);
@@ -80,6 +102,11 @@ std::string rg_file_name(int32_t attnum);
  */
 struct rg_build_t {
   table_t *table = nullptr;
+  /* Set: the next flush writes this version of a row group, with
+     these rows0 and dropped (../COLSTORE2.md §6.7); 0: a new one. */
+  uint64_t fsid = 0;
+  uint32_t rows0 = 0;
+  std::string dropped;
   std::vector<uint64_t> ids;
   std::vector<std::vector<std::string>> vals; /* by column */
   std::vector<std::vector<bool>> nulls;       /* by column */
@@ -95,8 +122,8 @@ int rg_build_add(rg_build_t &b, uint64_t id,
 
 /*
  * Write the rows added since the last flush as one row group: draw
- * its rg_id, write its CG files, put its filter keys and its RG key.
- * Nothing to write is no error. Returns 0 or -1.
+ * its rg_id, or take b.fsid, write its CG files, put its filter keys
+ * and its RG key. Nothing to write is no error. Returns 0 or -1.
  */
 int rg_build_flush(rg_build_t &b);
 
@@ -237,6 +264,20 @@ inline bool validmap_test(std::string_view bits, uint32_t rno) {
  */
 int col_dead(table_t *table, uint64_t fsid, uint32_t rows,
              std::vector<bool> &dead, uint32_t &ndead, uint32_t &markers);
+
+/*
+ * The live file set of row group rg_id at the newest committed state,
+ * into fsid and meta: 0, 1 if it has none, or -1. One read when it is
+ * the version of fsid on entry.
+ */
+int col_newest_version(table_t *table, uint64_t rg_id, uint64_t &fsid,
+                       rg_meta_t &meta);
+
+/*
+ * The metadata of file set fsid as the transaction sees it: 0, 1 if
+ * it sees none, or -1.
+ */
+int col_meta_seen(table_t *table, uint64_t fsid, rg_meta_t &meta);
 
 /*
  * Fold the delete markers of file set fsid of table into its

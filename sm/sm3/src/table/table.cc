@@ -1842,6 +1842,75 @@ static int need_not_folded(table_t *table, place_t place) {
 }
 
 /*
+ * The newest place of row id, read at place, a row group's place
+ * (../COLSTORE2.md §6.3, §6.4):
+ * 1. Its row group's newest version is place's: the row is there.
+ * 2. A newer version, and the transaction sees place's: the row's rno
+ *    there, and shadow set to place, for the transaction's own reads.
+ * 3. A newer version, place's unseen, as a place an earlier
+ *    transaction read is: the row found by its _id.
+ * 4. No version: the row group is gone, by a compaction into new
+ *    ones; place stays, where a moved marker or a delete's marker
+ *    says where the row went.
+ * Returns 0; 1 if the newest version does not hold the row, deleted
+ * or updated since; or -1.
+ */
+static int newest_place(table_t *table, uint64_t id, place_t &place,
+                        place_t &shadow) {
+  shadow = place_t();
+  uint64_t fsid = place.fsid;
+  rg_meta_t newest;
+  int r = col_newest_version(table, fsid_rg(place.fsid), fsid, newest);
+  if (r < 0) {
+    return -1;
+  }
+  // 4. The row group is gone; 1. its newest version.
+  if (r == 1 || fsid == place.fsid) {
+    return 0;
+  }
+  rg_meta_t seen;
+  r = col_meta_seen(table, place.fsid, seen);
+  if (r < 0) {
+    return -1;
+  }
+  // 3. Unseen: by its _id.
+  if (r == 1) {
+    int f = col_find_latest(table, id, place);
+    return f < 0 ? -1 : f;
+  }
+  // 2. Seen: mapped.
+  uint32_t rno = 0;
+  if (!rg_map_rno(seen, place.rno, newest, rno)) {
+    return 1;
+  }
+  shadow = place;
+  place = {fsid, rno};
+  return 0;
+}
+
+/*
+ * Fail a write of row id that its row group no longer holds live: as a
+ * write that meets another's marker does (../COLSTORE.md §9).
+ */
+static int row_gone(table_t *table, uint64_t id) {
+  if (table->session->level != sm1::xctlevel_t::read_committed) {
+    return sm1::seterr(sm1::SM_ERR_CONFLICT,
+                       "column store: the row was changed since the "
+                       "snapshot");
+  }
+  std::string_view tuple;
+  int r = tbl_read_latest(table, id, tuple);
+  if (r < 0) {
+    return -1;
+  }
+  return r == 0 ? sm1::seterr(sm1::SM_ERR_UPDATED,
+                              "column store: the row was updated since; "
+                              "read it again, in the delta store")
+                : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                              "column store: the row was deleted");
+}
+
+/*
  * Delete row id, at place in a row group, by its marker
  * (../COLSTORE.md §9, ../COLSTORE2.md §6.3):
  * 1. Take the row's exclusive lock, on its _id, as any write of it
@@ -1872,11 +1941,24 @@ static int mark_deleted(table_t *table, place_t place, uint64_t id) {
     // IX on the row group, held to the commit: its fold waits for no
     // writer, and gives up while one holds it.
     if (sm1::lock_row(s, table->def->storeid, rg_lock_key(place.fsid >> 2),
-                      sm1::SM_LOCKMODE_IX, false, rglock_relid) != 0 ||
-        need_not_folded(table, place) != 0) {
+                      sm1::SM_LOCKMODE_IX, false, rglock_relid) != 0) {
+      return -1;
+    }
+    place_t shadow;
+    int v = newest_place(table, id, place, shadow);
+    if (v != 0) {
+      return v < 0 ? -1 : row_gone(table, id);
+    }
+    if (need_not_folded(table, place) != 0) {
       return -1;
     }
     if (sm1::insert(s, table->def->storeid, marker_key(place), "") == 0) {
+      // A shadow marker at the place the snapshot sees, for the
+      // transaction's own reads of that version (../COLSTORE2.md §6.3).
+      if (0 != shadow.fsid &&
+          sm1::insert(s, table->def->storeid, marker_key(shadow), "") != 0) {
+        return -1;
+      }
       // Counted at the commit, for RG compaction (§11.1).
       table->session->col_marks[{table->def->oid, place.fsid}]++;
       return 0;

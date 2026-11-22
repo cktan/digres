@@ -1575,7 +1575,7 @@ TEST_CASE("a column store table agrees with a row store table") {
         REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, tc) == 0);
         REQUIRE(sm3::tbl_open(db.ss, r, sm1::SM_LOCKMODE_IX, tr) == 0);
         REQUIRE_MESSAGE(sm3::tbl_update_at(tc, rg, id, row.d, row.null) == 0,
-                        sm1::errmsg());
+                        std::string(sm1::errmsg()));
       }
       REQUIRE(sm3::tbl_update(tr, ids[a].second, row.d, row.null) == 0);
       model[a] = "u" + std::to_string(step);
@@ -2262,4 +2262,166 @@ TEST_CASE("the sealer folds a row group past 1% markers") {
   CHECK(dead_of(db, c, fsid, 10000) == std::pair<uint32_t, uint32_t>(120, 0));
   CHECK(scan_rows(db, c).size() == 9880);
   sm3::sealer_detach(db.cat);
+}
+
+namespace {
+
+/* Where row a is as ss's transaction sees it: (place, _id). */
+std::pair<sm3::place_t, uint64_t> where_in(sm3::session_t *ss, uint64_t c,
+                                           int32_t a) {
+  std::pair<sm3::place_t, uint64_t> at{{UINT64_MAX, 0}, 0};
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  while (sm3::tbl_scannxt(scan, id, tuple) == 0) {
+    sm2::datum_t d[2];
+    bool null[2];
+    REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+    if (!null[0] && sm2::datum_to_int32(d[0]) == a) {
+      at = {sm3::tbl_scan_place(scan), id};
+    }
+  }
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  return at;
+}
+
+/* Whether ss's transaction sees a row with a = a in c. */
+bool sees(sm3::session_t *ss, uint64_t c, int32_t a) {
+  return where_in(ss, c, a).first.fsid != UINT64_MAX;
+}
+
+} // namespace
+
+// Verify RG compaction writes the next version of a row group in
+// place, with its live rows alone, and that a snapshot older than it
+// still reads the version it saw.
+// 1. Load 10,000 rows; R (REPEATABLE READ) counts them.
+// 2. Delete a = 0 .. 1,999, and compact: version 1 of the same row
+//    group, of 8,000 rows; a = 2,000 is at rno 0.
+// 3. R counts 10,000 still; a new transaction counts 8,000.
+TEST_CASE("RG compaction writes the next version of a row group") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R.
+  load_rows(db, c, 10000);
+  uint64_t fsid = where(db, c, 0).first.fsid;
+  REQUIRE(sm3::fsid_version(fsid) == 0);
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(count_in(ss2, c) == 10000);
+  // 2. The deletes, and the compaction.
+  delete_rows(db, c, 0, 2000);
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  CHECK(compact(ss3, c, {fsid}));
+  auto [p, id] = where(db, c, 2000);
+  CHECK(p.fsid == fsid + 1);
+  CHECK(sm3::fsid_rg(p.fsid) == sm3::fsid_rg(fsid));
+  CHECK(p.rno == 0);
+  CHECK(row_groups(db, c) == 1);
+  CHECK(rg_rows(db, c) == 8000);
+  // 3. Each snapshot, its version.
+  CHECK(count_in(ss2, c) == 10000);
+  REQUIRE(sm3::commit(ss2) == 0);
+  CHECK(scan_rows(db, c).size() == 8000);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify a REPEATABLE READ writer whose snapshot is older than two
+// compactions deletes the right row, at its newest place, and does
+// not see it afterwards.
+// 1. Load 10,000 rows; R (REPEATABLE READ) finds a = 5,000 at rno
+//    5,000 of version 0.
+// 2. Delete a = 0 .. 1,999 and compact; delete a = 2,000 .. 3,599
+//    and compact again: version 2 holds a = 5,000 at rno 1,400.
+// 3. R deletes a = 5,000 by its old place: R no longer sees it, and
+//    sees a = 4,999 and a = 5,001.
+// 4. R commits: a new transaction counts 6,399 rows, without
+//    a = 5,000.
+TEST_CASE("a writer older than two compactions deletes the right row") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R's name for a = 5,000.
+  load_rows(db, c, 10000);
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p0, id0] = where_in(ss2, c, 5000);
+  REQUIRE(sm3::fsid_version(p0.fsid) == 0);
+  REQUIRE(p0.rno == 5000);
+  // 2. Two compactions.
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  delete_rows(db, c, 0, 2000);
+  CHECK(compact(ss3, c, {p0.fsid}));
+  delete_rows(db, c, 2000, 3600);
+  CHECK(compact(ss3, c, {p0.fsid + 1}));
+  auto [p2, id2] = where(db, c, 5000);
+  CHECK(p2.fsid == p0.fsid + 2);
+  CHECK(p2.rno == 1400);
+  CHECK(id2 == id0);
+  // 3. R's delete, by its old place.
+  sm3::table_t *t2 = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t2, p0, id0) == 0, sm1::errmsg());
+  sm3::tbl_close(t2);
+  CHECK_FALSE(sees(ss2, c, 5000));
+  CHECK(sees(ss2, c, 4999));
+  CHECK(sees(ss2, c, 5001));
+  CHECK(count_in(ss2, c) == 9999);
+  // 4. Committed.
+  REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 6399);
+  CHECK(rows.count(5000) == 0);
+  CHECK(rows.count(5001) == 1);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify two writers of one row, of snapshots on each side of a
+// compaction, meet at the row's newest place: the second fails.
+// 1. Load 10,000 rows; R (REPEATABLE READ) finds a = 3,000.
+// 2. Delete a = 0 .. 1,999, and compact.
+// 3. W, newer, deletes a = 3,000 at its newest place, and commits.
+// 4. R's delete of a = 3,000 by its old place fails with
+//    SM_ERR_CONFLICT.
+TEST_CASE("writers of a row on each side of a compaction conflict") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R.
+  load_rows(db, c, 10000);
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p0, id0] = where_in(ss2, c, 3000);
+  // 2. The compaction.
+  delete_rows(db, c, 0, 2000);
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  CHECK(compact(ss3, c, {p0.fsid}));
+  // 3. W.
+  delete_rows(db, c, 3000, 3001);
+  // 4. R.
+  sm3::table_t *t2 = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  CHECK(sm3::tbl_delete_at(t2, p0, id0) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_CONFLICT);
+  sm3::tbl_close(t2);
+  sm3::abort(ss2);
+  CHECK(scan_rows(db, c).size() == 7999);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
 }
