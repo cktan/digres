@@ -484,26 +484,40 @@ fsid has no version committed and live, or prepared.
 ## 7. The GC worker
 
 One thread a database (`gc_main()`) runs `gc_run_once()` when
-woken, and at least once a second. The filter's purge queue and
-`gc_queue_drops()` wake it. `db_open()` starts it, and `~db_t`
-stops it first of all.
+woken, and at least once a second. `db_open()` starts it, and
+`~db_t` stops it first of all. Three events wake it:
+
+- **The filter queues a purge.**
+- **A commit queues a drop** (`gc_queue_drops()`).
+- **The watermark passes a queued drop.** `db_release_snapshot()`
+  compares the new watermark with `drops_next`, the oldest
+  `commit_ts` in `drops`. The dropping transaction's own
+  snapshot is the usual one: it ends after the commit queues
+  the drop.
+
+The last two are kicks (`gc_kick()`): they set `gc_kicked` under
+`gc_mu`. The worker clears the flag before each run, and does not
+sleep while it is set. So a kick during a run starts another run
+at once, and is not lost.
 
 A run does these steps, under `gc_run_mu`, one run at a time:
 
 1. Take the watermark once, for the whole run.
-2. Take the queued purges and repairs (§4.6), and under `gc_mu`
-   the drops the watermark has passed.
-3. Put back the chained keys compaction found dead (§4.2).
-4. Purge the queued tombstones (§5).
-5. Drop each store whose drop the watermark has passed (§6).
-6. Free the SSI nodes the watermark has passed (`ssi_cleanup()`,
+2. Take, under `gc_mu`, the drops the watermark has passed.
+3. Drop each of those stores (§6).
+4. Take the queued purges and repairs (§4.6).
+5. Put back the chained keys compaction found dead (§4.2).
+6. Purge the queued tombstones (§5).
+7. Free the SSI nodes the watermark has passed (`ssi_cleanup()`,
    XCTMGR.md).
-7. Warn about stuck snapshots (§3).
-8. Finish a pending `CF:txn` sweep, or start one past its
+8. Warn about stuck snapshots (§3).
+9. Finish a pending `CF:txn` sweep, or start one past its
    threshold (§8).
 
-Purges come before drops: a key queued from a store about to be
-dropped is simply skipped once its CF is gone.
+Drops come first, so that the rest of the run does not delay the
+space. A purge or a repair of a store dropped in step 3 finds its
+CF gone, and is passed over. A drop still waits for the run in
+progress, and for a sweep's compaction pass (§8.6).
 
 The worker does not flush after a batch of purges. It runs at
 least once a second, so a delete-heavy workload would flush every
@@ -693,9 +707,10 @@ State in `db_t`:
 | `snapshots`, `snap_since`, `snap_warned` | `snap_mu` | §3 |
 | `gc_ready` | atomic | §4.4 |
 | `watermark_cache` | atomic; stored under `snap_mu` | §13.5 |
-| `gc_thread`, `gc_stopping`, `gc_cv` | `gc_mu` | §7 |
+| `gc_thread`, `gc_stopping`, `gc_cv`, `gc_kicked`, `gc_tick` | `gc_mu` | §7; tests lengthen `gc_tick` |
 | `purges`, `repairs` | their own mutex | `hint_queue_t` (§4.6) |
 | `drops` | `gc_mu` | a multimap from `commit_ts` to storeid |
+| `drops_next` | atomic; stored under `gc_mu` | the oldest `commit_ts` in `drops`, for the kick (§7) |
 | `gc_run_mu` | itself | one GC run at a time; `gc_sweep_txn()`, the sweep for tests, takes it too |
 | `read_epoch`, `readers[2]` | atomic | §8.3 |
 | `sweep_pending`, `sweep_w0`, `sweep_epoch` | `gc_run_mu` | §8.2 |

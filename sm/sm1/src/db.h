@@ -549,6 +549,13 @@ struct db_t {
   std::condition_variable gc_cv;
   bool gc_stopping = false;
   /*
+   * A run is due (gc_kick). The worker clears it before each run, so
+   * a kick during a run starts another at once, and is not lost.
+   */
+  bool gc_kicked = false;
+  /* How long the worker sleeps when not woken; tests lengthen it. */
+  std::chrono::milliseconds gc_tick{1000};
+  /*
    * The tombstones to purge: each record holds the store and the
    * tombstone's version key. A bounded hint, with each key queued
    * once until the worker takes the queue (../PURGE_PLAN.md §2.4).
@@ -569,6 +576,12 @@ struct db_t {
    */
   hint_queue_t reaps;
   std::multimap<uint64_t, uint64_t> drops; /* commit_ts -> storeid */
+  /*
+   * The oldest commit_ts in drops, or UINT64_MAX: stored under gc_mu,
+   * read with no lock by db_release_snapshot, which kicks the worker
+   * once the watermark reaches it.
+   */
+  std::atomic<uint64_t> drops_next{UINT64_MAX};
   /*
    * File sets whose put the compaction filter dropped dead, as
    * (storeid, fsid), for the worker to unlink their files
@@ -671,6 +684,9 @@ struct db_t {
 
   /* Test hook, as test_before_commit, for a timestamp lease's write. */
   std::function<rocksdb::Status()> test_before_lease;
+
+  /* Test hook: called by gc_run_once after its drops. */
+  std::function<void()> test_gc_after_drops;
 
   /* Destroy the CF handles and close RocksDB. */
   ~db_t();
@@ -818,6 +834,9 @@ void gc_stop(db_t *db);
 void gc_queue_drops(db_t *db, uint64_t commit_ts,
                     const std::vector<uint64_t> &storeids);
 
+/* Make the worker run now, or once more after the run it is in. */
+void gc_kick(db_t *db);
+
 /*
  * Queue storeid's chained key, whose newest version is xid's, a dead
  * transaction's, for the worker to put back (../GC.md §4.2;
@@ -832,9 +851,10 @@ void chain_repair(db_t *db, const hint_queue_t::batch_t &repairs);
  * Whether a GC run may write to storeid (gc.cc): 0 with IX held on it
  * by db->gc_locker, to the run's end, and its CF there; 1 if a drop or
  * a create of the store holds X, for the next run; 2 if it is gone.
- * Its permanent stores' drops are the run's own, after its writes; a
- * session's drop of a temporary store, or an abort's of a store it
- * made, holds X (sm1::store_work_begin).
+ * Its permanent stores' drops are the run's own, before its writes,
+ * which find such a store gone; a session's drop of a temporary
+ * store, or an abort's of a store it made, holds X
+ * (sm1::store_work_begin).
  */
 int gc_store_try(db_t *db, uint64_t storeid);
 
@@ -847,14 +867,15 @@ uint64_t chain_next_old(rocksdb::DB *rdb, rocksdb::ColumnFamilyHandle *cf);
 /*
  * Do the GC work that is due now. The worker calls this; tests call
  * it to run GC synchronously.
- * 1. Take the queued purges, the queued chained keys to repair, and
- *    the drops the watermark has passed.
- * 2. Put back the chained keys compaction found dead (chain_repair).
- * 3. Purge the queued tombstones.
- * 4. Drop each store whose drop the watermark has passed.
- * 5. Free the SSI nodes the watermark has passed (ssi_cleanup).
- * 6. Warn about snapshots that hold back GC too long (warn_stuck).
- * 7. Finish a pending CF:txn sweep, or start one once CF:txn has
+ * 1. Take the drops the watermark has passed.
+ * 2. Drop each of those stores first, so that no other work delays
+ *    the space.
+ * 3. Take the queued purges and the queued chained keys to repair.
+ * 4. Put back the chained keys compaction found dead (chain_repair).
+ * 5. Purge the queued tombstones.
+ * 6. Free the SSI nodes the watermark has passed (ssi_cleanup).
+ * 7. Warn about snapshots that hold back GC too long (warn_stuck).
+ * 8. Finish a pending CF:txn sweep, or start one once CF:txn has
  *    grown past its threshold.
  */
 void gc_run_once(db_t *db);

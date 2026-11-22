@@ -181,9 +181,10 @@ int prepare_child_main(const char *homedir) {
 }
 
 /*
- * Child: drop the newest store and commit, then create one
- * without committing; report, then wait to be killed. Both
- * leave a store CF that only the orphan sweep can remove.
+ * Child: a reader begins, so GC cannot drop the newest store; drop
+ * it and commit, then create one without committing; report, then
+ * wait to be killed. Both leave a store CF that only the orphan
+ * sweep can remove.
  */
 int orphan_child_main(const char *homedir) {
   sm1::env_t *env = attach(homedir);
@@ -197,6 +198,17 @@ int orphan_child_main(const char *homedir) {
     return 2;
   }
   uint64_t newest = list.back();
+  if (sm1::commit(s) != 0) {
+    return 2;
+  }
+  // The reader's snapshot keeps the dropped store's CF from GC.
+  sm1::session_t *r = opendb(env, "db", nullptr);
+  std::string_view d;
+  if (!r || sm1::begin(r, sm1::xctlevel_t::repeatable_read) != 0 ||
+      sm1::read(r, newest, "k", d) < 0 ||
+      sm1::begin(s, sm1::xctlevel_t::repeatable_read) != 0) {
+    return 2;
+  }
   uint64_t fresh = 0;
   if (sm1::rmstore(s, newest) != 0 || sm1::commit(s) != 0 ||
       sm1::begin(s, sm1::xctlevel_t::repeatable_read) != 0 ||
@@ -948,9 +960,10 @@ TEST_CASE("a transaction prepared when the process is killed is restored") {
 
 TEST_CASE("startup drops store CFs that nothing names") {
   // Verify the orphan CF sweep (../DBMGR.md §9.1 step 6).
-  // 1. Create a second store and commit. A child drops it
-  //    and commits, then creates one without committing, and
-  //    is killed.
+  // 1. Create a second store and commit. In a child, a reader
+  //    begins; the child drops the store and commits, then
+  //    creates one without committing, and is killed. The
+  //    reader keeps the dropped store's CF from GC.
   // 2. Reattach: the dropped store is gone, and the only
   //    store CFs left are the catalog's and the fixture's.
   tpc_fixture_t f;

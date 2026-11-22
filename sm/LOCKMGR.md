@@ -667,7 +667,8 @@ waits for the pass. The GC worker has a session for locks alone
 (`db->gc_locker`), and takes IX on each store it repairs or
 purges, to the run's end. A store whose drop or create holds X
 keeps its records for the next run. Its own drops of permanent
-stores come after its writes, in the same thread.
+stores come before its writes, in the same thread, and those
+writes find the stores gone.
 
 `g04` is the scenario; `test_chain.cc` has the race with a reap,
 in both orders.

@@ -594,6 +594,122 @@ TEST_CASE("a dropped store's column family goes once no snapshot sees it") {
 
 namespace {
 
+/* Restart db's worker with a tick of an hour: only a kick runs it. */
+void idle_worker(db_t *db) {
+  // Stop the worker, so the new tick applies to its first sleep.
+  gc_stop(db);
+  db->gc_stopping = false;
+  db->gc_tick = std::chrono::hours(1);
+  // Start it again.
+  gc_start(db);
+}
+
+/* Whether storeid's CF goes within five seconds. */
+bool goes_soon(db_t *db, uint64_t storeid) {
+  for (int i = 0; i < 1000; i++) {
+    if (!db_store(db, storeid).cf) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return false;
+}
+
+} // namespace
+
+TEST_CASE("a GC run drops a store before its other work") {
+  // Verify a run's drops come first (../GC.md §7).
+  // 1. Stop the worker, so that only the test runs GC.
+  // 2. Make store U and commit; queue a purge of a key in U.
+  // 3. Drop U and commit.
+  // 4. Run GC: at the hook after the drops, U's CF is gone, and the
+  //    purge of U is passed over.
+  gc_fixture_t f;
+  gc_stop(f.db());
+  sm1::session_t *s = f.open();
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  uint64_t ustoreid = mkstore(s);
+  REQUIRE(sm1::commit(s) == 0);
+  f.db()->purges.push(ustoreid, 0, "k");
+
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  REQUIRE(sm1::rmstore(s, ustoreid) == 0);
+  REQUIRE(sm1::commit(s) == 0);
+  bool gone_first = false;
+  f.db()->test_gc_after_drops = [&] {
+    gone_first = !db_store(f.db(), ustoreid).cf;
+  };
+  gc_run_once(f.db());
+  f.db()->test_gc_after_drops = nullptr;
+  CHECK(gone_first);
+  sm1::closedb(s);
+}
+
+TEST_CASE("the worker drops a store once the last snapshot that sees it ends") {
+  // Verify the end of the oldest snapshot kicks the worker
+  // (../GC.md §7).
+  // 1. Restart the worker with an hour's tick.
+  // 2. Make store U and commit. Reader R begins and reads store 1.
+  // 3. S drops U and commits: R holds the CF.
+  // 4. R commits: U's CF goes at once, with no tick.
+  gc_fixture_t f;
+  idle_worker(f.db());
+  sm1::session_t *s = f.open();
+  sm1::session_t *r = f.open();
+  commit_put(s, "k", "v");
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  uint64_t ustoreid = mkstore(s);
+  REQUIRE(sm1::commit(s) == 0);
+  REQUIRE(sm1::begin(r, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(get(r, g_store, "k") == "v");
+
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  REQUIRE(sm1::rmstore(s, ustoreid) == 0);
+  REQUIRE(sm1::commit(s) == 0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  CHECK(db_store(f.db(), ustoreid).cf != nullptr);
+
+  REQUIRE(sm1::commit(r) == 0);
+  CHECK(goes_soon(f.db(), ustoreid));
+  sm1::closedb(s);
+  sm1::closedb(r);
+}
+
+TEST_CASE("a drop committed during a GC run goes in a run right after") {
+  // Verify a kick during a run is not lost (../GC.md §7).
+  // 1. Restart the worker with an hour's tick.
+  // 2. Make store U and commit.
+  // 3. At the hook after a run's drops, S drops U and commits: the
+  //    run has taken its drops already.
+  // 4. Kick the worker: U's CF goes in the run after, with no tick.
+  gc_fixture_t f;
+  idle_worker(f.db());
+  sm1::session_t *s = f.open();
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  uint64_t ustoreid = mkstore(s);
+  REQUIRE(sm1::commit(s) == 0);
+
+  bool fired = false;
+  bool dropped = false;
+  f.db()->test_gc_after_drops = [&] {
+    if (fired) {
+      return;
+    }
+    fired = true;
+    dropped = sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0 &&
+              sm1::rmstore(s, ustoreid) == 0 && sm1::commit(s) == 0;
+  };
+  gc_kick(f.db());
+  CHECK(goes_soon(f.db(), ustoreid));
+  // Stop the worker before the hook goes.
+  gc_stop(f.db());
+  f.db()->test_gc_after_drops = nullptr;
+  CHECK(dropped);
+  sm1::closedb(s);
+}
+
+namespace {
+
 /* Options with a one-entry commit cache, so CF:txn answers lookups. */
 sm1::options_t tiny_cache() {
   sm1::options_t opt;

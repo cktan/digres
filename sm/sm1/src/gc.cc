@@ -575,12 +575,16 @@ void gc_main(db_t *db) {
   std::unique_lock<std::mutex> guard(db->gc_mu);
   // Run until told to stop.
   while (!db->gc_stopping) {
-    // Sleep until woken or a second passes.
-    db->gc_cv.wait_for(guard, std::chrono::seconds(1));
+    // Sleep until woken or a tick passes, unless a kick is pending.
+    if (!db->gc_kicked) {
+      db->gc_cv.wait_for(guard, db->gc_tick);
+    }
     // Stop promptly when told to.
     if (db->gc_stopping) {
       break;
     }
+    // This run serves every kick so far; a later one runs again.
+    db->gc_kicked = false;
     // Run GC without holding gc_mu.
     guard.unlock();
     gc_run_once(db);
@@ -646,27 +650,35 @@ void db_register_snapshot(db_t *db, uint64_t snapshot_ts) {
 
 /* Remove one registration of snapshot_ts. */
 void db_release_snapshot(db_t *db, uint64_t snapshot_ts) {
-  // Hold snap_mu while unregistering.
-  std::lock_guard<std::mutex> guard(db->snap_mu);
-  // Find one registration of the snapshot.
-  auto it = db->snapshots.find(snapshot_ts);
-  // Remove it, if present.
-  if (it != db->snapshots.end()) {
-    db->snapshots.erase(it);
+  uint64_t watermark;
+  {
+    // Hold snap_mu while unregistering.
+    std::lock_guard<std::mutex> guard(db->snap_mu);
+    // Find one registration of the snapshot.
+    auto it = db->snapshots.find(snapshot_ts);
+    // Remove it, if present.
+    if (it != db->snapshots.end()) {
+      db->snapshots.erase(it);
+    }
+    // Forget when it was taken.
+    auto since = db->snap_since.find(snapshot_ts);
+    if (since != db->snap_since.end()) {
+      db->snap_since.erase(since);
+    }
+    // With the last snapshot at this ts gone, a new one may warn again.
+    if (!db->snapshots.count(snapshot_ts)) {
+      db->snap_warned.erase(snapshot_ts);
+    }
+    // Publish the watermark for readers that take no mutex.
+    watermark =
+        db->snapshots.empty() ? db->visible_ts.load() : *db->snapshots.begin();
+    db->watermark_cache.store(watermark, std::memory_order_relaxed);
   }
-  // Forget when it was taken.
-  auto since = db->snap_since.find(snapshot_ts);
-  if (since != db->snap_since.end()) {
-    db->snap_since.erase(since);
+  // A drop the watermark now passes goes at once: kick the worker,
+  // outside snap_mu, so that the two locks are never nested.
+  if (watermark >= db->drops_next.load(std::memory_order_relaxed)) {
+    gc_kick(db);
   }
-  // With the last snapshot at this ts gone, a new one may warn again.
-  if (!db->snapshots.count(snapshot_ts)) {
-    db->snap_warned.erase(snapshot_ts);
-  }
-  // Publish the watermark for readers that take no mutex.
-  db->watermark_cache.store(db->snapshots.empty() ? db->visible_ts.load()
-                                                  : *db->snapshots.begin(),
-                            std::memory_order_relaxed);
 }
 
 /* The oldest registered snapshot, or visible_ts. */
@@ -739,6 +751,18 @@ void gc_queue_drops(db_t *db, uint64_t commit_ts,
   for (uint64_t storeid : storeids) {
     db->drops.emplace(commit_ts, storeid);
   }
+  // Publish the oldest drop, for db_release_snapshot's kick.
+  db->drops_next.store(db->drops.begin()->first, std::memory_order_relaxed);
+  // Make the worker run, in case no snapshot holds the drop back.
+  db->gc_kicked = true;
+  db->gc_cv.notify_one();
+}
+
+/* Make the worker run now, or once more after its run; see db.h. */
+void gc_kick(db_t *db) {
+  // Hold gc_mu, so the worker sees the flag before it sleeps.
+  std::lock_guard<std::mutex> guard(db->gc_mu);
+  db->gc_kicked = true;
   // Wake the worker.
   db->gc_cv.notify_one();
 }
@@ -760,6 +784,20 @@ void gc_run_once(db_t *db) {
     }
     // Remove them from the queue.
     db->drops.erase(db->drops.begin(), end);
+    // Publish the oldest drop left, for db_release_snapshot's kick.
+    db->drops_next.store(db->drops.empty() ? UINT64_MAX
+                                           : db->drops.begin()->first,
+                         std::memory_order_relaxed);
+  }
+
+  // Drop each store no snapshot can see, first: the rest of the run
+  // can take long, and a drop frees the most space.
+  for (uint64_t storeid : drops) {
+    // Drop the store's column family: no snapshot sees it.
+    db_drop_store_cf(db, storeid);
+  }
+  if (db->test_gc_after_drops) {
+    db->test_gc_after_drops();
   }
 
   // Unlink the files of the file sets whose put died.
@@ -790,9 +828,9 @@ void gc_run_once(db_t *db) {
   // Put back the chained keys compaction found dead.
   chain_repair(db, repairs);
 
-  // Purge first: a key queued from a store about to be
-  // dropped is simply skipped once its CF is gone. A store whose drop
-  // or create holds X keeps its keys for the next run.
+  // Purge. A key queued from a store dropped above is skipped, as
+  // its CF is gone. A store whose drop or create holds X keeps its
+  // keys for the next run.
   purges.for_each([&](const hint_queue_t::record_t &p) {
     int r = gc_store_try(db, p.storeid);
     if (1 == r) {
@@ -802,12 +840,6 @@ void gc_run_once(db_t *db) {
       purge_one(db, p.storeid, rocksdb::Slice(p.key.data(), p.key.size()));
     }
   });
-
-  // Drop each store no snapshot can see.
-  for (uint64_t storeid : drops) {
-    // Drop the store's column family: no snapshot sees it.
-    db_drop_store_cf(db, storeid);
-  }
 
   // Free SSI nodes the watermark has passed (../XCTMGR.md §7.2).
   ssi_cleanup(db);
