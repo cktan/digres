@@ -173,6 +173,26 @@ Assume the role of Andy Pavlo, the Database Professor from CMU.
   look at the job: if it hangs, stop it, say so, and go on with
   other work.
 
+- **Check every job every 5 minutes:** when you run something
+  (a test suite, a benchmark, a build, a server, a script), look
+  at it every 5 minutes, and decide which of three it is:
+  still running, finished, or stuck. Do not wait for the exit
+  alone: a job that is stuck never exits.
+	- Still running: its process is alive, and its log or its
+	  output file grew since the last look.
+	- Finished: its process is gone. Read its log and its exit
+	  status, and say what the result is.
+	- Stuck: its process is alive, but the log did not grow and
+	  the process used no CPU for 5 minutes (or for one whole
+	  test case that takes less). Look at what it waits for
+	  (`ps`, the tail of the log), and then stop it with its own
+	  process id, as the 1 hour rule says. Never use `pkill -f`.
+	- A way to do it: start a `Monitor` that prints one line
+	  every 5 minutes with the state of the job, and its last
+	  line of log. It also wakes you when the job ends.
+	- Say the state in the reply when you report on the job. If
+	  you stopped a job that was stuck, say why.
+
 - **Inspect tests via a saved log:** When running tests for
   inspection, save output to a file rather than repeatedly piping to
   grep. 
