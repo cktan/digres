@@ -46,46 +46,86 @@ struct pg_tm {
   const char *tm_zone;
 };
 
-/* These structs are opaque outside the timezone library */
-typedef struct pg_tz pg_tz;
+/*
+ * The zones are ty's (ty_timezone.h): a pg_tz is a ty_tz_t, and the calls
+ * below are ty's, in PostgreSQL's names and shapes. A struct pg_tzenum is
+ * opaque outside this library.
+ */
+#include "ty_timezone.h"
+
+typedef struct ty_tz_t pg_tz;
 typedef struct pg_tzenum pg_tzenum;
 
 /* Maximum length of a timezone name (not including trailing null) */
 #define TZ_STRLEN_MAX 255
 
-/* these functions are in localtime.c */
+/* the layout of ty's pg_tm is this one */
+static_assert(sizeof(struct pg_tm) == sizeof(ty_tz_pgtm_t),
+              "ty_tz_pgtm_t is pg_tm");
 
-extern struct pg_tm *pg_localtime(const pg_time_t *timep, const pg_tz *tz);
-extern struct pg_tm *pg_gmtime(const pg_time_t *timep);
-extern int pg_next_dst_boundary(const pg_time_t *timep, long int *before_gmtoff,
-                                int *before_isdst, pg_time_t *boundary,
-                                long int *after_gmtoff, int *after_isdst,
-                                const pg_tz *tz);
-extern bool pg_interpret_timezone_abbrev(const char *abbrev,
-                                         const pg_time_t *timep,
-                                         long int *gmtoff, int *isdst,
-                                         const pg_tz *tz);
-extern bool pg_timezone_abbrev_is_known(const char *abbrev, bool *isfixed,
-                                        long int *gmtoff, int *isdst,
-                                        const pg_tz *tz);
-extern const char *pg_get_next_timezone_abbrev(int *indx, const pg_tz *tz);
-extern bool pg_get_timezone_offset(const pg_tz *tz, long int *gmtoff);
-extern const char *pg_get_timezone_name(pg_tz *tz);
-extern bool pg_tz_acceptable(pg_tz *tz);
+/* pg_localtime: the UTC instant in a zone, in storage of the thread */
+static inline struct pg_tm *pg_localtime(const pg_time_t *timep,
+                                         const pg_tz *tz) {
+  return (struct pg_tm *)ty_tz_localtime_pg(tz, timep);
+}
+
+/*
+ * pg_interpret_timezone_abbrev: what the zone meant by an abbreviation
+ * (upper case) at or before the instant *timep: its offset, east of
+ * Greenwich, and DST flag.
+ */
+static inline bool pg_interpret_timezone_abbrev(const char *abbrev,
+                                                const pg_time_t *timep,
+                                                long int *gmtoff, int *isdst,
+                                                const pg_tz *tz) {
+  int west;
+
+  if (!ty_tz_abbrev_at(tz, *timep, abbrev, &west, isdst))
+    return false;
+  *gmtoff = -west;
+  return true;
+}
+
+/* pg_timezone_abbrev_is_known: whether it is the zone's, and has one meaning */
+static inline bool pg_timezone_abbrev_is_known(const char *abbrev,
+                                               bool *isfixed,
+                                               long int *gmtoff, int *isdst,
+                                               const pg_tz *tz) {
+  int fixed, west;
+
+  if (!ty_tz_abbrev_is_known(tz, abbrev, &fixed, &west, isdst))
+    return false;
+  *isfixed = fixed != 0;
+  *gmtoff = -west;
+  return true;
+}
+
+static inline const char *pg_get_next_timezone_abbrev(int *indx,
+                                                      const pg_tz *tz) {
+  return ty_tz_next_abbrev(tz, indx);
+}
+
+/* pg_get_timezone_offset: whether the zone has one offset, and it, east */
+static inline bool pg_get_timezone_offset(const pg_tz *tz, long int *gmtoff) {
+  return ty_tz_fixed_offset(tz, gmtoff) != 0;
+}
+
+static inline const char *pg_get_timezone_name(pg_tz *tz) {
+  return tz ? ty_tz_name(tz) : NULL;
+}
+
+/* A zone with leap seconds is not acceptable: ty's data has none. */
+static inline bool pg_tz_acceptable(pg_tz *tz) { return true; }
 
 /* these functions are in strftime.c */
-
 extern size_t pg_strftime(char *s, size_t maxsize, const char *format,
                           const struct pg_tm *t);
 
 /* these functions and variables are in pgtz.c */
-
 extern thread_local /*LOCAL*/ PGDLLIMPORT pg_tz *session_timezone;
-
 extern void pg_timezone_initialize(void);
 extern pg_tz *pg_tzset(const char *tzname);
 extern pg_tz *pg_tzset_offset(long gmtoffset);
-
 extern pg_tzenum *pg_tzenumerate_start(void);
 extern pg_tz *pg_tzenumerate_next(pg_tzenum *dir);
 extern void pg_tzenumerate_end(pg_tzenum *dir);

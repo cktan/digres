@@ -1625,23 +1625,13 @@ Datum interval_finite(PG_FUNCTION_ARGS) {
  *---------------------------------------------------------*/
 
 void GetEpochTime(struct pg_tm *tm) {
-  struct pg_tm *t0;
-  pg_time_t epoch = 0;
-
-  t0 = pg_gmtime(&epoch);
-
-  if (t0 == NULL)
-    elog(ERROR, "could not convert epoch to timestamp: %m");
-
-  tm->tm_year = t0->tm_year;
-  tm->tm_mon = t0->tm_mon;
-  tm->tm_mday = t0->tm_mday;
-  tm->tm_hour = t0->tm_hour;
-  tm->tm_min = t0->tm_min;
-  tm->tm_sec = t0->tm_sec;
-
-  tm->tm_year += 1900;
-  tm->tm_mon++;
+  /* The Unix epoch, 1970-01-01 00:00:00 UTC, with PostgreSQL's years. */
+  tm->tm_year = 1970;
+  tm->tm_mon = 1;
+  tm->tm_mday = 1;
+  tm->tm_hour = 0;
+  tm->tm_min = 0;
+  tm->tm_sec = 0;
 }
 
 Timestamp SetEpochTimestamp(void) {

@@ -2223,7 +2223,25 @@ bool abbrev_at(pg_time_t t, const char *abbr, ty_tz_t *tzp, int *offset,
 
 /* The calls of ty_timezone.h. */
 
-const ty_tz_t *ty_tz_find(const char *name) { return tzset_find(name); }
+/*
+ * A lookup by name takes a lock; most hosts ask for the same name again and
+ * again, so each thread keeps its last answer, by the exact text.
+ */
+const ty_tz_t *ty_tz_find(const char *name) {
+  static thread_local char last_name[TZ_STRLEN_MAX + 1];
+  static thread_local const ty_tz_t *last_tz = nullptr;
+
+  if (last_tz != nullptr && strcmp(last_name, name) == 0) {
+    return last_tz;
+  }
+  const ty_tz_t *tz = tzset_find(name);
+
+  if (tz != nullptr && strlen(name) <= TZ_STRLEN_MAX) {
+    strcpy(last_name, name);
+    last_tz = tz;
+  }
+  return tz;
+}
 
 const ty_tz_t *ty_tz_from_offset(long west) { return tzset_offset(west); }
 
@@ -2303,6 +2321,32 @@ int ty_tz_abbrev_is_known(const ty_tz_t *tz, const char *abbr, int *fixed,
 
 int ty_tz_fixed_offset(const ty_tz_t *tz, long *east) {
   return pg_get_timezone_offset(tz, east);
+}
+
+static_assert(sizeof(struct pg_tm) == sizeof(ty_tz_pgtm_t),
+              "ty_tz_pgtm_t is pg_tm");
+
+const ty_tz_pgtm_t *ty_tz_localtime_pg(const ty_tz_t *tz, const int64_t *t) {
+  return reinterpret_cast<const ty_tz_pgtm_t *>(pg_localtime(t, tz));
+}
+
+/* pg_get_next_timezone_abbrev of localtime.c: see ty_timezone.h. */
+const char *ty_tz_next_abbrev(const ty_tz_t *tz, int *indx) {
+  const struct state *sp = &tz->state;
+  const char *abbrs = sp->chars;
+  int abbrind = *indx;
+
+  /* If we're still in range, the result is the current abbrev. */
+  if (abbrind < 0 || abbrind >= sp->charcnt)
+    return NULL;
+  const char *result = abbrs + abbrind;
+
+  /* Advance *indx past this abbrev and its trailing null. */
+  while (abbrs[abbrind] != '\0')
+    abbrind++;
+  abbrind++;
+  *indx = abbrind;
+  return result;
 }
 
 int ty_tz_file(const char *name, char *canonname, const unsigned char **data,

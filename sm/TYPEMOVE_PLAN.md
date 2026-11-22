@@ -652,18 +652,26 @@ copied from PostgreSQL keeps its copyright notice
      (`ext/pg18.6`, tzdata 2026c, compiled by its `zic`);
      `ty/TZDATA.md` says how the file is made again when
      PostgreSQL has newer data, and the pack it holds can be
-     replaced by a file the host maps. Digres's loader of zone files
-     now takes each zone from ty (`ty_tz_file`) in place of the
-     operating system's files (2026e on this machine; ty has
-     2026c, the release of PostgreSQL 18.6), and its list of
-     zones, `pg_timezone_names`, is ty's. No test of digres
-     changed its output. Digres does not call the other
-     functions of ty_timezone.h yet. The tests: 16,618 answers of
-     Python's `zoneinfo` on the same zone files (the offset, the
+     replaced by a file the host maps. Digres uses these zones and
+     no other: its copy of the IANA library (`localtime.c`, about
+     1,700 lines, and the file reader and the directory scan of
+     `pgtz.c`) is gone, and `pg_tz` of digres is a `ty_tz_t`. The
+     calls of `pgtime.h` are in line calls into ty, and
+     `DetermineTimeZoneOffset` and its relatives of `datetime.c`
+     call ty. The zone data of digres is now ty's, release 2026c
+     (PostgreSQL 18.6's), in place of the operating system's
+     (2026e on this machine); no test changed its output.
+     Measured by callgrind over 100,000 rows, the statement
+     (old, new): timestamptz to text -0.07%; `extract(hour ...)`
+     -0.05%; `AT TIME ZONE` a zone name -8.8%; `date_trunc('day')`
+     +0.69%; `date::timestamptz` +0.96%; the text in of a
+     timestamptz with a zone name -5.1%. The tests: 16,618 answers
+     of Python's `zoneinfo` on the same zone files (the offset, the
      DST flag, the abbreviation and the fields of a UTC instant;
      the offset of a local time, with PostgreSQL's rule for a
-     gap and a fold), and hand tests of the lookup, the POSIX
-     specs, the abbreviations, a bad pack and a pack of the host.
+     gap and a fold), hand tests of the lookup, the POSIX specs,
+     the abbreviations, a bad pack and a pack of the host, and
+     the tests of digres, which ran on the new zones.
    - **The typmod of interval, timestamp and time, and
      `make_interval` moved (2026-11-21).**
      `ty_interval_adjust_typmod`, `ty_timestamp_adjust_typmod`,

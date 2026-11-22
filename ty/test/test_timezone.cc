@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -327,4 +328,62 @@ TEST_CASE("a pack of the host is used in place of ty's own") {
   unlink(path.c_str());
   CHECK(WIFEXITED(status));
   CHECK(0 == WEXITSTATUS(status));
+}
+
+// Verify the shapes of PostgreSQL's library: the fields, and the abbreviations.
+// 1. ty_tz_localtime_pg gives the same instant as ty_tz_localtime, with the
+//    month from 0 and the year from 1900.
+// 2. An instant past the range of pg_time_t is NULL.
+// 3. The abbreviations a zone uses are listed once each, to the end.
+// 4. A name asked again gives the zone again, whatever was asked between.
+TEST_CASE("PostgreSQL's shapes of a zone agree with ty's own") {
+  const ty_tz_t *ny = ty_tz_find("America/New_York");
+  int64_t t = 1710055800; // 2024-03-10 07:30:00 UTC, the hour after the gap
+
+  REQUIRE(nullptr != ny);
+  // 1. ty_tz_localtime_pg gives the same instant as ty_tz_localtime.
+  ty_tz_local_t a;
+  const ty_tz_pgtm_t *b = ty_tz_localtime_pg(ny, &t);
+
+  REQUIRE(0 == ty_tz_localtime(ny, t, &a));
+  REQUIRE(nullptr != b);
+  CHECK(a.year == b->tm_year + 1900);
+  CHECK(a.mon == b->tm_mon + 1);
+  CHECK(a.mday == b->tm_mday);
+  CHECK(a.hour == b->tm_hour);
+  CHECK(a.min == b->tm_min);
+  CHECK(a.sec == b->tm_sec);
+  CHECK(a.wday == b->tm_wday);
+  CHECK(a.yday == b->tm_yday);
+  CHECK(a.isdst == b->tm_isdst);
+  CHECK(a.gmtoff == b->tm_gmtoff);
+  CHECK(std::string(a.abbrev) == b->tm_zone);
+
+  // 2. An instant past the range of pg_time_t is NULL.
+  int64_t huge = INT64_MAX;
+
+  CHECK(nullptr == ty_tz_localtime_pg(ny, &huge));
+
+  // 3. The abbreviations a zone uses are listed once each, to the end.
+  std::vector<std::string> abbrs;
+  int indx = 0;
+
+  while (const char *w = ty_tz_next_abbrev(ny, &indx)) {
+    abbrs.push_back(w);
+  }
+  CHECK(abbrs.size() >= 4);
+  for (const char *want : {"LMT", "EDT", "EST", "EWT", "EPT"}) {
+    CHECK(std::find(abbrs.begin(), abbrs.end(), want) != abbrs.end());
+  }
+
+  // 4. A name asked again gives the zone again, whatever was asked between.
+  const ty_tz_t *tokyo = ty_tz_find("Asia/Tokyo");
+
+  REQUIRE(nullptr != tokyo);
+  CHECK(tokyo != ny);
+  CHECK(ny == ty_tz_find("America/New_York"));
+  CHECK(tokyo == ty_tz_find("Asia/Tokyo"));
+  CHECK(nullptr == ty_tz_find("Nowhere/Land"));
+  CHECK(nullptr == ty_tz_find("Nowhere/Land"));
+  CHECK(tokyo == ty_tz_find("Asia/Tokyo"));
 }

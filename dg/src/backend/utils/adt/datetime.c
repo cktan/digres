@@ -49,11 +49,6 @@ static const datetkn *datebsearch(const char *key, const datetkn *base,
                                   int nel);
 static int DecodeDate(char *str, int fmask, int *tmask, bool *is2digits,
                       struct pg_tm *tm);
-static int DetermineTimeZoneOffsetInternal(struct pg_tm *tm, pg_tz *tzp,
-                                           pg_time_t *tp);
-static bool DetermineTimeZoneAbbrevOffsetInternal(pg_time_t t, const char *abbr,
-                                                  pg_tz *tzp, int *offset,
-                                                  int *isdst);
 static pg_tz *FetchDynamicTimeZone(TimeZoneAbbrevTable *tbl, const datetkn *tp,
                                    DateTimeErrorExtra *extra);
 
@@ -1213,6 +1208,15 @@ int DecodeDateTime(char **field, int *ftype, int nf, int *dtype,
   return 0;
 }
 
+/*
+ * The fields of a pg_tm that a zone looks at: its local time. (The rules of
+ * the zones are ty's: ty_timezone.h.)
+ */
+static inline ty_tm_t tz_local_of(const struct pg_tm *tm) {
+  return ty_tm_t{tm->tm_year, tm->tm_mon, tm->tm_mday,
+                 tm->tm_hour, tm->tm_min, tm->tm_sec};
+}
+
 /* DetermineTimeZoneOffset()
  *
  * Given a struct pg_tm in which tm_year, tm_mon, tm_mday, tm_hour, tm_min,
@@ -1226,127 +1230,12 @@ int DecodeDateTime(char **field, int *ftype, int nf, int *dtype,
  * though probably some higher-level code will.
  */
 int DetermineTimeZoneOffset(struct pg_tm *tm, pg_tz *tzp) {
-  pg_time_t t;
+  ty_tm_t t = tz_local_of(tm);
+  int isdst;
+  int offset = ty_tz_offset_for_local(tzp, &t, &isdst, NULL);
 
-  return DetermineTimeZoneOffsetInternal(tm, tzp, &t);
-}
-
-/* DetermineTimeZoneOffsetInternal()
- *
- * As above, but also return the actual UTC time imputed to the date/time
- * into *tp.
- *
- * In event of an out-of-range date, we punt by returning zero into *tp.
- * This is okay for the immediate callers but is a good reason for not
- * exposing this worker function globally.
- *
- * Note: it might seem that we should use mktime() for this, but bitter
- * experience teaches otherwise.  This code is much faster than most versions
- * of mktime(), anyway.
- */
-static int DetermineTimeZoneOffsetInternal(struct pg_tm *tm, pg_tz *tzp,
-                                           pg_time_t *tp) {
-  int date, sec;
-  pg_time_t day, mytime, prevtime, boundary, beforetime, aftertime;
-  long int before_gmtoff, after_gmtoff;
-  int before_isdst, after_isdst;
-  int res;
-
-  /*
-   * First, generate the pg_time_t value corresponding to the given
-   * y/m/d/h/m/s taken as GMT time.  If this overflows, punt and decide the
-   * timezone is GMT.  (For a valid Julian date, integer overflow should be
-   * impossible with 64-bit pg_time_t, but let's check for safety.)
-   */
-  if (!IS_VALID_JULIAN(tm->tm_year, tm->tm_mon, tm->tm_mday))
-    goto overflow;
-  date = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) - UNIX_EPOCH_JDATE;
-
-  day = ((pg_time_t)date) * SECS_PER_DAY;
-  if (day / SECS_PER_DAY != date)
-    goto overflow;
-  sec =
-      tm->tm_sec + (tm->tm_min + tm->tm_hour * MINS_PER_HOUR) * SECS_PER_MINUTE;
-  mytime = day + sec;
-  /* since sec >= 0, overflow could only be from +day to -mytime */
-  if (mytime < 0 && day > 0)
-    goto overflow;
-
-  /*
-   * Find the DST time boundary just before or following the target time. We
-   * assume that all zones have GMT offsets less than 24 hours, and that DST
-   * boundaries can't be closer together than 48 hours, so backing up 24
-   * hours and finding the "next" boundary will work.
-   */
-  prevtime = mytime - SECS_PER_DAY;
-  if (mytime < 0 && prevtime > 0)
-    goto overflow;
-
-  res = pg_next_dst_boundary(&prevtime, &before_gmtoff, &before_isdst,
-                             &boundary, &after_gmtoff, &after_isdst, tzp);
-  if (res < 0)
-    goto overflow; /* failure? */
-
-  if (res == 0) {
-    /* Non-DST zone, life is simple */
-    tm->tm_isdst = before_isdst;
-    *tp = mytime - before_gmtoff;
-    return -(int)before_gmtoff;
-  }
-
-  /*
-   * Form the candidate pg_time_t values with local-time adjustment
-   */
-  beforetime = mytime - before_gmtoff;
-  if ((before_gmtoff > 0 && mytime < 0 && beforetime > 0) ||
-      (before_gmtoff <= 0 && mytime > 0 && beforetime < 0))
-    goto overflow;
-  aftertime = mytime - after_gmtoff;
-  if ((after_gmtoff > 0 && mytime < 0 && aftertime > 0) ||
-      (after_gmtoff <= 0 && mytime > 0 && aftertime < 0))
-    goto overflow;
-
-  /*
-   * If both before or both after the boundary time, we know what to do. The
-   * boundary time itself is considered to be after the transition, which
-   * means we can accept aftertime == boundary in the second case.
-   */
-  if (beforetime < boundary && aftertime < boundary) {
-    tm->tm_isdst = before_isdst;
-    *tp = beforetime;
-    return -(int)before_gmtoff;
-  }
-  if (beforetime > boundary && aftertime >= boundary) {
-    tm->tm_isdst = after_isdst;
-    *tp = aftertime;
-    return -(int)after_gmtoff;
-  }
-
-  /*
-   * It's an invalid or ambiguous time due to timezone transition.  In a
-   * spring-forward transition, prefer the "before" interpretation; in a
-   * fall-back transition, prefer "after".  (We used to define and implement
-   * this test as "prefer the standard-time interpretation", but that rule
-   * does not help to resolve the behavior when both times are reported as
-   * standard time; which does happen, eg Europe/Moscow in Oct 2014.  Also,
-   * in some zones such as Europe/Dublin, there is widespread confusion
-   * about which time offset is "standard" time, so it's fortunate that our
-   * behavior doesn't depend on that.)
-   */
-  if (beforetime > aftertime) {
-    tm->tm_isdst = before_isdst;
-    *tp = beforetime;
-    return -(int)before_gmtoff;
-  }
-  tm->tm_isdst = after_isdst;
-  *tp = aftertime;
-  return -(int)after_gmtoff;
-
-overflow:
-  /* Given date is out of range, so assume UTC */
-  tm->tm_isdst = 0;
-  *tp = 0;
-  return 0;
+  tm->tm_isdst = isdst;
+  return offset;
 }
 
 /* DetermineTimeZoneAbbrevOffset()
@@ -1365,32 +1254,12 @@ overflow:
  */
 int DetermineTimeZoneAbbrevOffset(struct pg_tm *tm, const char *abbr,
                                   pg_tz *tzp) {
-  pg_time_t t;
-  int zone_offset;
-  int abbr_offset;
-  int abbr_isdst;
+  ty_tm_t t = tz_local_of(tm);
+  int isdst;
+  int offset = ty_tz_abbrev_offset(tzp, &t, abbr, &isdst);
 
-  /*
-   * Compute the UTC time we want to probe at.  (In event of overflow, we'll
-   * probe at the epoch, which is a bit random but probably doesn't matter.)
-   */
-  zone_offset = DetermineTimeZoneOffsetInternal(tm, tzp, &t);
-
-  /*
-   * Try to match the abbreviation to something in the zone definition.
-   */
-  if (DetermineTimeZoneAbbrevOffsetInternal(t, abbr, tzp, &abbr_offset,
-                                            &abbr_isdst)) {
-    /* Success, so use the abbrev-specific answers. */
-    tm->tm_isdst = abbr_isdst;
-    return abbr_offset;
-  }
-
-  /*
-   * No match, so use the answers we already got from
-   * DetermineTimeZoneOffsetInternal.
-   */
-  return zone_offset;
+  tm->tm_isdst = isdst;
+  return offset;
 }
 
 /* DetermineTimeZoneAbbrevOffsetTS()
@@ -1410,7 +1279,7 @@ int DetermineTimeZoneAbbrevOffsetTS(TimestampTz ts, const char *abbr,
   /*
    * If the abbrev matches anything in the zone data, this is pretty easy.
    */
-  if (DetermineTimeZoneAbbrevOffsetInternal(t, abbr, tzp, &abbr_offset, isdst))
+  if (ty_tz_abbrev_at(tzp, t, abbr, &abbr_offset, isdst))
     return abbr_offset;
 
   /*
@@ -1425,32 +1294,6 @@ int DetermineTimeZoneAbbrevOffsetTS(TimestampTz ts, const char *abbr,
   return zone_offset;
 }
 
-/* DetermineTimeZoneAbbrevOffsetInternal()
- *
- * Workhorse for above two functions: work from a pg_time_t probe instant.
- * On success, return GMT offset and DST status into *offset and *isdst.
- */
-static bool DetermineTimeZoneAbbrevOffsetInternal(pg_time_t t, const char *abbr,
-                                                  pg_tz *tzp, int *offset,
-                                                  int *isdst) {
-  char upabbr[TZ_STRLEN_MAX + 1];
-  unsigned char *p;
-  long int gmtoff;
-
-  /* We need to force the abbrev to upper case */
-  strlcpy(upabbr, abbr, sizeof(upabbr));
-  for (p = (unsigned char *)upabbr; *p; p++)
-    *p = pg_toupper(*p);
-
-  /* Look up the abbrev's meaning at this time in this zone */
-  if (pg_interpret_timezone_abbrev(upabbr, &t, &gmtoff, isdst, tzp)) {
-    /* Change sign to agree with DetermineTimeZoneOffset() */
-    *offset = (int)-gmtoff;
-    return true;
-  }
-  return false;
-}
-
 /* TimeZoneAbbrevIsKnown()
  *
  * Detect whether the given string is a time zone abbreviation that's known
@@ -1459,22 +1302,12 @@ static bool DetermineTimeZoneAbbrevOffsetInternal(pg_time_t t, const char *abbr,
  */
 static bool TimeZoneAbbrevIsKnown(const char *abbr, pg_tz *tzp, bool *isfixed,
                                   int *offset, int *isdst) {
-  char upabbr[TZ_STRLEN_MAX + 1];
-  unsigned char *p;
-  long int gmtoff;
+  int fixed;
 
-  /* We need to force the abbrev to upper case */
-  strlcpy(upabbr, abbr, sizeof(upabbr));
-  for (p = (unsigned char *)upabbr; *p; p++)
-    *p = pg_toupper(*p);
-
-  /* Look up the abbrev's meaning in this zone */
-  if (pg_timezone_abbrev_is_known(upabbr, isfixed, &gmtoff, isdst, tzp)) {
-    /* Change sign to agree with DetermineTimeZoneOffset() */
-    *offset = (int)-gmtoff;
-    return true;
-  }
-  return false;
+  if (!ty_tz_abbrev_is_known(tzp, abbr, &fixed, offset, isdst))
+    return false;
+  *isfixed = fixed != 0;
+  return true;
 }
 
 /* DecodeTimeOnly()

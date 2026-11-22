@@ -736,8 +736,17 @@ in place of its own, by `ty_tz_use_data`; ty checks it first.
 The text in of timestamptz and timetz asks the host for the offset
 of a zone (section 19). The host may now answer from these calls.
 
-digres uses the same data: its loader of zone files reads each from
-`ty_tz_file()`, so the zones of digres and ty are the same ones.
+digres uses these zones and no other: its own copy of the IANA
+library (`src/timezone/localtime.c`) is gone. A `pg_tz` of digres is
+a `ty_tz_t`, and `pg_tzset`, `pg_localtime`, `pg_tz_acceptable` and
+the others of `pgtime.h` are calls into ty, with the names and the
+shapes of PostgreSQL's: `ty_tz_localtime_pg` gives a `pg_tm` (the
+month from 0, the year from 1900) in storage of the thread, and
+`ty_tz_next_abbrev` lists the abbreviations of a zone.
+`DetermineTimeZoneOffset` and its relatives in `datetime.c` call
+`ty_tz_offset_for_local`, `ty_tz_abbrev_offset` and
+`ty_tz_abbrev_at`. A lookup by name keeps the last answer of the
+thread, so the zone of a repeated name takes no lock.
 
 The tests: `test/tz_known.txt`, 16,618 lines that Python's
 `zoneinfo` gave for the same zone files, for every distinct zone
