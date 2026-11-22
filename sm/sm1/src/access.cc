@@ -1137,8 +1137,9 @@ int access_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
   }
   // A move of sm's own changed no row: first-committer-wins judges
   // the version under it (../COLSTORE.md §10.2). A moved-in version
-  // the snapshot does not see is told to the caller.
-  s->over_moved_in = moved_in && commit_ts > s->snapshot_ts;
+  // the snapshot does not see is told to the caller, once the write
+  // is done.
+  const bool over_moved_in = moved_in && commit_ts > s->snapshot_ts;
   if (sealed && 0 != under_commit_ts(s, st, key, sealed_key, &commit_ts)) {
     return -1;
   }
@@ -1229,6 +1230,8 @@ int access_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
   // Advance seq, and make the write visible to ourselves.
   s->seq = seq;
   s->seq_hwm = seq;
+  // Kept until the caller asks (sm1::wrote_over_moved_in).
+  s->over_moved_in = s->over_moved_in || over_moved_in;
   // The seek bound of our own reads must cover this version.
   s->wts_hi = wts;
   // The write used the re-read; the next needs its own.
@@ -1418,9 +1421,11 @@ int sm1::insert_sealed(sm1::session_t *session, uint64_t storeid,
                    key.size(), data.data(), data.size());
 }
 
-/* Whether the last write went over an unseen moved-in version; see sm1.h. */
-bool sm1::wrote_over_moved_in(const sm1::session_t *session) {
-  return session->over_moved_in;
+/* Whether a write went over an unseen moved-in version; see sm1.h. */
+bool sm1::wrote_over_moved_in(sm1::session_t *session) {
+  bool over = session->over_moved_in;
+  session->over_moved_in = false;
+  return over;
 }
 
 /* Insert a version a move of sm's own moves in; see sm1.h. */

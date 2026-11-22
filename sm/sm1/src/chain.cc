@@ -492,8 +492,9 @@ int chain_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
   }
   // A move of sm's own changed no row: first-committer-wins judges
   // the version under it (../COLSTORE.md §10.2). A moved-in version
-  // the snapshot does not see is told to the caller.
-  s->over_moved_in = c.moved_in && c.commit_ts > s->snapshot_ts;
+  // the snapshot does not see is told to the caller, once the write
+  // is done.
+  const bool over_moved_in = c.moved_in && c.commit_ts > s->snapshot_ts;
   if (c.sealed &&
       0 != chain_under_commit_ts(s, st, c.sealed_prev, &c.commit_ts)) {
     return -1;
@@ -617,6 +618,8 @@ int chain_write(sm1::session_t *s, uint64_t storeid, write_op_t op,
   // carry no relid, and a table's size takes in its old rows.
   count_write(st, std::string_view(key.data(), key.size()), bytes);
   // Advance seq, and make the write visible to ourselves.
+  // Kept until the caller asks (sm1::wrote_over_moved_in).
+  s->over_moved_in = s->over_moved_in || over_moved_in;
   s->seq = seq;
   s->seq_hwm = seq;
   s->wts_hi = wts;

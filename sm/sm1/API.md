@@ -1839,13 +1839,14 @@ conflict. A write that passes goes on over it as over any live
 version, and `sm1::read_latest` returns it. Errors as
 `sm1::insert`'s.
 
-### bool sm1::wrote_over_moved_in(const sm1::session_t* session)
+### bool sm1::wrote_over_moved_in(sm1::session_t* session)
 
-Whether the session's last write, of any store, went over a
-moved-in version that its snapshot does not see: the row was
-elsewhere for the snapshot, where the caller may hide it from the
-transaction's own reads ([`../COLSTORE.md`](../COLSTORE.md)
-§9). Valid after a write that succeeded.
+Whether a write of the session that succeeded, of any store, since
+the last call or since its transaction began, went over a moved-in
+version that its snapshot does not see: the row was elsewhere for
+the snapshot, where the caller may hide it from the transaction's
+own reads ([`../COLSTORE.md`](../COLSTORE.md) §9). The call clears
+it, so a later write of TOAST chunks does not hide it.
 
 ---
 

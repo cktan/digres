@@ -2796,3 +2796,50 @@ TEST_CASE("the cleanup waits for a prepared writer across a restart") {
   CHECK(rows.count(5000) == 0);
   sm3::session_close(ss3);
 }
+
+// Verify a writer older than an elimination, whose update writes the
+// new value out of line, still hides the row it updated from its own
+// reads of the eliminated version: the write of the value's TOAST
+// chunks, after the row's, does not lose sm1's word that the write
+// went over a moved-in version.
+// 1. Row groups of 100 rows, TOAST on; load 100 rows. R (REPEATABLE
+//    READ) finds a = 5 at its place in version 0.
+// 2. Eliminate version 0: its rows are in the delta store.
+// 3. R updates a = 5 by its place, b 2,000 bytes: R counts 100 rows,
+//    a = 5 once, with the new b.
+// 4. R commits: 100 rows, a = 5 with the new b.
+TEST_CASE("an older writer's update out of line over a moved-in row") {
+  col_db_t db(100, true);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R.
+  load_rows(db, c, 100);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p5, id5] = where_in(ss2, c, 5);
+  REQUIRE(p5.fsid != 0);
+  // 2. The elimination.
+  REQUIRE(eliminate(ss3, c, p5.fsid));
+  REQUIRE(row_groups(db, c) == 0);
+  // 3. R's update, out of line.
+  const std::string big(2000, 'x');
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r(5, big);
+  REQUIRE_MESSAGE(sm3::tbl_update_at(t, p5, id5, r.d, r.null) == 0,
+                  sm1::errmsg());
+  sm3::tbl_close(t);
+  CHECK(count_in(ss2, c) == 100);
+  // 4. Committed.
+  REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+  db.begin(sm1::xctlevel_t::repeatable_read);
+  auto rows = whole_rows(db.ss, c);
+  db.commit();
+  CHECK(rows.size() == 100);
+  CHECK(rows[5] == big);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}

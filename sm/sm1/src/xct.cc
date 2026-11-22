@@ -242,6 +242,7 @@ void reset(sm1::session_t *s) {
   s->stmt_marked = false;
   s->stmt_seq = 0;
   s->view_latest = false;
+  s->over_moved_in = false;
   // Its store handles of an older store map go (../DBMGR.md).
   uint64_t version = s->db->stores_version.load(std::memory_order_acquire);
   std::erase_if(s->store_handles,

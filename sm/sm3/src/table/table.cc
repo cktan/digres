@@ -1690,11 +1690,11 @@ static int col_write(table_t *table, uint64_t id, int rc,
   if (!table->def->column_store) {
     return rc;
   }
-  // 1. Over a moved-in version.
+  // 1. Over a moved-in version: told once, and asked after every write,
+  //    so a failed one leaves nothing for the next.
+  const bool over = sm1::wrote_over_moved_in(table->session->sm1);
   if (rc == 0) {
-    return sm1::wrote_over_moved_in(table->session->sm1)
-               ? shadow_seen(table, id)
-               : 0;
+    return over ? shadow_seen(table, id) : 0;
   }
   if (sm1::errnum() != sm1::SM_ERR_NOTFOUND &&
       sm1::errnum() != sm1::SM_ERR_SEALED) {

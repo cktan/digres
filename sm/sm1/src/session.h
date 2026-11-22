@@ -173,8 +173,9 @@ struct sm1::session_t {
   uint32_t stmt_seq = 0;
   /* sm1::view_latest: reads see the newest committed state. */
   bool view_latest = false;
-  /* The last write went over a moved-in version that its snapshot
-     does not see (sm1::wrote_over_moved_in). */
+  /* A write since the last sm1::wrote_over_moved_in, or since the
+     transaction began, went over a moved-in version that its
+     snapshot does not see. */
   bool over_moved_in = false;
 
   /*

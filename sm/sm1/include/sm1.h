@@ -1552,13 +1552,14 @@ int chain_erase_sealed(session_t* session, uint64_t storeid,
 int chain_insert_sealed(session_t* session, uint64_t storeid,
                         std::string_view key, std::string_view data);
 /*
- * Whether session's last write, of any store, chained or not, went
+ * Whether a write of session that succeeded, of any store, chained
+ * or not, since the last call or since its transaction began, went
  * over a moved-in version (sm1::insert_moved_in) that its snapshot
  * does not see: the row was elsewhere for the snapshot, where the
  * caller may hide it from the transaction's own reads
- * (../COLSTORE.md §9). Valid after a write that succeeded.
+ * (../COLSTORE.md §9). The call clears it.
  */
-bool wrote_over_moved_in(const session_t* session);
+bool wrote_over_moved_in(session_t* session);
 
 /* sm1::insert_moved_in, of a chained key. */
 int chain_insert_moved_in(session_t* session, uint64_t storeid,
