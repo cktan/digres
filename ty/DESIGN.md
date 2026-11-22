@@ -557,7 +557,7 @@ the postgres and sql forms (the words `ago`, `@`, the units and
 their abbreviations, signs, fractions), and the decoder of the
 ISO 8601 form, with the interval style passed in. The code is
 PostgreSQL's (`datetime.c`), moved with its notice into
-`src/interval_in.cc`, and is checked against what the old digres
+`src/dtparse.cc`, and is checked against what the old digres
 did with about 1,070 texts; the codes of the errors are
 PostgreSQL's, and the host words them. The text out is in section
 19; `extract`, `date_trunc` and `age`, and and the text of a
@@ -601,11 +601,36 @@ the host passes in: the date style, the date order and the
 interval style, with PostgreSQL's values. For a timestamptz the
 host finds the broken-down time in its zone and the name of the
 zone, and passes them. The special values, infinity, are written
-by the host. The text in is the host's, and reads `DateStyle` and
-the time zone (`DecodeDateTime`), `extract`, `date_trunc`, `age`,
-the casts, the typmods and everything with a time zone stay in
-digres until those settings are passed in, as the locale of money
-is.
+by the host. Everything with a time zone stays in digres for now:
+the text in of timestamptz and timetz, `AT TIME ZONE` and the
+casts that need a zone.
+
+The text in of date, time and timestamp is `ty_date_parse`,
+`ty_time_parse` and `ty_timestamp_parse` (`src/dtparse.cc`, with
+the text in of interval). They are PostgreSQL's `DecodeDateTime`
+and `DecodeTimeOnly`, moved with their notice. The date order is
+an argument. The words that name a zone or read the clock are the
+host's, through `ty_dtzone_t`, a table of four hooks that the
+call passes: is a word a zone abbreviation, is it the name of a
+zone, does a zone have one offset, and what is the time of the
+transaction. A hook may be NULL, for a host without one: then no
+zone word and no clock word is known. The hooks are the third
+kind of setting of the plan, where the host reads it, as a zone
+database is not a number that can be passed. ty does not compute
+the offset of a zone: no caller of these three reads it. A bad
+text gives -1 and `TY_ERR_INVALID`, with PostgreSQL's code in
+`*dterr` and the zone name for the message in `*extra`; a value
+out of range gives `TY_ERR_RANGE` and a code of 0. digres words
+both. The typmod stays with `ty_time_adjust_typmod` and
+`ty_timestamp_adjust_typmod`.
+
+The tests: 4,383 known answers from the old digres, for the three
+types in the three date orders (`gen_known.py --dtin`), with a
+host of a few abbreviations and zones; hand tests of the hooks
+(the clock, a dynamic abbreviation, an unknown zone, a hook that
+fails, no hooks); and `dg/test/select_datetime_in.sql`, which
+prints the same as the digres before the move, with the message
+of each error.
 
 `ty_timestamp_adjust_typmod` and `ty_time_adjust_typmod` round a
 timestamp and a time to the precision of `timestamp(p)` and

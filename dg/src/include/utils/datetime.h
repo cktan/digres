@@ -17,6 +17,7 @@
 #define DATETIME_H
 
 #include "utils/timestamp.h"
+#include "ty_datetime.h"
 
 /* this struct is declared in utils/tzparser.h: */
 struct tzEntry;
@@ -311,6 +312,15 @@ extern int DecodeTimeOnly(char **field, int *ftype, int nf, int *dtype,
 extern void DateTimeParseError(int dterr, DateTimeErrorExtra *extra,
                                const char *str, const char *datatype,
                                struct Node *escontext);
+
+/*
+ * ty reads the text of date, time and timestamp; these are its hooks for the
+ * zone words and the clock, and the error report of its codes.
+ */
+extern const ty_dtzone_t ty_dtzone_hooks;
+extern void TyDateTimeParseError(int dterr, const ty_dtin_extra_t *x,
+                                 const char *str, const char *datatype,
+                                 struct Node *escontext);
 
 extern int DetermineTimeZoneOffset(struct pg_tm *tm, pg_tz *tzp);
 extern int DetermineTimeZoneAbbrevOffset(struct pg_tm *tm, const char *abbr,

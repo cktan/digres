@@ -303,6 +303,99 @@ def main_part(args):
         print("part.%s %s %s => %s" % (kind, u.encode().hex(), v, res))
 
 
+def dtin_inputs():
+    """Texts for date, time and timestamp in: forms of the date, of the time,
+    and of the zone, put together by chance, and some broken at random."""
+    random.seed(20261125)
+    fixed = ["", " ", "epoch", "infinity", "-infinity", "+infinity", "Infinity", "allballs", "zulu", "z", "current",
+             "2000-01-31", "2000/01/31", "01/31/2000", "31/01/2000", "1/2/3", "01-02-03", "1.2.3", "2000.031", "2000-031", "J2451544", "j 2451544", "J2451544.5",
+             "Jan 31 2000", "January 31, 2000", "31 Jan 2000", "2000 Jan 31", "Jan-31-2000", "31-Jan-2000", "2000-Jan-31", "Jan-31-00", "31-Jan-00",
+             "20000131", "000131", "200001", "2000013", "20000131T040506", "20000131T0405", "20000131 040506", "2000-01-31T04:05:06", "2000-01-31t04:05:06",
+             "2000-01-31 BC", "0001-01-01 BC", "0001-01-01", "0000-01-01", "99999-12-31", "5874897-12-31", "5874898-01-01", "4714-11-24 BC", "4714-11-23 BC",
+             "5874897-12-31 04:05", "294276-12-31 23:59:59.999999", "294277-01-01", "Feb 29 2000", "Feb 29 1900", "2000-02-30", "2000-13-01", "13/13/13", "0/0/0",
+             "1999-12-31 23:59:60", "1999-12-31 23:59:61", "24:00:00", "24:00:01", "24:00", "23:60", "12:00 AM", "12:00 PM", "13:00 PM", "0:00 AM", "11:59:59.999999 PM",
+             "04:05:06.789", "04:05:06.7891234", "04:05:06.9999995", "04:05", "04", "040506", "0405", "04:05:06.", ":05", "04:", "T04:05:06", "t040506", "t 04:05",
+             "04:05:06 PST", "04:05:06 est", "04:05:06 EDT", "04:05:06 utc", "04:05:06 +05", "04:05:06 -05:30", "04:05:06 +05:30:15", "04:05:06 +24", "04:05:06 +25",
+             "04:05:06+05", "04:05:06-05", "04:05:06 america/new_york", "04:05:06 America/New_York", "04:05:06 nowhere/land", "04:05:06 est dst", "04:05:06 dst",
+             "04:05:06 pst pst", "04:05:06 pst est", "2000-01-31 04:05:06 PST", "2000-01-31 04:05:06 America/New_York", "2000-01-31 04:05:06 +05:30",
+             "2000-01-31 04:05:06 GMT-8", "2000-01-31 04:05:06 gmt+8", "2000-01-31 04:05:06-08", "2000-01-31 04:05:06.5-08:30", "2000-01-31 04:05:06 Z",
+             "2000-01-31 04:05:06 zulu", "Mon Jan 31 04:05:06 2000", "Mon Jan 31 04:05:06 2000 PST", "Jan 31 040506 PST 2000", "Jan 31 04:05:06 2000 PST",
+             "Monday 2000-01-31", "mon 2000-01-31 04:05", "2000-01-31 mon", "Sat Sun 2000-01-31", "2000-01-31 AD", "2000-01-31 ad bc", "2000-01-31 04:05 am", "2000-01-31 04:05 pm pm",
+             "J2451544 04:05 pst", "2451544", "2000-01-31 2000-01-31", "2000-01-31 04:05 04:05", "04:05 2000-01-31", "pst 04:05", "pst", "est dst", "dst", "am", "pm", "bc",
+             "2000-01-31 pst 04:05", "1.5", "1,5", "2000-01-31, 04:05", "(2000-01-31)", "2000-01-31;04:05", "2000-01-31\t04:05", "  2000-01-31  04:05  ", "\u00e92000-01-31",
+             "2000-01-31 04:05:06 +05:30:60", "2000-01-31 04:05:06 +05:60", "2000-01-31 04:05:06 +", "2000-01-31 04:05:06 -", "2000-01-31 +04:05", "+2000-01-31", "-2000-01-31",
+             "99999999999-01-01", "2000-99999999999-01", "2000-01-99999999999", "2000-01-31 99999999999:00", "04:05:99999999999", "04:99999999999:06", "04:05:06.99999999999",
+             "9999999999999999999999", "2000-01-31 04:05:06 +99999999999", "-99-01-01", "00-00-00", "99-99-99", "69-01-01", "70-01-01", "100-01-01", "1-1-1", "0-1-1"]
+    dates = ["2000-01-31", "2000/1/31", "1/31/2000", "31/1/2000", "12/25/99", "25/12/99", "99-12-25", "Jan 31 2000", "31 Jan 2000", "Jan 31, 2000", "2000 Jan 31",
+             "February 29, 2000", "Feb 29 2001", "20000131", "000131", "2000.031", "J2451544", "1999-12-31", "1970-01-01", "0001-01-01", "10000-01-01",
+             "2000-02-29", "2001-02-29", "2000-04-31", "1-2-3", "03/04/05", "2000-1-1", "2000-12-31", "1500-02-29", "4713-01-01 BC", "1.2.2000", "12.25.1999"]
+    times = ["04:05:06", "04:05", "4:5:6", "04:05:06.789", "04:05:06.789012", "23:59:59.999999", "24:00:00", "12:00:00 AM", "12:00:00 PM", "11:00 pm", "01:00 am",
+             "040506", "0405", "04:05:06.5", "00:00:00", "00:00", "13:00 pm", "25:00", "04:60", "04:05:61", "04:05:60", "T04:05:06", "t04:05"]
+    zones = ["PST", "pst", "EST", "EDT", "PDT", "UTC", "GMT", "Z", "z", "zulu", "+05", "-05", "+05:30", "-08:00", "+0530", "-0800", "+05:30:15", "America/New_York",
+             "Europe/London", "UTC+3", "GMT-8", "est dst", "dst", "pst dst", "nowhere/land", "+25", "+24:00", "xyzzy", "est edt"]
+    out = list(fixed)
+    for _ in range(240):
+        parts = []
+        if random.random() < 0.92:
+            parts.append(random.choice(dates))
+        if random.random() < 0.8:
+            parts.append(random.choice(times))
+        if random.random() < 0.4:
+            parts.append(random.choice(zones))
+        if random.random() < 0.1:
+            parts.append(random.choice(["bc", "BC", "ad"]))
+        if random.random() < 0.08:
+            parts.append(random.choice(["mon", "Tuesday", "fri"]))
+        if random.random() < 0.12:
+            random.shuffle(parts)
+        out.append(random.choice([" ", " ", "  ", "T"]).join(parts) if random.random() < 0.97 else ",".join(parts))
+    for _ in range(80):
+        t = list(random.choice(out[len(fixed):] + dates))
+        for _ in range(random.randint(1, 2)):
+            i = random.randrange(len(t) + 1)
+            if t and random.random() < 0.5 and i < len(t):
+                del t[i]
+            else:
+                t.insert(i, random.choice("0123456789:-/. +abtTZ"))
+        out.append("".join(t))
+    return out
+
+
+def main_dtin(args):
+    """The text in of date, time and timestamp, by date order: what the old
+    code read, as the canonical ISO text, or the code of its error."""
+    from concurrent.futures import ThreadPoolExecutor
+    inputs = dtin_inputs()
+    kinds = ["date", "time", "timestamp"]
+    orders = [("YMD", 0), ("DMY", 1), ("MDY", 2)]
+
+    def one(job):
+        kind, (order, _), t = job
+        lit = t.replace("\\", "\\\\").replace("'", "''").replace("\t", "\\t").replace("\n", "\\n")
+        script = "set timezone = 'UTC';\nset datestyle = 'ISO, %s';\nselect (E'%s'::%s)::text;\n" % (order, lit, kind)
+        r = subprocess.run(["psql", "-X", "-A", "-t", "-q"] + args, input=script, capture_output=True, text=True)
+        e = r.stderr
+        if "ERROR" not in e:
+            return r.stdout.strip().encode().hex() or "-"
+        if "invalid input syntax" in e:
+            return "E -1"
+        if "date/time field value out of range" in e:
+            return "E -3" if "different" in e else "E -2"
+        if "time zone displacement out of range" in e:
+            return "E -5"
+        if "not recognized" in e:
+            return "E -7" if "configuration file" in e else "E -6"
+        if "out of range" in e:
+            return "E R"
+        return "E ?" + e.strip().replace(" ", "_")[:40]
+
+    jobs = [(k, o, t) for k in kinds for o in orders for t in inputs]
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        res = list(ex.map(one, jobs))
+    for (kind, order, t), r in zip(jobs, res):
+        print("dt.in %s %d %s => %s" % (kind, order[1], t.encode().hex() or "-", r))
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--part":
         sys.argv.pop(1)
@@ -315,6 +408,10 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--interval":
         sys.argv.pop(1)
         main_interval(sys.argv[1:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "--dtin":
+        sys.argv.pop(1)
+        main_dtin(sys.argv[1:])
         return
     if len(sys.argv) > 1 and sys.argv[1] == "--datetime":
         sys.argv.pop(1)

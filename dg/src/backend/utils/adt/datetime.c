@@ -2622,6 +2622,64 @@ void ClearTimeZoneAbbrevCache(void) {
   memset(tzabbrevcache, 0, sizeof(tzabbrevcache));
 }
 
+/*
+ * ty's hook for a word that may be a time zone abbreviation. The codes TZ,
+ * DTZ, DYNTZ and UNKNOWN_FIELD are ty's TY_ABBREV_*, and ty's extra starts
+ * as DateTimeErrorExtra does, so the lookup is called as it is.
+ */
+static int ty_hook_abbrev(void *ctx, int field, const char *lowtoken, int *type,
+                          int *offset, const void **tz,
+                          ty_dtin_extra_t *extra) {
+  return DecodeTimezoneAbbrev(field, lowtoken, type, offset, (pg_tz **)tz,
+                              (DateTimeErrorExtra *)extra);
+}
+
+StaticAssertDecl(TZ == TY_ABBREV_TZ && DTZ == TY_ABBREV_DTZ &&
+                     DYNTZ == TY_ABBREV_DYNTZ &&
+                     UNKNOWN_FIELD == TY_ABBREV_NONE,
+                 "ty's codes of an abbreviation are PostgreSQL's");
+StaticAssertDecl(offsetof(ty_dtin_extra_t, timezone) ==
+                         offsetof(DateTimeErrorExtra, dtee_timezone) &&
+                     offsetof(ty_dtin_extra_t, abbrev) ==
+                         offsetof(DateTimeErrorExtra, dtee_abbrev),
+                 "ty's extra starts as DateTimeErrorExtra");
+
+/* ty's hook for the name of a time zone. */
+static const void *ty_hook_zone(void *ctx, const char *name) {
+  return pg_tzset(name);
+}
+
+/* ty's hook for whether a zone has one offset at all times. */
+static int ty_hook_zone_fixed(void *ctx, const void *tz, long *gmtoff) {
+  return pg_get_timezone_offset((const pg_tz *)tz, gmtoff);
+}
+
+/* ty's hook for the time of the transaction, in the session's zone. */
+static void ty_hook_now(void *ctx, ty_tm_t *t, int32_t *fsec, int *tz) {
+  struct pg_tm tm;
+  fsec_t f;
+
+  GetCurrentTimeUsec(&tm, &f, tz);
+  t->year = tm.tm_year;
+  t->mon = tm.tm_mon;
+  t->mday = tm.tm_mday;
+  t->hour = tm.tm_hour;
+  t->min = tm.tm_min;
+  t->sec = tm.tm_sec;
+  *fsec = f;
+}
+
+const ty_dtzone_t ty_dtzone_hooks = {NULL, ty_hook_abbrev, ty_hook_zone,
+                                     ty_hook_zone_fixed, ty_hook_now};
+
+/* Report a code of ty's text in: the code is PostgreSQL's DTERR. */
+void TyDateTimeParseError(int dterr, const ty_dtin_extra_t *x, const char *str,
+                          const char *datatype, Node *escontext) {
+  DateTimeErrorExtra extra = {x->timezone, x->abbrev};
+
+  DateTimeParseError(dterr, &extra, str, datatype, escontext);
+}
+
 /* DecodeSpecial()
  * Decode text string using lookup table.
  *

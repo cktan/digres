@@ -1357,6 +1357,193 @@ bool run_ts_known(const vec_t &v) {
   return true;
 }
 
+/* A host's zone hooks, as the tests' server has them (its zone is UTC). */
+struct fake_zone_t {
+  const char *name;
+  int fixed;
+  long gmtoff;
+};
+
+const fake_zone_t kFakeZones[] = {
+    {"america/new_york", 0, 0},
+    {"europe/london", 0, 0},
+    {"utc", 1, 0},
+    {"gmt", 1, 0},
+    /* what pg_tzset takes of a text that is almost a POSIX spec */
+    {"bt04:05:06.5", 1, 0},
+    {"tt04:057ttues:day", 0, 0},
+};
+
+/*
+ * A POSIX zone spec as pg_tzset takes it: a name of letters, an offset
+ * ([+-]hours[:min[:sec]], hours up to 167), and maybe the name of a daylight
+ * time. Returns 0 if the text is not one, 1 for one with a fixed offset, 2
+ * for one with a daylight time.
+ */
+int posix_zone(const char *p) {
+  int n = 0, v;
+
+  while (isalpha((unsigned char)*p)) {
+    p++, n++;
+  }
+  if (n < 1) {
+    return 0;
+  }
+  if (*p == '+' || *p == '-') {
+    p++;
+  }
+  static const int limit[] = {167, 59, 60};
+
+  for (int part = 0; part < 3; part++) {
+    if (!isdigit((unsigned char)*p)) {
+      return 0;
+    }
+    for (v = 0; isdigit((unsigned char)*p); p++) {
+      v = v * 10 + (*p - '0');
+      if (v > 1000) {
+        return 0;
+      }
+    }
+    if (v > limit[part]) {
+      return 0;
+    }
+    if (*p != ':') {
+      break;
+    }
+    p++;
+  }
+  if (*p == '\0') {
+    return 1;
+  }
+  for (; isalpha((unsigned char)*p); p++) {
+  }
+  return *p == '\0' ? 2 : 0;
+}
+
+/* Is the lower-case word a zone: a name of the list, or a POSIX spec. */
+const void *fake_zone(void *, const char *name) {
+  static const fake_zone_t fixed = {"posix", 1, 0}, dst = {"posix", 0, 0};
+
+  for (const auto &z : kFakeZones) {
+    if (strcmp(z.name, name) == 0) {
+      return &z;
+    }
+  }
+  int k = posix_zone(name);
+
+  return k == 0 ? nullptr : k == 1 ? &fixed : &dst;
+}
+
+int fake_zone_fixed(void *, const void *tz, long *gmtoff) {
+  const fake_zone_t *z = static_cast<const fake_zone_t *>(tz);
+
+  *gmtoff = z->gmtoff;
+  return z->fixed;
+}
+
+/* The abbreviations of the server's default list that the vectors use. */
+int fake_abbrev(void *, int, const char *w, int *type, int *offset,
+                const void **tz, ty_dtin_extra_t *) {
+  static const struct {
+    const char *w;
+    int type, offset;
+  } t[] = {{"pst", TY_ABBREV_TZ, 28800},  {"est", TY_ABBREV_TZ, 18000},
+           {"edt", TY_ABBREV_DTZ, 14400}, {"pdt", TY_ABBREV_DTZ, 25200},
+           {"utc", TY_ABBREV_TZ, 0},      {"gmt", TY_ABBREV_TZ, 0},
+           {"z", TY_ABBREV_TZ, 0}};
+
+  *type = TY_ABBREV_NONE;
+  *offset = 0;
+  *tz = nullptr;
+  if (strcmp(w, "zulu") == 0) {
+    *type = TY_ABBREV_TZ;
+    return 0;
+  }
+  for (const auto &e : t) {
+    if (strcmp(e.w, w) == 0) {
+      *type = e.type;
+      *offset = e.offset;
+      break;
+    }
+  }
+  return 0;
+}
+
+void fake_now(void *, ty_tm_t *tm, int32_t *fsec, int *tz) {
+  *tm = {2030, 6, 15, 12, 34, 56};
+  *fsec = 789000;
+  *tz = 0;
+}
+
+const ty_dtzone_t kFakeHost = {nullptr, fake_abbrev, fake_zone, fake_zone_fixed,
+                               fake_now};
+
+/* Run a text in of date, time or timestamp (known.txt): the text is hex. */
+bool run_dtin_known(const vec_t &v) {
+  std::vector<uint8_t> tb = bytes_of(v.args[2]);
+  std::string z(reinterpret_cast<const char *>(tb.data()), tb.size());
+  const std::string &kind = v.args[0];
+  int order = std::stoi(v.args[1]), dterr = 0, rc;
+  ty_dtin_extra_t extra;
+  int32_t d = 0;
+  int64_t t = 0;
+
+  INFO(v.line);
+  if (z.find('\0') != std::string::npos) {
+    return true;
+  }
+  if (kind == "date") {
+    rc = ty_date_parse(z.c_str(), order, &kFakeHost, &d, &dterr, &extra);
+  } else if (kind == "time") {
+    rc = ty_time_parse(z.c_str(), order, &kFakeHost, &t, &dterr, &extra);
+  } else {
+    rc = ty_timestamp_parse(z.c_str(), order, &kFakeHost, &t, &dterr, &extra);
+  }
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    if (v.res[1] == "R") {
+      CHECK(0 == dterr);
+      CHECK(TY_ERR_RANGE == ty_errnum());
+    } else {
+      CHECK(std::stoi(v.res[1]) == dterr);
+      CHECK(TY_ERR_INVALID == ty_errnum());
+    }
+    return true;
+  }
+  CHECK(0 == rc);
+  if (rc != 0) {
+    return true;
+  }
+  std::string text;
+  char out[TY_DATETIME_TEXT_MAX];
+  ty_tm_t tm = {};
+  int32_t fsec = 0;
+
+  if (kind == "date") {
+    if (d == TY_DATE_NOEND) {
+      text = "infinity";
+    } else if (d == TY_DATE_NOBEGIN) {
+      text = "-infinity";
+    } else {
+      ty_j2date(d + TY_POSTGRES_EPOCH_JDATE, &tm.year, &tm.mon, &tm.mday);
+      ty_date_format(&tm, TY_DATES_ISO, TY_DATEORDER_YMD, out);
+      text = out;
+    }
+  } else if (kind == "time") {
+    tm.hour = (int32_t)(t / TY_USECS_PER_HOUR);
+    tm.min = (int32_t)(t / TY_USECS_PER_MINUTE % 60);
+    tm.sec = (int32_t)(t / TY_USECS_PER_SEC % 60);
+    fsec = (int32_t)(t % TY_USECS_PER_SEC);
+    ty_time_format(&tm, fsec, 0, 0, TY_DATES_ISO, out);
+    text = out;
+  } else {
+    text = ts_text(t);
+  }
+  CHECK(v.res[0] ==
+        token_of(reinterpret_cast<const uint8_t *>(text.data()), text.size()));
+  return true;
+}
+
 /* Run a vector of what PostgreSQL did with a text (known.txt): the text is hex.
  */
 bool run_known(const vec_t &v) {
@@ -1368,6 +1555,9 @@ bool run_known(const vec_t &v) {
   }
   if (op.compare(0, 5, "part.") == 0) {
     return run_part_known(v);
+  }
+  if (op == "dt.in") {
+    return run_dtin_known(v);
   }
   if (op == "iv.parse") {
     std::vector<uint8_t> tb = bytes_of(v.args[1]);

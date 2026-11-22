@@ -7,6 +7,8 @@
  * Tests of the calendar and the date, time and timestamp arithmetic; the
  * rest are in the vectors.
  */
+#include <string.h>
+
 #include <string>
 
 #include "doctest.h"
@@ -127,4 +129,114 @@ TEST_CASE("the common words of extract agree with the tables") {
       }
     }
   }
+}
+
+namespace {
+
+/* A host with a dynamic abbreviation "xst", a broken one "bad", and a clock. */
+int hook_abbrev(void *, int, const char *w, int *type, int *offset,
+                const void **tz, ty_dtin_extra_t *extra) {
+  static int zone;
+
+  *type = TY_ABBREV_NONE;
+  *offset = 0;
+  *tz = nullptr;
+  if (strcmp(w, "xst") == 0) {
+    *type = TY_ABBREV_DYNTZ;
+    *tz = &zone;
+  } else if (strcmp(w, "bad") == 0) {
+    extra->timezone = "Nowhere/Land";
+    extra->abbrev = "bad";
+    return TY_DTERR_BAD_ZONE_ABBREV;
+  } else if (strcmp(w, "pst") == 0) {
+    *type = TY_ABBREV_TZ;
+    *offset = 28800;
+  }
+  return 0;
+}
+
+const void *hook_zone(void *, const char *name) {
+  static int zone;
+
+  return strcmp(name, "america/new_york") == 0 ? &zone : nullptr;
+}
+
+int hook_zone_fixed(void *, const void *, long *) { return 0; }
+
+void hook_now(void *, ty_tm_t *tm, int32_t *fsec, int *tz) {
+  *tm = {2030, 12, 31, 23, 59, 58};
+  *fsec = 500000;
+  *tz = 18000;
+}
+
+const ty_dtzone_t kHost = {nullptr, hook_abbrev, hook_zone, hook_zone_fixed,
+                           hook_now};
+
+} // namespace
+
+// Verify the words that need the host: the clock, the zones, and no host.
+// 1. With a clock, today, tomorrow, yesterday and now read it.
+// 2. A dynamic abbreviation is accepted, and a daylight modifier is not.
+// 3. A zone name the host does not know is a code, with the name kept.
+// 4. A hook that fails gives its code and its strings.
+// 5. Without hooks, no zone word and no clock word is known.
+TEST_CASE("the text in of date and time asks the host for zones and clock") {
+  int dterr;
+  ty_dtin_extra_t x;
+  int32_t d;
+  int64_t t;
+  int32_t today;
+
+  // 1. With a clock, today, tomorrow, yesterday and now read it.
+  CHECK(0 == ty_date_make(2030, 12, 31, &today));
+  CHECK(0 == ty_date_parse("today", TY_DATEORDER_MDY, &kHost, &d, &dterr, &x));
+  CHECK(today == d);
+  CHECK(0 ==
+        ty_date_parse("tomorrow", TY_DATEORDER_MDY, &kHost, &d, &dterr, &x));
+  CHECK(today + 1 == d);
+  CHECK(0 ==
+        ty_date_parse("yesterday", TY_DATEORDER_MDY, &kHost, &d, &dterr, &x));
+  CHECK(today - 1 == d);
+  CHECK(0 == ty_time_parse("now", TY_DATEORDER_MDY, &kHost, &t, &dterr, &x));
+  CHECK(((23 * 60 + 59) * 60 + 58) * INT64_C(1000000) + 500000 == t);
+  CHECK(0 ==
+        ty_timestamp_parse("now", TY_DATEORDER_MDY, &kHost, &t, &dterr, &x));
+  CHECK(INT64_C(86400000000) * today + 86398500000 == t);
+
+  // 2. A dynamic abbreviation is accepted, and a daylight modifier is not.
+  CHECK(0 == ty_timestamp_parse("2000-01-31 04:05 xst", TY_DATEORDER_MDY,
+                                &kHost, &t, &dterr, &x));
+  CHECK(0 ==
+        ty_time_parse("04:05 xst", TY_DATEORDER_MDY, &kHost, &t, &dterr, &x));
+  CHECK(-1 == ty_timestamp_parse("2000-01-31 04:05 xst dst", TY_DATEORDER_MDY,
+                                 &kHost, &t, &dterr, &x));
+  CHECK(TY_DTERR_BAD_FORMAT == dterr);
+
+  // 3. A zone name the host does not know is a code, with the name kept.
+  CHECK(0 == ty_timestamp_parse("2000-01-31 04:05 America/New_York",
+                                TY_DATEORDER_MDY, &kHost, &t, &dterr, &x));
+  CHECK(-1 == ty_timestamp_parse("Jan 31 2000 04:05 Nowhere/Land",
+                                 TY_DATEORDER_MDY, &kHost, &t, &dterr, &x));
+  CHECK(TY_DTERR_BAD_TIMEZONE == dterr);
+  CHECK(TY_ERR_INVALID == ty_errnum());
+  CHECK(std::string("nowhere/land") == x.timezone);
+
+  // 4. A hook that fails gives its code and its strings.
+  CHECK(-1 == ty_timestamp_parse("2000-01-31 04:05 bad", TY_DATEORDER_MDY,
+                                 &kHost, &t, &dterr, &x));
+  CHECK(TY_DTERR_BAD_ZONE_ABBREV == dterr);
+  CHECK(std::string("Nowhere/Land") == x.timezone);
+  CHECK(std::string("bad") == x.abbrev);
+
+  // 5. Without hooks, no zone word and no clock word is known.
+  CHECK(0 == ty_timestamp_parse("2000-01-31 04:05", TY_DATEORDER_MDY, nullptr,
+                                &t, &dterr, &x));
+  CHECK(-1 == ty_timestamp_parse("2000-01-31 04:05 pst", TY_DATEORDER_MDY,
+                                 nullptr, &t, &dterr, &x));
+  CHECK(TY_DTERR_BAD_FORMAT == dterr);
+  CHECK(-1 ==
+        ty_date_parse("today", TY_DATEORDER_MDY, nullptr, &d, &dterr, &x));
+  CHECK(TY_DTERR_BAD_FORMAT == dterr);
+  CHECK(0 == ty_date_parse("epoch", TY_DATEORDER_MDY, nullptr, &d, &dterr, &x));
+  CHECK(-10957 == d);
 }

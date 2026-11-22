@@ -576,7 +576,7 @@ copied from PostgreSQL keeps its copyright notice
      `ty_interval_parse`: the tokenizer, the decoders of the
      postgres, sql and ISO 8601 forms, and the tables of words.
      The code is PostgreSQL's, moved from `datetime.c` with its
-     notice into `ty/src/interval_in.cc`; the interval style is
+     notice into `ty/src/dtparse.cc`; the interval style is
      passed in. The typmod and the messages stay in digres. Not
      yet moved: the tokenizer and the tables are also still in
      `datetime.c`, for the text in of dates, times and
@@ -585,6 +585,35 @@ copied from PostgreSQL keeps its copyright notice
      of the errors, and `dg/test/select_interval_in.sql`.
      Measured by callgrind (old, new): the postgres form
      -14.08%; the ISO 8601 form +0.30%; the clock form +0.21%.
+   - **The text in of date, time and timestamp moved
+     (2026-11-22).** `ty_date_parse`, `ty_time_parse` and
+     `ty_timestamp_parse`, in `ty/src/dtparse.cc` (renamed from
+     `interval_in.cc`, as it now holds both). PostgreSQL's
+     `DecodeDateTime` and `DecodeTimeOnly` and their helpers
+     moved with their notice. The date order is an argument. The
+     words of time zones and the clock are the host's hooks,
+     `ty_dtzone_t`: a zone abbreviation, a zone name, whether a
+     zone has one offset, and the time of the transaction (the
+     fourth kind of setting of section 8: the host reads it,
+     because a zone database cannot be passed). The offset of a
+     zone is not computed: no caller of the three reads it,
+     which saves work. The text in of timestamptz and timetz
+     stays in digres, and uses the same decoders next. The
+     tests: 4,383 known answers from the old digres (three
+     types, three date orders), hand tests of the hooks, and
+     `dg/test/select_datetime_in.sql`, which prints the same as
+     the digres before the move, with the message of each
+     error. Measured by callgrind, the cost of the input
+     function a statement (old, new), over 100,000 rows of
+     text: `date` -4.0%; `timestamp` -3.7%; `time` -15.3%;
+     `timestamp` with a numeric zone +0.2%; `timestamp` in the
+     word form with a zone abbreviation +1.1%, which is +0.6% of
+     the statement. The first version was +10% on the word
+     form: libc `tolower` in place of the ASCII one, and a
+     wrapper and a translation of the codes on each of the three
+     lookups of a word. The totals of a statement carried the
+     noise of RocksDB (the table was rewritten between runs), so
+     the cost of the function is what is compared.
    - **The typmod of interval, timestamp and time, and
      `make_interval` moved (2026-11-21).**
      `ty_interval_adjust_typmod`, `ty_timestamp_adjust_typmod`,

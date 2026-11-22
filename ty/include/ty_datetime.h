@@ -526,4 +526,83 @@ size_t ty_timestamp_format(const ty_tm_t* tm, int32_t fsec, int print_tz,
 /* An interval, in an interval style. */
 size_t ty_interval_format(const ty_itm_t* itm, int style, char* out);
 
+/*
+ * The text in of date, time and timestamp, as date_in, time_in and
+ * timestamp_in read it, up to the typmod (ty_time_adjust_typmod and
+ * ty_timestamp_adjust_typmod do that). dateorder is the session's
+ * (TY_DATEORDER_*). The words of time zones and the clock are the host's:
+ * zone gives its hooks, and may be NULL, for a host that has none. Then no
+ * abbreviation and no zone name is known, and "now", "today", "tomorrow" and
+ * "yesterday" are bad.
+ *
+ * On an error the result is -1. If the text is bad, the error is
+ * TY_ERR_INVALID, and *dterr is PostgreSQL's code for it (TY_DTERR_*), with
+ * the zone's name in *extra for a code that has one. If the value is out of
+ * range ("date out of range", "timestamp out of range"), the error is
+ * TY_ERR_RANGE, and *dterr is 0. The host words both.
+ */
+#define TY_DTERR_BAD_FORMAT (-1)
+#define TY_DTERR_FIELD_OVERFLOW (-2)
+#define TY_DTERR_MD_FIELD_OVERFLOW (-3) /* a hint about DateStyle */
+#define TY_DTERR_INTERVAL_OVERFLOW (-4)
+#define TY_DTERR_TZDISP_OVERFLOW (-5)
+#define TY_DTERR_BAD_TIMEZONE (-6)
+#define TY_DTERR_BAD_ZONE_ABBREV (-7)
+
+/*
+ * What the zone hook says a word is. The values are PostgreSQL's, so that
+ * a host whose lookup gives them need not translate each word.
+ */
+enum {
+    TY_ABBREV_TZ = 5,     /* a fixed offset, standard time */
+    TY_ABBREV_DTZ = 6,    /* a fixed offset, daylight time */
+    TY_ABBREV_DYNTZ = 7,  /* a zone's own: its offset depends on the date */
+    TY_ABBREV_NONE = 31   /* not an abbreviation */
+};
+
+/*
+ * What a code for an error needs for its message. The two strings come
+ * first, as in PostgreSQL's DateTimeErrorExtra, so that a host may pass this
+ * to its own lookup. timezone is the name of the zone that failed
+ * (TY_DTERR_BAD_TIMEZONE and _BAD_ZONE_ABBREV), abbrev the abbreviation that
+ * names it (the second). A string is the host's, or in buf.
+ */
+typedef struct ty_dtin_extra_t {
+    const char* timezone;
+    const char* abbrev;
+    char buf[136];
+} ty_dtin_extra_t;
+
+/*
+ * The hooks of the host. A member that is NULL means the host has none, as
+ * above. ctx is passed back to each.
+ *
+ * abbrev: Is the lower-case word a time zone abbreviation? Set *type
+ *   (TY_ABBREV_*), and *offset and *tz on every return; for TZ and DTZ, *offset in seconds west of Greenwich
+ *   (PostgreSQL's sign, the offset flipped); for DYNTZ, *tz to the zone, an
+ *   opaque pointer. field is the index of the word in the text, for a cache.
+ *   Return 0, or a TY_DTERR_* code, with *extra filled.
+ * zone: Is the word the name of a zone ("America/New_York")? The zone, an
+ *   opaque pointer, or NULL.
+ * zone_fixed: Does the zone have one offset at all times? If so, set
+ *   *gmtoff to it in seconds east of Greenwich, and return 1.
+ * now: The time of the transaction in the session's zone: the fields, the
+ *   microseconds, and the offset in seconds west of Greenwich.
+ */
+typedef struct ty_dtzone_t {
+    void* ctx;
+    int (*abbrev)(void* ctx, int field, const char* lowtoken, int* type,
+                  int* offset, const void** tz, ty_dtin_extra_t* extra);
+    const void* (*zone)(void* ctx, const char* name);
+    int (*zone_fixed)(void* ctx, const void* tz, long* gmtoff);
+    void (*now)(void* ctx, ty_tm_t* tm, int32_t* fsec, int* tz);
+} ty_dtzone_t;
+
+int ty_date_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
+                  int32_t* out, int* dterr, ty_dtin_extra_t* extra);
+int ty_time_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
+                  int64_t* out, int* dterr, ty_dtin_extra_t* extra);
+int ty_timestamp_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
+                       int64_t* out, int* dterr, ty_dtin_extra_t* extra);
+
 #endif

@@ -105,60 +105,19 @@ Datum date_in(PG_FUNCTION_ARGS) {
   char *str = PG_GETARG_CSTRING(0);
   Node *escontext = fcinfo->context;
   DateADT date;
-  fsec_t fsec;
-  struct pg_tm tt, *tm = &tt;
-  int tzp;
-  int dtype;
-  int nf;
   int dterr;
-  char *field[MAXDATEFIELDS];
-  int ftype[MAXDATEFIELDS];
-  char workbuf[MAXDATELEN + 1];
-  DateTimeErrorExtra extra;
+  ty_dtin_extra_t extra;
 
-  dterr = ParseDateTime(str, workbuf, sizeof(workbuf), field, ftype,
-                        MAXDATEFIELDS, &nf);
-  if (dterr == 0)
-    dterr = DecodeDateTime(field, ftype, nf, &dtype, tm, &fsec, &tzp, &extra);
-  if (dterr != 0) {
-    DateTimeParseError(dterr, &extra, str, "date", escontext);
-    PG_RETURN_NULL();
-  }
-
-  switch (dtype) {
-  case DTK_DATE:
-    break;
-
-  case DTK_EPOCH:
-    GetEpochTime(tm);
-    break;
-
-  case DTK_LATE:
-    DATE_NOEND(date);
-    PG_RETURN_DATEADT(date);
-
-  case DTK_EARLY:
-    DATE_NOBEGIN(date);
-    PG_RETURN_DATEADT(date);
-
-  default:
-    DateTimeParseError(DTERR_BAD_FORMAT, &extra, str, "date", escontext);
-    PG_RETURN_NULL();
-  }
-
-  /* Prevent overflow in Julian-day routines */
-  if (!IS_VALID_JULIAN(tm->tm_year, tm->tm_mon, tm->tm_mday))
+  /* ty reads the text; the zone words and the clock are the hooks' */
+  if (ty_date_parse(str, DateOrder, &ty_dtzone_hooks, &date, &dterr, &extra)) {
+    if (dterr != 0) {
+      TyDateTimeParseError(dterr, &extra, str, "date", escontext);
+      PG_RETURN_NULL();
+    }
     ereturn(escontext, (Datum)0,
             (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
              errmsg("date out of range: \"%s\"", str)));
-
-  date = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) - POSTGRES_EPOCH_JDATE;
-
-  /* Now check for just-out-of-range dates */
-  if (!IS_VALID_DATE(date))
-    ereturn(escontext, (Datum)0,
-            (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-             errmsg("date out of range: \"%s\"", str)));
+  }
 
   PG_RETURN_DATEADT(date);
 }
@@ -1053,27 +1012,15 @@ Datum time_in(PG_FUNCTION_ARGS) {
   int32 typmod = PG_GETARG_INT32(2);
   Node *escontext = fcinfo->context;
   TimeADT result;
-  fsec_t fsec;
-  struct pg_tm tt, *tm = &tt;
-  int tz;
-  int nf;
   int dterr;
-  char workbuf[MAXDATELEN + 1];
-  char *field[MAXDATEFIELDS];
-  int dtype;
-  int ftype[MAXDATEFIELDS];
-  DateTimeErrorExtra extra;
+  ty_dtin_extra_t extra;
 
-  dterr = ParseDateTime(str, workbuf, sizeof(workbuf), field, ftype,
-                        MAXDATEFIELDS, &nf);
-  if (dterr == 0)
-    dterr = DecodeTimeOnly(field, ftype, nf, &dtype, tm, &fsec, &tz, &extra);
-  if (dterr != 0) {
-    DateTimeParseError(dterr, &extra, str, "time", escontext);
+  /* ty reads the text; the zone words and the clock are the hooks' */
+  if (ty_time_parse(str, DateOrder, &ty_dtzone_hooks, &result, &dterr,
+                    &extra)) {
+    TyDateTimeParseError(dterr, &extra, str, "time", escontext);
     PG_RETURN_NULL();
   }
-
-  tm2time(tm, fsec, &result);
   AdjustTimeForTypmod(&result, typmod);
 
   PG_RETURN_TIMEADT(result);
