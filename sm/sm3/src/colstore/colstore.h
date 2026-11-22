@@ -326,6 +326,14 @@ int col_find_latest(table_t *table, uint64_t id, place_t &place);
 int col_find_seen(table_t *table, uint64_t id, place_t &place);
 
 /*
+ * A test's hook: called by a column store table's write by _id after
+ * its write in the delta store failed, before it looks for the row in
+ * the row groups, so a test can run a move there, an elimination.
+ * Empty, but in a test.
+ */
+extern std::function<void()> col_write_hook;
+
+/*
  * Compact file set fsid of table, a row group's version below the
  * last, into its next version (../COLSTORE.md §11.2), in the caller's
  * transaction, at the newest committed state: its live rows alone, in

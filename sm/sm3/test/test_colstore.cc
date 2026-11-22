@@ -3409,10 +3409,12 @@ TEST_CASE("READ COMMITTED writers agree across the sealer's jobs") {
     sm1::errnum_t e = rc == 0 ? sm1::SM_OK : sm1::errnum();
     first = rc;
     first_e = e;
+    int latest = 2;
     if (rc != 0 && e == sm1::SM_ERR_UPDATED) {
       std::string_view tuple;
       int r = sm3::tbl_read_latest(t, id1, tuple);
-      REQUIRE(r >= 0);
+      REQUIRE_MESSAGE(r >= 0, std::string(sm1::errmsg()));
+      latest = r;
       if (r == 0) {
         rc = del1 ? sm3::tbl_delete(t, id1)
                   : sm3::tbl_update(t, id1, r1.d, r1.null);
@@ -3424,7 +3426,10 @@ TEST_CASE("READ COMMITTED writers agree across the sealer's jobs") {
     sm3::tbl_close(t);
     REQUIRE_MESSAGE((rc == 0 || e == sm1::SM_ERR_NOTFOUND),
                     "step " << step << " a " << a1 << " a2 " << a2 << " del1 "
-                            << del1 << " del2 " << del2 << " e " << e << ": "
+                            << del1 << " del2 " << del2 << " job " << job
+                            << " place " << p1.fsid << "/" << p1.rno
+                            << " first " << first << "/" << first_e
+                            << " latest " << latest << " e " << e << ": "
                             << std::string(sm1::errmsg()));
     REQUIRE(sm3::commit(ss2) == 0);
     if (rc == 0) {
@@ -3933,6 +3938,113 @@ TEST_CASE("an older writer of an eliminated row out of line") {
   CHECK(rows.size() == 99);
   CHECK(rows.count(5) == 0);
   CHECK(rows[6] == "r");
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify a READ COMMITTED write by _id alone of a row of a row group
+// that another transaction deleted after the writer's view began
+// fails with SM_ERR_NOTFOUND: the row is gone from the newest state,
+// with nothing to read again.
+// 1. Row groups of 100 rows; load 100 rows: one row group.
+// 2. W1 (READ COMMITTED) finds a = 5; W2 deletes it, and commits.
+// 3. W1's update of a = 5 by its _id: SM_ERR_NOTFOUND; W1 commits.
+TEST_CASE("a READ COMMITTED write by _id of a row deleted since") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  load_rows(db, c, 100);
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  // 2. W1's view; W2.
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  auto [p5, id5] = where_in(ss2, c, 5);
+  REQUIRE(p5.fsid != 0);
+  delete_rows(db, c, 5, 6);
+  // 3. W1's update.
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r(5, "w1");
+  CHECK(sm3::tbl_update(t, id5, r.d, r.null) == -1);
+  CHECK_MESSAGE(sm1::errnum() == sm1::SM_ERR_NOTFOUND,
+                std::string(sm1::errmsg()));
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss2) == 0);
+  CHECK(scan_rows(db, c).size() == 99);
+  sm3::session_close(ss2);
+}
+
+// Verify a write by _id alone of a row that an elimination moves back
+// into the delta store while the write looks for it writes the row
+// there, at READ COMMITTED and at REPEATABLE READ, and is not lost.
+// 1. Row groups of 100 rows; insert 100 rows one at a time, and seal
+//    them: their delta keys hold the seal's tombstones.
+// 2. W1 (READ COMMITTED) updates a = 5 by its _id; between its write
+//    in the delta store and its lookup in the row groups, the row
+//    group is eliminated (col_write_hook). The update goes.
+// 3. Seal again; R (REPEATABLE READ) deletes a = 6 by its _id, with
+//    the row group eliminated at the same moment. The delete goes,
+//    and R no longer sees a = 6.
+// 4. 99 rows; a = 5 updated.
+TEST_CASE("a write by _id of a row an elimination moves back meanwhile") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows, sealed.
+  insert_rows(db, c, 0, 100);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(seal(ss3, c));
+  uint64_t id5 = where(db, c, 5).second;
+  uint64_t id6 = where(db, c, 6).second;
+  // The hook eliminates the one row group, once.
+  bool fired = false;
+  auto eliminate_once = [&]() {
+    fired = false;
+    sm3::col_write_hook = [&]() {
+      if (fired) {
+        return;
+      }
+      fired = true;
+      std::vector<uint64_t> rgs = rg_ids(db, c);
+      REQUIRE(rgs.size() == 1);
+      REQUIRE(eliminate(ss3, c, rgs[0]));
+    };
+  };
+  // 2. W1, at READ COMMITTED.
+  eliminate_once();
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r5(5, "w1");
+  CHECK_MESSAGE(sm3::tbl_update(t, id5, r5.d, r5.null) == 0,
+                std::string(sm1::errmsg()));
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss2) == 0);
+  CHECK(fired);
+  CHECK(row_groups(db, c) == 0);
+  // 3. Sealed again; R, at REPEATABLE READ.
+  REQUIRE(seal(ss3, c));
+  eliminate_once();
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(count_in(ss2, c) == 100);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK_MESSAGE(sm3::tbl_delete(t, id6) == 0, std::string(sm1::errmsg()));
+  sm3::tbl_close(t);
+  CHECK(fired);
+  CHECK_FALSE(sees(ss2, c, 6));
+  CHECK(count_in(ss2, c) == 99);
+  REQUIRE(sm3::commit(ss2) == 0);
+  // 4. The rows.
+  sm3::col_write_hook = nullptr;
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 99);
+  CHECK(rows[5] == "w1");
+  CHECK(rows.count(6) == 0);
   sm3::session_close(ss2);
   sm3::session_close(ss3);
 }

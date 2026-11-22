@@ -1069,7 +1069,8 @@ look:
  * A column store table's write of a row its delta store does not hold;
  * defined below, with the reads.
  */
-static int col_write(sm3::table_t *table, uint64_t id, int rc,
+static int col_write(sm3::table_t *table, uint64_t id,
+                     const std::function<int()> &write,
                      const std::span<const sm2::datum_t> *values,
                      std::span<const bool> isnull, sm3::pin_ref_t *ref,
                      std::string_view *old);
@@ -1195,7 +1196,10 @@ int tbl_update(table_t *table, uint64_t id,
              ? -1
              : col_write(
                    table, id,
-                   update_row(table, id, key, values, isnull, nullptr, nullptr),
+                   [&] {
+                     return update_row(table, id, key, values, isnull, nullptr,
+                                       nullptr);
+                   },
                    &values, isnull, nullptr, nullptr);
 }
 
@@ -1207,9 +1211,13 @@ int tbl_update(table_t *table, uint64_t id,
   std::string key;
   return 0 != id_key(table, id, key)
              ? -1
-             : col_write(table, id,
-                         update_row(table, id, key, values, isnull, &ref, &old),
-                         &values, isnull, &ref, &old);
+             : col_write(
+                   table, id,
+                   [&] {
+                     return update_row(table, id, key, values, isnull, &ref,
+                                       &old);
+                   },
+                   &values, isnull, &ref, &old);
 }
 
 /*
@@ -1285,8 +1293,10 @@ int tbl_delete(table_t *table, uint64_t id) {
   std::string key;
   return 0 != id_key(table, id, key)
              ? -1
-             : col_write(table, id, delete_row(table, key, nullptr, nullptr),
-                         nullptr, {}, nullptr, nullptr);
+             : col_write(
+                   table, id,
+                   [&] { return delete_row(table, key, nullptr, nullptr); },
+                   nullptr, {}, nullptr, nullptr);
 }
 
 /* As above, pinning the row deleted into ref; see sm3.h. */
@@ -1295,8 +1305,10 @@ int tbl_delete(table_t *table, uint64_t id, pin_ref_t &ref,
   std::string key;
   return 0 != id_key(table, id, key)
              ? -1
-             : col_write(table, id, delete_row(table, key, &ref, &old), nullptr,
-                         {}, &ref, &old);
+             : col_write(
+                   table, id,
+                   [&] { return delete_row(table, key, &ref, &old); }, nullptr,
+                   {}, &ref, &old);
 }
 
 /* Begin a bulk load into the table; see sm3.h. */
@@ -1720,15 +1732,46 @@ static int hide_sealed(table_t *table, uint64_t id) {
 }
 
 /*
- * A write of row id whose write in the delta store gave rc: in a column
- * store table, a row the delta store has no version of
- * (SM_ERR_NOTFOUND), or a seal's tombstone of (SM_ERR_SEALED), is
- * written in its row group (../COLSTORE.md §8). rc for any other table
- * or error. values is null for a delete.
+ * Whether row id of a column store table is live at the newest state
+ * in its delta store, under its exclusive lock, taken here and held:
+ * a row that a move of sm's own, an elimination, put back there after
+ * a write found it elsewhere. The lock keeps any later move from it.
+ * 1, 0, or -1.
+ */
+static int moved_back(table_t *table, uint64_t id) {
+  std::string key = sm2::id_key(id);
+  // The row's lock, as a write of it takes: an elimination in flight
+  // that holds it is waited for.
+  if (sm2::rel_lock(table->rel, key, sm1::SM_LOCKMODE_EX, false) != 0) {
+    return -1;
+  }
+  sm1::session_t *s = table->session->sm1;
+  bool was = false;
+  if (sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  std::string_view tuple;
+  int r = sm2::rel_read(table->rel, key, tuple);
+  sm1::view_latest(s, was);
+  return r < 0 ? -1 : r == 0 ? 1 : 0;
+}
+
+/* A test's hook into col_write; see colstore.h. */
+std::function<void()> col_write_hook;
+
+/*
+ * A write of row id by write in the delta store: in a column store
+ * table, a row the delta store has no version of (SM_ERR_NOTFOUND),
+ * or a seal's tombstone of (SM_ERR_SEALED), is written in its row
+ * group (../COLSTORE.md §8). write's result for any other table or
+ * error. values is null for a delete.
  * 1. A write in the delta store over a moved-in version that the
  *    snapshot does not see: the snapshot sees the row in a row group,
  *    where a shadow marker hides it.
- * 2. Find the row group of the row's newest committed copy.
+ * 2. Find the row group of the row's newest committed copy. None: the
+ *    row may have moved into the delta store since, by an elimination;
+ *    then write it there again. Else, of a row the transaction sees,
+ *    it was changed since.
  * 3. With ref, read the row as it is, before it is written.
  * 4. Delete it there by its marker; an update puts values into the
  *    delta store as its new version.
@@ -1737,35 +1780,58 @@ static int hide_sealed(table_t *table, uint64_t id) {
  *    than the seal that took it: a tombstone of its own there.
  * 6. With ref, pin the row read into ref, for old to view.
  */
-static int col_write(table_t *table, uint64_t id, int rc,
+static int col_write(table_t *table, uint64_t id,
+                     const std::function<int()> &write,
                      const std::span<const sm2::datum_t> *values,
                      std::span<const bool> isnull, pin_ref_t *ref,
                      std::string_view *old) {
+  int rc = write();
   if (!table->def->column_store) {
     return rc;
   }
-  // 1. Over a moved-in version: told once, and asked after every write,
-  //    so a failed one leaves nothing for the next.
-  const bool over = sm1::wrote_over_moved_in(table->session->sm1);
-  if (rc == 0) {
-    return over ? shadow_seen(table, id) : 0;
-  }
-  if (sm1::errnum() != sm1::SM_ERR_NOTFOUND &&
-      sm1::errnum() != sm1::SM_ERR_SEALED) {
-    return rc;
-  }
-  const bool sealed = sm1::errnum() == sm1::SM_ERR_SEALED;
-  // 2. Its place in a row group. None, of a row the transaction sees,
-  //    is a row changed since: as a write that meets another's marker.
   place_t place;
-  int f = col_find_latest(table, id, place);
-  if (f < 0) {
-    return -1;
-  }
-  if (f == 1) {
+  bool sealed = false;
+  for (int tries = 0;; tries++) {
+    // 1. Over a moved-in version: told once, and asked after every
+    //    write, so a failed one leaves nothing for the next.
+    const bool over = sm1::wrote_over_moved_in(table->session->sm1);
+    if (rc == 0) {
+      return over ? shadow_seen(table, id) : 0;
+    }
+    if (sm1::errnum() != sm1::SM_ERR_NOTFOUND &&
+        sm1::errnum() != sm1::SM_ERR_SEALED) {
+      return rc;
+    }
+    sealed = sm1::errnum() == sm1::SM_ERR_SEALED;
+    if (col_write_hook) {
+      col_write_hook();
+    }
+    // 2. Its place in a row group.
+    int f = col_find_latest(table, id, place);
+    if (f < 0) {
+      return -1;
+    }
+    if (f == 0) {
+      break;
+    }
+    // None: moved back into the delta store meanwhile, written there
+    // again, as the lock now keeps it there.
+    int back = moved_back(table, id);
+    if (back < 0) {
+      return -1;
+    }
+    if (back == 1 && tries < 2) {
+      rc = write();
+      continue;
+    }
+    // Gone from the newest state: above read committed, a row the
+    // view sees was changed since; at read committed, there is none
+    // to write.
     int seen = col_seen(table, id);
-    return seen < 0 ? -1
-           : seen == 1
+    if (seen < 0) {
+      return -1;
+    }
+    return seen == 1 && table->session->level != sm1::xctlevel_t::read_committed
                ? row_gone(table, id)
                : sm1::seterr(sm1::SM_ERR_NOTFOUND,
                              "column store: no row " + std::to_string(id));
@@ -1773,7 +1839,7 @@ static int col_write(table_t *table, uint64_t id, int rc,
   // 3. The row as it is.
   std::string was;
   if (ref) {
-    f = col_read(table, id, true, was);
+    int f = col_read(table, id, true, was);
     if (f != 0) {
       return f < 0 ? -1
                    : sm1::seterr(sm1::SM_ERR_NOTFOUND,
@@ -2408,7 +2474,10 @@ int tbl_update(table_t *table, const row_key_t &key,
              ? -1
              : col_write(
                    table, id,
-                   update_row(table, id, k, values, isnull, nullptr, nullptr),
+                   [&] {
+                     return update_row(table, id, k, values, isnull, nullptr,
+                                       nullptr);
+                   },
                    &values, isnull, nullptr, nullptr);
 }
 
@@ -2422,9 +2491,13 @@ int tbl_update(table_t *table, const row_key_t &key,
   uint64_t id;
   return 0 != named(table, key, k, id)
              ? -1
-             : col_write(table, id,
-                         update_row(table, id, k, values, isnull, &ref, &old),
-                         &values, isnull, &ref, &old);
+             : col_write(
+                   table, id,
+                   [&] {
+                     return update_row(table, id, k, values, isnull, &ref,
+                                       &old);
+                   },
+                   &values, isnull, &ref, &old);
 }
 
 /* Delete the row key names; see sm3.h. */
@@ -2433,8 +2506,10 @@ int tbl_delete(table_t *table, const row_key_t &key) {
   uint64_t id;
   return 0 != named(table, key, k, id)
              ? -1
-             : col_write(table, id, delete_row(table, k, nullptr, nullptr),
-                         nullptr, {}, nullptr, nullptr);
+             : col_write(
+                   table, id,
+                   [&] { return delete_row(table, k, nullptr, nullptr); },
+                   nullptr, {}, nullptr, nullptr);
 }
 
 /* As above, pinning the row deleted into ref; see sm3.h. */
@@ -2445,8 +2520,9 @@ int tbl_delete(table_t *table, const row_key_t &key, pin_ref_t &ref,
   uint64_t id;
   return 0 != named(table, key, k, id)
              ? -1
-             : col_write(table, id, delete_row(table, k, &ref, &old), nullptr,
-                         {}, &ref, &old);
+             : col_write(
+                   table, id, [&] { return delete_row(table, k, &ref, &old); },
+                   nullptr, {}, &ref, &old);
 }
 
 /* Read the row key names; see sm3.h. */

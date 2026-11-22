@@ -526,10 +526,13 @@ table. A write takes the row's place from the scan instead:
    the row by its `_id`, and sm reads the delta key `n`. If the
    delta store has no version of it, or a seal's tombstone, sm
    looks up the row's place as above, at the newest committed
-   state (`col_find_latest`). No row there, of a row the
-   transaction sees, is a row changed since: the write fails as
-   over another's marker (§9 step 6), `SM_ERR_CONFLICT` above READ
-   COMMITTED.
+   state (`col_find_latest`). No row there may be a row that an
+   elimination moved back into the delta store meanwhile: under
+   the row's lock, which an elimination waits for, the delta key is
+   read at the newest state, and a live row there is written again
+   (`moved_back`). Else, of a row the transaction sees, it is a row
+   changed since: `SM_ERR_CONFLICT` above READ COMMITTED, and
+   `SM_ERR_NOTFOUND` at it.
 3. A follow after `SM_ERR_SEALED` is a lookup too.
 
 - **The place's `fsid` is 0 for a row in the delta store.**
@@ -1336,7 +1339,9 @@ random CGs and random bounds, against a test of every value.
     and an update's new version hides the old one; the newest
     version of a sealed row is read from its RG; a READ COMMITTED
     write of a row updated since and folded is `SM_ERR_UPDATED`;
-    an RR write by `_id` of a row deleted since conflicts; a writer
+    an RR write by `_id` of a row deleted since conflicts; a write
+    by `_id` of a row an elimination moves back meanwhile
+    (`col_write_hook`) is written there, not lost; a writer
     older than an elimination of a row out of line writes it with
     no conflict;
     a writer of a row that a newer version dropped fails, at each
