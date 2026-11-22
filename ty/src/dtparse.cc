@@ -1764,6 +1764,43 @@ static bool dt_now_date(struct pg_tm *tm) {
   return dt_now(tm, &fsec, NULL);
 }
 
+/* A pg_tm as the broken-down time the host's hooks take. */
+static inline __attribute__((always_inline)) ty_tm_t
+dt_ty_tm(const struct pg_tm *tm) {
+  return ty_tm_t{tm->tm_year, tm->tm_mon, tm->tm_mday,
+                 tm->tm_hour, tm->tm_min, tm->tm_sec};
+}
+
+/*
+ * The offset of a zone (the session's if tz is NULL) at the time tm, in
+ * seconds west of Greenwich, into *tzp; nothing if the host gives no such
+ * hook, as for the types that have no zone to read it.
+ */
+static inline __attribute__((always_inline)) void
+dt_offset(const struct pg_tm *tm, const void *tz, int *tzp) {
+  if (g_zone != nullptr && g_zone->offset != nullptr) {
+    ty_tm_t t = dt_ty_tm(tm);
+
+    *tzp = g_zone->offset(g_zone->ctx, &t, tz);
+  }
+}
+
+/* The same for a dynamic abbreviation of the zone tz. */
+static inline __attribute__((always_inline)) void
+dt_abbrev_offset(const struct pg_tm *tm, const char *abbrev, const void *tz,
+                 int *tzp) {
+  if (g_zone != nullptr && g_zone->abbrev_offset != nullptr) {
+    ty_tm_t t = dt_ty_tm(tm);
+
+    *tzp = g_zone->abbrev_offset(g_zone->ctx, &t, abbrev, tz);
+  }
+}
+
+/* Whether the host has a hook for the offsets: the others skip the work. */
+static bool dt_has_offsets() {
+  return g_zone != nullptr && g_zone->offset != nullptr;
+}
+
 static int DecodeDate(char *str, int fmask, int *tmask, bool *is2digits,
                       struct pg_tm *tm);
 int ValidateDate(int fmask, bool isjulian, bool is2digits, bool bc,
@@ -2304,6 +2341,7 @@ int DecodeDateTime(char **field, int *ftype, int nf, int *dtype,
   bool bc = false;
   const void *namedTz = NULL;
   const void *abbrevTz = NULL;
+  const char *abbrev = NULL;
   const void *valtz;
   struct pg_tm cur_tm;
 
@@ -2703,6 +2741,7 @@ int DecodeDateTime(char **field, int *ftype, int nf, int *dtype,
           return DTERR_BAD_FORMAT;
         /* we'll determine the actual offset later */
         abbrevTz = valtz;
+        abbrev = field[i];
         break;
 
       case AMPM:
@@ -2805,7 +2844,7 @@ int DecodeDateTime(char **field, int *ftype, int nf, int *dtype,
       if (fmask & DTK_M(DTZMOD))
         return DTERR_BAD_FORMAT;
 
-      /* the offset of the zone is the host's, and no caller reads it */
+      dt_offset(tm, namedTz, tzp);
     }
 
     /*
@@ -2817,7 +2856,7 @@ int DecodeDateTime(char **field, int *ftype, int nf, int *dtype,
       if (fmask & DTK_M(DTZMOD))
         return DTERR_BAD_FORMAT;
 
-      /* the offset of the abbreviation is the host's, as above */
+      dt_abbrev_offset(tm, abbrev, abbrevTz, tzp);
     }
 
     /* timezone not specified? then use session timezone */
@@ -2829,7 +2868,7 @@ int DecodeDateTime(char **field, int *ftype, int nf, int *dtype,
       if (fmask & DTK_M(DTZMOD))
         return DTERR_BAD_FORMAT;
 
-      /* the offset of the session's zone is the host's, as above */
+      dt_offset(tm, NULL, tzp);
     }
   }
 
@@ -2865,6 +2904,7 @@ int DecodeTimeOnly(char **field, int *ftype, int nf, int *dtype,
   int mer = HR24;
   const void *namedTz = NULL;
   const void *abbrevTz = NULL;
+  const char *abbrev = NULL;
   const void *valtz;
 
   *dtype = DTK_TIME;
@@ -3161,6 +3201,7 @@ int DecodeTimeOnly(char **field, int *ftype, int nf, int *dtype,
           return DTERR_BAD_FORMAT;
         /* we'll determine the actual offset later */
         abbrevTz = valtz;
+        abbrev = field[i];
         ftype[i] = DTK_TZ;
         break;
 
@@ -3257,6 +3298,7 @@ int DecodeTimeOnly(char **field, int *ftype, int nf, int *dtype,
       /* a date has to be specified */
       if ((fmask & DTK_DATE_M) != DTK_DATE_M)
         return DTERR_BAD_FORMAT;
+      dt_offset(tm, namedTz, tzp);
     }
   }
 
@@ -3270,9 +3312,22 @@ int DecodeTimeOnly(char **field, int *ftype, int nf, int *dtype,
     if (fmask & DTK_M(DTZMOD))
       return DTERR_BAD_FORMAT;
 
-    /* a date, if there is any, has to be whole; the offset is the host's */
-    if ((fmask & DTK_DATE_M) != 0 && (fmask & DTK_DATE_M) != DTK_DATE_M)
-      return DTERR_BAD_FORMAT;
+    struct pg_tm tmp = {};
+
+    /* a date, if there is any, has to be whole; none: today's (mday 0) */
+    if ((fmask & DTK_DATE_M) == 0) {
+      tmp.tm_mday = 0;
+    } else {
+      if ((fmask & DTK_DATE_M) != DTK_DATE_M)
+        return DTERR_BAD_FORMAT;
+      tmp.tm_year = tm->tm_year;
+      tmp.tm_mon = tm->tm_mon;
+      tmp.tm_mday = tm->tm_mday;
+    }
+    tmp.tm_hour = tm->tm_hour;
+    tmp.tm_min = tm->tm_min;
+    tmp.tm_sec = tm->tm_sec;
+    dt_abbrev_offset(&tmp, abbrev, abbrevTz, tzp);
   }
 
   /* timezone not specified? then use session timezone */
@@ -3283,9 +3338,22 @@ int DecodeTimeOnly(char **field, int *ftype, int nf, int *dtype,
     if (fmask & DTK_M(DTZMOD))
       return DTERR_BAD_FORMAT;
 
-    /* a date, if there is any, has to be whole; the offset is the host's */
-    if ((fmask & DTK_DATE_M) != 0 && (fmask & DTK_DATE_M) != DTK_DATE_M)
-      return DTERR_BAD_FORMAT;
+    struct pg_tm tmp = {};
+
+    /* a date, if there is any, has to be whole; none: today's (mday 0) */
+    if ((fmask & DTK_DATE_M) == 0) {
+      tmp.tm_mday = 0;
+    } else {
+      if ((fmask & DTK_DATE_M) != DTK_DATE_M)
+        return DTERR_BAD_FORMAT;
+      tmp.tm_year = tm->tm_year;
+      tmp.tm_mon = tm->tm_mon;
+      tmp.tm_mday = tm->tm_mday;
+    }
+    tmp.tm_hour = tm->tm_hour;
+    tmp.tm_min = tm->tm_min;
+    tmp.tm_sec = tm->tm_sec;
+    dt_offset(&tmp, NULL, tzp);
   }
 
   return 0;
@@ -3481,11 +3549,12 @@ int ty_datetime_part_unit_slow(const char *lowtoken, int epoch_only,
  */
 static int dt_decode(const char *str, int timeonly, size_t buflen,
                      int dateorder, const ty_dtzone_t *zone, int *dtype,
-                     struct pg_tm *tm, fsec_t *fsec, ty_dtin_extra_t *extra) {
+                     struct pg_tm *tm, fsec_t *fsec, ty_dtin_extra_t *extra,
+                     int *tzp) {
   char workbuf[MAXDATELEN + MAXDATEFIELDS];
   char *field[MAXDATEFIELDS];
   int ftype[MAXDATEFIELDS];
-  int nf, tz;
+  int nf;
 
   g_dateorder = dateorder;
   g_zone = zone;
@@ -3495,8 +3564,8 @@ static int dt_decode(const char *str, int timeonly, size_t buflen,
 
   if (d == 0) {
     d = timeonly
-            ? DecodeTimeOnly(field, ftype, nf, dtype, tm, fsec, &tz, extra)
-            : DecodeDateTime(field, ftype, nf, dtype, tm, fsec, &tz, extra);
+            ? DecodeTimeOnly(field, ftype, nf, dtype, tm, fsec, tzp, extra)
+            : DecodeDateTime(field, ftype, nf, dtype, tm, fsec, tzp, extra);
   }
   return d;
 }
@@ -3512,9 +3581,9 @@ int ty_date_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
                   int32_t *out, int *dterr, ty_dtin_extra_t *extra) {
   struct pg_tm tt, *tm = &tt;
   fsec_t fsec;
-  int dtype;
+  int dtype, tz0 = 0;
   int d = dt_decode(str, 0, MAXDATELEN + 1, dateorder, zone, &dtype, tm, &fsec,
-                    extra);
+                    extra, &tz0);
 
   *dterr = 0;
   if (d != 0) {
@@ -3557,9 +3626,9 @@ int ty_time_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
                   int64_t *out, int *dterr, ty_dtin_extra_t *extra) {
   struct pg_tm tt, *tm = &tt;
   fsec_t fsec;
-  int dtype;
+  int dtype, tz0 = 0;
   int d = dt_decode(str, 1, MAXDATELEN + 1, dateorder, zone, &dtype, tm, &fsec,
-                    extra);
+                    extra, &tz0);
 
   *dterr = 0;
   if (d != 0) {
@@ -3578,9 +3647,9 @@ int ty_timestamp_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
                        int64_t *out, int *dterr, ty_dtin_extra_t *extra) {
   struct pg_tm tt, *tm = &tt;
   fsec_t fsec;
-  int dtype;
+  int dtype, tz0 = 0;
   int d = dt_decode(str, 0, MAXDATELEN + MAXDATEFIELDS, dateorder, zone, &dtype,
-                    tm, &fsec, extra);
+                    tm, &fsec, extra, &tz0);
 
   *dterr = 0;
   if (d != 0) {
@@ -3610,4 +3679,85 @@ int ty_timestamp_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
   default:
     return dt_bad(DTERR_BAD_FORMAT, dterr);
   }
+}
+
+/*
+ * timestamptz_in, up to the typmod: see ty_datetime.h.
+ * 1. Decode the text into fields, and the zone's offset.
+ * 2. Make the instant: the local time plus the offset, in range.
+ */
+int ty_timestamptz_parse(const char *str, int dateorder,
+                         const ty_dtzone_t *zone, int64_t *out, int *dterr,
+                         ty_dtin_extra_t *extra) {
+  struct pg_tm tt, *tm = &tt;
+  fsec_t fsec;
+  int dtype, tz = 0;
+  int d = dt_decode(str, 0, MAXDATELEN + MAXDATEFIELDS, dateorder, zone, &dtype,
+                    tm, &fsec, extra, &tz);
+
+  *dterr = 0;
+  if (d != 0) {
+    return dt_bad(d, dterr);
+  }
+  switch (dtype) {
+  case DTK_DATE: {
+    /* tm2timestamp with the zone: the local time, then the offset */
+    if (!IS_VALID_JULIAN(tm->tm_year, tm->tm_mon, tm->tm_mday)) {
+      return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+    }
+    int64_t date = ty_date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) -
+                   TY_POSTGRES_EPOCH_JDATE;
+    int64_t time =
+        (((int64_t)tm->tm_hour * MINS_PER_HOUR + tm->tm_min) * SECS_PER_MINUTE +
+         tm->tm_sec) *
+            USECS_PER_SEC +
+        fsec;
+    int64_t r;
+
+    if (__builtin_mul_overflow(date, USECS_PER_DAY, &r) ||
+        __builtin_add_overflow(r, time, &r)) {
+      return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+    }
+    r += (int64_t)tz * USECS_PER_SEC;
+    if (!ty_timestamp_valid(r)) {
+      return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+    }
+    *out = r;
+    return 0;
+  }
+  case DTK_EPOCH:
+    *out =
+        (int64_t)(-(TY_POSTGRES_EPOCH_JDATE - 2440588)) * 86400 * USECS_PER_SEC;
+    return 0;
+  case DTK_LATE:
+    *out = TY_TIMESTAMP_NOEND;
+    return 0;
+  case DTK_EARLY:
+    *out = TY_TIMESTAMP_NOBEGIN;
+    return 0;
+  default:
+    return dt_bad(DTERR_BAD_FORMAT, dterr);
+  }
+}
+
+/* timetz_in, up to the typmod: see ty_datetime.h. */
+int ty_timetz_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
+                    ty_timetz_t *out, int *dterr, ty_dtin_extra_t *extra) {
+  struct pg_tm tt, *tm = &tt;
+  fsec_t fsec;
+  int dtype, tz = 0;
+  int d = dt_decode(str, 1, MAXDATELEN + 1, dateorder, zone, &dtype, tm, &fsec,
+                    extra, &tz);
+
+  *dterr = 0;
+  if (d != 0) {
+    return dt_bad(d, dterr);
+  }
+  out->time =
+      ((((int64_t)tm->tm_hour * MINS_PER_HOUR + tm->tm_min) * SECS_PER_MINUTE) +
+       tm->tm_sec) *
+          USECS_PER_SEC +
+      fsec;
+  out->zone = tz;
+  return 0;
 }

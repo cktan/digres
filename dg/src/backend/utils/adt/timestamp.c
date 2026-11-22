@@ -320,51 +320,20 @@ Datum timestamptz_in(PG_FUNCTION_ARGS) {
   int32 typmod = PG_GETARG_INT32(2);
   Node *escontext = fcinfo->context;
   TimestampTz result;
-  fsec_t fsec;
-  struct pg_tm tt, *tm = &tt;
-  int tz;
-  int dtype;
-  int nf;
   int dterr;
-  char *field[MAXDATEFIELDS];
-  int ftype[MAXDATEFIELDS];
-  char workbuf[MAXDATELEN + MAXDATEFIELDS];
-  DateTimeErrorExtra extra;
+  ty_dtin_extra_t extra;
 
-  dterr = ParseDateTime(str, workbuf, sizeof(workbuf), field, ftype,
-                        MAXDATEFIELDS, &nf);
-  if (dterr == 0)
-    dterr = DecodeDateTime(field, ftype, nf, &dtype, tm, &fsec, &tz, &extra);
-  if (dterr != 0) {
-    DateTimeParseError(dterr, &extra, str, "timestamp with time zone",
-                       escontext);
-    PG_RETURN_NULL();
-  }
-
-  switch (dtype) {
-  case DTK_DATE:
-    if (tm2timestamp(tm, fsec, &tz, &result) != 0)
-      ereturn(escontext, (Datum)0,
-              (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-               errmsg("timestamp out of range: \"%s\"", str)));
-    break;
-
-  case DTK_EPOCH:
-    result = SetEpochTimestamp();
-    break;
-
-  case DTK_LATE:
-    TIMESTAMP_NOEND(result);
-    break;
-
-  case DTK_EARLY:
-    TIMESTAMP_NOBEGIN(result);
-    break;
-
-  default:
-    elog(ERROR, "unexpected dtype %d while parsing timestamptz \"%s\"", dtype,
-         str);
-    TIMESTAMP_NOEND(result);
+  /* ty reads the text; the zones, with their offsets, are the hooks' */
+  if (ty_timestamptz_parse(str, DateOrder, &ty_dtzone_hooks_tz, &result,
+                           &dterr, &extra)) {
+    if (dterr != 0) {
+      TyDateTimeParseError(dterr, &extra, str, "timestamp with time zone",
+                           escontext);
+      PG_RETURN_NULL();
+    }
+    ereturn(escontext, (Datum)0,
+            (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+             errmsg("timestamp out of range: \"%s\"", str)));
   }
 
   AdjustTimestampForTypmod(&result, typmod, escontext);

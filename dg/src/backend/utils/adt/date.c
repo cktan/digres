@@ -1530,28 +1530,16 @@ Datum timetz_in(PG_FUNCTION_ARGS) {
   int32 typmod = PG_GETARG_INT32(2);
   Node *escontext = fcinfo->context;
   TimeTzADT *result;
-  fsec_t fsec;
-  struct pg_tm tt, *tm = &tt;
-  int tz;
-  int nf;
   int dterr;
-  char workbuf[MAXDATELEN + 1];
-  char *field[MAXDATEFIELDS];
-  int dtype;
-  int ftype[MAXDATEFIELDS];
-  DateTimeErrorExtra extra;
-
-  dterr = ParseDateTime(str, workbuf, sizeof(workbuf), field, ftype,
-                        MAXDATEFIELDS, &nf);
-  if (dterr == 0)
-    dterr = DecodeTimeOnly(field, ftype, nf, &dtype, tm, &fsec, &tz, &extra);
-  if (dterr != 0) {
-    DateTimeParseError(dterr, &extra, str, "time with time zone", escontext);
-    PG_RETURN_NULL();
-  }
+  ty_dtin_extra_t extra;
 
   result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-  tm2timetz(tm, fsec, tz, result);
+  /* ty reads the text; the zones, with their offsets, are the hooks' */
+  if (ty_timetz_parse(str, DateOrder, &ty_dtzone_hooks_tz,
+                      (ty_timetz_t *)result, &dterr, &extra)) {
+    TyDateTimeParseError(dterr, &extra, str, "time with time zone", escontext);
+    PG_RETURN_NULL();
+  }
   AdjustTimeForTypmod(&(result->time), typmod);
 
   PG_RETURN_TIMETZADT_P(result);

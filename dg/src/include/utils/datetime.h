@@ -317,7 +317,8 @@ extern void DateTimeParseError(int dterr, DateTimeErrorExtra *extra,
  * ty reads the text of date, time and timestamp; these are its hooks for the
  * zone words and the clock, and the error report of its codes.
  */
-extern const ty_dtzone_t ty_dtzone_hooks;
+extern const ty_dtzone_t ty_dtzone_hooks;    /* no zone's offset is read */
+extern const ty_dtzone_t ty_dtzone_hooks_tz; /* with the offsets of zones */
 extern void TyDateTimeParseError(int dterr, const ty_dtin_extra_t *x,
                                  const char *str, const char *datatype,
                                  struct Node *escontext);

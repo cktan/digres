@@ -2672,6 +2672,44 @@ static void ty_hook_now(void *ctx, ty_tm_t *t, int32_t *fsec, int *tz) {
 const ty_dtzone_t ty_dtzone_hooks = {NULL, ty_hook_abbrev, ty_hook_zone,
                                      ty_hook_zone_fixed, ty_hook_now};
 
+/*
+ * A pg_tm of the broken-down time ty gives a hook: only what the zone code
+ * reads. No date (mday 0) is today's date in the session's zone.
+ */
+static inline void ty_hook_tm(const ty_tm_t *t, struct pg_tm *tm) {
+  if (t->mday == 0) {
+    GetCurrentDateTime(tm);
+  } else {
+    tm->tm_year = t->year;
+    tm->tm_mon = t->mon;
+    tm->tm_mday = t->mday;
+  }
+  tm->tm_hour = t->hour;
+  tm->tm_min = t->min;
+  tm->tm_sec = t->sec;
+}
+
+/* ty's hook for the offset of a zone, the session's if tz is NULL. */
+static int ty_hook_offset(void *ctx, const ty_tm_t *t, const void *tz) {
+  struct pg_tm tm;
+
+  ty_hook_tm(t, &tm);
+  return DetermineTimeZoneOffset(&tm, tz ? (pg_tz *)tz : session_timezone);
+}
+
+/* ty's hook for the offset of a dynamic abbreviation. */
+static int ty_hook_abbrev_offset(void *ctx, const ty_tm_t *t,
+                                 const char *abbrev, const void *tz) {
+  struct pg_tm tm;
+
+  ty_hook_tm(t, &tm);
+  return DetermineTimeZoneAbbrevOffset(&tm, abbrev, (pg_tz *)tz);
+}
+
+const ty_dtzone_t ty_dtzone_hooks_tz = {
+    NULL,         ty_hook_abbrev, ty_hook_zone,         ty_hook_zone_fixed,
+    ty_hook_now, ty_hook_offset, ty_hook_abbrev_offset};
+
 /* Report a code of ty's text in: the code is PostgreSQL's DTERR. */
 void TyDateTimeParseError(int dterr, const ty_dtin_extra_t *x, const char *str,
                           const char *datatype, Node *escontext) {

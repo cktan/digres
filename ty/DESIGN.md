@@ -627,6 +627,19 @@ out of range gives `TY_ERR_RANGE` and a code of 0. digres words
 both. The typmod stays with `ty_time_adjust_typmod` and
 `ty_timestamp_adjust_typmod`.
 
+The text in of timestamptz and timetz is `ty_timestamptz_parse` and
+`ty_timetz_parse`, from the same decoders. They need two more
+hooks, for the offsets: `offset` gives the offset of a zone at a
+local time (the session's zone if the zone is NULL; a time with no
+date has `mday` 0, and means today's date in the session's zone),
+and `abbrev_offset` the offset of a dynamic abbreviation. A host
+that leaves them NULL gets the zone of the text, and UTC if there
+is none. The three types with no zone leave them NULL, so they do
+not pay for an offset nobody reads. The tests of these two: 5,748
+known answers (the zones with a fixed offset), hand tests of the
+hooks, and `dg/test/select_datetimetz_in.sql`, which runs on the
+zones of the database.
+
 The tests: 4,383 known answers from the old digres, for the three
 types in the three date orders (`gen_known.py --dtin`), with a
 host of a few abbreviations and zones; hand tests of the hooks

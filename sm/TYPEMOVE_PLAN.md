@@ -618,6 +618,30 @@ copied from PostgreSQL keeps its copyright notice
      lookups of a word. The totals of a statement carried the
      noise of RocksDB (the table was rewritten between runs), so
      the cost of the function is what is compared.
+   - **The text in of timestamptz and timetz moved
+     (2026-11-22).** `ty_timestamptz_parse` and
+     `ty_timetz_parse`, from the same decoders as date, time and
+     timestamp. The host's hooks give the offset of a zone at a
+     local time (`offset`: the session's zone if the zone is
+     NULL, and today's date for a time with no date) and the
+     offset of a dynamic abbreviation (`abbrev_offset`); the
+     three types with no zone leave them NULL, and pay nothing.
+     The tests: 5,748 known answers from the old digres (two
+     types, three date orders, two session zones, no zone with a
+     daylight time), hand tests of the hooks, and
+     `dg/test/select_datetimetz_in.sql`, which prints the same as
+     the digres before the move, with the zones of the database:
+     a daylight time, its gap and its overlap, a dynamic
+     abbreviation, and the message of each error. Measured by
+     callgrind over 100,000 rows of text, the cost of the
+     statement (old, new): `timestamptz` with no zone in the text
+     +0.89%; with a numeric zone -0.16%; in the word form with an
+     abbreviation +0.32%; `timetz` +2.19%. The first version was
+     +4.9% on `timetz` and +1.4% on the first form: a call of the
+     clock before each offset, and the clearing of a `pg_tm` in
+     each hook. The user accepted the +2.19% on `timetz`: it is
+     the cost of two layers (ty's and the wrapper's) and one hook
+     call, and it is the rarest of the types.
    - **The typmod of interval, timestamp and time, and
      `make_interval` moved (2026-11-21).**
      `ty_interval_adjust_typmod`, `ty_timestamp_adjust_typmod`,

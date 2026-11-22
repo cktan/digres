@@ -150,7 +150,7 @@ int hook_abbrev(void *, int, const char *w, int *type, int *offset,
     return TY_DTERR_BAD_ZONE_ABBREV;
   } else if (strcmp(w, "pst") == 0) {
     *type = TY_ABBREV_TZ;
-    *offset = 28800;
+    *offset = -28800; /* seconds east, as the table of abbreviations has it */
   }
   return 0;
 }
@@ -169,8 +169,8 @@ void hook_now(void *, ty_tm_t *tm, int32_t *fsec, int *tz) {
   *tz = 18000;
 }
 
-const ty_dtzone_t kHost = {nullptr, hook_abbrev, hook_zone, hook_zone_fixed,
-                           hook_now};
+const ty_dtzone_t kHost = {nullptr,  hook_abbrev, hook_zone, hook_zone_fixed,
+                           hook_now, nullptr,     nullptr};
 
 } // namespace
 
@@ -239,4 +239,126 @@ TEST_CASE("the text in of date and time asks the host for zones and clock") {
   CHECK(TY_DTERR_BAD_FORMAT == dterr);
   CHECK(0 == ty_date_parse("epoch", TY_DATEORDER_MDY, nullptr, &d, &dterr, &x));
   CHECK(-10957 == d);
+}
+
+namespace {
+
+/* What the offset hooks were asked, and what they answer. */
+struct offset_log_t {
+  int session_west = 7200; /* the session's zone, west of Greenwich */
+  int zone_west = 18000;   /* "America/New_York" at the time asked */
+  int dyn_west = 3600;     /* "xst" */
+  ty_tm_t asked = {};      /* the time of the last question */
+  const void *asked_tz = nullptr;
+  std::string asked_abbrev;
+  int calls = 0;
+};
+
+int off_offset(void *ctx, const ty_tm_t *tm, const void *tz) {
+  offset_log_t *log = static_cast<offset_log_t *>(ctx);
+
+  log->calls++;
+  log->asked = *tm;
+  log->asked_tz = tz;
+  return tz == nullptr ? log->session_west : log->zone_west;
+}
+
+int off_abbrev_offset(void *ctx, const ty_tm_t *tm, const char *abbrev,
+                      const void *tz) {
+  offset_log_t *log = static_cast<offset_log_t *>(ctx);
+
+  log->calls++;
+  log->asked = *tm;
+  log->asked_tz = tz;
+  log->asked_abbrev = abbrev;
+  return log->dyn_west;
+}
+
+int off_zone_fixed(void *, const void *, long *) { return 0; }
+
+} // namespace
+
+// Verify that the zone of timestamptz and timetz is asked of the host.
+// 1. A named zone: the hook gets the zone and the local time, and the
+//    instant is the local time plus its offset.
+// 2. No zone in the text: the session's zone, with a NULL zone.
+// 3. A zone of the text as an offset or an abbreviation needs no hook.
+// 4. A dynamic abbreviation: the hook gets the word and its zone.
+// 5. A timetz with a zone that has a daylight time and no date is bad;
+//    with a dynamic abbreviation, it is asked with no date.
+// 6. With no offset hook, the zone of the text only, and UTC otherwise.
+TEST_CASE("the text in of timestamptz and timetz asks the host for offsets") {
+  offset_log_t log;
+  ty_dtzone_t host = {&log,     hook_abbrev, hook_zone,        off_zone_fixed,
+                      hook_now, off_offset,  off_abbrev_offset};
+  int dterr;
+  ty_dtin_extra_t x;
+  int64_t t, local;
+  ty_timetz_t tt;
+
+  CHECK(0 == ty_timestamp_parse("2000-01-31 04:05", TY_DATEORDER_MDY, &host,
+                                &local, &dterr, &x));
+
+  // 1. A named zone: the hook gets the zone and the local time.
+  CHECK(0 == ty_timestamptz_parse("2000-01-31 04:05 America/New_York",
+                                  TY_DATEORDER_MDY, &host, &t, &dterr, &x));
+  CHECK(local + 18000 * INT64_C(1000000) == t);
+  CHECK(nullptr != log.asked_tz);
+  CHECK(2000 == log.asked.year);
+  CHECK(31 == log.asked.mday);
+  CHECK(4 == log.asked.hour);
+  CHECK(5 == log.asked.min);
+
+  // 2. No zone in the text: the session's zone, with a NULL zone.
+  log.calls = 0;
+  CHECK(0 == ty_timestamptz_parse("2000-01-31 04:05", TY_DATEORDER_MDY, &host,
+                                  &t, &dterr, &x));
+  CHECK(local + 7200 * INT64_C(1000000) == t);
+  CHECK(nullptr == log.asked_tz);
+  CHECK(1 == log.calls);
+
+  // 3. A zone of the text as an offset or an abbreviation needs no hook.
+  log.calls = 0;
+  CHECK(0 == ty_timestamptz_parse("2000-01-31 04:05 +02", TY_DATEORDER_MDY,
+                                  &host, &t, &dterr, &x));
+  CHECK(local - 7200 * INT64_C(1000000) == t);
+  CHECK(0 == ty_timestamptz_parse("2000-01-31 04:05 pst", TY_DATEORDER_MDY,
+                                  &host, &t, &dterr, &x));
+  CHECK(local + 28800 * INT64_C(1000000) == t);
+  CHECK(0 == log.calls);
+
+  // 4. A dynamic abbreviation: the hook gets the word and its zone.
+  CHECK(0 == ty_timestamptz_parse("2000-01-31 04:05 xst", TY_DATEORDER_MDY,
+                                  &host, &t, &dterr, &x));
+  CHECK(local + 3600 * INT64_C(1000000) == t);
+  CHECK(std::string("xst") == log.asked_abbrev);
+  CHECK(nullptr != log.asked_tz);
+
+  // 5. A timetz with a daylight zone and no date is bad; with a dynamic
+  //    abbreviation, it is asked with no date.
+  CHECK(-1 == ty_timetz_parse("04:05 America/New_York", TY_DATEORDER_MDY, &host,
+                              &tt, &dterr, &x));
+  CHECK(TY_DTERR_BAD_FORMAT == dterr);
+  CHECK(0 == ty_timetz_parse("2000-01-31 04:05 America/New_York",
+                             TY_DATEORDER_MDY, &host, &tt, &dterr, &x));
+  CHECK(18000 == tt.zone);
+  CHECK(0 ==
+        ty_timetz_parse("04:05 xst", TY_DATEORDER_MDY, &host, &tt, &dterr, &x));
+  CHECK(3600 == tt.zone);
+  CHECK(0 == log.asked.mday);
+  CHECK(4 == log.asked.hour);
+  CHECK(0 ==
+        ty_timetz_parse("04:05", TY_DATEORDER_MDY, &host, &tt, &dterr, &x));
+  CHECK(7200 == tt.zone);
+
+  // 6. With no offset hook, the zone of the text only, and UTC otherwise.
+  ty_dtzone_t bare = host;
+  bare.offset = nullptr;
+  bare.abbrev_offset = nullptr;
+  CHECK(0 == ty_timestamptz_parse("2000-01-31 04:05", TY_DATEORDER_MDY, &bare,
+                                  &t, &dterr, &x));
+  CHECK(local == t);
+  CHECK(0 == ty_timestamptz_parse("2000-01-31 04:05 +02", TY_DATEORDER_MDY,
+                                  &bare, &t, &dterr, &x));
+  CHECK(local - 7200 * INT64_C(1000000) == t);
 }

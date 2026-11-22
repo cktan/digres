@@ -396,6 +396,44 @@ def main_dtin(args):
         print("dt.in %s %d %s => %s" % (kind, order[1], t.encode().hex() or "-", r))
 
 
+def main_dtzin(args):
+    """The text in of timestamptz and timetz, by date order and session zone:
+    the instant as a UTC timestamp, or the time with its zone, as the old code
+    read it. Zones with a daylight time are left to the server's tests."""
+    from concurrent.futures import ThreadPoolExecutor
+    inputs = [t for t in dtin_inputs() if "america" not in t.lower() and "europe" not in t.lower()]
+    kinds = ["timestamptz", "timetz"]
+    orders = [("YMD", 0), ("DMY", 1), ("MDY", 2)]
+    zones = [("UTC", 0), ("Etc/GMT-5", 1)]
+
+    def one(job):
+        kind, (order, _), (zone, _z), t = job
+        lit = t.replace("\\", "\\\\").replace("'", "''").replace("\t", "\\t").replace("\n", "\\n")
+        expr = "((E'%s')::timestamptz at time zone 'UTC')::text" % lit if kind == "timestamptz" else "(E'%s')::timetz::text" % lit
+        script = "set timezone = '%s';\nset datestyle = 'ISO, %s';\nselect %s;\n" % (zone, order, expr)
+        r = subprocess.run(["psql", "-X", "-A", "-t", "-q"] + args, input=script, capture_output=True, text=True)
+        e = r.stderr
+        if "ERROR" not in e:
+            return r.stdout.strip().encode().hex() or "-"
+        if "invalid input syntax" in e:
+            return "E -1"
+        if "date/time field value out of range" in e:
+            return "E -3" if "different" in e else "E -2"
+        if "time zone displacement out of range" in e:
+            return "E -5"
+        if "not recognized" in e:
+            return "E -7" if "configuration file" in e else "E -6"
+        if "out of range" in e:
+            return "E R"
+        return "E ?" + e.strip().replace(" ", "_")[:40]
+
+    jobs = [(k, o, z, t) for k in kinds for o in orders for z in zones for t in inputs]
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        res = list(ex.map(one, jobs))
+    for (kind, order, zone, t), r in zip(jobs, res):
+        print("dtz.in %s %d %d %s => %s" % (kind, order[1], zone[1], t.encode().hex() or "-", r))
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--part":
         sys.argv.pop(1)
@@ -408,6 +446,10 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--interval":
         sys.argv.pop(1)
         main_interval(sys.argv[1:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "--dtzin":
+        sys.argv.pop(1)
+        main_dtzin(sys.argv[1:])
         return
     if len(sys.argv) > 1 and sys.argv[1] == "--dtin":
         sys.argv.pop(1)

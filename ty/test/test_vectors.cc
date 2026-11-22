@@ -1361,7 +1361,7 @@ bool run_ts_known(const vec_t &v) {
 struct fake_zone_t {
   const char *name;
   int fixed;
-  long gmtoff;
+  long gmtoff; /* seconds east of Greenwich, as pg_get_timezone_offset */
 };
 
 const fake_zone_t kFakeZones[] = {
@@ -1369,8 +1369,9 @@ const fake_zone_t kFakeZones[] = {
     {"europe/london", 0, 0},
     {"utc", 1, 0},
     {"gmt", 1, 0},
+    {"etc/gmt-5", 1, 18000},
     /* what pg_tzset takes of a text that is almost a POSIX spec */
-    {"bt04:05:06.5", 1, 0},
+    {"bt04:05:06.5", 1, -(4 * 3600 + 5 * 60 + 6)},
     {"tt04:057ttues:day", 0, 0},
 };
 
@@ -1422,7 +1423,8 @@ int posix_zone(const char *p) {
 
 /* Is the lower-case word a zone: a name of the list, or a POSIX spec. */
 const void *fake_zone(void *, const char *name) {
-  static const fake_zone_t fixed = {"posix", 1, 0}, dst = {"posix", 0, 0};
+  static thread_local fake_zone_t ring[8];
+  static thread_local int next = 0;
 
   for (const auto &z : kFakeZones) {
     if (strcmp(z.name, name) == 0) {
@@ -1431,7 +1433,32 @@ const void *fake_zone(void *, const char *name) {
   }
   int k = posix_zone(name);
 
-  return k == 0 ? nullptr : k == 1 ? &fixed : &dst;
+  if (k == 0) {
+    return nullptr;
+  }
+  // A POSIX offset is west of Greenwich: "gmt+8" is 8 hours west.
+  const char *p = name;
+  while (isalpha((unsigned char)*p)) {
+    p++;
+  }
+  int sign = 1;
+  if (*p == '+' || *p == '-') {
+    sign = *p == '-' ? -1 : 1;
+    p++;
+  }
+  long v[3] = {0, 0, 0};
+  for (int part = 0; part < 3 && isdigit((unsigned char)*p); part++) {
+    for (; isdigit((unsigned char)*p); p++) {
+      v[part] = v[part] * 10 + (*p - '0');
+    }
+    if (*p == ':') {
+      p++;
+    }
+  }
+  fake_zone_t &z = ring[next++ % 8];
+
+  z = {"posix", k == 1, -sign * (v[0] * 3600 + v[1] * 60 + v[2])};
+  return &z;
 }
 
 int fake_zone_fixed(void *, const void *tz, long *gmtoff) {
@@ -1447,9 +1474,9 @@ int fake_abbrev(void *, int, const char *w, int *type, int *offset,
   static const struct {
     const char *w;
     int type, offset;
-  } t[] = {{"pst", TY_ABBREV_TZ, 28800},  {"est", TY_ABBREV_TZ, 18000},
-           {"edt", TY_ABBREV_DTZ, 14400}, {"pdt", TY_ABBREV_DTZ, 25200},
-           {"utc", TY_ABBREV_TZ, 0},      {"gmt", TY_ABBREV_TZ, 0},
+  } t[] = {{"pst", TY_ABBREV_TZ, -28800},  {"est", TY_ABBREV_TZ, -18000},
+           {"edt", TY_ABBREV_DTZ, -14400}, {"pdt", TY_ABBREV_DTZ, -25200},
+           {"utc", TY_ABBREV_TZ, 0},       {"gmt", TY_ABBREV_TZ, 0},
            {"z", TY_ABBREV_TZ, 0}};
 
   *type = TY_ABBREV_NONE;
@@ -1475,8 +1502,29 @@ void fake_now(void *, ty_tm_t *tm, int32_t *fsec, int *tz) {
   *tz = 0;
 }
 
-const ty_dtzone_t kFakeHost = {nullptr, fake_abbrev, fake_zone, fake_zone_fixed,
-                               fake_now};
+/* The offset of a zone, west of Greenwich; the session's if tz is NULL. */
+int fake_offset(void *ctx, const ty_tm_t *, const void *tz) {
+  if (tz == nullptr) {
+    return *static_cast<int *>(ctx);
+  }
+  return (int)-static_cast<const fake_zone_t *>(tz)->gmtoff;
+}
+
+/* No zone of the vectors has a dynamic abbreviation. */
+int fake_abbrev_offset(void *, const ty_tm_t *, const char *, const void *) {
+  return 0;
+}
+
+const ty_dtzone_t kFakeHost = {nullptr,         fake_abbrev, fake_zone,
+                               fake_zone_fixed, fake_now,    nullptr,
+                               nullptr};
+
+/* The same with the offsets, for the types that have a zone; ctx is the
+ * offset of the session's zone, west of Greenwich. */
+ty_dtzone_t fake_host_tz(int *session_west) {
+  return {session_west, fake_abbrev, fake_zone,         fake_zone_fixed,
+          fake_now,     fake_offset, fake_abbrev_offset};
+}
 
 /* Run a text in of date, time or timestamp (known.txt): the text is hex. */
 bool run_dtin_known(const vec_t &v) {
@@ -1544,6 +1592,73 @@ bool run_dtin_known(const vec_t &v) {
   return true;
 }
 
+/*
+ * Run a text in of timestamptz or timetz (known.txt): kind, date order, the
+ * session's zone (0 UTC, 1 Etc/GMT-5), and the text in hex.
+ */
+bool run_dtzin_known(const vec_t &v) {
+  std::vector<uint8_t> tb = bytes_of(v.args[3]);
+  std::string z(reinterpret_cast<const char *>(tb.data()), tb.size());
+  const std::string &kind = v.args[0];
+  int order = std::stoi(v.args[1]), dterr = 0, rc;
+  int session_west = std::stoi(v.args[2]) == 0 ? 0 : -18000;
+  ty_dtzone_t host = fake_host_tz(&session_west);
+  ty_dtin_extra_t extra;
+  int64_t t = 0;
+  ty_timetz_t tz = {};
+
+  INFO(v.line);
+  // The zone of this text has a daylight time: what pg_tzset knows of its
+  // rules is the server's.
+  std::string low = z;
+
+  for (char &c : low) {
+    c = (char)tolower((unsigned char)c);
+  }
+  if (z.find('\0') != std::string::npos ||
+      low.find("ttues:day") != std::string::npos) {
+    return true;
+  }
+  if (kind == "timestamptz") {
+    rc = ty_timestamptz_parse(z.c_str(), order, &host, &t, &dterr, &extra);
+  } else {
+    rc = ty_timetz_parse(z.c_str(), order, &host, &tz, &dterr, &extra);
+  }
+  if (v.res[0] == "E") {
+    CHECK(-1 == rc);
+    if (v.res[1] == "R") {
+      CHECK(0 == dterr);
+      CHECK(TY_ERR_RANGE == ty_errnum());
+    } else {
+      CHECK(std::stoi(v.res[1]) == dterr);
+      CHECK(TY_ERR_INVALID == ty_errnum());
+    }
+    return true;
+  }
+  CHECK(0 == rc);
+  if (rc != 0) {
+    return true;
+  }
+  std::string text;
+
+  if (kind == "timestamptz") {
+    text = ts_text(t);
+  } else {
+    char out[TY_DATETIME_TEXT_MAX];
+    ty_tm_t tm = {};
+
+    tm.hour = (int32_t)(tz.time / TY_USECS_PER_HOUR);
+    tm.min = (int32_t)(tz.time / TY_USECS_PER_MINUTE % 60);
+    tm.sec = (int32_t)(tz.time / TY_USECS_PER_SEC % 60);
+    ty_time_format(&tm, (int32_t)(tz.time % TY_USECS_PER_SEC), 1, tz.zone,
+                   TY_DATES_ISO, out);
+    text = out;
+  }
+  CHECK(v.res[0] ==
+        token_of(reinterpret_cast<const uint8_t *>(text.data()), text.size()));
+  return true;
+}
+
 /* Run a vector of what PostgreSQL did with a text (known.txt): the text is hex.
  */
 bool run_known(const vec_t &v) {
@@ -1558,6 +1673,9 @@ bool run_known(const vec_t &v) {
   }
   if (op == "dt.in") {
     return run_dtin_known(v);
+  }
+  if (op == "dtz.in") {
+    return run_dtzin_known(v);
   }
   if (op == "iv.parse") {
     std::vector<uint8_t> tb = bytes_of(v.args[1]);

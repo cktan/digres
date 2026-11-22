@@ -578,8 +578,9 @@ typedef struct ty_dtin_extra_t {
  * above. ctx is passed back to each.
  *
  * abbrev: Is the lower-case word a time zone abbreviation? Set *type
- *   (TY_ABBREV_*), and *offset and *tz on every return; for TZ and DTZ, *offset in seconds west of Greenwich
- *   (PostgreSQL's sign, the offset flipped); for DYNTZ, *tz to the zone, an
+ *   (TY_ABBREV_*), and *offset and *tz on every return; for TZ and DTZ,
+ *   *offset in seconds east of Greenwich, as PostgreSQL's table of
+ *   abbreviations has it (PST is -28800); for DYNTZ, *tz to the zone, an
  *   opaque pointer. field is the index of the word in the text, for a cache.
  *   Return 0, or a TY_DTERR_* code, with *extra filled.
  * zone: Is the word the name of a zone ("America/New_York")? The zone, an
@@ -588,6 +589,15 @@ typedef struct ty_dtin_extra_t {
  *   *gmtoff to it in seconds east of Greenwich, and return 1.
  * now: The time of the transaction in the session's zone: the fields, the
  *   microseconds, and the offset in seconds west of Greenwich.
+ * offset: The offset in seconds west of Greenwich of a zone at a local time
+ *   (what PostgreSQL's DetermineTimeZoneOffset gives); tz is the zone from
+ *   the hook zone, or NULL for the session's zone. A time of day with no
+ *   date has mday 0: the date is then today's, in the session's zone. NULL for a text of a type
+ *   with no zone (date, time, timestamp), which reads no offset: then none
+ *   is asked for.
+ * abbrev_offset: The same for a dynamic abbreviation (DetermineTimeZoneAbbrev
+ *   Offset): abbrev is the lower-case word, tz the zone the hook abbrev gave;
+ *   mday is 0 for no date, as above.
  */
 typedef struct ty_dtzone_t {
     void* ctx;
@@ -596,6 +606,9 @@ typedef struct ty_dtzone_t {
     const void* (*zone)(void* ctx, const char* name);
     int (*zone_fixed)(void* ctx, const void* tz, long* gmtoff);
     void (*now)(void* ctx, ty_tm_t* tm, int32_t* fsec, int* tz);
+    int (*offset)(void* ctx, const ty_tm_t* tm, const void* tz);
+    int (*abbrev_offset)(void* ctx, const ty_tm_t* tm, const char* abbrev,
+                         const void* tz);
 } ty_dtzone_t;
 
 int ty_date_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
@@ -604,5 +617,18 @@ int ty_time_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
                   int64_t* out, int* dterr, ty_dtin_extra_t* extra);
 int ty_timestamp_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
                        int64_t* out, int* dterr, ty_dtin_extra_t* extra);
+
+/*
+ * The text in of timestamptz and timetz (timestamptz_in and timetz_in), up to
+ * the typmod. They read the zone of the text, or else the session's, with
+ * the hooks offset and abbrev_offset, so those must be there. A timestamptz
+ * is the instant, in UTC. A timetz is the time as written, with its zone in
+ * seconds west of Greenwich.
+ */
+int ty_timestamptz_parse(const char* str, int dateorder,
+                         const ty_dtzone_t* zone, int64_t* out, int* dterr,
+                         ty_dtin_extra_t* extra);
+int ty_timetz_parse(const char* str, int dateorder, const ty_dtzone_t* zone,
+                    ty_timetz_t* out, int* dterr, ty_dtin_extra_t* extra);
 
 #endif
