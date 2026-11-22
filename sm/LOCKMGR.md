@@ -589,6 +589,7 @@ something the caller is not writing.
 | a collation or type in use | OID, its oid | `DROP COLLATION` with a column using it | not built ([`CATALOG.md`](CATALOG.md)) |
 | an index as an object | none | `DROP INDEX` against a scan on it | subsumed by the table's lock |
 | a sequence as an object | none | `CREATE` and `DROP SEQUENCE` | its record is a catalog key, read in the transaction ([`SEQUENCE.md`](SEQUENCE.md)) |
+| a store, against work outside a transaction | store, its storeid | a reaper's write against the drop of the store's column family (§2.3) | built: `sm1::mkstore`, `sm1::rmstore`, `sm1::store_work_begin`, `gc_store_try` |
 
 Nothing in sm1 requires a width of a key: `max_keylen`, 4096,
 bounds it, and a lock keeps none of it.
@@ -619,13 +620,66 @@ involved.
   takes no locks and is not undone by an abort.
 - **A TOAST chunk.** It belongs to its row.
 
+### 2.3 A store's lock
+
+Some writes to a store run outside the writer's transaction: the
+row reaper's cut of a chain, the btree reaper's write of a leaf,
+and the GC worker's repair and purge. A drop of the store must
+not come between such a write and its check that the store is
+there.
+
+> **Warning:** a write to a dropped column family is not a
+> refused write. RocksDB fails its memtable insert after the
+> WAL write, and sets a background error. From then on, every
+> write to the database fails, until it is opened again.
+
+A store's lock orders the two. It is an OID lock in a name space
+of its own, so a storeid never meets a table's oid of the same
+number (§3.1).
+
+| Holder | Mode | Held |
+| --- | --- | --- |
+| the transaction that makes the store (`sm1::mkstore`) | X | to its end: an abort drops the store |
+| the transaction that drops the store (`sm1::rmstore`) | X | to its end; taken after the catalog row's lock, so a second drop still waits on the row (`b32`) |
+| a session's drop of a temporary store, at commit or at close | X | over the drop of the column family |
+| work on the store (`sm1::store_work_begin`) | IX | to the work's end; asked for without a wait |
+
+The column family of a dropped store goes later, in the GC
+worker, once no snapshot sees the store ([`GC.md`](GC.md) §1).
+So the work does not trust its IX alone:
+
+1. Begin a read-only transaction at READ COMMITTED, unless one is
+   active.
+2. Take IX on the store, if it can be had at once. A drop or a
+   create holds X: pass over the store.
+3. Check the store is live: its catalog row at the newest
+   committed state. A drop that committed before the IX shows
+   there. A temporary store has no catalog row: its handle is
+   checked, as its drops hold X.
+4. Do the work. A drop of the store that is not committed waits
+   for the IX, so the store stays, and the GC worker does not
+   drop a store whose catalog row is live.
+5. End the transaction, and the IX with it.
+
+The row reaper and the btree reaper run each pass in one such
+transaction, with IX on each store they meet. A drop of a store
+waits for the pass. The GC worker has a session for locks alone
+(`db->gc_locker`), and takes IX on each store it repairs or
+purges, to the run's end. A store whose drop or create holds X
+keeps its records for the next run. Its own drops of permanent
+stores come after its writes, in the same thread.
+
+`g04` is the scenario; `test_chain.cc` has the race with a reap,
+in both orders.
+
 ## 3. Implementation
 
 ### 3.1 The lock id
 
 `lockid_t` in `src/locktab.h` holds two words. `hi` is the
 storeid, its top bit set for an OID lock; `lo` is the oid, or
-`lock_row_hash(key)`. An OID lock's storeid is 0.
+`lock_row_hash(key)`. An OID lock's storeid is 0. A store's lock
+(§2.3) is an OID lock with storeid 1, and the storeid in `lo`.
 
 `lock_row_hash` in `src/lockmgr.cc` must give the same value in
 every build, as a `PREPARED` record keeps it: no host byte order,

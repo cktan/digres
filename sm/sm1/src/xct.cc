@@ -250,6 +250,19 @@ void reset(sm1::session_t *s) {
 }
 
 /*
+ * Drop a store the transaction created. A permanent one is under the
+ * X its sm1::mkstore took; a temporary one takes no lock until now, so
+ * it takes X for its drop (../LOCKMGR.md §2.3), and is the session's
+ * no longer.
+ */
+void drop_created_store(sm1::session_t *s, uint64_t storeid) {
+  if (s->temp_stores.erase(storeid)) {
+    lock_store(s, storeid, sm1::SM_LOCKMODE_EX, false);
+  }
+  db_drop_store_cf(s->db, storeid);
+}
+
+/*
  * Drop the column families this transaction created, newest
  * first (../DBMGR.md §7.6). A failure leaves an orphan CF with no catalog
  * row, which the startup sweep (../DBMGR.md §7.6 step 6) is meant to catch.
@@ -257,9 +270,7 @@ void reset(sm1::session_t *s) {
 void drop_created(sm1::session_t *s) {
   // Drop each created CF, newest first.
   for (auto it = s->created.rbegin(); it != s->created.rend(); ++it) {
-    db_drop_store_cf(s->db, *it);
-    // A temporary one is the session's no longer.
-    s->temp_stores.erase(*it);
+    drop_created_store(s, *it);
   }
 }
 
@@ -603,10 +614,7 @@ int rollback(sm1::session_t *s, int depth) {
 
   // Drop the stores created after the mark, newest first.
   for (size_t i = s->created.size(); i-- > m.created;) {
-    // Drop the CF.
-    db_drop_store_cf(db, s->created[i]);
-    // A temporary one is the session's no longer.
-    s->temp_stores.erase(s->created[i]);
+    drop_created_store(s, s->created[i]);
   }
   // Forget those stores.
   s->created.resize(m.created);
@@ -733,14 +741,15 @@ int commit(sm1::session_t *s) {
     }
     // Keep the committed SSI node for its overlaps.
     ssi_end(s);
+    // It may have dropped a temporary store, which writes nothing:
+    // under its X, so no work on the store meets the drop.
+    drop_temp_dropped(s);
     // Release its locks: a transaction that never wrote can
     // still hold them, through sm1::lock_row or
     // sm1::lock_oid (../LOCKMGR.md §3.2).
     lock_release_all(s);
     // Keep its on_commit functions for the entry point to run.
     committed_fns.swap(s->on_commit);
-    // It may have dropped a temporary store, which writes nothing.
-    drop_temp_dropped(s);
     // Forget the transaction.
     reset(s);
     return 0;
@@ -983,9 +992,10 @@ void publish_commit(sm1::session_t *s, uint64_t commit_ts) noexcept {
   // once the commit is visible, and
   // queue dropped stores for removal once no snapshot can
   // see them (../XCTMGR.md §8.4).
-  lock_release_all(s);
-  // Drop its dropped temporary stores now; the queue finds them gone.
+  // Drop its dropped temporary stores now, under their X; the queue
+  // finds them gone.
   drop_temp_dropped(s);
+  lock_release_all(s);
   // Queue its dropped stores for GC.
   gc_queue_drops(db, commit_ts, s->dropped);
   // Drop each dropped sequence's lease; nothing reads it now

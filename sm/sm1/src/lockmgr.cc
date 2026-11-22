@@ -417,7 +417,7 @@ int lock_try(sm1::session_t *s, const lockid_t &k, sm1::lockmode_t mode,
 }
 
 /*
- * Take the OID lock (storeid, key) in mode; see session.h.
+ * Take the OID lock k in mode, an oid's or a store's; see session.h.
  *
  * The fast path (../LOCKMGR.md §3.2) keeps a table's weak locks,
  * IS and IX, out of the lock table and its mutexes. IS and IX never
@@ -454,10 +454,9 @@ int lock_try(sm1::session_t *s, const lockid_t &k, sm1::lockmode_t mode,
  * after raising the count. If fp_take ran first, the sweep finds
  * its slot; if after, it sees the count and goes to the table.
  */
-int lock_oid(sm1::session_t *s, uint64_t oid, sm1::lockmode_t mode,
-             bool nowait) {
+int lock_name(sm1::session_t *s, const lockid_t &k, sm1::lockmode_t mode,
+              bool nowait) {
   db_t *db = s->db;
-  lockid_t k = oid_id(oid);
   bool counted = false;
   if (is_weak(mode)) {
     if (fp_take(db, s, k, mode)) {
@@ -501,6 +500,20 @@ int lock_oid(sm1::session_t *s, uint64_t oid, sm1::lockmode_t mode,
     }
   }
   return rc;
+}
+
+/* Take the lock on an oid; see session.h. */
+int lock_oid(sm1::session_t *s, uint64_t oid, sm1::lockmode_t mode,
+             bool nowait) {
+  return lock_name(s, oid_id(oid), mode, nowait);
+}
+
+/* Take a store's lock; see session.h. */
+int lock_store(sm1::session_t *s, uint64_t storeid, sm1::lockmode_t mode,
+               bool nowait) {
+  // An OID lock in a name space of its own: bit 0 of hi set, so a
+  // storeid never meets a table's oid of the same number.
+  return lock_name(s, {type_bit(sm1::LOCKTYPE_OID) | 1, storeid}, mode, nowait);
 }
 
 /* Add the session to its database's sweep list; see session.h. */

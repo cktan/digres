@@ -1003,21 +1003,29 @@ A row pass, `sm1::row_reap_pass()`:
 
 1. Take the queue (`hint_queue_t::take()`).
 2. Read W once for the batch.
-3. For each key, take the key's write latch, and read CURR again.
+3. Begin a read-only transaction, unless one is active, for the
+   stores' locks.
+4. At a store's first key, take IX on the store
+   (`sm1::store_work_begin`, LOCKMGR.md §2.3). Skip every key of
+   a store whose drop or create holds X, or whose drop committed:
+   a write to a dropped column family stops every write of the
+   database.
+5. For each key, take the key's write latch, and read CURR again.
    If CURR is gone, has a `prev` of 0, or is not settled at W,
    skip the key: a key not yet settled is queued again by a later
    read.
-4. Walk the chain from `prev`, and collect the ids, until `prev`
+6. Walk the chain from `prev`, and collect the ids, until `prev`
    is 0 or an id is missing.
-5. Write one `WriteBatch`: a `Delete` of each id, and CURR again
+7. Write one `WriteBatch`: a `Delete` of each id, and CURR again
    with `prev` set to 0, stamped with its writer's `commit_ts`.
    Then let go of the latch. Unstamped, the copy could outlive
    its writer's status record: a `CF:txn` sweep that stamped the
    stored CURR deletes the record (§1), as for any copy a write
    makes (`stamp_copy()`).
-6. A pool's detach ends a pass after the key it is on.
+8. A pool's detach ends a pass after the key it is on.
+9. End the transaction begun in step 3, and the IX with it.
 
-Step 5 writes the row again, its whole payload. Without it, a
+Step 7 writes the row again, its whole payload. Without it, a
 reader would find the same `prev` on the next read and queue the
 key again for ever. The cost is a copy of the row once for each
 reaped key. A writer's reap has no such cost, as its write

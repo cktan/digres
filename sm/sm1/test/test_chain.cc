@@ -1853,33 +1853,104 @@ TEST_CASE(
 
 namespace {
 
-/* The store a reap hook drops; set by the test that uses it. */
+/* The store a reap hook's drop drops, and the session that drops it. */
 std::atomic<uint64_t> g_hook_drop_store{0};
+sm1::session_t *g_hook_dropper = nullptr;
+std::thread g_hook_drop;
+/* Set once the hook's drop has dropped; read when the hook ends. */
+std::atomic<bool> g_hook_dropped{false};
+bool g_dropped_in_hook = false;
 
-/* A reap hook that drops the store where a race would drop it. */
-void drop_in_reap(db_t *db) { db_drop_store_cf(db, g_hook_drop_store.load()); }
+/*
+ * A reap hook that drops the store from another session where a race
+ * would, between the reap's read and its write, and gives the drop a
+ * while to go through before the reap goes on.
+ */
+void drop_in_reap(db_t *) {
+  g_hook_drop = std::thread([] {
+    begin_xct(g_hook_dropper);
+    REQUIRE(sm1::rmstore(g_hook_dropper, g_hook_drop_store.load()) == 0);
+    g_hook_dropped = true;
+    commit_xct(g_hook_dropper);
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  g_dropped_in_hook = g_hook_dropped.load();
+}
 
 } // namespace
 
-TEST_CASE("a store dropped during a reap is no error") {
-  // Verify the race the row reaper met in server.sh and pgregress: a store
-  // dropped after the pass copied its handle, so the write is refused by
-  // RocksDB with "Invalid column family specified in write batch".
-  // 1. Insert k and update it, so CURR has a chain, and read k to queue it.
-  // 2. Reap, with the hook dropping the store between the read and the
-  //    write.
-  // 3. Confirm the pass returns 0, not -1: nothing was reaped, no error.
+TEST_CASE("a drop of a store waits for a reap that holds its IX") {
+  // Verify a reap and a drop of its store never meet: the drop's X waits
+  // for the pass's IX on the store, so the reap's write never goes to a
+  // dropped CF, which would stop RocksDB taking any write.
+  // 1. Make stores c and other; insert k in c, update it, and read it to
+  //    queue it.
+  // 2. Reap, with the hook starting a drop of c in another session between
+  //    the read and the write: the drop has not returned when the hook ends.
+  // 3. Confirm the pass reaped k, and the drop then commits.
+  // 4. Run GC: c's CF is gone, and an insert into other commits.
   chain_fixture_t f;
   uint64_t c = mkchain(f.s);
+  uint64_t other = mkchain(f.s);
   chain_put(f.s, c, "k", "v1", true);
   chain_put(f.s, c, "k", "v2", false);
   CHECK(read_one(f.s, c, "k") == "v2");
 
   g_hook_drop_store = c;
+  g_hook_dropper = f.open();
+  g_hook_dropped = false;
   g_reap_hook = drop_in_reap;
   int64_t reaped = sm1::row_reap_pass(f.s);
   g_reap_hook = nullptr;
-  CHECK(reaped == 0);
+  g_hook_drop.join();
+  CHECK_FALSE(g_dropped_in_hook);
+  CHECK(reaped == 1);
+  CHECK(g_hook_dropped.load());
+
+  gc_run_once(f.s->db);
+  CHECK(db_store(f.s->db, c).cf == nullptr);
+  chain_put(f.s, other, "j", "w", true);
+  sm1::closedb(g_hook_dropper);
+}
+
+TEST_CASE("a reap passes over a store being dropped, and one dropped") {
+  // Verify the row reaper writes nothing to a store whose drop holds X,
+  // or has committed, and the database still takes writes.
+  // 1. Make stores c and other; insert k in c, update it, and read it to
+  //    queue it.
+  // 2. Session d drops c and holds its X: a pass reaps nothing.
+  // 3. Read k again to queue it; reader r begins and reads k, so its
+  //    snapshot keeps c's CF; d commits: a pass reaps nothing, as c's
+  //    catalog row is gone, though its CF is not.
+  // 4. r ends, and GC runs: c's CF is gone, and an insert into other
+  //    commits.
+  chain_fixture_t f;
+  uint64_t c = mkchain(f.s);
+  uint64_t other = mkchain(f.s);
+  chain_put(f.s, c, "k", "v1", true);
+  chain_put(f.s, c, "k", "v2", false);
+  CHECK(read_one(f.s, c, "k") == "v2");
+
+  sm1::session_t *d = f.open();
+  begin_xct(d);
+  REQUIRE(sm1::rmstore(d, c) == 0);
+  CHECK(sm1::row_reap_pass(f.s) == 0);
+
+  CHECK(read_one(f.s, c, "k") == "v2");
+  CHECK(sm1::row_reaps_pending(f.home.env(), "db") == 1);
+  sm1::session_t *r = f.open();
+  begin_xct(r, sm1::xctlevel_t::repeatable_read);
+  CHECK(chain_get(r, c, "k") == "v2");
+  commit_xct(d);
+  CHECK(db_store(f.s->db, c).cf != nullptr);
+  CHECK(sm1::row_reap_pass(f.s) == 0);
+  commit_xct(r);
+  sm1::closedb(r);
+
+  gc_run_once(f.s->db);
+  CHECK(db_store(f.s->db, c).cf == nullptr);
+  chain_put(f.s, other, "j", "w", true);
+  sm1::closedb(d);
 }
 #endif
 

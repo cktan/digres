@@ -180,8 +180,21 @@ int sm1::closedb(sm1::session_t *session) {
   // Free the cursors the abort ended that no caller ended.
   xct_free_scans(session);
   // Drop the temporary stores it still holds: they are no one else's.
-  for (uint64_t storeid : session->temp_stores) {
-    db_drop_store_cf(session->db, storeid);
+  // Each under X, in a transaction for the locks, so no work on the
+  // store meets its drop (sm1::store_work_begin). With no transaction
+  // to be had, the drop goes on without.
+  if (!session->temp_stores.empty()) {
+    bool locked =
+        sm1::begin(session, sm1::xctlevel_t::read_committed, true) == 0;
+    for (uint64_t storeid : session->temp_stores) {
+      if (locked) {
+        lock_store(session, storeid, sm1::SM_LOCKMODE_EX, false);
+      }
+      db_drop_store_cf(session->db, storeid);
+    }
+    if (locked) {
+      sm1::abort(session);
+    }
   }
   session->temp_stores.clear();
   // Keep what is needed after the session is freed.

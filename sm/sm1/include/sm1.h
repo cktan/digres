@@ -683,6 +683,29 @@ int lock_oid(session_t* session, uint64_t oid, lockmode_t mode);
 int trylock_oid(session_t* session, uint64_t oid, lockmode_t mode);
 
 /*
+ * Begin work on store storeid outside the caller's own transaction:
+ * a reaper's writes, which a drop of the store must not meet
+ * (../LOCKMGR.md section 2.3). The transaction that makes or drops a
+ * store holds X on it; the work holds IX.
+ * 1. With no transaction active, begin one at READ COMMITTED,
+ *    read-only; a transaction already active is used as it is.
+ * 2. Take IX on the store if it can be had at once.
+ * 3. Check the store is live: its catalog row at the newest
+ *    committed state, or a temporary store's handle.
+ * Returns 0 with IX held, until sm1::store_work_end; 1, the store
+ * dropped or being dropped, with nothing held and the transaction
+ * begun in 1 ended; or -1.
+ */
+int store_work_begin(session_t* session, uint64_t storeid);
+
+/*
+ * End the work sm1::store_work_begin began: the transaction it began
+ * ends, and its IX with it. One that was already active goes on, and
+ * keeps the IX to its end.
+ */
+void store_work_end(session_t* session);
+
+/*
  * Read the newest committed version of a key, ignoring the
  * snapshot, under a row lock this transaction already holds, or
  * with a write of the key by this transaction still in effect,

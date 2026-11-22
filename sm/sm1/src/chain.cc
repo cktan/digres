@@ -25,6 +25,7 @@
 #include <cassert>
 #include <cstring>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <rocksdb/write_batch.h>
@@ -1431,9 +1432,16 @@ void chain_report(db_t *db, uint64_t storeid, rocksdb::Slice key,
 /* Put back each queued chained key; see db.h. */
 void chain_repair(db_t *db, const hint_queue_t::batch_t &repairs) {
   repairs.for_each([&](const hint_queue_t::record_t &r) {
+    // A store whose drop or create holds X keeps its key for the next
+    // run; one dropped since has nothing to repair.
+    int ok = gc_store_try(db, r.storeid);
+    if (1 == ok) {
+      db->repairs.push(r.storeid, r.xid,
+                       std::string_view(r.key.data(), r.key.size()));
+      return;
+    }
     store_t st = db_store(db, r.storeid);
-    // A store dropped since has nothing to repair.
-    if (!st.chained) {
+    if (0 != ok || !st.chained) {
       return;
     }
     rocksdb::Slice key(r.key.data(), r.key.size());
@@ -1518,14 +1526,10 @@ int reap_one(db_t *db, const store_t &st, uint64_t storeid, rocksdb::Slice key,
   head.flags |= version_stamped;
   head.commit_ts = ts;
   batch.Put(st.cf, curr_key(key), chain_value(head, false));
+  // The caller holds IX on the store, so it is not dropped meanwhile:
+  // a write to a dropped CF would stop RocksDB taking any write.
   rocksdb::Status status = st.rdb->Write(store_write_options(st), &batch);
   if (!status.ok()) {
-    // The store may have been dropped after the caller copied st: the
-    // copy still holds the CF's handle, and RocksDB refuses a write to a
-    // dropped CF. Nothing is left to reap then, and it is no error.
-    if (db_store(db, storeid).cf != st.cf) {
-      return 0;
-    }
     return set_status_error(status, "reap a chain");
   }
   return 1;
@@ -1902,14 +1906,36 @@ int64_t sm1::row_reap_pass(sm1::session_t *session,
   }
   // W once for the batch: a key settled at it stays settled.
   uint64_t w = db_watermark(db);
+  // A transaction for the stores' IX, to the pass's end, unless one is
+  // active: a drop of a store waits for the pass (sm1::store_work_begin).
+  const bool own = !session->active;
+  if (own && sm1::begin(session, sm1::xctlevel_t::read_committed, true) != 0) {
+    return -1;
+  }
+  defer {
+    if (own) {
+      sm1::abort(session);
+    }
+  };
+  // Whether each store met is reaped: IX held on it, and it is live.
+  std::unordered_map<uint64_t, bool> held;
   int64_t reaped = 0;
   bool failed = false;
   keys.for_each([&](const hint_queue_t::record_t &rec) {
     if (failed || (nullptr != stop && stop->load())) {
       return;
     }
+    auto [it, fresh] = held.try_emplace(rec.storeid, false);
+    if (fresh) {
+      int r = sm1::store_work_begin(session, rec.storeid);
+      failed = r < 0;
+      it->second = 0 == r;
+    }
+    // A store dropped, or being dropped, has nothing to reap.
+    if (!it->second) {
+      return;
+    }
     store_t st = db_store(db, rec.storeid);
-    // A store dropped since has nothing to reap.
     if (!st.chained) {
       return;
     }

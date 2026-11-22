@@ -1317,6 +1317,55 @@ int sm1::trylock_oid(sm1::session_t *session, uint64_t oid,
   return lock_object(session, oid, mode, true);
 }
 
+/* Begin work on a store outside a transaction; see sm1.h. */
+int sm1::store_work_begin(sm1::session_t *session, uint64_t storeid) {
+  if (nullptr == session) {
+    return set_error(sm1::SM_ERR_INVALID, "store_work_begin: no session");
+  }
+  // 1. A transaction of its own, unless one is active.
+  session->work_began = !session->active;
+  if (session->work_began &&
+      sm1::begin(session, sm1::xctlevel_t::read_committed, true) != 0) {
+    session->work_began = false;
+    return -1;
+  }
+  // Nothing held, and the transaction begun ended.
+  auto skip = [&](int rc) {
+    sm1::store_work_end(session);
+    return rc;
+  };
+  // 2. IX, if no drop of the store holds X.
+  int r = lock_store(session, storeid, sm1::SM_LOCKMODE_IX, true);
+  if (0 != r) {
+    return skip(r < 0 ? -1 : 1);
+  }
+  // 3. Live: a drop committed before the IX is in the newest state.
+  // A temporary store has no catalog row, and goes at once, under X.
+  store_t st = db_store(session->db, storeid);
+  if (!st.cf) {
+    return skip(1);
+  }
+  if (!st.owner) {
+    bool was = false;
+    sm1::view_latest(session, true, &was);
+    r = catalog_lookup(session, xct_view(session), storeid);
+    sm1::view_latest(session, was);
+    if (0 != r) {
+      return skip(r < 0 ? -1 : 1);
+    }
+  }
+  return 0;
+}
+
+/* End the work store_work_begin began; see sm1.h. */
+void sm1::store_work_end(sm1::session_t *session) {
+  if (nullptr != session && session->work_began) {
+    session->work_began = false;
+    // Read-only: an abort ends it as a commit would, and lets go of IX.
+    sm1::abort(session);
+  }
+}
+
 /* Insert a row; the key must not exist. */
 int sm1::insert(sm1::session_t *session, uint64_t storeid, std::string_view key,
                 std::string_view data) {

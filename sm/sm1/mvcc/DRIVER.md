@@ -198,6 +198,7 @@ can be read at a glance. Several steps may share a time.
 | `stmt` | — | `ok`: starts a statement, for `rc` |
 | `readlatest` | `<row>` | the newest committed value, or `-`; at `rc`, under a lock the session holds |
 | `lookup` | `<row>` | the value in the SECOND store, or `-` |
+| `write2` | `<row> <value>` | as `write`, of a row of the SECOND store: `ok`, or an error name |
 | `rmstore` | — | `ok`: drops the second store |
 | `mkstore` | — | `ok`: creates a store, whose storeid is not printed |
 | `lsstore` | — | `<n> stores` |
@@ -264,13 +265,14 @@ it.
 
 **Two stores.** Every run creates a second store
 holding the same seeded rows as the first. Every verb above
-works in the first one; `lookup` and `rmstore` are the only ways
-to reach the second, and they exist so that a script can drop
-a store while reading another — `a17` for the older
-snapshot that goes on reading a dropped store, `c31` for
+works in the first one; `lookup`, `write2` and `rmstore` are
+the only ways to reach the second, and they exist so that a
+script can drop a store while reading another — `a17` for the
+older snapshot that goes on reading a dropped store, `c31` for
 §11's write skew, where the only thing joining two
 transactions is that one resolved the store the other
-dropped. `lookup` reads a row like `read` does; what the
+dropped, `g04` for the row reaper, which passes over a store
+being dropped. `lookup` reads a row like `read` does; what the
 scenario is usually after is the storeid resolution it takes on
 the way, which is a tracked catalog read.
 

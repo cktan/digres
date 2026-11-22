@@ -79,6 +79,8 @@ struct sm1::session_t {
 
   /* sm1::set_no_transaction: settled reads and pages need none. */
   bool no_transaction = false;
+  /* sm1::store_work_begin began the transaction, for store_work_end. */
+  bool work_began = false;
 
   /* The transaction; meaningful only while active. */
   bool active = false;
@@ -511,6 +513,19 @@ private:
  */
 int lock_oid(sm1::session_t *session, uint64_t oid, sm1::lockmode_t mode,
              bool nowait);
+
+/*
+ * Take the lock of store storeid in mode, as lock_oid takes an oid's,
+ * in a name space of its own (../LOCKMGR.md §3.4): the transaction
+ * that makes or drops the store holds X, and work outside a
+ * transaction on the store holds IX (sm1::store_work_begin).
+ */
+int lock_store(sm1::session_t *session, uint64_t storeid, sm1::lockmode_t mode,
+               bool nowait);
+
+/* The OID lock k in mode: lock_oid's and lock_store's steps. */
+int lock_name(sm1::session_t *session, const lockid_t &k, sm1::lockmode_t mode,
+              bool nowait);
 
 /* Add the session to its database's, for a strong locker's sweep. */
 void lock_register(sm1::session_t *session);

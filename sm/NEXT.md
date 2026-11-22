@@ -488,27 +488,6 @@ Owed, and blocking nothing above:
   ([`../dg/GUCPLAN.md`](../dg/GUCPLAN.md) §5) must be set by
   `InitializeOneGUCOption()` before anything frees it.
 
-- **A write after `TRUNCATE` can meet a dropped column family.**
-  pgregress's `generated_virtual` failed once in the full dg
-  suite at `-j 4` (2026-11-20, debug build, `wip-colstore-34`):
-  after `TRUNCATE gtest1`, `INSERT INTO gtest1` failed with
-  "write version: Invalid argument: Invalid column family
-  specified in write batch", and so did later writes of `gtest1`
-  and `gtest3`. Run alone six times, it passed each time. The
-  write went to a store whose column family was gone: a stale
-  store handle, or table handle, after the old store's drop at
-  `TRUNCATE`'s commit (`truncate_table()` in
-  `sm3/src/ddl/ddl.cc`, `db_drop_store_cf()` in
-  `sm1/src/db.cc`), is the likely cause; not confirmed. The
-  diff is kept in
-  `../bench/build/evidence/generated_virtual-2026-11-20.diff`.
-  It failed so again in `alter_table` (2026-11-21, debug build,
-  `wip-colstore2-1`): `DROP TABLE attmp2` and the next `CREATE
-  TABLE` failed with the same message, and the rerun passed. That
-  diff is in
-  `../bench/build/evidence/alter_table-2026-11-21.diff`.
-  Next: a test that truncates and writes a table from one
-  session while others drop stores.
 - **The Column Store's parts not built**
   ([`COLSTORE.md`](COLSTORE.md)). Each is owed; none blocks the
   table's use:

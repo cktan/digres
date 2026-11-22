@@ -1227,25 +1227,29 @@ rows again and again. A page that waits costs a move from head to
 tail under the mutex, and no read. The queue counts the slots
 that wait.
 
-### 9.8 No transaction
+### 9.8 A transaction for the stores' locks
 
-The btree reaper starts no sm transaction, opens no table and
-takes no lock on one. It does not need them:
+The btree reaper opens no table and takes no lock on one. Its
+pass runs in one read-only transaction at READ COMMITTED, for the
+stores' IX alone ([`LOCKMGR.md`](LOCKMGR.md) §2.3): a drop of a
+store waits for the pass, so no write goes to a dropped column
+family. It needs no more:
 
 - Judging an entry reads a row's newest version and compares it
   with the GC watermark. It needs no snapshot.
 - A leaf's change is one `page_write()`, one RocksDB write batch,
   atomic by itself. A tree's change already commits when it is
   made (§2.2).
-- So the btree reaper holds no snapshot, and never holds back the
-  watermark.
+- So the btree reaper judges no row by a snapshot. The snapshot
+  of its transaction is the newest when the pass begins, and
+  holds back the watermark only to the pass's end.
 
 What a transaction and a table lock give a reader, the btree
 reaper gets another way:
 
 | Need | How the btree reaper meets it |
 | --- | --- |
-| the store stays open | its session keeps a copy of the store's handle until the pass ends: a handle goes with its last copy (`db_drop_store_cf()`). A call on a dropped store fails with `SM_ERR_NOTFOUND`, and the page is dropped |
+| the store stays open | the pass holds IX on the store (`sm1::store_work_begin`): a drop of the store waits for the pass. A store whose drop holds X, or has committed, is passed over, and its page is dropped |
 | `CF:txn` records stay | `latest_version()` and `chain_latest()`, under every settled read, count it in the read epoch, as for every reader (`db_read_enter()`) |
 | the table's definition | `table_def_t` is in memory, and is not changed once published. The btree reaper notes `cat_publishes()` before it fetches the definition, and compares after each row read. If the count moved, the entry stays in doubt. A commit publishes under the catalog's mutex, and a later writer reads the definition under it, so a row written under a newer definition is read only after the count moved. A stale definition therefore judges no row |
 | a key out of line | `toast_fetch()` reads by a cursor, which needs a transaction. `toast_fetch_settled()` reads the chunks by `sm1::read_settled_versioned()`, as a chunk is versioned in a chained store too. A settled row's chunks are settled |
@@ -1658,8 +1662,9 @@ is built.
 - **Judging a whole leaf under its latch.** A leaf that cannot be
   set would keep its readers and writers waiting on its rows. A
   first judging with no latch filters it.
-- **A btree reaper that runs in a transaction.** Its snapshot
-  would hold back the watermark, and it needs none (§9.8).
+- **A btree reaper that judges rows by a snapshot.** It needs
+  none: its transaction is for the stores' IX alone, and lasts a
+  pass (§9.8).
 - **Two or more hash functions in the filter.** Clearing a bit
   could hide other pages.
 - **Stopping reaping on a busy system.** With no autovacuum, a

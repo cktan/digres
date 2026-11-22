@@ -16,6 +16,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <unordered_map>
 
 namespace sm3 {
 
@@ -178,17 +179,23 @@ namespace {
  * 1. Open a session with no transaction, and read the watermark, made
  *    above 0, as a slot's 0 is a page that does not wait.
  * 2. Take a page. One that waits is passed over, unread.
- * 3. Note the catalog's publishes, then find the table by the page's
+ * 3. Take IX on the page's store, in a read-only transaction of the
+ *    pass's (sm1::store_work_begin), once a store: a drop of the store
+ *    waits for the pass, so no write goes to a dropped CF. A store
+ *    being dropped, or gone, drops the page.
+ * 4. Note the catalog's publishes, then find the table by the page's
  *    store. A store gone drops the page.
- * 4. Reap the leaf. A page left with an entry in doubt waits for the
+ * 5. Reap the leaf. A page left with an entry in doubt waits for the
  *    watermark to move. A failure drops the page: the queue is a hint,
  *    and the page's bits are still there. A store dropped meanwhile
  *    fails so, whatever the error, and is no error to report: after a
  *    failure, find the table by the store again, and say nothing if it
  *    is gone.
- * 5. With rows, run the row reaper's pass on the same session. A
- *    failure is logged: its keys are a hint, queued again by a read.
- * 6. Close the session, so the db reaper can close an idle database.
+ * 6. With rows, run the row reaper's pass on the same session, in the
+ *    same transaction. A failure is logged: its keys are a hint, queued
+ *    again by a read.
+ * 7. End the transaction, and close the session, so the db reaper can
+ *    close an idle database.
  */
 int run_pass(btree_reaper_t *c, size_t budget, bool rows) {
   sm1::session_t *s = c->open();
@@ -204,6 +211,14 @@ int run_pass(btree_reaper_t *c, size_t budget, bool rows) {
   }
   defer { session_close(ws); };
   uint64_t watermark = sm1::gc_watermark(s) + 1;
+  // 3. The pass's transaction, for the stores' IX: read-only, it
+  // writes nothing of its own, and ends with the pass.
+  if (0 != sm1::begin(s, sm1::xctlevel_t::read_committed, true)) {
+    return -1;
+  }
+  defer { sm1::abort(s); };
+  // Whether each store met is reaped: IX held on it, and it is live.
+  std::unordered_map<uint64_t, bool> held;
   size_t pages = c->queue.size();
   for (size_t i = 0; i < pages && 0 != budget && !c->stop.load(); i++) {
     reap_page_t page;
@@ -215,6 +230,13 @@ int run_pass(btree_reaper_t *c, size_t budget, bool rows) {
       continue;
     }
     budget--;
+    auto [it, fresh] = held.try_emplace(page.storeid, false);
+    if (fresh) {
+      it->second = 0 == sm1::store_work_begin(s, page.storeid);
+    }
+    if (!it->second) {
+      continue;
+    }
     uint64_t publishes = cat_publishes(ws);
     auto def = cat_get_table_by_store(c->cat, page.storeid);
     if (!def) {

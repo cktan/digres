@@ -26,6 +26,7 @@
 #include "session.h"
 #include "sm0_arena.h"
 #include "sm0_codec.h"
+#include "sm0_defer.h"
 #include "ty.h"
 #include "version.h"
 
@@ -685,6 +686,11 @@ gc_filter_factory(db_t *db, uint64_t storeid) {
 
 /* Start the worker thread. */
 void gc_start(db_t *db) {
+  // Its session for locks: registered, so a strong locker's sweep
+  // meets its IX, as it meets a session's.
+  db->gc_locker = new sm1::session_t;
+  db->gc_locker->db = db;
+  lock_register(db->gc_locker);
   // Start the worker thread.
   db->gc_thread = std::thread(gc_main, db);
 }
@@ -703,6 +709,21 @@ void gc_stop(db_t *db) {
   if (db->gc_thread.joinable()) {
     db->gc_thread.join();
   }
+  // Its session for locks goes with it; a run released its locks.
+  if (db->gc_locker) {
+    lock_unregister(db->gc_locker);
+    delete db->gc_locker;
+    db->gc_locker = nullptr;
+  }
+}
+
+/* Whether a GC run may write to a store; see db.h. */
+int gc_store_try(db_t *db, uint64_t storeid) {
+  if (db->gc_locker &&
+      lock_store(db->gc_locker, storeid, sm1::SM_LOCKMODE_IX, true) != 0) {
+    return 1;
+  }
+  return db_store(db, storeid).cf ? 0 : 2;
 }
 
 /* Queue storeids to drop once the watermark passes commit_ts. */
@@ -759,13 +780,27 @@ void gc_run_once(db_t *db) {
   hint_queue_t::batch_t repairs = db->repairs.take();
   hint_queue_t::batch_t purges = db->purges.take();
 
+  // The stores' IX goes at the run's end, after its writes.
+  defer {
+    if (db->gc_locker) {
+      lock_release_all(db->gc_locker);
+    }
+  };
+
   // Put back the chained keys compaction found dead.
   chain_repair(db, repairs);
 
   // Purge first: a key queued from a store about to be
-  // dropped is simply skipped once its CF is gone.
+  // dropped is simply skipped once its CF is gone. A store whose drop
+  // or create holds X keeps its keys for the next run.
   purges.for_each([&](const hint_queue_t::record_t &p) {
-    purge_one(db, p.storeid, rocksdb::Slice(p.key.data(), p.key.size()));
+    int r = gc_store_try(db, p.storeid);
+    if (1 == r) {
+      db->purges.push(p.storeid, 0,
+                      std::string_view(p.key.data(), p.key.size()));
+    } else if (0 == r) {
+      purge_one(db, p.storeid, rocksdb::Slice(p.key.data(), p.key.size()));
+    }
   });
 
   // Drop each store no snapshot can see.

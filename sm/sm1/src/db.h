@@ -580,6 +580,11 @@ struct db_t {
   std::vector<std::pair<uint64_t, uint64_t>> fs_dead;
   std::thread gc_thread;
   std::mutex gc_run_mu; /* one gc_run_once at a time */
+  /*
+   * A session for locks alone, made by gc_start: a run's IX on the
+   * stores it repairs and purges (gc_store_try), under gc_run_mu.
+   */
+  sm1::session_t *gc_locker = nullptr;
 
   /*
    * Read epochs, for the CF:txn sweep (../GC.md §1 step 3). Every
@@ -820,8 +825,18 @@ void gc_queue_drops(db_t *db, uint64_t commit_ts,
  */
 void chain_report(db_t *db, uint64_t storeid, rocksdb::Slice key, uint64_t xid);
 
-/* Put back each queued chained key (chain.cc). */
+/* Put back each queued chained key (chain.cc), under gc_store_try. */
 void chain_repair(db_t *db, const hint_queue_t::batch_t &repairs);
+
+/*
+ * Whether a GC run may write to storeid (gc.cc): 0 with IX held on it
+ * by db->gc_locker, to the run's end, and its CF there; 1 if a drop or
+ * a create of the store holds X, for the next run; 2 if it is gone.
+ * Its permanent stores' drops are the run's own, after its writes; a
+ * session's drop of a temporary store, or an abort's of a store it
+ * made, holds X (sm1::store_work_begin).
+ */
+int gc_store_try(db_t *db, uint64_t storeid);
 
 /*
  * The id after the store's last old version, for next_old: 1 if it

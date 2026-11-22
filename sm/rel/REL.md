@@ -793,8 +793,9 @@ thread (`sm_reaper_run`,
 ([`../GC.md`](../GC.md#135-reaping-by-the-reapers-threads)
 §13.5). A script gets no reaper thread, so a tree's entries change
 only by this and by `(compact)`. A pass reaps the leaves and the
-keys that readers and writers queued, with no transaction of its
-own.
+keys that readers and writers queued, in a read-only transaction
+of its own, for IX on each store it writes
+([`../LOCKMGR.md`](../LOCKMGR.md#23-a-stores-lock) §2.3).
 
 ```janet
 (reaper-pass)

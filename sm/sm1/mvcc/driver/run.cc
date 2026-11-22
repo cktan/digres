@@ -448,6 +448,13 @@ std::string execute(worker_t *w, const item_t &it) {
     }
     return rc == 1 ? "-" : std::string(data);
   }
+  if (it.verb == "write2") {
+    // write2 <row> <value>: an update of a row of the SECOND store, so
+    // a scenario can give it a chain for the reaper before a drop.
+    return row_update(w->sess, w->store2, a[0], a[1], false) == 0
+               ? "ok"
+               : error_name();
+  }
   if (it.verb == "rmstore") {
     // Drop the second store; the first one every other verb
     // works in is never dropped.

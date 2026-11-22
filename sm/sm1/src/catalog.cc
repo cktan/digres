@@ -67,6 +67,13 @@ int mkstore(sm1::session_t *s, uint64_t *out, bool temporary, bool chained) {
       db_alloc_objid(s->db, &storeid) != 0) {
     return -1;
   }
+  // X on a new permanent store, to the transaction's end: an abort
+  // drops it, and work outside a transaction passes over it
+  // (sm1::store_work_begin). The storeid is fresh, so no one holds it.
+  // A temporary store takes no lock: its drops take X.
+  if (!temporary && lock_store(s, storeid, sm1::SM_LOCKMODE_EX, true) != 0) {
+    return -1;
+  }
 
   // Create the column family eagerly, before the catalog row,
   // so this transaction can write into it at once (../DBMGR.md §7).
@@ -128,6 +135,10 @@ int rmstore(sm1::session_t *s, uint64_t storeid) {
   }
   // A temporary store has no catalog row: it goes at commit.
   if (s->temp_stores.count(storeid)) {
+    // X, so its drop meets no work on it (sm1::store_work_begin).
+    if (lock_store(s, storeid, sm1::SM_LOCKMODE_EX, false) != 0) {
+      return -1;
+    }
     s->dropped.push_back(storeid);
     s->temp_touched = true;
     return 0;
@@ -140,7 +151,10 @@ int rmstore(sm1::session_t *s, uint64_t storeid) {
   }
   // Remember the storeid, so GC drops its CF after commit.
   s->dropped.push_back(storeid);
-  return 0;
+  // X, after the catalog row's lock, so a second drop still waits on
+  // the row: work on the store that began before ends first, and none
+  // begins from now (sm1::store_work_begin).
+  return lock_store(s, storeid, sm1::SM_LOCKMODE_EX, false);
 }
 
 /* sm1::lsstore, minus the out-of-memory guard. */
