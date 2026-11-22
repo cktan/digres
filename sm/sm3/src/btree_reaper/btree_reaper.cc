@@ -11,6 +11,7 @@
 
 #include "sm0_defer.h"
 #include "sm0_log.h"
+#include "sm1_ty.h"
 
 #include <cassert>
 #include <chrono>
@@ -243,6 +244,8 @@ int run_pass(btree_reaper_t *c, size_t budget, bool rows) {
  * full queue, and run no row pass.
  */
 void worker(btree_reaper_t *c, bool first) {
+  // ty on this thread allocates from an arena of the thread.
+  sm1::ty_thread_init();
   std::unique_lock lock(c->mu);
   while (!c->stopping) {
     c->cv.wait_for(lock, std::chrono::seconds(1));

@@ -21,6 +21,8 @@
  */
 #include "walfs.h"
 
+#include "sm1_ty.h"
+
 #include <fcntl.h>
 #include <pthread.h>
 #include <time.h>
@@ -180,6 +182,8 @@ private:
   /* The spare's thread: zero m_spare, set before it started. */
   static void *zero_main(void *arg) {
     walfs_t *fs = static_cast<walfs_t *>(arg);
+    // ty on this thread allocates from an arena of the thread.
+    sm1::ty_thread_init();
     fs->m_spare_ok =
         zero_fill(fs->m_spare, fs->m_prealloc_bytes, O_CREAT | O_TRUNC);
     return nullptr;

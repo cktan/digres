@@ -18,6 +18,7 @@
 #include "colstore.h"
 
 #include "sm0_log.h"
+#include "sm1_ty.h"
 
 #include <algorithm>
 #include <condition_variable>
@@ -219,6 +220,8 @@ void compact_rg(session_t *ss, uint64_t oid, uint64_t rg_id) {
 
 /* The worker: take a job from the queue, and do it. */
 void work(sealer_t *z) {
+  // ty on this thread allocates from an arena of the thread.
+  sm1::ty_thread_init();
   std::unique_lock<std::mutex> g(z->mu);
   for (;;) {
     z->cv.wait(g, [&] { return z->stop || !z->queue.empty(); });

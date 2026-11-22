@@ -25,6 +25,7 @@
 #include "log.h"
 #include "session.h"
 #include "sm0_codec.h"
+#include "sm1_ty.h"
 #include "version.h"
 
 #include <chrono>
@@ -559,6 +560,8 @@ void warn_stuck(db_t *db) {
 
 /* The worker: run GC when woken, and at least once a second. */
 void gc_main(db_t *db) {
+  // ty on this thread allocates from an arena of the thread.
+  sm1::ty_thread_init();
   // Hold gc_mu while waiting for work.
   std::unique_lock<std::mutex> guard(db->gc_mu);
   // Run until told to stop.

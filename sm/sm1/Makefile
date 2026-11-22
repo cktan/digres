@@ -40,11 +40,13 @@ SM0_LIB  := $(SM0)/$(BUILD)/libsm0.a
 # RocksDB, built in ../../ext: its headers, and the library a link
 # takes, the release build's, or under make tsan the sanitizer's.
 include ../../ext/ext.mk
+# ty, which sm's threads give an alloc function (src/ty_thread.cc).
+include ../../ty/ty.mk
 ROCKSDB_LIB ?= $(ROCKSDB_REL)
 
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -I../include \
-            -I$(SM0)/include -I$(ROCKSDB_INC) -Isrc -MMD -MP
-LDLIBS   += $(SM0_LIB) $(ROCKSDB_LIB) $(ROCKSDB_DEPS) -lpthread
+            -I$(SM0)/include -I$(ROCKSDB_INC) -I$(TY_INC) -Isrc -MMD -MP
+LDLIBS   += $(SM0_LIB) $(ROCKSDB_LIB) $(ROCKSDB_DEPS) $(TY_LIB) -lpthread
 
 # The compiler and flags every object is built with. Rewriting
 # the file when they change makes it newer than the objects, so
@@ -108,13 +110,13 @@ $(SM0_LIB):
 $(LIB_OBJS) $(TEST_OBJS) $(MVCC_OBJS) $(DRV_OBJS) $(EX_OBJS) $(BENCH_OBJ): \
     | $(ROCKSDB_SRC)
 
-$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM0_LIB) $(ROCKSDB_LIB)
+$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM0_LIB) $(ROCKSDB_LIB) $(TY_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_OBJS) $(LIB) $(LDLIBS)
 
-$(MVCC_BIN): $(MVCC_OBJS) $(LIB) $(SM0_LIB) $(ROCKSDB_LIB)
+$(MVCC_BIN): $(MVCC_OBJS) $(LIB) $(SM0_LIB) $(ROCKSDB_LIB) $(TY_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(MVCC_OBJS) $(LIB) $(LDLIBS)
 
-$(DRIVER): $(DRV_OBJS) $(LIB) $(SM0_LIB) $(ROCKSDB_LIB)
+$(DRIVER): $(DRV_OBJS) $(LIB) $(SM0_LIB) $(ROCKSDB_LIB) $(TY_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(DRV_OBJS) $(LIB) $(LDLIBS)
 
 $(BUILD)/drvobj/%.o: mvcc/driver/%.cc $(FLAGS_FILE)
@@ -125,7 +127,7 @@ $(BUILD)/mvcc/%.o: mvcc/%.cc $(FLAGS_FILE)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -Imvcc -c -o $@ $<
 
-$(BUILD)/example/%: $(BUILD)/example/%.o $(LIB) $(SM0_LIB) $(ROCKSDB_LIB)
+$(BUILD)/example/%: $(BUILD)/example/%.o $(LIB) $(SM0_LIB) $(ROCKSDB_LIB) $(TY_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIB) $(LDLIBS)
 
 $(BUILD)/example/%.o: example/%.cc $(FLAGS_FILE)

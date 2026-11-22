@@ -44,9 +44,11 @@ CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc/type -Isrc/ryu \
 # RocksDB, built in ../../ext: the release build's, or with make tsan
 # the instrumented one.
 include ../../ext/ext.mk
+# ty, which sm1's threads call; this level's tests link it.
+include ../../ty/ty.mk
 ROCKSDB_LIB ?= $(ROCKSDB_REL)
 LDLIBS   += $(ROCKSDB_LIB) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata \
-            -lpthread
+            $(TY_LIB) -lpthread
 
 BUILD := build
 
@@ -92,7 +94,8 @@ $(SM0_LIB):
 $(SM1_LIB):
 	$(MAKE) -C $(SM1) BUILD=$(BUILD) OPTFLAGS='$(OPTFLAGS)' $(BUILD)/libsm1.a
 
-$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM1_LIB) $(SM0_LIB) $(ROCKSDB_LIB)
+$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM1_LIB) $(SM0_LIB) $(ROCKSDB_LIB) \
+    $(TY_LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_OBJS) $(LIB) $(SM1_LIB) $(SM0_LIB) \
 	    $(LDLIBS)
 

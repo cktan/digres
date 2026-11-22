@@ -14,6 +14,7 @@
  */
 
 #include "../catalog/internal.h"
+#include "sm1_ty.h"
 #include "sm_sys.h"
 
 #include <condition_variable>
@@ -204,6 +205,8 @@ void build_one(catalog_t *cat, session_t *ws, uint64_t table, uint64_t index,
  * 4. Start again at step 1.
  */
 void work() {
+  // ty on this thread allocates from an arena of the thread.
+  sm1::ty_thread_init();
   builder_t &b = g_builder;
   for (;;) {
     task_t task;

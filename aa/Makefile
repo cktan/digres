@@ -32,8 +32,10 @@ CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -I../sm/include \
             -I../sm/sm0/include -Isrc -MMD -MP
 # RocksDB, the release build ../ext makes.
 include ../ext/ext.mk
+# ty, which sm calls; the tests link it.
+include ../ty/ty.mk
 LDLIBS   += $(ROCKSDB_REL) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata \
-            -lpthread
+            $(TY_LIB) -lpthread
 
 BUILD := build
 SM    := ../sm
@@ -71,7 +73,7 @@ $(LIB): $(LIB_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM_LIB) $(ROCKSDB_REL)
+$(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM_LIB) $(ROCKSDB_REL) $(TY_LIB)
 	$(CXX) $(CXXFLAGS) -Wl,--wrap=$(WRAP_SM_BEGIN) -o $@ $(TEST_OBJS) $(LIB) $(SM_LIB) $(LDLIBS)
 
 # sm builds its own library; whether it is up to date is sm's to say.

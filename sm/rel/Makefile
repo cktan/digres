@@ -14,7 +14,9 @@ CXXFLAGS ?= $(OPTFLAGS)
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -I../include -I/usr/local/include -Isrc -MMD -MP
 # RocksDB, the release build ../../ext makes.
 include ../../ext/ext.mk
-LDLIBS   += -L/usr/local/lib -ljanet $(ROCKSDB_REL) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata -lpthread -ldl -lm
+# ty, which sm1's threads call; this level's tests link it.
+include ../../ty/ty.mk
+LDLIBS   += -L/usr/local/lib -ljanet $(ROCKSDB_REL) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata $(TY_LIB) -lpthread -ldl -lm
 
 BUILD    ?= ../build
 OBJDIR   := $(BUILD)/rel_obj
@@ -39,7 +41,7 @@ $(OBJDIR)/%.o: src/%.cc $(FLAGS_FILE)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-$(BIN): $(OBJS) $(BUILD)/libsm.a $(ROCKSDB_REL)
+$(BIN): $(OBJS) $(BUILD)/libsm.a $(ROCKSDB_REL) $(TY_LIB)
 	@mkdir -p $(dir $@)
 	$(CXX) -o $@ $(OBJS) $(BUILD)/libsm.a $(LDLIBS)
 

@@ -24,6 +24,7 @@
 #include "log.h"
 #include "sm0_codec.h"
 #include "sm0_defer.h"
+#include "sm1_ty.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -437,6 +438,8 @@ namespace {
  * 3. Go back to step 1.
  */
 void db_reaper_main(sm1::env_t *env) {
+  // ty on this thread allocates from an arena of the thread.
+  sm1::ty_thread_init();
   std::unique_lock<std::mutex> guard(env->mu);
   while (!env->stopping) {
     auto now = std::chrono::steady_clock::now();
