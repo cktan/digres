@@ -69,8 +69,18 @@ of what is above them, and everything under them, is new.
   - A scan reads only the columns that the query uses. It skips
     each group of rows that the predicate cannot match, from
     the min, max and filter of each column, kept in RocksDB.
+  - `UPDATE` and `DELETE` work on sealed rows. A delete marks
+    the row dead in its group, and an update also writes the
+    new version to the row store. When a fifth of a group is
+    dead, the worker writes a new version of the group with
+    the live rows alone. A group under half live goes back to
+    the row store, to be sealed again with other rows.
   - A value is 2 KB at most. Put a longer value in a row store
     table, and join the two.
+  - A column store table has no index and no key. digres
+    ignores `PRIMARY KEY`, `UNIQUE`, foreign keys and `CREATE
+    INDEX` on it, with a warning. It refuses `SERIALIZABLE`
+    and `TABLESAMPLE` on it.
 - **The column store needs another executor for its full
   benefit.** PostgreSQL's executor takes one row at a time.
   So a scan of a column store table makes each row again from

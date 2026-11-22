@@ -156,8 +156,9 @@ few hundred rows. The 20% and 50% are of the RG size set.
 - **A CG is never replaced under its `fsid`.** RG compaction
   writes every CG of the next version, under the next `fsid`
   (§11.2). So an RG key is put once and erased once.
-- **A directory holds the files of 1024 RGs**, about 30k files
-  for 30 columns. A table of 1B rows has about 3M files.
+- **A directory holds the files of 1024 file sets**, which is
+  256 RGs, as an RG has four versions: about 7,700 files for 30
+  columns at version 0. A table of 1B rows has about 3M files.
   `DROP TABLE` removes the store's directory tree.
 - **A file is durable before anything refers to it.** The writer
   syncs the file (`fdatasync`) and its directories, then puts
@@ -209,7 +210,8 @@ set keys of sm1 (§4.5), in a key class of their own:
   snapshot.** It needs no visibility rule of its own.
 - **An RG key and its filter keys are put once and erased
   once.** The seal, a bulk load or RG compaction puts them. RG
-  compaction erases them. Nothing changes them between.
+  compaction or elimination erases them. Nothing changes them
+  between.
   `TRUNCATE` and `DROP TABLE` erase no key: the table's old
   store goes, with its directory of files (§14).
 - **A marker names its version.** A version renumbers its rows:
@@ -319,8 +321,8 @@ The rows of an RG that `rewrite_table` wrote (§9.2) may not be in
 A CG file holds, in this order (`sm2/src/col/cg.cc`):
 
 1. The body, compressed with zstd: the encoding, the row count,
-   a flags byte that says which bitmaps follow, a null bitmap
-   and a long bitmap where a row needs them, then
+   a flags byte that says whether a null bitmap follows, the
+   null bitmap where a row needs it, then
    the values as the encoding lays them out, the dictionary
    first in a CG with one (§5.1, §5.2).
 2. The zonemap (§6.1).
@@ -362,8 +364,9 @@ it.
 
 - **Every write checks it** (`need_values_fit` in
   `sm3/src/table/table.cc`): an insert, an update, an update of a
-  row of an RG, a bulk load's row, a rewrite's row
-  (`rewrite_table`), and an `ADD COLUMN`'s missing value. A TOAST
+  row of an RG, a bulk load's row, and a rewrite's row
+  (`rewrite_table`). `ADD COLUMN` checks its missing value
+  (`sm3/src/ddl/ddl.cc`). A TOAST
   pointer names a value of the table's own, checked when it was
   written.
 - **So every value is in its CG.** A CG has no pointer to
@@ -464,8 +467,10 @@ of the version that it rewrites (§11.2).
   RGs would make a scan look 100 times cheaper than it is, and
   a nested loop over the table look almost free. So `relpages`
   is the bytes of all the CGs and of the delta store, divided
-  by 8 KB. `reltuples` is the row counts of the RG keys plus the
-  delta store's. Neither needs a file read.
+  by 8 KB. `reltuples` is the count of `ANALYZE`: the row counts
+  of the RG keys, less their dead rows, plus the delta store's
+  rows. The planner scales it by the table's growth in bytes
+  since then. Neither needs a CG file read.
 - **The cost of a scan does not see the projection.** A scan of
   2 of 30 columns costs as a scan of all of them. A cost model
   that sees it waits for the columnar executor.
@@ -499,16 +504,16 @@ of the version that it rewrites (§11.2).
 
 A lookup of `_id` is a scan with the predicate `_id = n`:
 
-1. Read the RG keys at the snapshot.
-2. Skip each RG whose `_id` min and max do not hold `n`.
-3. Read the validmap and the delete markers of each version that
-   is left: its dead `rno`s (`col_dead`).
-4. Read the version's `_id` CG, and walk it row by row to `n`. A
-   copy at a dead `rno` is dead. A read of the row (`col_read`)
-   reads every CG of the version that holds it.
-5. Read the delta key `n`.
+1. Read the delta key `n`.
+2. Read the RG keys at the snapshot.
+3. Skip each RG whose `_id` min and max do not hold `n`.
+4. Read the `_id` CG of each version that is left, and walk it
+   row by row to `n`. A read of the row (`col_read`) reads
+   every CG of the version that holds it.
+5. Read the validmap and the delete markers of that version: its
+   dead `rno`s (`col_dead`). A copy at a dead `rno` is dead.
 
-- **Steps 1 and 2 read RocksDB alone.** The `_id` filter is not
+- **Steps 1 to 3 read RocksDB alone.** The `_id` filter is not
   read: `col_find_latest` and `col_read` pass no bound.
 - **The read of the RG keys reads every RG key**, so a lookup
   costs in proportion to the RGs of the table. A lookup that
@@ -528,11 +533,12 @@ table. A write takes the row's place from the scan instead:
    looks up the row's place as above, at the newest committed
    state (`col_find_latest`). No row there may be a row that an
    elimination moved back into the delta store meanwhile: under
-   the row's lock, which an elimination waits for, the delta key is
-   read at the newest state, and a live row there is written again
-   (`moved_back`). Else, of a row the transaction sees, it is a row
-   changed since: `SM_ERR_CONFLICT` above READ COMMITTED, and
-   `SM_ERR_NOTFOUND` at it.
+   the row's lock, which an elimination only tries, and gives up
+   on if it is held, the delta key is read at the newest state,
+   and a live row there is written again (`moved_back`). Else, of
+   a row the transaction sees, it is a row changed since:
+   `SM_ERR_CONFLICT` above READ COMMITTED, and `SM_ERR_NOTFOUND`
+   at it.
 3. A follow after `SM_ERR_SEALED` is a lookup too.
 
 - **The place's `fsid` is 0 for a row in the delta store.**
@@ -566,7 +572,7 @@ version `i` and a newer version `k` (`rg_map_rno`):
 
 The writer reads `D_i` from the RG key its snapshot sees, and
 `D_k` from the newest. Each is 1,250 bytes for 10k rows. The map
-costs a popcount over each.
+costs a test of each bit below `rno_0` in each.
 
 ---
 
@@ -851,7 +857,7 @@ no rw-edge.
   by its gid, for its `COMMIT PREPARED` (`sm3::commit_prepared`);
   `ROLLBACK PREPARED` drops them. A restart loses them, and a
   scan catches the rows (below).
-- **A scan that reads more than 10k rows of a delta store also
+- **A scan that reads 10k rows or more of a delta store also
   queues a seal job.** The counts start at 0 when the database
   opens, so this catches a delta store that grew before a
   restart. Until then, a delta store can hold up to twice the
@@ -872,8 +878,11 @@ RG compaction, and the jobs beside it, rewrite an RG that has
 many dead rows. They are GC, not a write path. Each is a job of
 the sealer (§10.4), in a READ COMMITTED transaction of its own
 (§10.3), at the newest committed state, and each holds X on the
-RG, NOWAIT (§9.1): a writer of the RG makes it give up, and the
-next markers committed on the RG queue it again.
+RG, NOWAIT (§9.1): a writer of the RG makes it give up. The
+commit that queues a job sets the RG's count of markers for it
+back to 0. So the RG is queued again only when 2,000 more
+markers are committed on it (100 for the fold), or when a scan
+meets it.
 
 | Job | When | What |
 | --- | --- | --- |
@@ -947,11 +956,12 @@ of 0 to 2:
    holder, a reader's `FOR SHARE` included, makes it give up: the
    write of the delta key would wait for it.
 4. Put each at delta key `_id` as a moved-in version
-   (`sm2::rel_movein_at`, through `sm1::insert_moved_in`). A
-   value over 2,000 bytes goes to TOAST, as an insert's does, its
-   chunks moved-in versions too: a writer older than the
-   elimination erases them with no conflict. The rows count toward
-   the next seal.
+   (`sm2::rel_movein_at`, through `sm1::chain_insert_moved_in`,
+   as the table's store is chained). A row longer than 2,000
+   bytes has its longest values moved to TOAST, as an insert's
+   has, their chunks moved-in versions too: a writer older than
+   the elimination erases them with no conflict. The rows count
+   toward the next seal.
 5. Erase the version's RG key and its filter keys.
 6. Commit; then give the sealer a cleanup of the version (§11.4).
 
@@ -967,7 +977,7 @@ row's content, so it must not fail a user's transaction:
   a write does not conflict.
 - **A write that passes** goes on over it as over any live
   version: it does not fail with `SM_ERR_SEALED`, and
-  `sm1::read_latest` returns it.
+  `sm1::chain_read_latest` returns it.
 - **A writer older than it is told**
   (`sm1::wrote_over_moved_in`): the write went over a moved-in
   version that its snapshot does not see. The writer puts a
@@ -975,9 +985,12 @@ row's content, so it must not fail a user's transaction:
 - **The Garbage Collector** treats it as any version.
 
 - **The rows are written twice**, into the delta store now, and
-  into a new RG at the next seal. About 4,100 rows of 10,000 are
-  left at version 3's 20%: 10,000, then 8,000, 6,400, 5,120, and
-  4,096.
+  into a new RG at the next seal. Fewer than half of the RG's
+  10,000 rows are left by then. A scan queues a version when a
+  fifth of its own rows are dead: 10,000, then 8,000, 6,400,
+  5,120, and 4,096 live, which is under half. A commit queues
+  the RG at each 2,000 markers: 10,000, then 8,000, 6,000, and
+  4,000 live.
 - **An RG under half live is eliminated** at any version. Its
   rows wait in the delta store, as rows, until the next seal
   puts them into a full RG with others. There is no merge of
@@ -1401,7 +1414,8 @@ NULL` kept from an ignored `PRIMARY KEY`; `INSERT ... SELECT`
 into RGs; `UPDATE`, `DELETE ... RETURNING` and `SELECT ... FOR
 UPDATE`; a `DELETE` by `_id`, which sm finds in its RG; an
 `UPDATE` at REPEATABLE READ; `EXPLAIN VERBOSE` of a scan of some
-columns, and an `UPDATE` whose scan reads every column;
+columns; an `UPDATE` whose scan reads every column, checked by
+its `RETURNING`;
 queries with bounds, whose results equal a row store table's;
 `ALTER TABLE` and `TRUNCATE`; `CREATE TABLE AS` and `COPY`; a
 SERIALIZABLE transaction refused with `0A000`; `storage =
@@ -1432,8 +1446,8 @@ whenever they do.
 
 ## 16. Open questions
 
-Each question has a proposal where there is one. None is
-decided.
+Each question of §16.1 has a proposal where there is one. None
+is decided. §16.2 lists what is deferred.
 
 ### 16.1 The seal and RG compaction
 
@@ -1448,12 +1462,11 @@ decided.
 1. **The place at insert** ([`../QUESTION.md`](../QUESTION.md)
    5). A row would get its place, `(rg_id, rno)` of an open RG,
    at its insert, and keep it through the seal. Row locks would
-   then be on the place, an insert would never wait for a seal
-   (the next RG is drawn while one seals), and the seal would
-   take S on the RG, NOWAIT, and every row of it, a hole for each
-   `rno` whose insert aborted. It changes the value of every
-   delta row, or costs every insert a second key; row locks on
-   `_id` need neither.
+   then be on the place, and the seal would take S on the RG,
+   NOWAIT, and every row of it, a hole for each `rno` whose
+   insert aborted. It changes the value of every delta row, or
+   costs every insert a second key; row locks on `_id` need
+   neither.
 2. **Logical decoding** ([`LOGICALDECODE.md`](LOGICALDECODE.md)),
    which is not built. When it is: an insert into the delta
    store or a bulk load's RG emits an insert for each row; a
