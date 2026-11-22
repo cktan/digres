@@ -736,6 +736,9 @@ in place of its own, by `ty_tz_use_data`; ty checks it first.
 The text in of timestamptz and timetz asks the host for the offset
 of a zone (section 19). The host may now answer from these calls.
 
+digres uses the same data: its loader of zone files reads each from
+`ty_tz_file()`, so the zones of digres and ty are the same ones.
+
 The tests: `test/tz_known.txt`, 16,618 lines that Python's
 `zoneinfo` gave for the same zone files, for every distinct zone
 (341), at fixed instants and local times and around the

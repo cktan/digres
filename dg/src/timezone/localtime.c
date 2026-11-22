@@ -25,6 +25,7 @@
 
 #include "datatype/timestamp.h"
 #include "pgtz.h"
+#include "ty_timezone.h"
 
 #include "private.h"
 #include "tzfile.h"
@@ -198,11 +199,12 @@ union local_storage {
 static int tzloadbody(char const *name, char *canonname, struct state *sp,
                       bool doextend, union local_storage *lsp) {
   int i;
-  int fid;
   int stored;
   ssize_t nread;
   union input_buffer *up = &lsp->u.u;
   int tzheadsize = sizeof(struct tzhead);
+  const unsigned char *zdata;
+  size_t zsize;
 
   sp->goback = sp->goahead = false;
 
@@ -215,19 +217,13 @@ static int tzloadbody(char const *name, char *canonname, struct state *sp,
   if (name[0] == ':')
     ++name;
 
-  fid = pg_open_tzfile(name, canonname);
-  if (fid < 0)
-    return ENOENT; /* pg_open_tzfile may not set errno */
-
-  nread = read(fid, up->buf, sizeof up->buf);
-  if (nread < tzheadsize) {
-    int err = nread < 0 ? errno : EINVAL;
-
-    close(fid);
-    return err;
-  }
-  if (close(fid) < 0)
-    return errno;
+  /* The zone file is in ty's data (ty_timezone.h): no file is opened. */
+  if (!ty_tz_file(name, canonname, &zdata, &zsize))
+    return ENOENT;
+  nread = zsize < sizeof up->buf ? zsize : sizeof up->buf;
+  memcpy(up->buf, zdata, nread);
+  if (nread < tzheadsize)
+    return EINVAL;
   for (stored = 4; stored <= 8; stored *= 2) {
     int32 ttisstdcnt = detzcode(up->tzhead.tzh_ttisstdcnt);
     int32 ttisutcnt = detzcode(up->tzhead.tzh_ttisutcnt);

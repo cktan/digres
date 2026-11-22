@@ -26,12 +26,13 @@ the sha256 of `tzdata.zi`, so a file says what it was made from.
 
 ty follows PostgreSQL's data, not the operating system's.
 
-Today digres reads the operating system's zone files, from
-`/usr/share/zoneinfo` (the `SYSTEMTZDIR` of `pg_config.h`). On
-this machine that is release 2026e, newer than the 2026c that
-PostgreSQL 18.6 holds. A zone that changed between the two gives
-different answers in ty and in digres, until digres uses the
-zones of ty.
+digres reads the zones from ty too: its zone loader
+(`dg/src/timezone`) takes each zone file from `ty_tz_file()`, not
+from `/usr/share/zoneinfo`, and its list of zones (the view
+`pg_timezone_names`) is the list of ty. So digres and ty always
+agree on a zone, and a newer tzdata reaches digres when ty
+has it.
+The `SYSTEMTZDIR` of `pg_config.h` is no longer used.
 
 ## 2. How to make `tzdata.cc`
 

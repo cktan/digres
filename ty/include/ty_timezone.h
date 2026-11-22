@@ -109,6 +109,15 @@ unsigned ty_tz_name_count(void);
 const char* ty_tz_name_at(unsigned i);
 
 /*
+ * The bytes of the zone file of a zone (in any case), as zic wrote it, for a
+ * host that has its own reader of that format. canonname, if not NULL, gets
+ * the name in the database's case: it must have room for 256 bytes. 1 if
+ * there is such a zone, else 0. The bytes stay good as long as the data.
+ */
+int ty_tz_file(const char* name, char* canonname, const unsigned char** data,
+               size_t* size);
+
+/*
  * Use a pack of zones the host holds, as one it mapped from a file, in place
  * of ty's own. ty checks its magic number, its format version, its size and
  * its checksum. It must be called before the first zone is found, and the

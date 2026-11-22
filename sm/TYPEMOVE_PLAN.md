@@ -652,9 +652,13 @@ copied from PostgreSQL keeps its copyright notice
      (`ext/pg18.6`, tzdata 2026c, compiled by its `zic`);
      `ty/TZDATA.md` says how the file is made again when
      PostgreSQL has newer data, and the pack it holds can be
-     replaced by a file the host maps. Digres still reads the
-     operating system's files (2026e on this machine), and does
-     not use these functions yet. The tests: 16,618 answers of
+     replaced by a file the host maps. Digres's loader of zone files
+     now takes each zone from ty (`ty_tz_file`) in place of the
+     operating system's files (2026e on this machine; ty has
+     2026c, the release of PostgreSQL 18.6), and its list of
+     zones, `pg_timezone_names`, is ty's. No test of digres
+     changed its output. Digres does not call the other
+     functions of ty_timezone.h yet. The tests: 16,618 answers of
      Python's `zoneinfo` on the same zone files (the offset, the
      DST flag, the abbreviation and the fields of a UTC instant;
      the offset of a local time, with PostgreSQL's rule for a

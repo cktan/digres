@@ -2305,6 +2305,11 @@ int ty_tz_fixed_offset(const ty_tz_t *tz, long *east) {
   return pg_get_timezone_offset(tz, east);
 }
 
+int ty_tz_file(const char *name, char *canonname, const unsigned char **data,
+               size_t *size) {
+  return pack_find(name, canonname, data, size);
+}
+
 const char *ty_tz_data_version(void) {
   const pack_t *pk = pack();
 

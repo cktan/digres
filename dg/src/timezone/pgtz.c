@@ -22,148 +22,13 @@
 #include "datatype/timestamp.h"
 #include "miscadmin.h"
 #include "pgtz.h"
+#include "ty_timezone.h"
 #include "storage/fd.h"
 #include "utils/control_block.h"
 #include "utils/hsearch.h"
 
 /* Current session timezone (controlled by TimeZone GUC) */
 thread_local /*LOCAL*/ pg_tz *session_timezone = NULL;
-
-static bool scan_directory_ci(const char *dirname, const char *fname,
-                              int fnamelen, char *canonname, int canonnamelen);
-
-/*
- * Return full pathname of timezone data directory
- */
-static const char *pg_TZDIR(void) {
-#ifndef SYSTEMTZDIR
-  /* normal case: timezone stuff is under our share dir */
-  static bool done_tzdir = false;
-  static char tzdir[MAXPGPATH];
-
-  if (done_tzdir)
-    return tzdir;
-
-  get_share_path(pcb->my_exec_path, tzdir);
-  strlcpy(tzdir + strlen(tzdir), "/timezone", MAXPGPATH - strlen(tzdir));
-
-  done_tzdir = true;
-  return tzdir;
-#else
-  /* we're configured to use system's timezone database */
-  return SYSTEMTZDIR;
-#endif
-}
-
-/*
- * Given a timezone name, open() the timezone data file.  Return the
- * file descriptor if successful, -1 if not.
- *
- * The input name is searched for case-insensitively (we assume that the
- * timezone database does not contain case-equivalent names).
- *
- * If "canonname" is not NULL, then on success the canonical spelling of the
- * given name is stored there (the buffer must be > TZ_STRLEN_MAX bytes!).
- */
-int pg_open_tzfile(const char *name, char *canonname) {
-  const char *fname;
-  char fullname[MAXPGPATH];
-  int fullnamelen;
-  int orignamelen;
-
-  /* Initialize fullname with base name of tzdata directory */
-  strlcpy(fullname, pg_TZDIR(), sizeof(fullname));
-  orignamelen = fullnamelen = strlen(fullname);
-
-  if (fullnamelen + 1 + strlen(name) >= MAXPGPATH)
-    return -1; /* not gonna fit */
-
-  /*
-   * If the caller doesn't need the canonical spelling, first just try to
-   * open the name as-is.  This can be expected to succeed if the given name
-   * is already case-correct, or if the filesystem is case-insensitive; and
-   * we don't need to distinguish those situations if we aren't tasked with
-   * reporting the canonical spelling.
-   */
-  if (canonname == NULL) {
-    int result;
-
-    fullname[fullnamelen] = '/';
-    /* test above ensured this will fit: */
-    strcpy(fullname + fullnamelen + 1, name);
-    result = open(fullname, O_RDONLY | PG_BINARY, 0);
-    if (result >= 0)
-      return result;
-    /* If that didn't work, fall through to do it the hard way */
-    fullname[fullnamelen] = '\0';
-  }
-
-  /*
-   * Loop to split the given name into directory levels; for each level,
-   * search using scan_directory_ci().
-   */
-  fname = name;
-  for (;;) {
-    const char *slashptr;
-    int fnamelen;
-
-    slashptr = strchr(fname, '/');
-    if (slashptr)
-      fnamelen = slashptr - fname;
-    else
-      fnamelen = strlen(fname);
-    if (!scan_directory_ci(fullname, fname, fnamelen,
-                           fullname + fullnamelen + 1,
-                           MAXPGPATH - fullnamelen - 1))
-      return -1;
-    fullname[fullnamelen++] = '/';
-    fullnamelen += strlen(fullname + fullnamelen);
-    if (slashptr)
-      fname = slashptr + 1;
-    else
-      break;
-  }
-
-  if (canonname)
-    strlcpy(canonname, fullname + orignamelen + 1, TZ_STRLEN_MAX + 1);
-
-  return open(fullname, O_RDONLY | PG_BINARY, 0);
-}
-
-/*
- * Scan specified directory for a case-insensitive match to fname
- * (of length fnamelen --- fname may not be null terminated!).  If found,
- * copy the actual filename into canonname and return true.
- */
-static bool scan_directory_ci(const char *dirname, const char *fname,
-                              int fnamelen, char *canonname, int canonnamelen) {
-  bool found = false;
-  DIR *dirdesc;
-  struct dirent *direntry;
-
-  dirdesc = AllocateDir(dirname);
-
-  while ((direntry = ReadDirExtended(dirdesc, dirname, LOG)) != NULL) {
-    /*
-     * Ignore . and .., plus any other "hidden" files.  This is a security
-     * measure to prevent access to files outside the timezone directory.
-     */
-    if (direntry->d_name[0] == '.')
-      continue;
-
-    if (strlen(direntry->d_name) == fnamelen &&
-        pg_strncasecmp(direntry->d_name, fname, fnamelen) == 0) {
-      /* Found our match */
-      strlcpy(canonname, direntry->d_name, canonnamelen);
-      found = true;
-      break;
-    }
-  }
-
-  FreeDir(dirdesc);
-
-  return found;
-}
 
 /*
  * We keep loaded timezones in a hashtable so we don't have to
@@ -331,85 +196,33 @@ void pg_timezone_initialize(void) {
  *
  * All data is allocated using palloc in the current context.
  */
-#define MAX_TZDIR_DEPTH 10
-
+/*
+ * The zones are those of ty's data (ty_timezone.h), in the order of the
+ * lower-case name; no directory is read.
+ */
 struct pg_tzenum {
-  int baselen;
-  int depth;
-  DIR *dirdesc[MAX_TZDIR_DEPTH];
-  char *dirname[MAX_TZDIR_DEPTH];
+  unsigned next; /* the index of the next name */
   struct pg_tz tz;
 };
 
 /* typedef pg_tzenum is declared in pgtime.h */
 
 pg_tzenum *pg_tzenumerate_start(void) {
-  pg_tzenum *ret = (pg_tzenum *)palloc0(sizeof(pg_tzenum));
-  char *startdir = pstrdup(pg_TZDIR());
-
-  ret->baselen = strlen(startdir) + 1;
-  ret->depth = 0;
-  ret->dirname[0] = startdir;
-  ret->dirdesc[0] = AllocateDir(startdir);
-  if (!ret->dirdesc[0])
-    ereport(ERROR, (errcode_for_file_access(),
-                    errmsg("could not open directory \"%s\": %m", startdir)));
-  return ret;
+  return (pg_tzenum *)palloc0(sizeof(pg_tzenum));
 }
 
-void pg_tzenumerate_end(pg_tzenum *dir) {
-  while (dir->depth >= 0) {
-    FreeDir(dir->dirdesc[dir->depth]);
-    pfree(dir->dirname[dir->depth]);
-    dir->depth--;
-  }
-  pfree(dir);
-}
+void pg_tzenumerate_end(pg_tzenum *dir) { pfree(dir); }
 
 pg_tz *pg_tzenumerate_next(pg_tzenum *dir) {
-  while (dir->depth >= 0) {
-    struct dirent *direntry;
-    char fullname[MAXPGPATH * 2];
-
-    direntry = ReadDir(dir->dirdesc[dir->depth], dir->dirname[dir->depth]);
-
-    if (!direntry) {
-      /* End of this directory */
-      FreeDir(dir->dirdesc[dir->depth]);
-      pfree(dir->dirname[dir->depth]);
-      dir->depth--;
-      continue;
-    }
-
-    if (direntry->d_name[0] == '.')
-      continue;
-
-    snprintf(fullname, sizeof(fullname), "%s/%s", dir->dirname[dir->depth],
-             direntry->d_name);
-
-    if (get_dirent_type(fullname, direntry, true, ERROR) == PGFILETYPE_DIR) {
-      /* Step into the subdirectory */
-      if (dir->depth >= MAX_TZDIR_DEPTH - 1)
-        ereport(ERROR, (errmsg_internal("timezone directory stack overflow")));
-      dir->depth++;
-      dir->dirname[dir->depth] = pstrdup(fullname);
-      dir->dirdesc[dir->depth] = AllocateDir(fullname);
-      if (!dir->dirdesc[dir->depth])
-        ereport(ERROR,
-                (errcode_for_file_access(),
-                 errmsg("could not open directory \"%s\": %m", fullname)));
-
-      /* Start over reading in the new directory */
-      continue;
-    }
+  while (dir->next < ty_tz_name_count()) {
+    const char *name = ty_tz_name_at(dir->next++);
 
     /*
      * Load this timezone using tzload() not pg_tzset(), so we don't fill
      * the cache.  Also, don't ask for the canonical spelling: we already
-     * know it, and pg_open_tzfile's way of finding it out is pretty
-     * inefficient.
+     * know it.
      */
-    if (tzload(fullname + dir->baselen, NULL, &dir->tz.state, true) != 0) {
+    if (tzload(name, NULL, &dir->tz.state, true) != 0) {
       /* Zone could not be loaded, ignore it */
       continue;
     }
@@ -420,7 +233,7 @@ pg_tz *pg_tzenumerate_next(pg_tzenum *dir) {
     }
 
     /* OK, return the canonical zone name spelling. */
-    strlcpy(dir->tz.TZname, fullname + dir->baselen, sizeof(dir->tz.TZname));
+    strlcpy(dir->tz.TZname, name, sizeof(dir->tz.TZname));
 
     /* Timezone loaded OK. */
     return &dir->tz;
