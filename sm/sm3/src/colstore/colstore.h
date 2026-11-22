@@ -45,7 +45,8 @@ constexpr size_t col_max_value = 2048;
 
 /* The rows of a row group of cat's tables: fewer if a test set them. */
 inline uint32_t rg_rows(const catalog_t *cat) {
-  return cat->rg_rows ? cat->rg_rows : rg_max_rows;
+  const uint32_t rows = cat->rg_rows.load(std::memory_order_relaxed);
+  return rows ? rows : rg_max_rows;
 }
 
 /* The name of the _id CG's file, among the columns' attnums. */

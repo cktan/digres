@@ -901,6 +901,33 @@ a table of `_id` to `[fsid rno]`, in one scan.
 Deletes a column store table's row by its name, its place from
 `place-of` and its `_id` (`sm_tbl_delete_at`).
 
+### `(update-at table place id row)`
+Updates a column store table's row by its name, as `delete-at`
+names it, to the values of `row` (`sm_tbl_update_at`).
+
+### `(row-groups table)`
+The versions of row groups of the column store table that the
+transaction sees, in `fsid` order (`sm_tbl_row_groups`): an array
+of tables of `:fsid`, `:rows`, `:dead`, the rows its validmap and
+markers name, and `:markers`.
+
+### `(fold-rg table fsid)`, `(compact-rg table fsid)`, `(eliminate-rg table fsid)`, `(cleanup-rg table fsid)`
+Run a job of the sealer by hand on file set `fsid`, in the
+transaction, which runs at READ COMMITTED (`sm_tbl_rg_job`): the
+fold, RG compaction, elimination or the cleanup
+([`../COLSTORE.md`](../COLSTORE.md) §11). `true` if it did;
+`false` if it gave up on a writer or a lock holder, or must wait
+for the watermark.
+
+### `(markers-of table fsid)`
+The count of delete markers of file set `fsid` that the
+transaction sees, of an old version too (`sm_tbl_rg_markers`).
+
+### `(set-rg-rows n)`
+Gives the column store tables of the session's catalog row groups
+of `n` rows, 1 to 10,000 (`sm_set_rg_rows`), before they have
+rows: for tests.
+
 ### `(scan table [:from first] [:to last])`
 Scans the table, keyless, in `_id` order over the `_id`s
 `[first, last]`. Returns an array of `[id [val1 val2 ...]]`

@@ -147,8 +147,9 @@ struct sm3::catalog_t {
   /* The host's evaluator of partial and expression indexes; set once. */
   index_eval_fn eval;
   bool toast = false; /* the host reads TOAST pointers (cat_set_toast) */
-  /* The rows of a row group; 0 is rg_max_rows (cat_set_rg_rows). */
-  uint32_t rg_rows = 0;
+  /* The rows of a row group; 0 is rg_max_rows (cat_set_rg_rows).
+     Atomic: the sealer's thread reads it while a test sets it. */
+  std::atomic<uint32_t> rg_rows{0};
 
   /*
    * The delta rows and delete markers of each prepared transaction,

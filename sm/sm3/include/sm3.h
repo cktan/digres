@@ -1183,9 +1183,9 @@ int cat_set_toast(catalog_t* cat, bool on);
 /*
  * Give the column store tables of the catalog row groups of rows
  * rows, fewer than the 10k they have (../COLSTORE.md §7), so that a
- * seal, an RG compaction and a merge come sooner: for tests. Once,
- * before any session uses the catalog. 0, or -1 with SM_ERR_INVALID
- * for rows 0 or past 10k.
+ * seal, an RG compaction and an elimination come sooner: for tests.
+ * Before the tables have rows. 0, or -1 with SM_ERR_INVALID for rows
+ * 0 or past 10k.
  */
 int cat_set_rg_rows(catalog_t* cat, uint32_t rows);
 
@@ -1990,6 +1990,28 @@ int tbl_scan_columns(table_t* table, std::vector<bool> cols,
  * written.
  */
 int tbl_fold(table_t* table, uint64_t fsid, bool& done);
+
+/* A version of a row group, as a transaction sees it: for tests. */
+struct rg_info_t {
+  uint64_t fsid = 0;    /* rg_id << 2 | version */
+  uint32_t rows = 0;    /* its rows */
+  uint32_t dead = 0;    /* the rows its validmap and markers name */
+  uint32_t markers = 0; /* its delete markers */
+};
+
+/*
+ * The versions of row groups of a column store table that the
+ * transaction sees, in fsid order, into out (../COLSTORE.md §4.4):
+ * for tests.
+ */
+int tbl_row_groups(table_t* table, std::vector<rg_info_t>& out);
+
+/*
+ * The delete markers of file set fsid of a column store table that
+ * the transaction sees, of a version gone from it too, into n
+ * (../COLSTORE.md §11.4): for tests.
+ */
+int tbl_rg_markers(table_t* table, uint64_t fsid, size_t& n);
 
 /*
  * Erase the delete markers and validmap of file set fsid of a column

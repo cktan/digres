@@ -10064,12 +10064,12 @@ static TM_Result write_result(Relation rel, const std::string &key, int rc,
  * The place of tbl's row at key, if tbl is a column store table and the
  * scan in *scan is on that row, read from a row group: a write names the
  * row by it, and sm looks for none (../../../../../sm/COLSTORE.md §8).
- * fsid 0 otherwise, and sm finds
- * the row by its _id.  fsid 0 too after a write found the row changed, as
- * its newest version is elsewhere.
+ * fsid 0 otherwise, and sm finds the row by its _id.  fsid 0 too after a
+ * write found the row changed, as its newest version is elsewhere.
  */
-static sm_row_place_t scan_rg(sm_tbl_t *tbl, Relation rel,
-                              const std::string &key, smstore_scan_t **scan) {
+static sm_row_place_t scan_place(sm_tbl_t *tbl, Relation rel,
+                                 const std::string &key,
+                                 smstore_scan_t **scan) {
   Oid oid = RelationGetRelid(rel);
   sm_row_place_t none = {0, 0};
 
@@ -10134,12 +10134,13 @@ TM_Result smstore_update(Relation rel, const RowKey *key, TupleTableSlot *slot,
       row_to_sm(tbl, slot->tts_tupleDescriptor, slot->tts_values,
                 slot->tts_isnull, slot->tts_nvalid, have_old ? &old : NULL);
   smstore_scan_t *scan;
-  sm_row_place_t rg = scan_rg(tbl, rel, bytes, &scan);
+  sm_row_place_t place = scan_place(tbl, rel, bytes, &scan);
   int rc = waiting([&] {
-    return 0 != rg.fsid ? sm_tbl_update_at(tbl, rg, key_rowno(rel, key), row,
-                                           slot->tts_isnull, slot->tts_nvalid)
-                        : sm_tbl_update(tbl, sk, row, slot->tts_isnull,
-                                        slot->tts_nvalid);
+    return 0 != place.fsid
+               ? sm_tbl_update_at(tbl, place, key_rowno(rel, key), row,
+                                  slot->tts_isnull, slot->tts_nvalid)
+               : sm_tbl_update(tbl, sk, row, slot->tts_isnull,
+                               slot->tts_nvalid);
   });
 
   sm_unpin(&ref);
@@ -10159,16 +10160,16 @@ TM_Result smstore_delete(Relation rel, const RowKey *key,
   const void *old;
   size_t len;
   smstore_scan_t *scan;
-  sm_row_place_t rg = scan_rg(tbl, rel, bytes, &scan);
+  sm_row_place_t place = scan_place(tbl, rel, bytes, &scan);
 
   /*
    * A row group's row, the scan on it: deleted by its name, and kept as the
    * scan read it, copied, as the scan's pin lasts until its cursor moves.
    */
-  if (0 != rg.fsid && scan_tuple(scan, &old, &len)) {
+  if (0 != place.fsid && scan_tuple(scan, &old, &len)) {
     std::string was((const char *)old, len);
-    int rc =
-        waiting([&] { return sm_tbl_delete_at(tbl, rg, key_rowno(rel, key)); });
+    int rc = waiting(
+        [&] { return sm_tbl_delete_at(tbl, place, key_rowno(rel, key)); });
 
     if (0 == rc) {
       sm_unpin(&kept_ref);

@@ -1616,6 +1616,56 @@ int sm_tbl_update_at(sm_tbl_t* tbl, sm_row_place_t place, uint64_t id,
 int sm_tbl_seal(sm_tbl_t* tbl, bool* sealed);
 
 /*
+ * A version of a row group of a column store table, as the
+ * transaction sees it (../COLSTORE.md §4.4): for tests.
+ */
+typedef struct sm_rg_info_t {
+    uint64_t fsid;    /* rg_id << 2 | version */
+    uint32_t rows;    /* its rows */
+    uint32_t dead;    /* the rows its validmap and markers name */
+    uint32_t markers; /* its delete markers */
+} sm_rg_info_t;
+
+/*
+ * The versions of row groups of a column store table that the
+ * transaction sees, in fsid order: the first cap into out, and the
+ * count of all into *n. For tests.
+ */
+int sm_tbl_row_groups(sm_tbl_t* tbl, sm_rg_info_t* out, size_t cap,
+                      size_t* n);
+
+/* The jobs of the sealer (../COLSTORE.md §11), to run by hand. */
+typedef enum sm_rg_job_t {
+    SM_RG_FOLD,      /* the markers into the validmap (§11.1) */
+    SM_RG_COMPACT,   /* the next version, or elimination at the last (§11.2) */
+    SM_RG_ELIMINATE, /* the live rows into the delta store (§11.3) */
+    SM_RG_CLEANUP    /* an old version's markers and validmap (§11.4) */
+} sm_rg_job_t;
+
+/*
+ * Run job on file set fsid of a column store table, in the session's
+ * transaction, at read committed: *done says whether it did, false
+ * when it gave up on a writer or a lock holder, or must wait for the
+ * watermark. For tests.
+ */
+int sm_tbl_rg_job(sm_tbl_t* tbl, sm_rg_job_t job, uint64_t fsid,
+                  bool* done);
+
+/*
+ * The delete markers of file set fsid of a column store table that
+ * the transaction sees, of a version gone from it too, into *n. For
+ * tests.
+ */
+int sm_tbl_rg_markers(sm_tbl_t* tbl, uint64_t fsid, size_t* n);
+
+/*
+ * Give the column store tables of the session's catalog row groups
+ * of rows rows, 1 to 10,000 (../COLSTORE.md §7), before they have
+ * rows. For tests.
+ */
+int sm_set_rg_rows(sm_session_t* session, uint32_t rows);
+
+/*
  * Wait until the seal's job of the session's database has nothing
  * to do: the tables a commit queued are sealed (../COLSTORE.md
  * §10.4). For tests.

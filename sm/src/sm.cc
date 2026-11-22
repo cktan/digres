@@ -2196,6 +2196,64 @@ int sm_seal_wait(sm_session_t *session) {
   });
 }
 
+/* The row groups' versions a transaction sees; see sm.h. */
+int sm_tbl_row_groups(sm_tbl_t *tbl, sm_rg_info_t *out, size_t cap, size_t *n) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl || !n || (cap != 0 && !out)) {
+      return null_arg("sm_tbl_row_groups", "tbl, out or n");
+    }
+    std::vector<sm3::rg_info_t> rgs;
+    if (sm3::tbl_row_groups(tbl->table, rgs) != 0) {
+      return -1;
+    }
+    *n = rgs.size();
+    for (size_t i = 0; i < rgs.size() && i < cap; i++) {
+      out[i] = {rgs[i].fsid, rgs[i].rows, rgs[i].dead, rgs[i].markers};
+    }
+    return 0;
+  });
+}
+
+/* Run a job of the sealer by hand; see sm.h. */
+int sm_tbl_rg_job(sm_tbl_t *tbl, sm_rg_job_t job, uint64_t fsid, bool *done) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl || !done) {
+      return null_arg("sm_tbl_rg_job", "tbl or done");
+    }
+    switch (job) {
+    case SM_RG_FOLD:
+      return sm3::tbl_fold(tbl->table, fsid, *done);
+    case SM_RG_COMPACT:
+      return sm3::tbl_compact_rg(tbl->table, fsid, *done);
+    case SM_RG_ELIMINATE:
+      return sm3::tbl_eliminate_rg(tbl->table, fsid, *done);
+    case SM_RG_CLEANUP:
+      return sm3::tbl_cleanup(tbl->table, fsid, *done);
+    }
+    return sm1::seterr(sm1::SM_ERR_INVALID, "sm_tbl_rg_job: no such job");
+  });
+}
+
+/* The delete markers of a file set; see sm.h. */
+int sm_tbl_rg_markers(sm_tbl_t *tbl, uint64_t fsid, size_t *n) {
+  return guard(tbl ? tbl->session : nullptr, [&] {
+    if (!tbl || !n) {
+      return null_arg("sm_tbl_rg_markers", "tbl or n");
+    }
+    return sm3::tbl_rg_markers(tbl->table, fsid, *n);
+  });
+}
+
+/* Set the catalog's row group size; see sm.h. */
+int sm_set_rg_rows(sm_session_t *session, uint32_t rows) {
+  return guard(session, [&] {
+    if (!session) {
+      return null_arg("sm_set_rg_rows", "session");
+    }
+    return sm3::cat_set_rg_rows(sm3::session_cat(session->sm3), rows);
+  });
+}
+
 /* Seal a row group of a column store table; see sm.h. */
 int sm_tbl_seal(sm_tbl_t *tbl, bool *sealed) {
   return guard(tbl ? tbl->session : nullptr, [&] {

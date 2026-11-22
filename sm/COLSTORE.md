@@ -526,14 +526,19 @@ table. A write takes the row's place from the scan instead:
    the row by its `_id`, and sm reads the delta key `n`. If the
    delta store has no version of it, or a seal's tombstone, sm
    looks up the row's place as above, at the newest committed
-   state (`col_find_latest`).
+   state (`col_find_latest`). No row there, of a row the
+   transaction sees, is a row changed since: the write fails as
+   over another's marker (§9 step 6), `SM_ERR_CONFLICT` above READ
+   COMMITTED.
 3. A follow after `SM_ERR_SEALED` is a lookup too.
 
 - **The place's `fsid` is 0 for a row in the delta store.**
 - **The place is the one the scan's snapshot sees.** The write
   maps it to the newest version (§8.1, §9).
 - **A read by `_id` is the same**: the delta store, then the
-  lookup, at the snapshot, or newest for `sm_tbl_read_latest`.
+  lookup, at the snapshot, or newest for `sm_tbl_read_latest`. A
+  seal's tombstone, read newest (`SM_ERR_SEALED`), sends the read to
+  the lookup too.
 - **A row lock is on the delta key `_id`** wherever the row is
   (§9.1), so it needs no place, and a renumbering moves no lock.
 
@@ -595,9 +600,11 @@ an RG, at the place its snapshot sees (`mark_deleted` in
       its delta key, as for a row of the delta store, where it is
       a moved-in version or a newer one (§11.3).
 4. Read the newest version's validmap at the newest state. A bit
-   set means the row was deleted and folded: `SM_ERR_NOTFOUND` if
-   the snapshot sees the bit, or at READ COMMITTED, else
-   `SM_ERR_CONFLICT`.
+   set means the row was deleted or updated, and folded: the write
+   fails as over another's marker (step 6), `SM_ERR_CONFLICT` above
+   READ COMMITTED, `SM_ERR_UPDATED` or `SM_ERR_NOTFOUND` at READ
+   COMMITTED. A bit the snapshot sees, above READ COMMITTED, is
+   `SM_ERR_NOTFOUND`.
 5. Insert the delete marker at the newest place, a versioned key,
    as a unique index entry is. First-committer-wins applies to it
    as to any key. If the newest place is not the snapshot's,
@@ -1324,7 +1331,25 @@ random CGs and random bounds, against a test of every value.
     rows a later seal takes; a write by `_id` in a statement
     marks its row once.
 23. A delete by a writer older than the seal hides the delta row,
-    and an update's new version hides the old one.
+    and an update's new version hides the old one; the newest
+    version of a sealed row is read from its RG; a READ COMMITTED
+    write of a row updated since and folded is `SM_ERR_UPDATED`;
+    an RR write by `_id` of a row deleted since conflicts;
+    a writer of a row that a newer version dropped fails, at each
+    level; an older writer's update, out of line, over a moved-in
+    row hides the row; a writer of a row deleted before an
+    elimination fails; RG compaction of a version with no live row
+    leaves none.
+24. **Random workloads across the sealer's jobs**, run by hand
+    between the steps: a REPEATABLE READ writer and a reader of the
+    same age, whose views are their snapshots and the writer's own
+    writes, each row once; READ COMMITTED writers of the same rows,
+    retried after `SM_ERR_UPDATED` as digres retries, which end as
+    one after the other; a REPEATABLE READ writer of any row, whose
+    write fails with `SM_ERR_CONFLICT` exactly on a row changed
+    since. `SM3_SEED` picks another workload, `SM3_SEALER` runs the
+    sealer's own jobs too, and `SM3_TOAST` writes values out of
+    line.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.
@@ -1342,6 +1367,17 @@ the fold; RG compaction into the next version, with a REPEATABLE
 READ writer older than it; elimination of an RG under half live,
 with a writer older than it; a `FOR SHARE` holder across an RG
 compaction, which keeps its lock.
+`rel/test/test_colstore_jobs.rel` runs the sealer's jobs by hand
+(`fold-rg`, `compact-rg`, `eliminate-rg`, `cleanup-rg`), on RGs of
+1,000 rows (`set-rg-rows`), and reads each version's dead rows and
+markers (`row-groups`, `markers-of`): the fold, with a snapshot
+older than it; the fold's give-up on a writer; a delete of a folded
+row; RG compaction into versions 1 to 3, with a writer older than
+two of them; the elimination of version 3, with an older writer's
+update by name (`update-at`) and the cleanup that waits for it; a
+`FOR SHARE` holder, which stops elimination and not RG compaction;
+`SM_ERR_CONFLICT` and `SM_ERR_UPDATED` for a row changed since; a
+prepared delete across a restart; a delete older than the seal.
 `rel/test/test_toast.rel`, with TOAST on: 10k rows of values of
 2,000 bytes inserted one at a time, sealed by the seal's job,
 read back whole; a value of 2,049 bytes refused.

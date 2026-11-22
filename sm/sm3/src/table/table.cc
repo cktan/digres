@@ -1565,14 +1565,32 @@ static int col_read(table_t *table, uint64_t id, bool latest,
 }
 
 /*
+ * Whether a column store table's read of the delta store that gave rc
+ * is to be read again from the row groups: the delta store has no
+ * version of the row (1), or, read newest, the seal's tombstone
+ * (SM_ERR_SEALED, which sm1::read_latest gives for a row a move took
+ * elsewhere). The error is then cleared.
+ */
+static bool col_elsewhere(const table_t *table, int rc) {
+  if (!table->def->column_store) {
+    return false;
+  }
+  if (rc == -1 && sm1::errnum() == sm1::SM_ERR_SEALED) {
+    sm1::reseterr();
+    return true;
+  }
+  return rc == 1;
+}
+
+/*
  * A read of row id whose read of the delta store gave rc: in a column
- * store table, a row the delta store has no version of is read from
- * its row group, held in the table until the next such read. rc for
- * any other table.
+ * store table, a row the delta store has no version of, or the seal's
+ * tombstone of (col_elsewhere), is read from its row group, held in
+ * the table until the next such read. rc for any other table.
  */
 static int col_reread(table_t *table, uint64_t id, bool latest, int rc,
                       std::string_view &tuple) {
-  if (rc != 1 || !table->def->column_store) {
+  if (!col_elsewhere(table, rc)) {
     return rc;
   }
   rc = col_read(table, id, latest, table->col_row);
@@ -1628,7 +1646,7 @@ static int read_into(table_t *table, pin_ref_t &ref, std::string_view &tuple,
 /* As col_reread, into a pin, pointing ref at it; the pin holds the row. */
 static int col_reread(table_t *table, uint64_t id, bool latest, int rc,
                       pin_ref_t &ref, std::string_view &tuple) {
-  if (rc != 1 || !table->def->column_store) {
+  if (!col_elsewhere(table, rc)) {
     return rc;
   }
   pin_t *p = pin_reread(ref);
@@ -1644,6 +1662,23 @@ static int col_reread(table_t *table, uint64_t id, bool latest, int rc,
   tuple = p->own;
   pin_hold(p, table->def, tuple, ref);
   return 0;
+}
+
+static int row_gone(table_t *table, uint64_t id);
+
+/*
+ * Whether the transaction's view sees row id of a column store table,
+ * in the delta store or in a row group: 1, 0, or -1.
+ */
+static int col_seen(table_t *table, uint64_t id) {
+  std::string_view tuple;
+  int r = sm2::rel_read(table->rel, sm2::id_key(id), tuple);
+  if (r <= 0) {
+    return r < 0 ? -1 : 1;
+  }
+  place_t place;
+  r = col_find_seen(table, id, place);
+  return r < 0 ? -1 : r == 0 ? 1 : 0;
 }
 
 /*
@@ -1720,13 +1755,20 @@ static int col_write(table_t *table, uint64_t id, int rc,
     return rc;
   }
   const bool sealed = sm1::errnum() == sm1::SM_ERR_SEALED;
-  // 2. Its place in a row group.
+  // 2. Its place in a row group. None, of a row the transaction sees,
+  //    is a row changed since: as a write that meets another's marker.
   place_t place;
   int f = col_find_latest(table, id, place);
-  if (f != 0) {
-    return f < 0 ? -1
-                 : sm1::seterr(sm1::SM_ERR_NOTFOUND,
-                               "column store: no row " + std::to_string(id));
+  if (f < 0) {
+    return -1;
+  }
+  if (f == 1) {
+    int seen = col_seen(table, id);
+    return seen < 0 ? -1
+           : seen == 1
+               ? row_gone(table, id)
+               : sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                             "column store: no row " + std::to_string(id));
   }
   // 3. The row as it is.
   std::string was;
@@ -1858,12 +1900,15 @@ static int lock_row(table_t *table, uint64_t id, sm1::lockmode_t mode,
 }
 
 /*
- * Whether the row at place is deleted by a bit of its validmap: 0 if
- * not; else -1, with SM_ERR_NOTFOUND if the transaction's view sees
- * the bit, or at read committed, and SM_ERR_CONFLICT if a fold since
- * the snapshot set it (../COLSTORE.md §9).
+ * Whether row id at place is deleted by a bit of its validmap: 0 if
+ * not; else -1, as a write that meets another's marker fails
+ * (row_gone): SM_ERR_CONFLICT above read committed, and at read
+ * committed SM_ERR_UPDATED for a row updated since, whose new version
+ * is in the delta store, or SM_ERR_NOTFOUND. A bit the transaction's
+ * view sees, above read committed, is SM_ERR_NOTFOUND
+ * (../COLSTORE.md §9).
  */
-static int need_not_folded(table_t *table, place_t place) {
+static int need_not_folded(table_t *table, place_t place, uint64_t id) {
   sm1::session_t *s = table->session->sm1;
   const std::string key = validmap_key(place.fsid);
   // 1. The newest validmap: a fold holds X on the row group, so none
@@ -1888,12 +1933,12 @@ static int need_not_folded(table_t *table, place_t place) {
     return -1;
   }
   bool seen = r == 0 && validmap_test(bits, place.rno);
-  if (seen || table->session->level == sm1::xctlevel_t::read_committed) {
+  if (seen && table->session->level != sm1::xctlevel_t::read_committed) {
     return sm1::seterr(sm1::SM_ERR_NOTFOUND,
                        "column store: the row was deleted");
   }
-  return sm1::seterr(sm1::SM_ERR_CONFLICT,
-                     "column store: the row was deleted since the snapshot");
+  // 3. Since the view, or at read committed: deleted, or updated.
+  return row_gone(table, id);
 }
 
 /*
@@ -2012,7 +2057,7 @@ static int mark_deleted(table_t *table, place_t place, uint64_t id) {
     return v < 0 ? -1 : row_gone(table, id);
   }
   // 4. Folded.
-  if (need_not_folded(table, place) != 0) {
+  if (need_not_folded(table, place, id) != 0) {
     return -1;
   }
   // 5. The marker.
@@ -2264,6 +2309,48 @@ int tbl_fold(table_t *table, uint64_t fsid, bool &done) {
     return -1;
   }
   return col_fold(table, fsid, done);
+}
+
+/* The row groups' versions a transaction sees; see sm3.h. */
+int tbl_row_groups(table_t *table, std::vector<rg_info_t> &out) {
+  out.clear();
+  if (!table->def->column_store) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "table: " + table->def->name +
+                                                " is no column store table");
+  }
+  std::vector<std::pair<uint64_t, std::string>> sets;
+  if (sm1::fileset_list(table->session->sm1, table->def->storeid, sets) != 0) {
+    return -1;
+  }
+  for (const auto &[fsid, value] : sets) {
+    rg_meta_t meta;
+    std::vector<bool> dead;
+    uint32_t ndead = 0, markers = 0;
+    if (rg_meta_decode(value, meta) != 0 ||
+        col_dead(table, fsid, meta.rows, dead, ndead, markers) != 0) {
+      return -1;
+    }
+    out.push_back({fsid, meta.rows, ndead, markers});
+  }
+  std::sort(out.begin(), out.end(), [](const rg_info_t &a, const rg_info_t &b) {
+    return a.fsid < b.fsid;
+  });
+  return 0;
+}
+
+/* The delete markers of a file set; see sm3.h. */
+int tbl_rg_markers(table_t *table, uint64_t fsid, size_t &n) {
+  n = 0;
+  if (!table->def->column_store) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "table: " + table->def->name +
+                                                " is no column store table");
+  }
+  std::vector<uint32_t> rnos;
+  if (col_markers(table, fsid, rnos) != 0) {
+    return -1;
+  }
+  n = rnos.size();
+  return 0;
 }
 
 /* Clean up an old version of a column store table; see sm3.h. */

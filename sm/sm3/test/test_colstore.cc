@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -2891,4 +2892,838 @@ TEST_CASE("a writer older than the seal no longer sees the row it deleted") {
   CHECK(rows[6] == "r");
   sm3::session_close(ss2);
   sm3::session_close(ss3);
+}
+
+// Verify a writer of a row that a newer version dropped, deleted or
+// updated since its snapshot, fails as over another's marker: at
+// REPEATABLE READ with SM_ERR_CONFLICT, at READ COMMITTED with
+// SM_ERR_NOTFOUND for a delete since and SM_ERR_UPDATED for an
+// update since.
+// 1. Row groups of 100 rows; load 100. R (REPEATABLE READ) finds
+//    a = 5 at its place in version 0.
+// 2. W deletes a = 5, and updates a = 6; compact: version 1 drops
+//    both.
+// 3. R's delete of a = 5 by its place fails with SM_ERR_CONFLICT.
+// 4. R2 (READ COMMITTED), with the places of version 0: its delete of
+//    a = 5 fails with SM_ERR_NOTFOUND, and of a = 6 with
+//    SM_ERR_UPDATED.
+TEST_CASE("a writer of a row a newer version dropped fails") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R.
+  load_rows(db, c, 100);
+  auto [p5, id5] = where(db, c, 5);
+  auto [p6, id6] = where(db, c, 6);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(count_in(ss2, c) == 100);
+  // 2. W; version 1.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE(sm3::tbl_delete_at(t, p5, id5) == 0);
+  row_t r6(6, "w");
+  REQUIRE(sm3::tbl_update_at(t, p6, id6, r6.d, r6.null) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  REQUIRE(compact(ss3, c, p5.fsid));
+  // 3. R.
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK(sm3::tbl_delete_at(t, p5, id5) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_CONFLICT);
+  sm3::tbl_close(t);
+  sm3::abort(ss2);
+  // 4. R2, at READ COMMITTED.
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK(sm3::tbl_delete_at(t, p5, id5) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_NOTFOUND);
+  CHECK(sm3::tbl_delete_at(t, p6, id6) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_UPDATED);
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss2) == 0);
+  CHECK(scan_rows(db, c).size() == 99);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify a writer older than an elimination of a row deleted before
+// it, after its snapshot, fails with SM_ERR_CONFLICT.
+// 1. Row groups of 100 rows; load 100. R (REPEATABLE READ) finds
+//    a = 5 at its place.
+// 2. W deletes a = 5; eliminate: a = 5 is not moved in.
+// 3. R's delete of a = 5 by its place fails with SM_ERR_CONFLICT.
+TEST_CASE("an older writer of a row deleted before an elimination fails") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R.
+  load_rows(db, c, 100);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p5, id5] = where_in(ss2, c, 5);
+  // 2. W; the elimination.
+  delete_rows(db, c, 5, 6);
+  REQUIRE(eliminate(ss3, c, p5.fsid));
+  REQUIRE(row_groups(db, c) == 0);
+  CHECK(scan_rows(db, c).size() == 99);
+  // 3. R.
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK(sm3::tbl_delete_at(t, p5, id5) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_CONFLICT);
+  sm3::tbl_close(t);
+  sm3::abort(ss2);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify RG compaction of a version with no live row leaves no
+// version, and a job on a version gone fails with SM_ERR_NOTFOUND,
+// which the sealer passes over.
+// 1. Row groups of 100 rows; load 100, and delete them all.
+// 2. Compact: done, and no row group is left; a scan finds no row.
+// 3. Compact the version again: SM_ERR_NOTFOUND.
+TEST_CASE("RG compaction of a version with no live row leaves none") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows, all deleted.
+  load_rows(db, c, 100);
+  uint64_t fsid = where(db, c, 5).first.fsid;
+  delete_rows(db, c, 0, 100);
+  // 2. The compaction.
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  CHECK(compact(ss3, c, fsid));
+  CHECK(row_groups(db, c) == 0);
+  CHECK(scan_rows(db, c).empty());
+  // 3. Again.
+  REQUIRE(sm3::begin(ss3, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss3, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  bool done = true;
+  CHECK(sm3::tbl_compact_rg(t, fsid, done) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_NOTFOUND);
+  CHECK_FALSE(done);
+  sm3::tbl_close(t);
+  sm3::abort(ss3);
+  sm3::session_close(ss3);
+}
+
+// Verify a writer whose snapshot is older than an elimination and the
+// seal that takes the rows again deletes the row in its new row group,
+// and no longer sees it.
+// 1. Row groups of 100 rows; load 100. R (REPEATABLE READ) finds
+//    a = 5 at its place in version 0.
+// 2. Eliminate version 0; seal the delta store: a new row group of
+//    the 100 rows.
+// 3. R deletes a = 5 by its old place: R counts 99, without a = 5.
+// 4. R commits: 99 rows, in the new row group.
+TEST_CASE("a writer older than an elimination and the seal after it") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R.
+  load_rows(db, c, 100);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p5, id5] = where_in(ss2, c, 5);
+  // 2. The elimination, and the seal.
+  REQUIRE(eliminate(ss3, c, p5.fsid));
+  REQUIRE(seal(ss3, c));
+  auto [q5, qid5] = where(db, c, 5);
+  REQUIRE(q5.fsid != 0);
+  REQUIRE(sm3::fsid_rg(q5.fsid) != sm3::fsid_rg(p5.fsid));
+  // 3. R's delete.
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t, p5, id5) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  CHECK_FALSE(sees(ss2, c, 5));
+  CHECK(count_in(ss2, c) == 99);
+  // 4. Committed.
+  REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 99);
+  CHECK(rows.count(5) == 0);
+  CHECK(row_groups(db, c) == 1);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+namespace {
+
+/* The _id of each row of c, by a, as a new transaction sees them. */
+std::map<int32_t, uint64_t> ids_by_a(col_db_t &db, uint64_t c) {
+  std::map<int32_t, uint64_t> out;
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  while (sm3::tbl_scannxt(scan, id, tuple) == 0) {
+    sm2::datum_t d[2];
+    bool null[2];
+    REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+    out[sm2::datum_to_int32(d[0])] = id;
+  }
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  db.commit();
+  return out;
+}
+
+} // namespace
+
+// Verify a REPEATABLE READ writer open across the sealer's jobs, run
+// by hand, sees its snapshot and its own writes, each row once, and
+// that its writes land where the rows are: a random workload. W
+// writes the even rows alone, and another transaction the odd ones,
+// so no write of W conflicts.
+// 1. Row groups of 100 rows; load 300 rows, and insert 150 more: three
+//    row groups and the delta store.
+// 2. In each of 12 rounds, W begins; then 40 random steps: W deletes,
+//    updates or inserts an even row, by its place or by its _id;
+//    another transaction does so to an odd row; or a job runs: a seal,
+//    or a fold, an RG compaction or an elimination of a version.
+//    A write of W in four is under a savepoint, rolled back half the
+//    time.
+// 3. Every 8 steps, W's view is its snapshot and its own writes, each
+//    row once; R's, a reader of the same age, is its snapshot.
+// 4. W commits: a new transaction's view is the model.
+// With SM3_SEALER set, the sealer runs its own jobs too, between the
+// steps and during them; a job by hand that meets one of them gives
+// up, or finds its version gone.
+TEST_CASE("an old writer agrees across the sealer's jobs") {
+  // SM3_TOAST, if set, turns TOAST on, and writes values out of line.
+  const bool toast = std::getenv("SM3_TOAST") != nullptr;
+  col_db_t db(100, toast);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  const bool sealer = std::getenv("SM3_SEALER") != nullptr;
+  sm1::env_t *env = db.env();
+  if (sealer) {
+    REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+              sm1::session_t *s = nullptr;
+              return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+            }) == 0);
+  }
+  // A job by hand: 0 a seal, 1 a fold, 2 an RG compaction, 3 an
+  // elimination; with the sealer, a version gone, or a row it holds,
+  // is no failure.
+  auto run_job = [&](sm3::session_t *ss, unsigned job, uint64_t fsid) {
+    REQUIRE(sm3::begin(ss, sm1::xctlevel_t::read_committed) == 0);
+    sm3::table_t *t = nullptr;
+    REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+    bool done = false;
+    int rc = job == 0   ? sm3::tbl_seal(t, done)
+             : job == 1 ? sm3::tbl_fold(t, fsid, done)
+             : job == 2 ? sm3::tbl_compact_rg(t, fsid, done)
+                        : sm3::tbl_eliminate_rg(t, fsid, done);
+    sm1::errnum_t e = rc == 0 ? sm1::SM_OK : sm1::errnum();
+    sm3::tbl_close(t);
+    if (rc == 0) {
+      REQUIRE_MESSAGE(sm3::commit(ss) == 0, sm1::errmsg());
+      return;
+    }
+    REQUIRE_MESSAGE(sealer, "job " << job << ": " << sm1::errmsg());
+    REQUIRE_MESSAGE((e == sm1::SM_ERR_NOTFOUND || e == sm1::SM_ERR_SEALED),
+                    "job " << job << ": " << sm1::errmsg());
+    sm3::abort(ss);
+  };
+  // 1. The rows.
+  load_rows(db, c, 300);
+  insert_rows(db, c, 300, 450);
+  // Every row of c whole, as ss's open transaction sees it.
+  auto view = [&](sm3::session_t *ss) {
+    return toast ? whole_rows(ss, c) : rows_in(ss, c);
+  };
+  // Every row of c whole, as a new transaction sees it.
+  auto now = [&]() {
+    db.begin(sm1::xctlevel_t::repeatable_read);
+    auto rows = view(db.ss);
+    db.commit();
+    return rows;
+  };
+  std::map<int32_t, std::string> model = now();
+  std::map<int32_t, uint64_t> ids = ids_by_a(db, c);
+  REQUIRE(model.size() == 450);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr, *ss4 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss4) == 0);
+  // SM3_SEED, if set, picks another workload, to hunt with.
+  const char *seed = std::getenv("SM3_SEED");
+  std::mt19937 rng(seed ? std::strtoul(seed, nullptr, 10) : 20261122);
+  int32_t next_a = 1000;
+  // A random key of m whose a has parity odd, or INT32_MIN if none.
+  auto pick = [&](const std::map<int32_t, std::string> &m, int odd) {
+    std::vector<int32_t> keys;
+    for (const auto &[a, b] : m) {
+      if ((a & 1) == odd) {
+        keys.push_back(a);
+      }
+    }
+    return keys.empty() ? INT32_MIN : keys[rng() % keys.size()];
+  };
+  // A write of row a in ss's open transaction: 0 delete, 1 update, 2
+  // insert; by its place (as ss sees it) or by its _id.
+  auto write = [&](sm3::session_t *ss, std::map<int32_t, std::string> &m,
+                   int odd, int step) {
+    unsigned op = m.size() < 200 ? 2 : rng() % 3;
+    sm3::table_t *t = nullptr;
+    REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+    if (op == 2) {
+      int32_t a = next_a++;
+      a = (a & ~1) | odd;
+      next_a = a + 2;
+      row_t r(a, "i" + std::to_string(step));
+      uint64_t id = 0;
+      REQUIRE(sm3::tbl_insert(t, r.d, r.null, id) == 0);
+      m[a] = "i" + std::to_string(step);
+      ids[a] = id;
+    } else {
+      int32_t a = pick(m, odd);
+      REQUIRE(a != INT32_MIN);
+      sm3::tbl_close(t);
+      auto [p, id] = where_in(ss, c, a);
+      REQUIRE(id == ids[a]);
+      REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+      bool by_place = rng() % 2;
+      // With TOAST, an update in eight is out of line.
+      std::string v = "u" + std::to_string(step);
+      if (toast && rng() % 8 == 0) {
+        v = std::string(2000, static_cast<char>('a' + step % 26)) + v;
+      }
+      row_t r(a, v);
+      int rc = op == 0 ? (by_place ? sm3::tbl_delete_at(t, p, id)
+                                   : sm3::tbl_delete(t, id))
+                       : (by_place ? sm3::tbl_update_at(t, p, id, r.d, r.null)
+                                   : sm3::tbl_update(t, id, r.d, r.null));
+      REQUIRE_MESSAGE(rc == 0, "step " << step << " op " << op << " a " << a
+                                       << " place " << p.fsid << "/" << p.rno
+                                       << ": " << sm1::errmsg());
+      if (op == 0) {
+        m.erase(a);
+      } else {
+        m[a] = v;
+      }
+    }
+    sm3::tbl_close(t);
+  };
+  for (int round = 0, step = 0; round < 12; round++) {
+    // 2. W, and the steps.
+    REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+    REQUIRE(sm3::begin(ss4, sm1::xctlevel_t::repeatable_read) == 0);
+    const std::map<int32_t, std::string> snapshot = model;
+    std::map<int32_t, std::string> seen = model;
+    for (int k = 0; k < 40; k++, step++) {
+      unsigned what = rng() % 3;
+      if (what == 0) {
+        // A write in four under a savepoint, rolled back half the time:
+        // its markers, shadow markers and delta writes go with it.
+        int depth = rng() % 4 == 0 ? sm3::savepoint(ss2) : -1;
+        auto before = seen;
+        auto ids_before = ids;
+        write(ss2, seen, 0, step);
+        if (depth >= 0 && rng() % 2) {
+          REQUIRE(sm3::rollback(ss2, depth) == 0);
+          seen = before;
+          ids = ids_before;
+        } else if (depth >= 0) {
+          REQUIRE(sm3::forget(ss2, depth) == 0);
+        }
+      } else if (what == 1) {
+        db.begin();
+        write(db.ss, model, 1, step);
+        db.commit();
+      } else {
+        std::vector<uint64_t> rgs = rg_ids(db, c);
+        unsigned job = rng() % 4;
+        run_job(ss3, rgs.empty() ? 0 : job,
+                rgs.empty() ? 0 : rgs[rng() % rgs.size()]);
+      }
+      // 3. W's view.
+      if (k % 8 == 7) {
+        auto in_w = view(ss2);
+        REQUIRE_MESSAGE(in_w == seen, "round " << round << " step " << step);
+        REQUIRE_MESSAGE(view(ss4) == snapshot,
+                        "R: round " << round << " step " << step);
+      }
+    }
+    // 4. W commits.
+    REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+    REQUIRE(sm3::commit(ss4) == 0);
+    for (auto it = model.begin(); it != model.end();) {
+      it = (it->first & 1) == 0 ? model.erase(it) : std::next(it);
+    }
+    for (const auto &[a, b] : seen) {
+      if ((a & 1) == 0) {
+        model[a] = b;
+      }
+    }
+    REQUIRE_MESSAGE(now() == model, "after round " << round);
+  }
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+  sm3::session_close(ss4);
+  if (sealer) {
+    sm3::sealer_detach(db.cat);
+  }
+}
+
+// Verify READ COMMITTED writers of the same rows, across the sealer's
+// jobs run by hand, end as one after the other, as digres retries a
+// write: a random workload.
+// 1. Row groups of 100 rows; load 300 rows, and insert 150 more.
+// 2. In each of 300 steps: W1 finds a random row's place; then W2
+//    updates or deletes a random row, perhaps the same, and commits;
+//    then a job runs, perhaps: a seal, a fold, an RG compaction or an
+//    elimination.
+// 3. W1 updates or deletes its row by its place: SM_ERR_UPDATED is
+//    answered by a read of the newest version and a write by _id, as
+//    digres does; SM_ERR_NOTFOUND means the row is gone. W1 commits.
+// 4. Every 25 steps, a new transaction's view is the model.
+TEST_CASE("READ COMMITTED writers agree across the sealer's jobs") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  load_rows(db, c, 300);
+  insert_rows(db, c, 300, 450);
+  std::map<int32_t, std::string> model = scan_rows(db, c);
+  std::map<int32_t, uint64_t> ids = ids_by_a(db, c);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  const char *seed = std::getenv("SM3_SEED");
+  std::mt19937 rng(seed ? std::strtoul(seed, nullptr, 10) : 20261123);
+  auto any = [&]() {
+    auto it = model.begin();
+    std::advance(it, rng() % model.size());
+    return it->first;
+  };
+  // A job by hand: 0 a seal, 1 a fold, 2 an RG compaction, 3 an
+  // elimination.
+  auto run_job = [&](unsigned job) {
+    std::vector<uint64_t> rgs = rg_ids(db, c);
+    if (rgs.empty()) {
+      job = 0;
+    }
+    uint64_t fsid = rgs.empty() ? 0 : rgs[rng() % rgs.size()];
+    REQUIRE(sm3::begin(ss3, sm1::xctlevel_t::read_committed) == 0);
+    sm3::table_t *t = nullptr;
+    REQUIRE(sm3::tbl_open(ss3, c, sm1::SM_LOCKMODE_IX, t) == 0);
+    bool done = false;
+    int rc = job == 0   ? sm3::tbl_seal(t, done)
+             : job == 1 ? sm3::tbl_fold(t, fsid, done)
+             : job == 2 ? sm3::tbl_compact_rg(t, fsid, done)
+                        : sm3::tbl_eliminate_rg(t, fsid, done);
+    REQUIRE_MESSAGE(rc == 0, "job " << job << ": " << sm1::errmsg());
+    sm3::tbl_close(t);
+    REQUIRE(sm3::commit(ss3) == 0);
+  };
+  for (int step = 0; step < 300 && model.size() > 50; step++) {
+    // 2. W1's place; W2; a job.
+    REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+    int32_t a1 = any();
+    auto [p1, id1] = where_in(ss2, c, a1);
+    REQUIRE(id1 == ids[a1]);
+    int32_t a2 = rng() % 3 == 0 ? a1 : any();
+    bool del2 = rng() % 4 == 0;
+    db.begin();
+    sm3::table_t *t = nullptr;
+    REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+    row_t r2(a2, "w2-" + std::to_string(step));
+    REQUIRE_MESSAGE((del2 ? sm3::tbl_delete(t, ids[a2])
+                          : sm3::tbl_update(t, ids[a2], r2.d, r2.null)) == 0,
+                    sm1::errmsg());
+    sm3::tbl_close(t);
+    db.commit();
+    if (del2) {
+      model.erase(a2);
+    } else {
+      model[a2] = "w2-" + std::to_string(step);
+    }
+    int job = -1;
+    if (rng() % 2) {
+      job = static_cast<int>(rng() % 4);
+      run_job(static_cast<unsigned>(job));
+    }
+    // 3. W1's write by its place, retried as digres retries it.
+    int first = 0;
+    sm1::errnum_t first_e = sm1::SM_OK;
+    bool del1 = rng() % 4 == 0;
+    row_t r1(a1, "w1-" + std::to_string(step));
+    REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+    int rc = del1 ? sm3::tbl_delete_at(t, p1, id1)
+                  : sm3::tbl_update_at(t, p1, id1, r1.d, r1.null);
+    sm1::errnum_t e = rc == 0 ? sm1::SM_OK : sm1::errnum();
+    first = rc;
+    first_e = e;
+    if (rc != 0 && e == sm1::SM_ERR_UPDATED) {
+      std::string_view tuple;
+      int r = sm3::tbl_read_latest(t, id1, tuple);
+      REQUIRE(r >= 0);
+      if (r == 0) {
+        rc = del1 ? sm3::tbl_delete(t, id1)
+                  : sm3::tbl_update(t, id1, r1.d, r1.null);
+        e = rc == 0 ? sm1::SM_OK : sm1::errnum();
+      } else {
+        e = sm1::SM_ERR_NOTFOUND;
+      }
+    }
+    sm3::tbl_close(t);
+    REQUIRE_MESSAGE((rc == 0 || e == sm1::SM_ERR_NOTFOUND),
+                    "step " << step << " a " << a1 << " a2 " << a2 << " del1 "
+                            << del1 << " del2 " << del2 << " e " << e << ": "
+                            << std::string(sm1::errmsg()));
+    REQUIRE(sm3::commit(ss2) == 0);
+    if (rc == 0) {
+      REQUIRE_MESSAGE(model.count(a1) == 1,
+                      "step " << step << ": W1 wrote a row W2 deleted");
+      if (del1) {
+        model.erase(a1);
+      } else {
+        model[a1] = "w1-" + std::to_string(step);
+      }
+    } else {
+      REQUIRE_MESSAGE(model.count(a1) == 0,
+                      "step " << step << ": W1 found no row W2 kept: a1 " << a1
+                              << " a2 " << a2 << " del1 " << del1 << " del2 "
+                              << del2 << " job " << job << " place " << p1.fsid
+                              << "/" << p1.rno << " first " << first << "/"
+                              << first_e << " e " << e);
+    }
+    // 4. Agreement.
+    if (step % 25 == 24) {
+      REQUIRE_MESSAGE(scan_rows(db, c) == model, "step " << step);
+    }
+  }
+  CHECK(scan_rows(db, c) == model);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify a read of the newest version of a row the seal took from the
+// delta store reads it from its row group, as for a row a bulk load
+// wrote there; the seal's tombstone at its delta key says no more
+// than that the row is elsewhere.
+// 1. Row groups of 100 rows; insert 100 rows one at a time, and seal
+//    them.
+// 2. At READ COMMITTED, lock a = 5, and read its newest version: the
+//    row, from its row group.
+// 3. Update a = 6 by its old place after W deletes it: SM_ERR_NOTFOUND,
+//    not SM_ERR_SEALED.
+TEST_CASE("a read of the newest version of a sealed row finds it") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows, sealed.
+  insert_rows(db, c, 0, 100);
+  auto [p6, id6] = where(db, c, 6);
+  REQUIRE(p6.fsid == 0);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(seal(ss3, c));
+  auto [q6, qid6] = where(db, c, 6);
+  REQUIRE(q6.fsid != 0);
+  uint64_t id5 = where(db, c, 5).second;
+  // 2. The newest version of a = 5.
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE(sm3::tbl_lock(t, id5, sm1::SM_LOCKMODE_EX) == 0);
+  std::string_view tuple;
+  CHECK_MESSAGE(sm3::tbl_read_latest(t, id5, tuple) == 0,
+                std::string(sm1::errmsg()));
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss2) == 0);
+  // 3. a = 6, deleted by W, written at its place.
+  delete_rows(db, c, 6, 7);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r6(6, "x");
+  CHECK(sm3::tbl_update_at(t, q6, qid6, r6.d, r6.null) == -1);
+  CHECK_MESSAGE(sm1::errnum() == sm1::SM_ERR_NOTFOUND,
+                std::string(sm1::errmsg()));
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss2) == 0);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify a READ COMMITTED writer of a row updated since, and folded,
+// is told SM_ERR_UPDATED, as before the fold, so it reads the row's
+// new version and writes it; a row deleted since and folded is
+// SM_ERR_NOTFOUND.
+// 1. Row groups of 100 rows; load 100. W1 (READ COMMITTED) finds
+//    a = 5 and a = 6 at their places.
+// 2. W2 updates a = 5 and deletes a = 6; fold the row group.
+// 3. W1's update of a = 5 by its place: SM_ERR_UPDATED; by its _id, it
+//    goes. W1's delete of a = 6 by its place: SM_ERR_NOTFOUND.
+TEST_CASE("a write of a row updated since and folded is told it was updated") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; W1's places.
+  load_rows(db, c, 100);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
+  auto [p5, id5] = where_in(ss2, c, 5);
+  auto [p6, id6] = where_in(ss2, c, 6);
+  // 2. W2; the fold.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t w(5, "w2");
+  REQUIRE(sm3::tbl_update_at(t, p5, id5, w.d, w.null) == 0);
+  REQUIRE(sm3::tbl_delete_at(t, p6, id6) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  REQUIRE(fold(ss3, c, p5.fsid));
+  // 3. W1.
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r(5, "w1");
+  CHECK(sm3::tbl_update_at(t, p5, id5, r.d, r.null) == -1);
+  CHECK_MESSAGE(sm1::errnum() == sm1::SM_ERR_UPDATED,
+                std::string(sm1::errmsg()));
+  std::string_view tuple;
+  REQUIRE(sm3::tbl_read_latest(t, id5, tuple) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_update(t, id5, r.d, r.null) == 0,
+                  std::string(sm1::errmsg()));
+  CHECK(sm3::tbl_delete_at(t, p6, id6) == -1);
+  CHECK_MESSAGE(sm1::errnum() == sm1::SM_ERR_NOTFOUND,
+                std::string(sm1::errmsg()));
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss2) == 0);
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 99);
+  CHECK(rows[5] == "w1");
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify first-committer-wins judges a REPEATABLE READ writer across
+// the sealer's jobs run by hand: its write of a row fails with
+// SM_ERR_CONFLICT exactly when another transaction changed the row
+// after its snapshot, whatever moved the row meanwhile. A random
+// workload.
+// 1. Row groups of 100 rows; load 300 rows, and insert 150 more.
+// 2. In each of 30 rounds, W begins; then up to 25 random steps:
+//    another transaction updates or deletes a row, which W's later
+//    writes of it must conflict with; or a job runs; or W updates or
+//    deletes a row it sees, by its place or by its _id.
+// 3. A conflict ends W's round, aborted: it must be on a row changed
+//    since. A write that goes must be on a row not changed since.
+// 4. At the round's end W commits, and a new transaction's view is
+//    the model.
+TEST_CASE("first-committer-wins agrees across the sealer's jobs") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows.
+  load_rows(db, c, 300);
+  insert_rows(db, c, 300, 450);
+  std::map<int32_t, std::string> model = scan_rows(db, c);
+  std::map<int32_t, uint64_t> ids = ids_by_a(db, c);
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  const char *seed = std::getenv("SM3_SEED");
+  std::mt19937 rng(seed ? std::strtoul(seed, nullptr, 10) : 20261124);
+  auto any = [&](const std::map<int32_t, std::string> &m) {
+    auto it = m.begin();
+    std::advance(it, rng() % m.size());
+    return it->first;
+  };
+  auto run_job = [&](unsigned job) {
+    std::vector<uint64_t> rgs = rg_ids(db, c);
+    if (rgs.empty()) {
+      job = 0;
+    }
+    uint64_t fsid = rgs.empty() ? 0 : rgs[rng() % rgs.size()];
+    REQUIRE(sm3::begin(ss3, sm1::xctlevel_t::read_committed) == 0);
+    sm3::table_t *t = nullptr;
+    REQUIRE(sm3::tbl_open(ss3, c, sm1::SM_LOCKMODE_IX, t) == 0);
+    bool done = false;
+    int rc = job == 0   ? sm3::tbl_seal(t, done)
+             : job == 1 ? sm3::tbl_fold(t, fsid, done)
+             : job == 2 ? sm3::tbl_compact_rg(t, fsid, done)
+                        : sm3::tbl_eliminate_rg(t, fsid, done);
+    REQUIRE_MESSAGE(rc == 0, "job " << job << ": " << sm1::errmsg());
+    sm3::tbl_close(t);
+    REQUIRE(sm3::commit(ss3) == 0);
+  };
+  int conflicts = 0, goes = 0;
+  for (int round = 0, step = 0; round < 30 && model.size() > 100; round++) {
+    // 2. W, and the steps.
+    REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+    std::map<int32_t, std::string> seen = model, mine;
+    std::set<int32_t> changed, gone_mine;
+    bool aborted = false;
+    for (int k = 0; k < 25 && !aborted; k++, step++) {
+      unsigned what = rng() % 3;
+      if (what == 0) {
+        // Another transaction, on a row W has not written.
+        int32_t a = any(model);
+        if (mine.count(a) || gone_mine.count(a)) {
+          continue;
+        }
+        bool del = rng() % 4 == 0;
+        db.begin();
+        sm3::table_t *t = nullptr;
+        REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+        row_t r(a, "o" + std::to_string(step));
+        REQUIRE_MESSAGE((del ? sm3::tbl_delete(t, ids[a])
+                             : sm3::tbl_update(t, ids[a], r.d, r.null)) == 0,
+                        sm1::errmsg());
+        sm3::tbl_close(t);
+        db.commit();
+        if (del) {
+          model.erase(a);
+        } else {
+          model[a] = "o" + std::to_string(step);
+        }
+        changed.insert(a);
+      } else if (what == 1) {
+        run_job(rng() % 4);
+      } else {
+        // W, on a row it sees and has not deleted: one changed since,
+        // a third of the time.
+        int32_t a = any(seen);
+        if (!changed.empty() && rng() % 3 == 0) {
+          auto it = changed.begin();
+          std::advance(it, rng() % changed.size());
+          a = *it;
+        }
+        auto [p, id] = where_in(ss2, c, a);
+        REQUIRE(id == ids[a]);
+        bool del = rng() % 4 == 0, by_place = rng() % 2;
+        sm3::table_t *t = nullptr;
+        REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+        row_t r(a, "w" + std::to_string(step));
+        int rc = del ? (by_place ? sm3::tbl_delete_at(t, p, id)
+                                 : sm3::tbl_delete(t, id))
+                     : (by_place ? sm3::tbl_update_at(t, p, id, r.d, r.null)
+                                 : sm3::tbl_update(t, id, r.d, r.null));
+        sm1::errnum_t e = rc == 0 ? sm1::SM_OK : sm1::errnum();
+        std::string msg = rc == 0 ? "" : std::string(sm1::errmsg());
+        sm3::tbl_close(t);
+        // 3. A conflict exactly on a row changed since.
+        if (changed.count(a)) {
+          REQUIRE_MESSAGE(e == sm1::SM_ERR_CONFLICT,
+                          "step " << step << " a " << a << " del " << del
+                                  << " by_place " << by_place << " place "
+                                  << p.fsid << "/" << p.rno << ": " << msg);
+          sm3::abort(ss2);
+          aborted = true;
+          conflicts++;
+        } else {
+          REQUIRE_MESSAGE(rc == 0, "step " << step << " a " << a << " del "
+                                           << del << " by_place " << by_place
+                                           << " place " << p.fsid << "/"
+                                           << p.rno << ": " << msg);
+          goes++;
+          if (del) {
+            seen.erase(a);
+            mine.erase(a);
+            gone_mine.insert(a);
+          } else {
+            seen[a] = "w" + std::to_string(step);
+            mine[a] = seen[a];
+          }
+        }
+      }
+    }
+    // 4. W commits; the model takes its writes.
+    if (!aborted) {
+      REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+      for (const auto &[a, b] : mine) {
+        model[a] = b;
+      }
+      for (int32_t a : gone_mine) {
+        model.erase(a);
+      }
+    }
+    REQUIRE_MESSAGE(scan_rows(db, c) == model, "after round " << round);
+  }
+  CHECK(conflicts > 0);
+  CHECK(goes > 0);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify a REPEATABLE READ writer by _id alone of a row another
+// transaction deleted since its snapshot fails with SM_ERR_CONFLICT,
+// not SM_ERR_NOTFOUND, whether the row was in a row group at the
+// snapshot or in the delta store, sealed since.
+// 1. Row groups of 100 rows; load 100, and insert 100 more one at a
+//    time. R (REPEATABLE READ) sees all 200.
+// 2. Seal the delta store; W deletes a = 5, of the load, and
+//    a = 105, sealed since R began.
+// 3. R's delete of a = 5 by its _id: SM_ERR_CONFLICT. R2 (REPEATABLE
+//    READ, as old): its delete of a = 105 by its _id, too.
+TEST_CASE("an RR writer by _id of a row deleted since conflicts") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R and R2.
+  load_rows(db, c, 100);
+  insert_rows(db, c, 100, 200);
+  uint64_t id5 = where(db, c, 5).second;
+  uint64_t id105 = where(db, c, 105).second;
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr, *ss4 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss4) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  REQUIRE(sm3::begin(ss4, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(count_in(ss2, c) == 200);
+  CHECK(count_in(ss4, c) == 200);
+  // 2. The seal; W.
+  REQUIRE(seal(ss3, c));
+  delete_rows(db, c, 5, 6);
+  delete_rows(db, c, 105, 106);
+  // 3. R and R2.
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK(sm3::tbl_delete(t, id5) == -1);
+  CHECK_MESSAGE(sm1::errnum() == sm1::SM_ERR_CONFLICT,
+                std::string(sm1::errmsg()));
+  sm3::tbl_close(t);
+  sm3::abort(ss2);
+  REQUIRE(sm3::tbl_open(ss4, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK(sm3::tbl_delete(t, id105) == -1);
+  CHECK_MESSAGE(sm1::errnum() == sm1::SM_ERR_CONFLICT,
+                std::string(sm1::errmsg()));
+  sm3::tbl_close(t);
+  sm3::abort(ss4);
+  CHECK(scan_rows(db, c).size() == 198);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+  sm3::session_close(ss4);
 }
