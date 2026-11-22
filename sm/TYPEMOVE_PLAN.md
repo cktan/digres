@@ -525,15 +525,19 @@ copied from PostgreSQL keeps its copyright notice
      was +1.7% to +1.9%. sm's threads set ty's alloc to an
      arena of the thread (next item).
    - **sm links ty; its threads set ty's alloc (2026-11-22).**
-     `sm1::ty_thread_init()` is the first act of the garbage
-     collector, the database reaper, the log zeroing, the
-     index builders, the sealer and the btree reapers. A piece
-     is a multiple of 8 bytes of a `thread_local` arena that the
-     thread's end frees, and `free` does nothing. The timer
-     thread of sm0 has none: sm0 depends on nothing. The
-     Makefiles of sm1, sm2, sm3, rel and aa link `libty.a`, from
-     `ty/ty.mk`; digres's link line now has ty after sm. No call
-     of sm allocates through ty yet.
+     The garbage collector, the database reaper, the log
+     zeroing, the index builders, the sealer and the btree
+     reapers each make an `sm0::arena_t` at their start, and
+     give `ty_set_alloc` a lambda that cuts from it: a piece is
+     a multiple of 8 bytes, and `free` does nothing. The thread
+     keeps the arena as its handle. A loop that runs jobs calls
+     `arena.reset()` after each job (added to `sm0::arena_t`:
+     it frees all the pieces and keeps the newest block), so
+     that the arena does not grow without end. The timer thread
+     of sm0 has none: sm0 depends on nothing. The Makefiles of
+     sm1, sm2, sm3, rel and aa link `libty.a`, from `ty/ty.mk`;
+     digres's link line now has ty after sm. No call of sm
+     allocates through ty yet.
    - **ty reads varlenas; ty allocates the result (2026-11-22).**
      A text, bytea or bpchar parameter is a PostgreSQL varlena:
      a 1-byte or a 4-byte header, and no toast. dg detoasts

@@ -21,7 +21,8 @@
  */
 #include "walfs.h"
 
-#include "sm1_ty.h"
+#include "sm0_arena.h"
+#include "ty.h"
 
 #include <fcntl.h>
 #include <pthread.h>
@@ -182,8 +183,15 @@ private:
   /* The spare's thread: zero m_spare, set before it started. */
   static void *zero_main(void *arg) {
     walfs_t *fs = static_cast<walfs_t *>(arg);
-    // ty on this thread allocates from an arena of the thread.
-    sm1::ty_thread_init();
+    // ty on this thread allocates from an arena of the thread, which the
+    // thread's end frees.
+    sm0::arena_t arena;
+    static thread_local sm0::arena_t *t_arena;
+    t_arena = &arena;
+    // ty keeps its functions per thread, so each thread sets its own.
+    ty_set_alloc(
+        [](size_t n) -> void * { return t_arena->alloc((n + 7) & ~(size_t)7); },
+        [](void *) {});
     fs->m_spare_ok =
         zero_fill(fs->m_spare, fs->m_prealloc_bytes, O_CREAT | O_TRUNC);
     return nullptr;

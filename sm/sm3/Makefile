@@ -39,6 +39,8 @@ CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc/catalog \
 include ../../ext/ext.mk
 # ty, which sm1's threads call; this level's tests link it.
 include ../../ty/ty.mk
+# The threads of sm3 give ty_set_alloc their arena: ty.h.
+CXXFLAGS += -I$(TY_INC)
 ROCKSDB_LIB ?= $(ROCKSDB_REL)
 LDLIBS   += $(ROCKSDB_LIB) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata \
             $(TY_LIB) -lpthread

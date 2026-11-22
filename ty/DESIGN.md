@@ -104,15 +104,18 @@ returns NULL.
   `palloc_extended()` with `MCXT_ALLOC_NO_OOM` (and NULL past
   `MaxAllocSize`, so that none throws) and `pfree()`, so a result
   is in the memory context of the call. sm calls it at the start
-  of each of its own threads, with functions that cut from an
-  arena of the thread: `sm1::ty_thread_init()`
-  (`../sm/sm1/include/sm1_ty.h`) in the garbage collector, the
-  reaper of databases, the zeroing of the log, the index
-  builders, the sealer and the btree reapers. The arena goes at
-  the thread's end, so `free` does nothing. The timer thread of
-  sm0 calls none, and sm0 does not link ty. An index-build thread
-  that digres adopts is given the functions of digres then. sm's
-  builds link ty (`ty.mk`).
+  of each of its own threads (the garbage collector, the reaper
+  of databases, the zeroing of the log, the index builders, the
+  sealer and the btree reapers). Each makes an `sm0::arena_t` of
+  its own, and gives ty a lambda that cuts from it (a piece is a
+  multiple of 8 bytes, and `free` does nothing). The thread keeps
+  the arena as its handle: a thread that runs jobs in a loop
+  calls `arena.reset()` after each job, so that the arena does
+  not grow without end, and no result of ty from a job may live
+  past it. The arena goes at the thread's end. The timer thread
+  of sm0 calls none, and sm0 does not link ty. An index-build
+  thread that digres adopts is given the functions of digres
+  then. sm's builds link ty (`ty.mk`).
 - A thread calls it before its first call that returns a result.
   It does not change the functions while a result of the thread
   is live, as `free` would no longer match `alloc`.

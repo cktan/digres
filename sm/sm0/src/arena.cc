@@ -25,6 +25,25 @@ arena_t::~arena_t() {
 }
 
 /*
+ * Free every piece, and keep the tail.
+ * 1. Free every block behind the tail, the large ones too.
+ * 2. Empty the tail: any block, large or not, has room for block_room
+ *    bytes at least, so it serves as a usual block.
+ */
+void arena_t::reset() {
+  if (nullptr == m_tail) {
+    return;
+  }
+  for (block_t *b = m_tail->prev; nullptr != b;) {
+    block_t *prev = b->prev;
+    ::operator delete(b);
+    b = prev;
+  }
+  m_tail->prev = nullptr;
+  m_tail->top = 0;
+}
+
+/*
  * Make a block for n bytes, the tail having no room for them.
  * 1. Make a block of n bytes if n is above block_room, else of
  *    block_room.

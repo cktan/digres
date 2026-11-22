@@ -22,9 +22,10 @@
 
 #include "error.h"
 #include "log.h"
+#include "sm0_arena.h"
 #include "sm0_codec.h"
 #include "sm0_defer.h"
-#include "sm1_ty.h"
+#include "ty.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -438,8 +439,15 @@ namespace {
  * 3. Go back to step 1.
  */
 void db_reaper_main(sm1::env_t *env) {
-  // ty on this thread allocates from an arena of the thread.
-  sm1::ty_thread_init();
+  // ty on this thread allocates from an arena of the thread, which the
+  // loop resets after each job, so that it does not grow without end.
+  sm0::arena_t arena;
+  static thread_local sm0::arena_t *t_arena;
+  t_arena = &arena;
+  // ty keeps its functions per thread, so each thread sets its own.
+  ty_set_alloc(
+      [](size_t n) -> void * { return t_arena->alloc((n + 7) & ~(size_t)7); },
+      [](void *) {});
   std::unique_lock<std::mutex> guard(env->mu);
   while (!env->stopping) {
     auto now = std::chrono::steady_clock::now();
@@ -461,6 +469,8 @@ void db_reaper_main(sm1::env_t *env) {
     if (next == std::chrono::steady_clock::time_point::max()) {
       env->idle_cv.wait(guard);
     } else {
+    // The pass is done: nothing of ty's from it is live.
+    arena.reset();
       env->idle_cv.wait_until(guard, next);
     }
   }

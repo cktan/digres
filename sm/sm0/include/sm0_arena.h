@@ -8,11 +8,15 @@
  *
  *   sm0::arena_t a;
  *   char *p = a.alloc(n);    // n bytes, uninitialized
- *   ...                      // the destructor frees every piece
+ *   ...
+ *   a.reset();               // frees every piece, keeps one block
+ *                            // the destructor frees every piece too
  *
  * An arena holds bytes alone. A piece has no alignment and no
  * destructor: do not put an object in one. A piece never moves, and
- * stays good until the arena goes.
+ * stays good until reset() or until the arena goes. A loop that
+ * works on jobs calls reset() after each job, so the arena does not
+ * grow without end.
  *
  * Pieces are cut from the tail, the newest block of one list. A piece
  * above block_room gets a block of exactly its size, linked behind the
@@ -59,6 +63,12 @@ public:
     m_tail->top += n;
     return p;
   }
+
+  /*
+   * Free every piece at once, and keep the newest block, empty, for the
+   * pieces to come. Every piece from before is bad after this call.
+   */
+  void reset();
 
 private:
   char *grow(size_t n);

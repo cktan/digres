@@ -14,8 +14,9 @@
  */
 
 #include "../catalog/internal.h"
-#include "sm1_ty.h"
+#include "sm0_arena.h"
 #include "sm_sys.h"
+#include "ty.h"
 
 #include <condition_variable>
 #include <deque>
@@ -205,8 +206,15 @@ void build_one(catalog_t *cat, session_t *ws, uint64_t table, uint64_t index,
  * 4. Start again at step 1.
  */
 void work() {
-  // ty on this thread allocates from an arena of the thread.
-  sm1::ty_thread_init();
+  // ty on this thread allocates from an arena of the thread, which the
+  // loop resets after each job, so that it does not grow without end.
+  sm0::arena_t arena;
+  static thread_local sm0::arena_t *t_arena;
+  t_arena = &arena;
+  // ty keeps its functions per thread, so each thread sets its own.
+  ty_set_alloc(
+      [](size_t n) -> void * { return t_arena->alloc((n + 7) & ~(size_t)7); },
+      [](void *) {});
   builder_t &b = g_builder;
   for (;;) {
     task_t task;
@@ -252,6 +260,8 @@ void work() {
       // The build's session ends with the build.
       sm1::closedb(s);
     }
+    // The build is done: nothing of ty's from it is live.
+    arena.reset();
     std::lock_guard lock(b.mu);
     // Unknown to a detach from here, so a stop it raised is for
     // this build alone: take it, lest it end the next one's waits.

@@ -129,3 +129,56 @@ TEST_CASE("arena pieces never move or overlap") {
     }
   }
 }
+
+// Verify that reset() frees every piece and keeps one block for the next.
+// 1. Cut pieces until the arena has a second block and a large one.
+// 2. Reset, and cut a piece: it is the start of the kept block.
+// 3. Reset again with nothing cut and on an arena with no block: no harm.
+// 4. A large piece after a reset is cut as before.
+TEST_CASE("arena reset keeps the tail and frees the rest") {
+  arena_t a;
+
+  // 1. Cut pieces until the arena has a second block and a large one.
+  char *first = a.alloc(16);
+  a.alloc(arena_t::block_room - 16);
+  char *tail = a.alloc(8);
+  char *large = a.alloc(arena_t::block_room * 4);
+  memset(large, 'z', arena_t::block_room * 4);
+  CHECK(tail != first + arena_t::block_room);
+
+  // 2. Reset, and cut a piece: it is the start of the kept block.
+  a.reset();
+  char *again = a.alloc(8);
+  CHECK(again == tail);
+  memset(again, 'k', 8);
+
+  // 3. Reset again with nothing cut and on an arena with no block.
+  a.reset();
+  a.reset();
+  arena_t empty;
+  empty.reset();
+  char *p = empty.alloc(8);
+  memset(p, 'e', 8);
+
+  // 4. A large piece after a reset is cut as before.
+  char *big = a.alloc(arena_t::block_room * 2);
+  memset(big, 'b', arena_t::block_room * 2);
+  CHECK(nullptr != big);
+}
+
+// Verify that an arena whose only block is large keeps it on reset.
+// 1. Cut a large piece first, so the large block is the tail.
+// 2. Reset, and cut a usual piece: it fits, with no new block.
+TEST_CASE("arena reset of a large first block") {
+  arena_t a;
+
+  // 1. Cut a large piece first, so the large block is the tail.
+  char *large = a.alloc(arena_t::block_room * 3);
+  memset(large, 'L', arena_t::block_room * 3);
+
+  // 2. Reset, and cut a usual piece: it fits, with no new block.
+  a.reset();
+  char *p = a.alloc(arena_t::block_room);
+  CHECK(p == large);
+  memset(p, 'p', arena_t::block_room);
+}

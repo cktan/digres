@@ -4,7 +4,9 @@
  */
 
 /*
- * Tests of the alloc and free functions of ty on a thread of sm.
+ * Tests of ty on a thread of sm: the alloc and free functions that sm's
+ * threads give to ty_set_alloc(), an arena of the thread and a lambda
+ * that reads it, as each thread's start does (gc.cc, for one).
  */
 #include <stdint.h>
 #include <string.h>
@@ -13,7 +15,7 @@
 #include <thread>
 
 #include "doctest.h"
-#include "sm1_ty.h"
+#include "sm0_arena.h"
 #include "ty.h"
 #include "ty_text.h"
 
@@ -28,18 +30,24 @@ std::string short_text(const std::string &s) {
 
 } // namespace
 
-// Verify that a thread that calls ty_thread_init() has ty allocate from its
-// arena, and that a value of ty on that thread is good until the thread ends.
-// 1. On a new thread, call ty_thread_init().
+// Verify that a thread whose arena is given to ty has ty allocate from it,
+// and that a reset of the arena frees the pieces at once.
+// 1. On a new thread, make an arena and give ty a lambda that reads it.
 // 2. Allocate twice with ty_alloc(): the pieces are aligned to 8 and apart.
 // 3. Free the first: the second is still good, as free does nothing.
 // 4. Concatenate two texts with ty_text_concat(): the result is right.
+// 5. Reset the arena: the next piece is the first of the block again.
 TEST_CASE("ty on a thread of sm allocates from the thread's arena") {
   bool ok = false;
 
   std::thread t([&] {
-    // 1. On a new thread, call ty_thread_init().
-    sm1::ty_thread_init();
+    // 1. On a new thread, make an arena and give ty a lambda that reads it.
+    sm0::arena_t arena;
+    static thread_local sm0::arena_t *t_arena;
+    t_arena = &arena;
+    ty_set_alloc(
+        [](size_t n) -> void * { return t_arena->alloc((n + 7) & ~(size_t)7); },
+        [](void *) {});
 
     // 2. Allocate twice with ty_alloc(): aligned to 8 and apart.
     char *a = static_cast<char *>(ty_alloc(5));
@@ -65,40 +73,46 @@ TEST_CASE("ty on a thread of sm allocates from the thread's arena") {
         5 == ty_vl_len(r) && 0 == memcmp(ty_vl_data(r), "abcde", 5);
     ty_free(r);
 
+    // 5. Reset the arena: the next piece is the first of the block again.
+    arena.reset();
+    bool reused = static_cast<char *>(ty_alloc(5)) == a;
+
     ok = 0 == ((uintptr_t)a & 7) && 0 == ((uintptr_t)b & 7) && apart && kept &&
-         concat;
+         concat && reused;
   });
   t.join();
   CHECK(ok);
 }
 
 // Verify that each thread has an arena of its own, and that a thread that
-// did not call ty_thread_init() has ty's default, malloc and free.
-// 1. Two threads each call ty_thread_init() and allocate.
-// 2. Each thread gets a piece and can write it.
-// 3. This thread, which did not call it, allocates and frees with malloc.
+// did not call ty_set_alloc() has ty's default, malloc and free.
+// 1. Two threads each give ty their own arena and allocate.
+// 2. Each thread gets a piece in its own arena and can write it.
+// 3. This thread, which did not give one, allocates and frees with malloc.
 TEST_CASE("each thread of sm has an arena of its own") {
   char *pa = nullptr, *pb = nullptr;
 
-  // 1. Two threads each call ty_thread_init() and allocate.
-  std::thread t1([&] {
-    sm1::ty_thread_init();
-    pa = static_cast<char *>(ty_alloc(16));
-    memset(pa, 1, 16);
-  });
+  // 1. Two threads each give ty their own arena and allocate.
+  auto run = [](char *&out, int fill) {
+    sm0::arena_t arena;
+    static thread_local sm0::arena_t *t_arena;
+    t_arena = &arena;
+    ty_set_alloc(
+        [](size_t n) -> void * { return t_arena->alloc((n + 7) & ~(size_t)7); },
+        [](void *) {});
+    out = static_cast<char *>(ty_alloc(16));
+    memset(out, fill, 16);
+  };
+  std::thread t1([&] { run(pa, 1); });
   t1.join();
-  std::thread t2([&] {
-    sm1::ty_thread_init();
-    pb = static_cast<char *>(ty_alloc(16));
-    memset(pb, 2, 16);
-  });
+  std::thread t2([&] { run(pb, 2); });
   t2.join();
 
-  // 2. Each thread gets a piece and can write it.
+  // 2. Each thread gets a piece in its own arena and can write it.
   CHECK(nullptr != pa);
   CHECK(nullptr != pb);
 
-  // 3. This thread, which did not call it, allocates and frees with malloc.
+  // 3. This thread, which did not give one, allocates and frees with malloc.
   void *p = ty_alloc(32);
   CHECK(nullptr != p);
   ty_free(p);

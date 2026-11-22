@@ -24,8 +24,9 @@
 #include "db.h"
 #include "log.h"
 #include "session.h"
+#include "sm0_arena.h"
 #include "sm0_codec.h"
-#include "sm1_ty.h"
+#include "ty.h"
 #include "version.h"
 
 #include <chrono>
@@ -560,8 +561,15 @@ void warn_stuck(db_t *db) {
 
 /* The worker: run GC when woken, and at least once a second. */
 void gc_main(db_t *db) {
-  // ty on this thread allocates from an arena of the thread.
-  sm1::ty_thread_init();
+  // ty on this thread allocates from an arena of the thread, which the
+  // loop resets after each job, so that it does not grow without end.
+  sm0::arena_t arena;
+  static thread_local sm0::arena_t *t_arena;
+  t_arena = &arena;
+  // ty keeps its functions per thread, so each thread sets its own.
+  ty_set_alloc(
+      [](size_t n) -> void * { return t_arena->alloc((n + 7) & ~(size_t)7); },
+      [](void *) {});
   // Hold gc_mu while waiting for work.
   std::unique_lock<std::mutex> guard(db->gc_mu);
   // Run until told to stop.
@@ -575,6 +583,8 @@ void gc_main(db_t *db) {
     // Run GC without holding gc_mu.
     guard.unlock();
     gc_run_once(db);
+    // The job is done: nothing of ty's from it is live.
+    arena.reset();
     // Retake gc_mu before waiting again.
     guard.lock();
   }

@@ -17,8 +17,9 @@
 
 #include "colstore.h"
 
+#include "sm0_arena.h"
 #include "sm0_log.h"
-#include "sm1_ty.h"
+#include "ty.h"
 
 #include <algorithm>
 #include <condition_variable>
@@ -220,8 +221,15 @@ void compact_rg(session_t *ss, uint64_t oid, uint64_t rg_id) {
 
 /* The worker: take a job from the queue, and do it. */
 void work(sealer_t *z) {
-  // ty on this thread allocates from an arena of the thread.
-  sm1::ty_thread_init();
+  // ty on this thread allocates from an arena of the thread, which the
+  // loop resets after each job, so that it does not grow without end.
+  sm0::arena_t arena;
+  static thread_local sm0::arena_t *t_arena;
+  t_arena = &arena;
+  // ty keeps its functions per thread, so each thread sets its own.
+  ty_set_alloc(
+      [](size_t n) -> void * { return t_arena->alloc((n + 7) & ~(size_t)7); },
+      [](void *) {});
   std::unique_lock<std::mutex> g(z->mu);
   for (;;) {
     z->cv.wait(g, [&] { return z->stop || !z->queue.empty(); });
@@ -247,6 +255,8 @@ void work(sealer_t *z) {
     if (s) {
       sm1::closedb(s);
     }
+    // The job is done: nothing of ty's from it is live.
+    arena.reset();
     g.lock();
     z->busy = false;
     z->cv.notify_all();

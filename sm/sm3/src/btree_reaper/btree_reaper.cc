@@ -9,9 +9,10 @@
 
 #include "../catalog/internal.h"
 
+#include "sm0_arena.h"
 #include "sm0_defer.h"
 #include "sm0_log.h"
-#include "sm1_ty.h"
+#include "ty.h"
 
 #include <cassert>
 #include <chrono>
@@ -244,8 +245,15 @@ int run_pass(btree_reaper_t *c, size_t budget, bool rows) {
  * full queue, and run no row pass.
  */
 void worker(btree_reaper_t *c, bool first) {
-  // ty on this thread allocates from an arena of the thread.
-  sm1::ty_thread_init();
+  // ty on this thread allocates from an arena of the thread, which the
+  // loop resets after each job, so that it does not grow without end.
+  sm0::arena_t arena;
+  static thread_local sm0::arena_t *t_arena;
+  t_arena = &arena;
+  // ty keeps its functions per thread, so each thread sets its own.
+  ty_set_alloc(
+      [](size_t n) -> void * { return t_arena->alloc((n + 7) & ~(size_t)7); },
+      [](void *) {});
   std::unique_lock lock(c->mu);
   while (!c->stopping) {
     c->cv.wait_for(lock, std::chrono::seconds(1));
@@ -266,6 +274,8 @@ void worker(btree_reaper_t *c, bool first) {
     if (0 != budget || rows) {
       run_pass(c, budget, rows);
     }
+    // The pass is done: nothing of ty's from it is live.
+    arena.reset();
     lock.lock();
   }
 }
