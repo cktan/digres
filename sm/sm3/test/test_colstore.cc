@@ -666,6 +666,18 @@ bool compact(sm3::session_t *ss, uint64_t c, uint64_t fsid) {
   return done;
 }
 
+/* Eliminate file set fsid of c in a transaction of its own; done. */
+bool eliminate(sm3::session_t *ss, uint64_t c, uint64_t fsid) {
+  REQUIRE(sm3::begin(ss, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  bool done = false;
+  REQUIRE_MESSAGE(sm3::tbl_eliminate_rg(t, fsid, done) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss) == 0);
+  return done;
+}
+
 /* Delete rows a = from .. to - 1 of c by their names. */
 void delete_rows(col_db_t &db, uint64_t c, int from, int to) {
   std::vector<std::pair<sm3::place_t, uint64_t>> names;
@@ -684,12 +696,14 @@ void delete_rows(col_db_t &db, uint64_t c, int from, int to) {
 
 } // namespace
 
-// Verify RG compaction rewrites a row group's live rows into a new
-// one, and gives up on a row with a writer in flight.
+// Verify RG compaction rewrites a row group's live rows into its next
+// version, and gives up on a writer of the row group in flight.
 // 1. Load 10,000 rows: one row group; delete a = 0 .. 29.
-// 2. S2 locks a = 50: compaction gives up, and nothing changes.
-// 3. S2 commits: compaction makes a new row group of 9,970 rows, and
-//    the old one is gone; a scan gives 9,970 rows, a = 50 among them.
+// 2. S2 deletes a = 50, in flight: compaction gives up, and nothing
+//    changes.
+// 3. S2 commits: compaction makes the next version, of 9,969 rows,
+//    and the old one is gone; a scan gives 9,969 rows, without
+//    a = 50.
 TEST_CASE("RG compaction rewrites live rows, and gives up on a writer") {
   col_db_t db;
   db.begin();
@@ -707,7 +721,8 @@ TEST_CASE("RG compaction rewrites live rows, and gives up on a writer") {
   REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
   sm3::table_t *t2 = nullptr;
   REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
-  REQUIRE(sm3::tbl_lock(t2, where(db, c, 50).second, sm1::SM_LOCKMODE_EX) == 0);
+  auto [p50, id50] = where(db, c, 50);
+  REQUIRE(sm3::tbl_delete_at(t2, p50, id50) == 0);
   sm1::session_t *s3 = db.open();
   sm3::session_t *ss3 = nullptr;
   REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
@@ -722,8 +737,9 @@ TEST_CASE("RG compaction rewrites live rows, and gives up on a writer") {
   CHECK(rg2 != 0);
   CHECK(rg2 != rg);
   auto rows = scan_rows(db, c);
-  CHECK(rows.size() == 9970);
-  CHECK(rows.count(50) == 1);
+  CHECK(rows.size() == 9969);
+  CHECK(rows.count(50) == 0);
+  CHECK(rows.count(51) == 1);
   CHECK(rows.count(10) == 0);
   sm3::session_close(ss2);
   sm3::session_close(ss3);
@@ -1356,13 +1372,15 @@ size_t colstore_files(col_db_t &db) {
 
 } // namespace
 
-// Verify that a reader's FOR SHARE lock and a prepared writer keep a
-// row from RG compaction and from the seal, until they end, with row
-// groups of 100 rows.
-// 1. Load 100 rows: one row group. S2 locks a = 5 FOR SHARE: RG
-//    compaction gives up. S2 commits: nothing yet changes.
+// Verify that a reader's FOR SHARE lock keeps a row from elimination,
+// and not from RG compaction, which keeps the lock; and that a
+// prepared writer keeps a row from RG compaction and from the seal,
+// until they end, with row groups of 100 rows.
+// 1. Load 100 rows: one row group. S2 locks a = 5 FOR SHARE:
+//    elimination gives up; RG compaction writes version 1, and S2's
+//    lock still holds a = 5 from a FOR UPDATE. S2 commits.
 // 2. S2 deletes a = 6 and prepares: RG compaction gives up. COMMIT
-//    PREPARED: RG compaction rewrites the row group, 99 rows.
+//    PREPARED: RG compaction writes version 2, 99 rows.
 // 3. Insert 100 rows into the delta store. S2 updates a = 1050 and
 //    prepares: the seal finds 99 rows it can take, and seals none.
 //    ROLLBACK PREPARED: the seal takes all 100.
@@ -1385,11 +1403,23 @@ TEST_CASE("a FOR SHARE lock and a prepared writer hold off RG compaction "
   // 1. FOR SHARE.
   REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
   REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IS, t2) == 0);
-  REQUIRE(sm3::tbl_lock(t2, where(db, c, 5).second, sm1::SM_LOCKMODE_SH) == 0);
-  CHECK_FALSE(compact(ss3, c, {rg}));
+  uint64_t id5 = where(db, c, 5).second;
+  REQUIRE(sm3::tbl_lock(t2, id5, sm1::SM_LOCKMODE_SH) == 0);
+  CHECK_FALSE(eliminate(ss3, c, rg));
+  CHECK(where(db, c, 5).first.fsid == rg);
+  CHECK(compact(ss3, c, rg));
+  CHECK(where(db, c, 5).first.fsid == rg + 1);
+  {
+    REQUIRE(sm3::begin(ss3, sm1::xctlevel_t::read_committed) == 0);
+    sm3::table_t *t3 = nullptr;
+    REQUIRE(sm3::tbl_open(ss3, c, sm1::SM_LOCKMODE_IX, t3) == 0);
+    CHECK(sm3::tbl_trylock(t3, id5, sm1::SM_LOCKMODE_EX) == 1);
+    sm3::tbl_close(t3);
+    REQUIRE(sm3::commit(ss3) == 0);
+  }
   sm3::tbl_close(t2);
   REQUIRE(sm3::commit(ss2) == 0);
-  CHECK(where(db, c, 5).first.fsid == rg);
+  rg = rg + 1;
   // 2. A prepared delete.
   auto [rg6, id6] = where(db, c, 6);
   REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
@@ -1400,7 +1430,7 @@ TEST_CASE("a FOR SHARE lock and a prepared writer hold off RG compaction "
   CHECK_FALSE(compact(ss3, c, {rg}));
   REQUIRE_MESSAGE(sm1::commit_prepared(db.s, "g1") == 0, sm1::errmsg());
   CHECK(compact(ss3, c, {rg}));
-  CHECK(where(db, c, 5).first.fsid != rg);
+  CHECK(where(db, c, 5).first.fsid == rg + 1);
   CHECK(scan_rows(db, c).size() == 99);
   // 3. A prepared update of a delta row.
   insert_rows(db, c, 1000, 1100);

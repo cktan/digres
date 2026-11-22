@@ -725,11 +725,16 @@ not a write path. The steps are in
   once no snapshot sees the version.
 
 Each holds X on the RG, NOWAIT: a writer of the RG holds IX, and
-makes the job give up. Each tries the lock of each live row, as
-a write of it would take it: a holder, a reader's `FOR SHARE`
-included, makes it give up. The next markers committed on the
-RG queue it again. Each runs at READ COMMITTED, as the seal does
-(§10.3).
+makes the job give up. The next markers committed on the RG queue
+it again. Each runs at READ COMMITTED, as the seal does (§10.3).
+
+- **RG compaction keeps every row lock.** A row lock is on the
+  row's delta key `_id` (§9.1), which the next version keeps. A
+  `FOR SHARE` or `FOR UPDATE` holder keeps its lock, and does not
+  stop RG compaction.
+- **Elimination tries the lock of each live row**, as the write of
+  the row's delta key would wait for it: a holder, a reader's
+  `FOR SHARE` included, makes it give up.
 
 **A moved-in version** is a live version with the flags
 `version_sealed` and `version_moved_in`. First-committer-wins
@@ -1017,9 +1022,9 @@ random CGs and random bounds, against a test of every value.
 8. DDL: `TRUNCATE`, `ADD COLUMN`, `DROP COLUMN` and a rewrite.
 9. A changed byte in a CG file fails a scan of its column, and
    not a scan of the others.
-10. A reader's `FOR SHARE` lock and a prepared writer hold off
-    RG compaction until they end; a prepared writer holds off the
-    seal.
+10. A reader's `FOR SHARE` lock holds off elimination, not RG
+    compaction, which keeps the lock; a prepared writer holds off
+    RG compaction and the seal until it ends.
 11. A bulk load rolled back to a savepoint leaves no row, no RG
     and no file.
 12. **A column store table agrees with a row store table.** One

@@ -900,8 +900,8 @@ struct rg_job_t {
 /*
  * Compact a version into its next; see colstore.h:
  * 1. Begin the job: X on the row group.
- * 2. Read the version's live rows; try each row's lock, as a write
- *    of it would take it: a holder makes it give up.
+ * 2. Read the version's live rows. A row lock is on the row's _id,
+ *    which the next version keeps, so a holder of one stays.
  * 3. The next version's dropped set: this one's, and its dead rows.
  * 4. Write the next version with the live rows alone, in their order.
  * 5. End the job: this version's RG key and filter keys erased.
@@ -920,7 +920,7 @@ int col_compact(table_t *table, uint64_t fsid, bool &done) {
     return rc < 0 ? -1 : 0;
   }
   const rg_meta_t &meta = j.meta;
-  // 2. The live rows, each one's lock tried.
+  // 2. The live rows.
   rg_read_t r;
   defer { rg_read_close(r); };
   if (rg_read_open(table, fsid, meta, {}, r) != 0) {
@@ -934,10 +934,6 @@ int col_compact(table_t *table, uint64_t fsid, bool &done) {
   uint64_t id;
   while ((rc = rg_read_next(table, r, id, values,
                             std::span<bool>(isnull.get(), ncols))) == 0) {
-    int lk = tbl_trylock(table, id, sm1::SM_LOCKMODE_EX);
-    if (lk != 0) {
-      return j.give_up(lk < 0 ? -1 : 0);
-    }
     if (rg_build_add(b, id, values,
                      std::span<const bool>(isnull.get(), ncols)) != 0) {
       return j.give_up(-1);
@@ -978,8 +974,8 @@ int col_compact(table_t *table, uint64_t fsid, bool &done) {
 /*
  * Eliminate a row group's newest version; see colstore.h:
  * 1. Begin the job: X on the row group.
- * 2. Read the version's live rows; try each row's lock: a holder
- *    makes it give up.
+ * 2. Read the version's live rows; try each row's lock, as the write
+ *    of its delta key would wait for it: a holder makes it give up.
  * 3. Give each to movein, a moved-in version in the delta store.
  * 4. End the job: the version's RG key and filter keys erased.
  */

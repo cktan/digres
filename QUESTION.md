@@ -23,8 +23,8 @@ moved markers are gone. Is this rule right for a small RG?
 | A. Eliminate an RG under half live, as built | `rg_plan()` in `sm3/src/colstore/sealer.cc`; `merge_set()` and the old path of `col_compact` are gone | the rows of a small RG wait in the delta store, as rows, until the next seal |
 | B. Keep the merge for small RGs | the old path stays, with its moved markers | moved markers are never erased (a sealed version); two kinds of compaction to keep correct |
 
-**Recommendation, built:** A. It has one way to move rows out of
-an RG. A writer older than the move finds the row by its `_id` in
+**Recommendation, taken (the user said "eliminate only, no
+merging"):** A. It has one way to move rows out of an RG. A writer older than the move finds the row by its `_id` in
 the delta store, and first-committer-wins sees through the
 moved-in version. Moved markers no longer leak.
 
@@ -41,8 +41,11 @@ Also built, and to know:
   scenario `s06` still tests it. Keep it until you decide; removing
   it removes `s06`, which needs your approval.
 
-Next: drop the row-lock tries of compaction and elimination;
-then the restart pass of the cleanup.
+Built after: RG compaction no longer tries each row's lock, as a
+row lock on `_id` survives the renumbering; a `FOR SHARE` holder no
+longer stops it. Elimination keeps the tries: its write of the
+row's delta key would wait for the holder. Next: the restart pass
+of the cleanup.
 
 ## 6. COLSTORE2: what versioned compaction keeps of the old one (2026-11-21)
 

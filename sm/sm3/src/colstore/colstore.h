@@ -321,8 +321,9 @@ int col_find_seen(table_t *table, uint64_t id, place_t &place);
  * last, into its next version (../COLSTORE2.md §6.7), in the caller's
  * transaction, at the newest committed state: its live rows alone, in
  * their order; then the version's RG key and filter keys erased. A
- * writer of the row group, or a holder of a live row's lock, makes it
- * give up, done false, with nothing left written. Returns 0 or -1.
+ * writer of the row group makes it give up, done false, with nothing
+ * left written; a holder of a row's lock, on its _id, does not.
+ * Returns 0 or -1.
  */
 int col_compact(table_t *table, uint64_t fsid, bool &done);
 
@@ -336,8 +337,9 @@ using movein_fn = std::function<int(uint64_t id, std::span<const sm2::datum_t>,
  * committed state: each live row given to movein, which puts it into
  * the delta store under its _id as a moved-in version; then the RG
  * key and filter keys erased. Its markers and validmap stay for the
- * snapshots that see it. A give-up is as col_compact's. Returns 0 or
- * -1.
+ * snapshots that see it. A writer of the row group, or a holder of a
+ * live row's lock, makes it give up, done false, with nothing left
+ * written. Returns 0 or -1.
  */
 int col_eliminate(table_t *table, uint64_t fsid, const movein_fn &movein,
                   bool &done);

@@ -40,6 +40,9 @@
 #     store. A REPEATABLE READ session older than the elimination
 #     still counts the version's rows, deletes a row by its place
 #     there, and no longer sees it.
+# 14. A FOR SHARE holder of a row does not stop RG compaction, which
+#     keeps the lock on the row's _id: a FOR UPDATE of the row is
+#     still blocked after it.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -346,6 +349,39 @@
     (assert-nil (rg-of tv eid) "no row has the deleted _id")
 (commit)
 (session-close s3)
+
+# 14. A FOR SHARE holder across an RG compaction.
+(begin :rc)
+    (table-create tl
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (def lids (load tl (map (fn [i] [i "l"]) (range 10000))))
+(commit)
+(def l0 (do (begin :rc) (def p (places tl)) (commit) p))
+(def lid (get lids 5000))
+(session-open s4 "csdb")
+(session-use s4)
+(begin :rc)
+    (lock-row tl lid :shared)
+(session-use default)
+(begin :rc)
+    (for i 0 2000
+      (delete-at tl (get l0 (get lids i)) (get lids i)))
+(commit)
+(seal-wait)
+(begin :rc)
+    (assert-eq (rg-of tl lid) (+ (get (get l0 lid) 0) 1)
+               "RG compaction went on past the FOR SHARE holder")
+    (qa-nowait true)
+    (assert-err :err-blocked (lock-row tl lid :exclusive))
+    (qa-nowait false)
+(commit)
+(session-use s4)
+(commit)
+(session-use default)
+(session-close s4)
 
 (db-close)
 (env-detach :force true)
