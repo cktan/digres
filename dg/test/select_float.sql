@@ -11,7 +11,10 @@
 -- 7. width_bucket, in both directions.
 -- 8. The hash: zero and -0 alike, every NaN alike, float4 as float8.
 -- 9. Trigonometry in radians and in degrees, exact where the angle is,
---    the hyperbolic functions, erf and gamma, and pi.
+--    the hyperbolic functions, erf and gamma, and pi. As in
+--    PostgreSQL's float8 test, the hyperbolic functions print at
+--    extra_float_digits 0, and erf and gamma at -1: the libm of each
+--    platform can differ in the last place.
 -- 10. avg, variance, stddev, covariance and regression of float8 and
 --     float4: their results, their NULLs, and the combine of two states.
 -- (Errors are server.sh's: a run stops at its first.)
@@ -36,8 +39,11 @@ SELECT hashfloat8(0.0::float8) = hashfloat8(-0.0::float8) AS zero, hashfloat8('N
 SELECT sind(30::float8) AS a, sind(90::float8) AS b, cosd(60::float8) AS c, cosd(90::float8) AS d, tand(45::float8) AS e, cotd(45::float8) AS f, sind(-30::float8) AS g, cosd(180::float8) AS h, sind(210::float8) AS i, tand(135::float8) AS j, cosd(120::float8) AS k, sind(360::float8) AS l, sind(1e5::float8) AS m;
 SELECT asind(0.5::float8) AS a, acosd(0.5::float8) AS b, atand(1::float8) AS c, atan2d(1::float8, 1) AS d, acosd(-1::float8) AS e, asind(-1::float8) AS f, acosd(0::float8) AS g, atan2d(0::float8, -1) AS h;
 SELECT sin(0::float8) AS a, cos(0::float8) AS b, tan(0::float8) AS c, cot(1::float8) AS d, asin(1::float8) AS e, acos(1::float8) AS f, atan(1::float8) AS g, atan2(1::float8, 1) AS h, sin(pi() / 2) AS i, cos(pi()) AS j, pi() AS k, degrees(pi()) AS l, radians(180::float8) AS m;
+SET extra_float_digits = 0;
 SELECT sinh(1::float8) AS a, cosh(1::float8) AS b, tanh(1::float8) AS c, asinh(1::float8) AS d, acosh(2::float8) AS e, atanh(0.5::float8) AS f, atanh(1::float8) AS g, sinh('Infinity'::float8) AS h, tanh('-Infinity'::float8) AS i, cosh(0::float8) AS j;
+SET extra_float_digits = -1;
 SELECT erf(1::float8) AS a, erfc(1::float8) AS b, erf('Infinity'::float8) AS c, gamma(5::float8) AS d, gamma(0.5::float8) AS e, lgamma(1::float8) AS f, gamma(1::float8) AS g, cot(0::float8) AS h, sin('NaN'::float8) AS i, cosd('NaN'::float8) AS j;
+RESET extra_float_digits;
 SELECT avg(x), var_pop(x), var_samp(x), stddev_pop(x), stddev_samp(x) FROM (VALUES (1::float8), (2), (4), (8), (16)) v(x);
 SELECT avg(x), var_samp(x), stddev_samp(x), var_pop(x) FROM (VALUES (5::float8)) v(x);
 SELECT avg(x), var_pop(x), var_samp(x), stddev_pop(x) FROM (SELECT 1::float8 AS x WHERE false) v;
