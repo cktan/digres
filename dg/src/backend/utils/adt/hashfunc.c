@@ -37,6 +37,8 @@
 #include "utils/fmgrprotos.h"
 #include "utils/pg_locale.h"
 #include "ty_bytea.h"
+#include "ty_text.h"
+#include "utils/ty_glue.h"
 #include "ty_int.h"
 #include "varatt.h"
 
@@ -171,8 +173,7 @@ Datum hashtext(PG_FUNCTION_ARGS) {
   mylocale = pg_newlocale_from_collation(collid);
 
   if (mylocale->deterministic) {
-    result =
-        hash_any((unsigned char *)VARDATA_ANY(key), VARSIZE_ANY_EXHDR(key));
+    result = UInt32GetDatum(ty_text_hash(TYV(key)));
   } else {
     Size bsize, rsize;
     char *buf;
@@ -221,8 +222,8 @@ Datum hashtextextended(PG_FUNCTION_ARGS) {
   mylocale = pg_newlocale_from_collation(collid);
 
   if (mylocale->deterministic) {
-    result = hash_any_extended((unsigned char *)VARDATA_ANY(key),
-                               VARSIZE_ANY_EXHDR(key), PG_GETARG_INT64(1));
+    result =
+        UInt64GetDatum(ty_text_hash_extended(TYV(key), PG_GETARG_INT64(1)));
   } else {
     Size bsize, rsize;
     char *buf;
@@ -267,8 +268,7 @@ Datum hashvarlena(PG_FUNCTION_ARGS) {
   uint32 result;
 
   /* the hash of a byte string is ty's, PostgreSQL's algorithm */
-  result = (uint32)ty_bytea_hash((const uint8_t *)VARDATA_ANY(key),
-                                 VARSIZE_ANY_EXHDR(key), 0);
+  result = (uint32)ty_bytea_hash(TYV(key), 0);
 
   /* Avoid leaking memory for toasted inputs */
   PG_FREE_IF_COPY(key, 0);
@@ -280,8 +280,7 @@ Datum hashvarlenaextended(PG_FUNCTION_ARGS) {
   struct varlena *key = PG_GETARG_VARLENA_PP(0);
   uint64 result;
 
-  result = ty_bytea_hash((const uint8_t *)VARDATA_ANY(key),
-                         VARSIZE_ANY_EXHDR(key), (uint64)PG_GETARG_INT64(1));
+  result = ty_bytea_hash(TYV(key), (uint64)PG_GETARG_INT64(1));
 
   PG_FREE_IF_COPY(key, 0);
 

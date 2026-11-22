@@ -6,6 +6,7 @@
 /*
  * text.cc -- the operations of UTF-8 text.
  */
+#include "text_raw.h"
 #include "ty_text.h"
 
 #include <stdio.h>
@@ -49,7 +50,7 @@ int too_large() {
 } // namespace
 
 /* Count the bytes that are not continuation bytes, 8 at a time. */
-size_t ty_text_length(const char *s, size_t len) {
+size_t tyr_text_length(const char *s, size_t len) {
   size_t chars = 0, i = 0;
 
   for (; i + 8 <= len; i += 8) {
@@ -75,8 +76,8 @@ size_t ty_text_length(const char *s, size_t len) {
  *    an empty result.
  * 3. Skip the characters before the first, then take up to the count.
  */
-int ty_text_substr(const char *s, size_t len, int32_t start, int32_t count,
-                   int has_count, size_t *off, size_t *outlen) {
+int tyr_text_substr(const char *s, size_t len, int32_t start, int32_t count,
+                    int has_count, size_t *off, size_t *outlen) {
   int32_t s1 = start > 1 ? start : 1, e = 0;
   bool to_end = !has_count;
 
@@ -103,33 +104,33 @@ int ty_text_substr(const char *s, size_t len, int32_t start, int32_t count,
 }
 
 /* The first n characters, or all but the last -n. */
-void ty_text_left(const char *s, size_t len, int32_t n, size_t *off,
-                  size_t *outlen) {
+void tyr_text_left(const char *s, size_t len, int32_t n, size_t *off,
+                   size_t *outlen) {
   int64_t k = n;
 
   if (n < 0) {
-    k = (int64_t)ty_text_length(s, len) + n;
+    k = (int64_t)tyr_text_length(s, len) + n;
   }
   *off = 0;
   *outlen = (size_t)(advance(s, s + len, k) - s);
 }
 
 /* The last n characters, or all but the first -n. */
-void ty_text_right(const char *s, size_t len, int32_t n, size_t *off,
-                   size_t *outlen) {
+void tyr_text_right(const char *s, size_t len, int32_t n, size_t *off,
+                    size_t *outlen) {
   int64_t k;
 
   if (n < 0) {
     k = n == INT32_MIN ? INT32_MAX : -(int64_t)n;
   } else {
-    k = (int64_t)ty_text_length(s, len) - n;
+    k = (int64_t)tyr_text_length(s, len) - n;
   }
   *off = (size_t)(advance(s, s + len, k) - s);
   *outlen = len - *off;
 }
 
 /* Reverse by characters. */
-void ty_text_reverse(const char *s, size_t len, char *out) {
+void tyr_text_reverse(const char *s, size_t len, char *out) {
   const char *p = s, *end = s + len;
   char *dst = out + len;
 
@@ -144,8 +145,8 @@ void ty_text_reverse(const char *s, size_t len, char *out) {
 }
 
 /* OVERLAY: the first start-1 characters, r, then the rest after count. */
-int ty_text_overlay(const char *s, size_t len, const char *r, size_t rlen,
-                    int32_t start, int32_t count, char *out, size_t *outlen) {
+int tyr_text_overlay(const char *s, size_t len, const char *r, size_t rlen,
+                     int32_t start, int32_t count, char *out, size_t *outlen) {
   int32_t sum;
   size_t off1, len1, off2, len2;
 
@@ -157,9 +158,9 @@ int ty_text_overlay(const char *s, size_t len, const char *r, size_t rlen,
     return ty_err_range();
   }
   /* the head: the first start - 1 characters */
-  ty_text_substr(s, len, 1, start - 1, 1, &off1, &len1);
+  tyr_text_substr(s, len, 1, start - 1, 1, &off1, &len1);
   /* the tail: from start + count to the end (a start below 1 is 1) */
-  ty_text_substr(s, len, sum, 0, 0, &off2, &len2);
+  tyr_text_substr(s, len, sum, 0, 0, &off2, &len2);
   memcpy(out, s + off1, len1);
   memcpy(out + len1, r, rlen);
   memcpy(out + len1 + rlen, s + off2, len2);
@@ -173,8 +174,8 @@ int ty_text_overlay(const char *s, size_t len, const char *r, size_t rlen,
  * (Boyer-Moore-Horspool, as PostgreSQL does): a larger table skips more but
  * costs more to make.
  */
-void ty_text_find_init(ty_text_find_t *f, const char *s, size_t len,
-                       const char *needle, size_t nlen) {
+void tyr_text_find_init(tyr_text_find_t *f, const char *s, size_t len,
+                        const char *needle, size_t nlen) {
   f->s = s;
   f->len = len;
   f->needle = needle;
@@ -203,7 +204,7 @@ void ty_text_find_init(ty_text_find_t *f, const char *s, size_t len,
 }
 
 /* The next copy at or after pos; set pos after it. */
-int64_t ty_text_find_next(ty_text_find_t *f) {
+int64_t tyr_text_find_next(tyr_text_find_t *f) {
   const char *hay = f->s, *needle = f->needle;
   const char *end = hay + f->len;
   const char *hptr = hay + f->pos;
@@ -240,35 +241,36 @@ int64_t ty_text_find_next(ty_text_find_t *f) {
 }
 
 /* Find needle in s; the place is in characters. */
-int32_t ty_text_position(const char *s, size_t len, const char *needle,
-                         size_t nlen) {
+int32_t tyr_text_position(const char *s, size_t len, const char *needle,
+                          size_t nlen) {
   if (nlen < 1) {
     return 1;
   }
   if (len < nlen) {
     return 0;
   }
-  ty_text_find_t f;
+  tyr_text_find_t f;
   int64_t m;
 
-  ty_text_find_init(&f, s, len, needle, nlen);
-  m = ty_text_find_next(&f);
-  return m < 0 ? 0 : (int32_t)(ty_text_length(s, (size_t)m) + 1);
+  tyr_text_find_init(&f, s, len, needle, nlen);
+  m = tyr_text_find_next(&f);
+  return m < 0 ? 0 : (int32_t)(tyr_text_length(s, (size_t)m) + 1);
 }
 
 /* The size of the result of replace: count the copies. */
-int ty_text_replace_size(const char *s, size_t len, const char *from,
-                         size_t flen, size_t tlen, size_t *outlen, int *found) {
+int tyr_text_replace_size(const char *s, size_t len, const char *from,
+                          size_t flen, size_t tlen, size_t *outlen,
+                          int *found) {
   *found = 0;
   *outlen = len;
   if (len < 1 || flen < 1) {
     return 0;
   }
-  ty_text_find_t f;
+  tyr_text_find_t f;
   size_t n = 0;
 
-  ty_text_find_init(&f, s, len, from, flen);
-  while (ty_text_find_next(&f) >= 0) {
+  tyr_text_find_init(&f, s, len, from, flen);
+  while (tyr_text_find_next(&f) >= 0) {
     n++;
   }
   if (n == 0) {
@@ -289,14 +291,14 @@ int ty_text_replace_size(const char *s, size_t len, const char *from,
 }
 
 /* Write the result of replace. */
-void ty_text_replace(const char *s, size_t len, const char *from, size_t flen,
-                     const char *to, size_t tlen, char *out) {
-  ty_text_find_t f;
+void tyr_text_replace(const char *s, size_t len, const char *from, size_t flen,
+                      const char *to, size_t tlen, char *out) {
+  tyr_text_find_t f;
   size_t start = 0;
   int64_t m;
 
-  ty_text_find_init(&f, s, len, from, flen);
-  while ((m = ty_text_find_next(&f)) >= 0) {
+  tyr_text_find_init(&f, s, len, from, flen);
+  while ((m = tyr_text_find_next(&f)) >= 0) {
     memcpy(out, s + start, (size_t)m - start);
     out += (size_t)m - start;
     memcpy(out, to, tlen);
@@ -313,8 +315,8 @@ void ty_text_replace(const char *s, size_t len, const char *from, size_t flen,
  * 2. A negative n counts from the end: n becomes the number of fields + n + 1.
  * 3. The field is between the (n-1)th and the nth copy of the separator.
  */
-int ty_text_split_part(const char *s, size_t len, const char *sep,
-                       size_t seplen, int32_t n, size_t *off, size_t *outlen) {
+int tyr_text_split_part(const char *s, size_t len, const char *sep,
+                        size_t seplen, int32_t n, size_t *off, size_t *outlen) {
   *off = 0;
   *outlen = 0;
   if (n == 0) {
@@ -330,14 +332,14 @@ int ty_text_split_part(const char *s, size_t len, const char *sep,
     }
     return 0;
   }
-  ty_text_find_t f;
+  tyr_text_find_t f;
   int64_t k = n;
 
   if (n < 0) {
     int64_t fields = 1;
 
-    ty_text_find_init(&f, s, len, sep, seplen);
-    while (ty_text_find_next(&f) >= 0) {
+    tyr_text_find_init(&f, s, len, sep, seplen);
+    while (tyr_text_find_next(&f) >= 0) {
       fields++;
     }
     k = fields + n + 1;
@@ -345,26 +347,26 @@ int ty_text_split_part(const char *s, size_t len, const char *sep,
       return 0;
     }
   }
-  ty_text_find_init(&f, s, len, sep, seplen);
+  tyr_text_find_init(&f, s, len, sep, seplen);
   size_t start = 0;
   int64_t m = -1;
 
   /* walk past k - 1 copies: the field starts after the last of them */
   for (int64_t i = 1; i < k; i++) {
-    m = ty_text_find_next(&f);
+    m = tyr_text_find_next(&f);
     if (m < 0) {
       return 0; /* there is no such field */
     }
     start = (size_t)m + seplen;
   }
-  m = ty_text_find_next(&f);
+  m = tyr_text_find_next(&f);
   *off = start;
   *outlen = (m < 0 ? len : (size_t)m) - start;
   return 0;
 }
 
 /* The size of repeat. */
-int ty_text_repeat_size(size_t len, int32_t count, size_t *outlen) {
+int tyr_text_repeat_size(size_t len, int32_t count, size_t *outlen) {
   if (count < 0) {
     count = 0;
   }
@@ -378,7 +380,7 @@ int ty_text_repeat_size(size_t len, int32_t count, size_t *outlen) {
 }
 
 /* repeat: copy once, then double what is there. */
-void ty_text_repeat(const char *s, size_t len, int32_t count, char *out) {
+void tyr_text_repeat(const char *s, size_t len, int32_t count, char *out) {
   if (count <= 0 || len == 0) {
     return;
   }
@@ -394,7 +396,7 @@ void ty_text_repeat(const char *s, size_t len, int32_t count, char *out) {
 }
 
 /* TY_ERR_RANGE if the result may not be so large. */
-int ty_text_size_check(size_t bytes) {
+int tyr_text_size_check(size_t bytes) {
   return bytes > TY_TEXT_MAX_LEN ? too_large() : 0;
 }
 
@@ -402,10 +404,10 @@ int ty_text_size_check(size_t bytes) {
  * The length of the result of lpad or rpad, in characters, and PostgreSQL's
  * limit: 4 bytes a character.
  */
-int ty_text_pad_prepare(const char *s, size_t len, int32_t n, size_t flen,
-                        int32_t *eff) {
+int tyr_text_pad_prepare(const char *s, size_t len, int32_t n, size_t flen,
+                         int32_t *eff) {
   int64_t want = n < 0 ? 0 : n;
-  int64_t have = (int64_t)ty_text_length(s, len);
+  int64_t have = (int64_t)tyr_text_length(s, len);
 
   if (have > want) {
     have = want;
@@ -413,7 +415,7 @@ int ty_text_pad_prepare(const char *s, size_t len, int32_t n, size_t flen,
   if (flen <= 0) {
     want = have; /* nothing to pad with, so do not pad */
   }
-  if (ty_text_size_check((size_t)want * 4) != 0) {
+  if (tyr_text_size_check((size_t)want * 4) != 0) {
     return -1;
   }
   *eff = (int32_t)want;
@@ -450,9 +452,9 @@ char *put_head(char *dst, const char *s, size_t len, int64_t nchars) {
 } // namespace
 
 /* lpad: the fill, then the first characters of s. */
-void ty_text_lpad(const char *s, size_t len, int32_t eff, const char *fill,
-                  size_t flen, char *out, size_t *outlen) {
-  int64_t have = (int64_t)ty_text_length(s, len);
+void tyr_text_lpad(const char *s, size_t len, int32_t eff, const char *fill,
+                   size_t flen, char *out, size_t *outlen) {
+  int64_t have = (int64_t)tyr_text_length(s, len);
 
   if (have > eff) {
     have = eff;
@@ -464,9 +466,9 @@ void ty_text_lpad(const char *s, size_t len, int32_t eff, const char *fill,
 }
 
 /* rpad: the first characters of s, then the fill. */
-void ty_text_rpad(const char *s, size_t len, int32_t eff, const char *fill,
-                  size_t flen, char *out, size_t *outlen) {
-  int64_t have = (int64_t)ty_text_length(s, len);
+void tyr_text_rpad(const char *s, size_t len, int32_t eff, const char *fill,
+                   size_t flen, char *out, size_t *outlen) {
+  int64_t have = (int64_t)tyr_text_length(s, len);
 
   if (have > eff) {
     have = eff;
@@ -497,8 +499,8 @@ bool in_set(const char *p, size_t n, const char *set, size_t setlen) {
 } // namespace
 
 /* Trim the characters in set from the left and the right. */
-void ty_text_trim(const char *s, size_t len, const char *set, size_t setlen,
-                  int left, int right, size_t *off, size_t *outlen) {
+void tyr_text_trim(const char *s, size_t len, const char *set, size_t setlen,
+                   int left, int right, size_t *off, size_t *outlen) {
   const char *p = s, *end = s + len;
 
   *off = 0;
@@ -537,8 +539,9 @@ void ty_text_trim(const char *s, size_t len, const char *set, size_t setlen,
 
 /* Translate: for each character of s, find it in from; use the same place in
  * to. */
-void ty_text_translate(const char *s, size_t len, const char *from, size_t flen,
-                       const char *to, size_t tlen, char *out, size_t *outlen) {
+void tyr_text_translate(const char *s, size_t len, const char *from,
+                        size_t flen, const char *to, size_t tlen, char *out,
+                        size_t *outlen) {
   const char *p = s, *end = s + len;
   const char *to_end = to + tlen;
   char *dst = out;
@@ -577,7 +580,7 @@ void ty_text_translate(const char *s, size_t len, const char *from, size_t flen,
 }
 
 /* The code point of the first character. */
-int ty_text_ascii(const char *s, size_t len, int32_t *out) {
+int tyr_text_ascii(const char *s, size_t len, int32_t *out) {
   const unsigned char *d = (const unsigned char *)s;
 
   if (len == 0) {
@@ -617,7 +620,7 @@ int ty_text_ascii(const char *s, size_t len, int32_t *out) {
 }
 
 /* The character of a code point. */
-int ty_text_chr(int32_t n, char *out, size_t *outlen) {
+int tyr_text_chr(int32_t n, char *out, size_t *outlen) {
   char msg[96];
 
   if (n < 0) {
@@ -667,12 +670,12 @@ int ty_text_chr(int32_t n, char *out, size_t *outlen) {
 }
 
 /* The bytes of the first nchars characters. */
-size_t ty_text_cliplen(const char *s, size_t len, size_t nchars) {
+size_t tyr_text_cliplen(const char *s, size_t len, size_t nchars) {
   return (size_t)(advance(s, s + len, (int64_t)nchars) - s);
 }
 
 /* The longest part of at most nbytes that ends at a character boundary. */
-size_t ty_text_clipbytes(const char *s, size_t len, size_t nbytes) {
+size_t tyr_text_clipbytes(const char *s, size_t len, size_t nbytes) {
   const char *p = s, *end = s + len;
   size_t kept = 0;
 
@@ -694,12 +697,12 @@ size_t ty_text_clipbytes(const char *s, size_t len, size_t nbytes) {
  *    spaces unless force is set.
  * 2. If not, keep all of s, and for character(n) add spaces up to maxchars.
  */
-int ty_bpchar_fit(const char *s, size_t len, size_t maxchars, int force,
-                  int pad, size_t *keep, size_t *total) {
-  size_t chars = ty_text_length(s, len);
+int tyr_bpchar_fit(const char *s, size_t len, size_t maxchars, int force,
+                   int pad, size_t *keep, size_t *total) {
+  size_t chars = tyr_text_length(s, len);
 
   if (chars > maxchars) {
-    size_t k = ty_text_cliplen(s, len, maxchars);
+    size_t k = tyr_text_cliplen(s, len, maxchars);
 
     if (!force) {
       for (size_t j = k; j < len; j++) {
@@ -718,9 +721,9 @@ int ty_bpchar_fit(const char *s, size_t len, size_t maxchars, int force,
 }
 
 /* A name: cut to 63 bytes at a character, zero-filled to 64. */
-void ty_name_parse(const char *s, size_t len, char *out) {
+void tyr_name_parse(const char *s, size_t len, char *out) {
   size_t n = len >= TY_NAMEDATALEN
-                 ? ty_text_clipbytes(s, len, TY_NAMEDATALEN - 1)
+                 ? tyr_text_clipbytes(s, len, TY_NAMEDATALEN - 1)
                  : len;
 
   memset(out, 0, TY_NAMEDATALEN);
@@ -856,8 +859,8 @@ int like_match(const char *t, size_t tlen, const char *p, size_t plen, int utf8,
 } // namespace
 
 /* LIKE: a match, or not, or an error. */
-int ty_text_like(const char *t, size_t tlen, const char *p, size_t plen,
-                 int utf8) {
+int tyr_text_like(const char *t, size_t tlen, const char *p, size_t plen,
+                  int utf8) {
   int m = like_match(t, tlen, p, plen, utf8, 0);
 
   return m == k_like_error ? -1 : m == k_like_true ? 1 : 0;
@@ -870,8 +873,8 @@ int ty_text_like(const char *t, size_t tlen, const char *p, size_t plen,
  * 3. With another character, change it to a backslash, and double a
  *    backslash, unless it comes right after the escape.
  */
-int ty_text_like_escape(const char *pat, size_t plen, const char *esc,
-                        size_t elen, int utf8, char *out, size_t *outlen) {
+int tyr_text_like_escape(const char *pat, size_t plen, const char *esc,
+                         size_t elen, int utf8, char *out, size_t *outlen) {
   const char *p = pat, *pend = pat + plen;
   char *r = out;
 
@@ -922,14 +925,337 @@ int ty_text_like_escape(const char *pat, size_t plen, const char *esc,
   return 0;
 }
 
-/* The error of a concat: the limit if the block is too large, else no memory.
- */
-int ty_text_concat_error(size_t alen, size_t blen, size_t headroom) {
-  const size_t max_block = TY_TEXT_MAX_LEN + 4;
-  size_t len = alen + blen;
+/* ---- the operations on a varlena: each reads its inputs' bytes, calls the
+ * function above, and puts a result in memory from the thread's alloc ---- */
 
-  if (len > max_block || headroom > max_block - len) {
-    return ty_internal::set_error(TY_ERR_RANGE, "requested length too large");
+namespace {
+
+/* The place and length of the bytes of v. */
+struct bytes_t {
+  const char *p;
+  size_t n;
+  explicit bytes_t(const ty_varlena_t *v) : p(ty_vl_data(v)), n(ty_vl_len(v)) {}
+};
+
+/* A result that is the bytes at off, n of them, of s. */
+int part(const bytes_t &s, size_t off, size_t n, ty_varlena_t **out) {
+  return ty_vl_new_copy(s.p + off, n, out);
+}
+
+} // namespace
+
+size_t ty_text_length(const ty_varlena_t *s) {
+  bytes_t a(s);
+
+  return tyr_text_length(a.p, a.n);
+}
+
+size_t ty_text_length_bytes(const char *s, size_t len) {
+  return tyr_text_length(s, len);
+}
+
+int ty_text_substr(const ty_varlena_t *s, int32_t start, int32_t count,
+                   int has_count, ty_varlena_t **out) {
+  bytes_t a(s);
+  size_t off, n;
+
+  if (tyr_text_substr(a.p, a.n, start, count, has_count, &off, &n) != 0) {
+    return -1;
   }
-  return ty_internal::set_error(TY_ERR_NOMEM, "out of memory");
+  return part(a, off, n, out);
+}
+
+int ty_text_left(const ty_varlena_t *s, int32_t n, ty_varlena_t **out) {
+  bytes_t a(s);
+  size_t off, len;
+
+  tyr_text_left(a.p, a.n, n, &off, &len);
+  return part(a, off, len, out);
+}
+
+int ty_text_right(const ty_varlena_t *s, int32_t n, ty_varlena_t **out) {
+  bytes_t a(s);
+  size_t off, len;
+
+  tyr_text_right(a.p, a.n, n, &off, &len);
+  return part(a, off, len, out);
+}
+
+int ty_text_reverse(const ty_varlena_t *s, ty_varlena_t **out) {
+  bytes_t a(s);
+  char *d;
+
+  if (ty_vl_new(a.n, out, &d) != 0) {
+    return -1;
+  }
+  tyr_text_reverse(a.p, a.n, d);
+  return 0;
+}
+
+/*
+ * OVERLAY.
+ * 1. Check the start, and that start + count fits an int32.
+ * 2. The head is the first start - 1 characters, the tail all from start +
+ *    count; their sizes and r's make the size of the result.
+ * 3. Make the result, and have the raw function write it.
+ */
+int ty_text_overlay(const ty_varlena_t *s, const ty_varlena_t *r, int32_t start,
+                    int32_t count, ty_varlena_t **out) {
+  bytes_t a(s), b(r);
+  int32_t sum;
+  size_t off1, len1, off2, len2, outlen;
+  char *d;
+
+  if (start <= 0) {
+    return ty_internal::set_error(TY_ERR_INVALID,
+                                  "negative substring length not allowed");
+  }
+  if (__builtin_add_overflow(start, count, &sum)) {
+    return ty_err_range();
+  }
+  tyr_text_substr(a.p, a.n, 1, start - 1, 1, &off1, &len1);
+  tyr_text_substr(a.p, a.n, sum, 0, 0, &off2, &len2);
+  if (ty_vl_new(len1 + b.n + len2, out, &d) != 0) {
+    return -1;
+  }
+  tyr_text_overlay(a.p, a.n, b.p, b.n, start, count, d, &outlen);
+  return 0;
+}
+
+int32_t ty_text_position(const ty_varlena_t *s, const ty_varlena_t *needle) {
+  bytes_t a(s), b(needle);
+
+  return tyr_text_position(a.p, a.n, b.p, b.n);
+}
+
+int ty_text_replace(const ty_varlena_t *s, const ty_varlena_t *from,
+                    const ty_varlena_t *to, ty_varlena_t **out) {
+  bytes_t a(s), f(from), t(to);
+  size_t total;
+  int found;
+  char *d;
+
+  if (tyr_text_replace_size(a.p, a.n, f.p, f.n, t.n, &total, &found) != 0) {
+    return -1;
+  }
+  if (!found) {
+    *out = (ty_varlena_t *)s;
+    return 0;
+  }
+  if (ty_vl_new(total, out, &d) != 0) {
+    return -1;
+  }
+  tyr_text_replace(a.p, a.n, f.p, f.n, t.p, t.n, d);
+  return 0;
+}
+
+int ty_text_split_part(const ty_varlena_t *s, const ty_varlena_t *sep,
+                       int32_t n, ty_varlena_t **out) {
+  bytes_t a(s), b(sep);
+  size_t off, len;
+
+  if (tyr_text_split_part(a.p, a.n, b.p, b.n, n, &off, &len) != 0) {
+    return -1;
+  }
+  return part(a, off, len, out);
+}
+
+int ty_text_repeat(const ty_varlena_t *s, int32_t count, ty_varlena_t **out) {
+  bytes_t a(s);
+  size_t total;
+  char *d;
+
+  if (tyr_text_repeat_size(a.n, count, &total) != 0 ||
+      ty_vl_new(total, out, &d) != 0) {
+    return -1;
+  }
+  tyr_text_repeat(a.p, a.n, count, d);
+  return 0;
+}
+
+/* lpad and rpad: the length in characters, the check, then the pad. */
+static int pad(const ty_varlena_t *s, int32_t n, const ty_varlena_t *fill,
+               int left, ty_varlena_t **out) {
+  bytes_t a(s), f(fill);
+  int32_t eff;
+  size_t outlen;
+  char *d;
+
+  if (tyr_text_pad_prepare(a.p, a.n, n, f.n, &eff) != 0 ||
+      ty_vl_new((size_t)eff * 4, out, &d) != 0) {
+    return -1;
+  }
+  if (left) {
+    tyr_text_lpad(a.p, a.n, eff, f.p, f.n, d, &outlen);
+  } else {
+    tyr_text_rpad(a.p, a.n, eff, f.p, f.n, d, &outlen);
+  }
+  ty_vl_set_len(*out, outlen);
+  return 0;
+}
+
+int ty_text_lpad(const ty_varlena_t *s, int32_t n, const ty_varlena_t *fill,
+                 ty_varlena_t **out) {
+  return pad(s, n, fill, 1, out);
+}
+
+int ty_text_rpad(const ty_varlena_t *s, int32_t n, const ty_varlena_t *fill,
+                 ty_varlena_t **out) {
+  return pad(s, n, fill, 0, out);
+}
+
+int ty_text_trim(const ty_varlena_t *s, const ty_varlena_t *set, int left,
+                 int right, ty_varlena_t **out) {
+  bytes_t a(s), b(set);
+  size_t off, len;
+
+  tyr_text_trim(a.p, a.n, b.p, b.n, left, right, &off, &len);
+  return part(a, off, len, out);
+}
+
+int ty_text_translate(const ty_varlena_t *s, const ty_varlena_t *from,
+                      const ty_varlena_t *to, ty_varlena_t **out) {
+  bytes_t a(s), f(from), t(to);
+  size_t outlen;
+  char *d;
+
+  if (a.n == 0) {
+    *out = (ty_varlena_t *)s;
+    return 0;
+  }
+  /* a character may be 4 bytes: PostgreSQL's limit is on 4 * the length */
+  if (tyr_text_size_check(a.n * 4) != 0 || ty_vl_new(a.n * 4, out, &d) != 0) {
+    return -1;
+  }
+  tyr_text_translate(a.p, a.n, f.p, f.n, t.p, t.n, d, &outlen);
+  ty_vl_set_len(*out, outlen);
+  return 0;
+}
+
+int ty_text_ascii(const ty_varlena_t *s, int32_t *out) {
+  bytes_t a(s);
+
+  return tyr_text_ascii(a.p, a.n, out);
+}
+
+int ty_text_chr(int32_t n, ty_varlena_t **out) {
+  char buf[4];
+  size_t len;
+
+  if (tyr_text_chr(n, buf, &len) != 0) {
+    return -1;
+  }
+  return ty_vl_new_copy(buf, len, out);
+}
+
+/*
+ * Fit the bytes at s. If self is not NULL and s needs no change, the result
+ * is self; else a new value.
+ */
+static int bpchar_make(const char *s, size_t len, size_t maxchars, int force,
+                       int pad, const ty_varlena_t *self, ty_varlena_t **out) {
+  size_t keep, total;
+  char *d;
+
+  if (tyr_bpchar_fit(s, len, maxchars, force, pad, &keep, &total) != 0) {
+    return -1;
+  }
+  if (nullptr != self && keep == len && total == len) {
+    *out = (ty_varlena_t *)self;
+    return 0;
+  }
+  if (ty_vl_new(total, out, &d) != 0) {
+    return -1;
+  }
+  memcpy(d, s, keep);
+  if (total > keep) {
+    memset(d + keep, ' ', total - keep);
+  }
+  return 0;
+}
+
+int ty_bpchar_in(const char *s, size_t len, size_t maxchars, int force, int pad,
+                 ty_varlena_t **out) {
+  return bpchar_make(s, len, maxchars, force, pad, nullptr, out);
+}
+
+int ty_bpchar_fit(const ty_varlena_t *s, size_t maxchars, int force, int pad,
+                  ty_varlena_t **out) {
+  bytes_t a(s);
+
+  return bpchar_make(a.p, a.n, maxchars, force, pad, s, out);
+}
+
+int ty_bpchar_cmp(const ty_varlena_t *a, const ty_varlena_t *b) {
+  bytes_t x(a), y(b);
+
+  return tyr_bpchar_cmp(x.p, x.n, y.p, y.n);
+}
+
+int ty_bpchar_eq(const ty_varlena_t *a, const ty_varlena_t *b) {
+  bytes_t x(a), y(b);
+
+  return tyr_text_eq(x.p, tyr_bpchar_truelen(x.p, x.n), y.p,
+                     tyr_bpchar_truelen(y.p, y.n));
+}
+
+uint32_t ty_bpchar_hash(const ty_varlena_t *s) {
+  bytes_t a(s);
+
+  return tyr_bpchar_hash(a.p, a.n);
+}
+
+uint64_t ty_bpchar_hash_extended(const ty_varlena_t *s, uint64_t seed) {
+  bytes_t a(s);
+
+  return tyr_bpchar_hash_extended(a.p, a.n, seed);
+}
+
+void ty_name_from_text(const ty_varlena_t *s, int trim, char *out) {
+  bytes_t a(s);
+  size_t n = a.n;
+
+  if (n >= TY_NAMEDATALEN) {
+    n = tyr_text_clipbytes(a.p, n, TY_NAMEDATALEN - 1);
+  }
+  if (trim) {
+    n = tyr_bpchar_truelen(a.p, n);
+  }
+  memset(out, 0, TY_NAMEDATALEN);
+  memcpy(out, a.p, n);
+}
+
+void ty_name_parse(const char *s, size_t len, char *out) {
+  tyr_name_parse(s, len, out);
+}
+
+int ty_text_like(const ty_varlena_t *t, const ty_varlena_t *p, int utf8) {
+  bytes_t a(t), b(p);
+
+  return tyr_text_like(a.p, a.n, b.p, b.n, utf8);
+}
+
+int ty_text_like_bytes(const char *t, size_t tlen, const char *p, size_t plen,
+                       int utf8) {
+  return tyr_text_like(t, tlen, p, plen, utf8);
+}
+
+int ty_text_like_escape(const ty_varlena_t *pat, const ty_varlena_t *esc,
+                        int utf8, ty_varlena_t **out) {
+  bytes_t a(pat), e(esc);
+  ty_varlena_t *r;
+  size_t outlen;
+  char *d;
+
+  /* the result is at most twice as long: a backslash is doubled */
+  if (ty_vl_new(a.n * 2, &r, &d) != 0) {
+    return -1;
+  }
+  if (tyr_text_like_escape(a.p, a.n, e.p, e.n, utf8, d, &outlen) != 0) {
+    ty_free(r);
+    return -1;
+  }
+  ty_vl_set_len(r, outlen);
+  *out = r;
+  return 0;
 }

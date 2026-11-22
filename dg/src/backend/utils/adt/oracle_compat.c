@@ -23,9 +23,21 @@
 #include "utils/memutils.h"
 #include "varatt.h"
 #include "ty_text.h"
+#include "utils/ty_glue.h"
 
-static text *dotrim(const char *string, int stringlen, const char *set,
-                    int setlen, bool doltrim, bool dortrim);
+static text *dotrim(text *string, text *set, bool doltrim, bool dortrim);
+
+/* The set of btrim(s), ltrim(s) and rtrim(s) with one argument: a space. */
+typedef struct {
+  int32 vl_len_;
+  char data[4];
+} space_set_t;
+#define SPACE_SET(name)                  \
+  space_set_t name##_v;                  \
+  text *name = (text *)&name##_v;        \
+  SET_VARSIZE(&name##_v, VARHDRSZ + 1);  \
+  name##_v.data[0] = ' '
+
 static bytea *dobyteatrim(bytea *string, bytea *set, bool doltrim,
                           bool dortrim);
 
@@ -147,20 +159,9 @@ Datum lpad(PG_FUNCTION_ARGS) {
   int32 len = PG_GETARG_INT32(1);
   text *string2 = PG_GETARG_TEXT_PP(2);
   text *ret;
-  int32 eff;
-  size_t outlen;
 
-  /* ty gives the length in characters, and checks PostgreSQL's limit */
-  if (ty_text_pad_prepare(VARDATA_ANY(string1), VARSIZE_ANY_EXHDR(string1), len,
-                          VARSIZE_ANY_EXHDR(string2), &eff))
-    ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                    errmsg("requested length too large")));
-
-  ret = (text *)palloc(VARHDRSZ + (size_t)eff * 4);
-  ty_text_lpad(VARDATA_ANY(string1), VARSIZE_ANY_EXHDR(string1), eff,
-               VARDATA_ANY(string2), VARSIZE_ANY_EXHDR(string2),
-               VARDATA(ret), &outlen);
-  SET_VARSIZE(ret, VARHDRSZ + outlen);
+  if (ty_text_lpad(TYV(string1), len, TYV(string2), TYVO(&ret)))
+    ty_raise_alloc();
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -186,20 +187,9 @@ Datum rpad(PG_FUNCTION_ARGS) {
   int32 len = PG_GETARG_INT32(1);
   text *string2 = PG_GETARG_TEXT_PP(2);
   text *ret;
-  int32 eff;
-  size_t outlen;
 
-  /* ty gives the length in characters, and checks PostgreSQL's limit */
-  if (ty_text_pad_prepare(VARDATA_ANY(string1), VARSIZE_ANY_EXHDR(string1), len,
-                          VARSIZE_ANY_EXHDR(string2), &eff))
-    ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                    errmsg("requested length too large")));
-
-  ret = (text *)palloc(VARHDRSZ + (size_t)eff * 4);
-  ty_text_rpad(VARDATA_ANY(string1), VARSIZE_ANY_EXHDR(string1), eff,
-               VARDATA_ANY(string2), VARSIZE_ANY_EXHDR(string2),
-               VARDATA(ret), &outlen);
-  SET_VARSIZE(ret, VARHDRSZ + outlen);
+  if (ty_text_rpad(TYV(string1), len, TYV(string2), TYVO(&ret)))
+    ty_raise_alloc();
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -224,8 +214,7 @@ Datum btrim(PG_FUNCTION_ARGS) {
   text *set = PG_GETARG_TEXT_PP(1);
   text *ret;
 
-  ret = dotrim(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), VARDATA_ANY(set),
-               VARSIZE_ANY_EXHDR(set), true, true);
+  ret = dotrim(string, set, true, true);
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -240,8 +229,9 @@ Datum btrim1(PG_FUNCTION_ARGS) {
   text *string = PG_GETARG_TEXT_PP(0);
   text *ret;
 
-  ret = dotrim(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), " ", 1, true,
-               true);
+  SPACE_SET(set);
+
+  ret = dotrim(string, set, true, true);
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -249,13 +239,13 @@ Datum btrim1(PG_FUNCTION_ARGS) {
 /*
  * Common implementation for btrim, ltrim, rtrim
  */
-static text *dotrim(const char *string, int stringlen, const char *set,
-                    int setlen, bool doltrim, bool dortrim) {
-  size_t off, len;
+static text *dotrim(text *string, text *set, bool doltrim, bool dortrim) {
+  text *ret;
 
-  /* ty finds the part that is left */
-  ty_text_trim(string, stringlen, set, setlen, doltrim, dortrim, &off, &len);
-  return cstring_to_text_with_len(string + off, len);
+  /* ty makes the part that is left */
+  if (ty_text_trim(TYV(string), TYV(set), doltrim, dortrim, TYVO(&ret)))
+    ty_raise_alloc();
+  return ret;
 }
 
 /*
@@ -410,8 +400,7 @@ Datum ltrim(PG_FUNCTION_ARGS) {
   text *set = PG_GETARG_TEXT_PP(1);
   text *ret;
 
-  ret = dotrim(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), VARDATA_ANY(set),
-               VARSIZE_ANY_EXHDR(set), true, false);
+  ret = dotrim(string, set, true, false);
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -426,8 +415,9 @@ Datum ltrim1(PG_FUNCTION_ARGS) {
   text *string = PG_GETARG_TEXT_PP(0);
   text *ret;
 
-  ret = dotrim(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), " ", 1, true,
-               false);
+  SPACE_SET(set);
+
+  ret = dotrim(string, set, true, false);
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -452,8 +442,7 @@ Datum rtrim(PG_FUNCTION_ARGS) {
   text *set = PG_GETARG_TEXT_PP(1);
   text *ret;
 
-  ret = dotrim(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), VARDATA_ANY(set),
-               VARSIZE_ANY_EXHDR(set), false, true);
+  ret = dotrim(string, set, false, true);
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -468,8 +457,9 @@ Datum rtrim1(PG_FUNCTION_ARGS) {
   text *string = PG_GETARG_TEXT_PP(0);
   text *ret;
 
-  ret = dotrim(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), " ", 1, false,
-               true);
+  SPACE_SET(set);
+
+  ret = dotrim(string, set, false, true);
 
   PG_RETURN_TEXT_P(ret);
 }
@@ -496,21 +486,10 @@ Datum translate(PG_FUNCTION_ARGS) {
   text *from = PG_GETARG_TEXT_PP(1);
   text *to = PG_GETARG_TEXT_PP(2);
   text *result;
-  size_t m = VARSIZE_ANY_EXHDR(string), retlen;
 
-  if (m <= 0)
-    PG_RETURN_TEXT_P(string);
-
-  /* a character may be 4 bytes: PostgreSQL's limit is on 4 * m */
-  if (ty_text_size_check(m * 4 + 0))
-    ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                    errmsg("requested length too large")));
-
-  result = (text *)palloc(VARHDRSZ + m * 4);
-  ty_text_translate(VARDATA_ANY(string), m, VARDATA_ANY(from),
-                    VARSIZE_ANY_EXHDR(from), VARDATA_ANY(to),
-                    VARSIZE_ANY_EXHDR(to), VARDATA(result), &retlen);
-  SET_VARSIZE(result, retlen + VARHDRSZ);
+  /* ty makes the result, or gives string if it is empty */
+  if (ty_text_translate(TYV(string), TYV(from), TYV(to), TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_TEXT_P(result);
 }
@@ -541,7 +520,7 @@ Datum ascii(PG_FUNCTION_ARGS) {
   text *string = PG_GETARG_TEXT_PP(0);
   int32 result;
 
-  if (ty_text_ascii(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), &result))
+  if (ty_text_ascii(TYV(string), &result))
     ereport(ERROR, (errcode(ERRCODE_CHARACTER_NOT_IN_REPERTOIRE),
                     errmsg("invalid byte sequence for encoding \"%s\"",
                            GetDatabaseEncodingName())));
@@ -574,20 +553,16 @@ Datum ascii(PG_FUNCTION_ARGS) {
 Datum chr(PG_FUNCTION_ARGS) {
   int32 arg = PG_GETARG_INT32(0);
   text *result;
-  size_t bytes;
-  char buf[4];
 
-  if (ty_text_chr(arg, buf, &bytes)) {
+  if (ty_text_chr(arg, TYVO(&result))) {
     /* the number was negative, or no character: ty's message says which */
+    if (ty_errnum() == TY_ERR_NOMEM)
+      ty_raise_alloc();
     ereport(ERROR, (errcode(ty_errnum() == TY_ERR_INVALID
                                 ? ERRCODE_INVALID_PARAMETER_VALUE
                                 : ERRCODE_PROGRAM_LIMIT_EXCEEDED),
                     errmsg("%s", ty_errmsg())));
   }
-
-  result = (text *)palloc(VARHDRSZ + bytes);
-  SET_VARSIZE(result, VARHDRSZ + bytes);
-  memcpy(VARDATA(result), buf, bytes);
 
   PG_RETURN_TEXT_P(result);
 }
@@ -610,16 +585,9 @@ Datum repeat(PG_FUNCTION_ARGS) {
   text *string = PG_GETARG_TEXT_PP(0);
   int32 count = PG_GETARG_INT32(1);
   text *result;
-  size_t tlen;
 
-  if (ty_text_repeat_size(VARSIZE_ANY_EXHDR(string), count, &tlen))
-    ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                    errmsg("requested length too large")));
-
-  result = (text *)palloc(VARHDRSZ + tlen);
-  SET_VARSIZE(result, VARHDRSZ + tlen);
-  ty_text_repeat(VARDATA_ANY(string), VARSIZE_ANY_EXHDR(string), count,
-                 VARDATA(result));
+  if (ty_text_repeat(TYV(string), count, TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_TEXT_P(result);
 }

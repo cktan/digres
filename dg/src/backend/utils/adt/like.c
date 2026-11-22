@@ -26,6 +26,7 @@
 #include "utils/pg_locale.h"
 #include "varatt.h"
 #include "ty_text.h"
+#include "utils/ty_glue.h"
 
 #define LIKE_TRUE						1
 #define LIKE_FALSE						0
@@ -147,7 +148,7 @@ static char SB_lower_char(unsigned char c, pg_locale_t locale) {
  */
 static int like_ty(const char *s, int slen, const char *p, int plen,
                    int utf8) {
-  int r = ty_text_like(s, slen, p, plen, utf8);
+  int r = ty_text_like_bytes(s, slen, p, plen, utf8);
 
   if (r < 0) {
     if (ty_errnum() == TY_ERR_RANGE)
@@ -415,17 +416,15 @@ Datum like_escape(PG_FUNCTION_ARGS) {
   text *pat = PG_GETARG_TEXT_PP(0);
   text *esc = PG_GETARG_TEXT_PP(1);
   text *result;
-  size_t outlen;
 
-  /* the result is at most twice as long: a backslash is doubled */
-  result = (text *)palloc(VARSIZE_ANY_EXHDR(pat) * 2 + VARHDRSZ);
-  if (ty_text_like_escape(VARDATA_ANY(pat), VARSIZE_ANY_EXHDR(pat),
-                          VARDATA_ANY(esc), VARSIZE_ANY_EXHDR(esc), 1,
-                          VARDATA(result), &outlen))
+  /* ty makes the pattern of the default escape */
+  if (ty_text_like_escape(TYV(pat), TYV(esc), 1, TYVO(&result))) {
+    if (ty_errnum() != TY_ERR_INVALID)
+      ty_raise_alloc();
     ereport(ERROR, (errcode(ERRCODE_INVALID_ESCAPE_SEQUENCE),
                     errmsg("invalid escape string"),
                     errhint("Escape string must be empty or one character.")));
-  SET_VARSIZE(result, VARHDRSZ + outlen);
+  }
 
   PG_RETURN_TEXT_P(result);
 }
@@ -438,16 +437,15 @@ Datum like_escape_bytea(PG_FUNCTION_ARGS) {
   bytea *pat = PG_GETARG_BYTEA_PP(0);
   bytea *esc = PG_GETARG_BYTEA_PP(1);
   bytea *result;
-  size_t outlen;
 
-  result = (bytea *)palloc(VARSIZE_ANY_EXHDR(pat) * 2 + VARHDRSZ);
-  if (ty_text_like_escape(VARDATA_ANY(pat), VARSIZE_ANY_EXHDR(pat),
-                          VARDATA_ANY(esc), VARSIZE_ANY_EXHDR(esc), 0,
-                          VARDATA(result), &outlen))
+  /* ty makes the pattern of the default escape */
+  if (ty_text_like_escape(TYV(pat), TYV(esc), 0, TYVO(&result))) {
+    if (ty_errnum() != TY_ERR_INVALID)
+      ty_raise_alloc();
     ereport(ERROR, (errcode(ERRCODE_INVALID_ESCAPE_SEQUENCE),
                     errmsg("invalid escape string"),
                     errhint("Escape string must be empty or one character.")));
-  SET_VARSIZE(result, VARHDRSZ + outlen);
+  }
 
   PG_RETURN_BYTEA_P(result);
 }

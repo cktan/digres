@@ -10,14 +10,20 @@
  * it when the text comes in, as PostgreSQL does. A function never reads past
  * its string, whatever the bytes.
  *
- * A string is a pointer and a length in bytes; it has no NUL. A function
- * that makes a string writes it to the caller's buffer; each says how large
- * the buffer must be, and ty allocates nothing. A position or a count is in
- * characters (code points), as SQL says; a length in bytes is a size_t.
+ * A text, and every character(n) and character varying(n), is a varlena
+ * (ty_varlena.h), as PostgreSQL has it: the host gives the value as it has
+ * it, with a short or a long header, and not toasted. A function that makes
+ * a text allocates it with the thread's alloc function (ty_set_alloc), and
+ * gives it in *out, with a long header. A position or a count is in
+ * characters (code points), as SQL says.
  *
  * A call that can fail returns 0, or -1 with the thread's error set; its
  * output is then not set. The message is PostgreSQL's. The kinds are:
- * TY_ERR_INVALID for a parameter that is wrong, TY_ERR_RANGE for a limit.
+ * TY_ERR_INVALID for a parameter that is wrong, TY_ERR_RANGE for a limit,
+ * TY_ERR_NOMEM if the alloc function returns NULL.
+ *
+ * A function that may have nothing to change (replace, character(n)) can
+ * give its input as the result: *out is then the input itself, not a copy.
  */
 #ifndef TY_TEXT_H
 #define TY_TEXT_H
@@ -28,16 +34,17 @@
 
 #include "ty.h"
 #include "ty_hash.h"
+#include "ty_varlena.h"
 
-/* The most bytes a result may have: PostgreSQL's MaxAllocSize less its header. */
-#define TY_TEXT_MAX_LEN ((size_t)0x3fffffff - 4)
+#define TY_TEXT_MAX_LEN TY_VARLENA_MAX_LEN
 
 /*
  * Compare, as bytes; a string that is a prefix of the other is the
- * smaller: negative, zero or positive.
+ * smaller: negative, zero or positive. ty_text_cmp_bytes is for two strings
+ * that are not varlenas, a pointer and a length each.
  */
-static inline int ty_text_cmp(const char* a, size_t alen, const char* b,
-                              size_t blen) {
+static inline int ty_text_cmp_bytes(const char* a, size_t alen, const char* b,
+                                    size_t blen) {
     int c = memcmp(a, b, alen < blen ? alen : blen);
 
     if (c == 0 && alen != blen) {
@@ -46,247 +53,212 @@ static inline int ty_text_cmp(const char* a, size_t alen, const char* b,
     return c;
 }
 
-static inline int ty_text_eq(const char* a, size_t alen, const char* b,
-                             size_t blen) {
+static inline int ty_text_cmp(const ty_varlena_t* a, const ty_varlena_t* b) {
+    return ty_text_cmp_bytes(ty_vl_data(a), ty_vl_len(a), ty_vl_data(b),
+                             ty_vl_len(b));
+}
+
+/* Equal, as bytes; the _bytes form is for strings that are not varlenas. */
+static inline int ty_text_eq_bytes(const char* a, size_t alen, const char* b,
+                                   size_t blen) {
     return alen == blen && memcmp(a, b, alen) == 0;
 }
 
+static inline int ty_text_eq(const ty_varlena_t* a, const ty_varlena_t* b) {
+    return ty_text_eq_bytes(ty_vl_data(a), ty_vl_len(a), ty_vl_data(b),
+                            ty_vl_len(b));
+}
+
 /* Whether the string begins with the prefix. */
-static inline int ty_text_starts_with(const char* s, size_t len,
-                                      const char* prefix, size_t plen) {
-    return plen <= len && memcmp(s, prefix, plen) == 0;
+static inline int ty_text_starts_with(const ty_varlena_t* s,
+                                      const ty_varlena_t* prefix) {
+    size_t plen = ty_vl_len(prefix);
+
+    return plen <= ty_vl_len(s) &&
+           memcmp(ty_vl_data(s), ty_vl_data(prefix), plen) == 0;
 }
 
 /* The hash of the bytes, PostgreSQL's. */
-static inline uint32_t ty_text_hash(const char* s, size_t len) {
-    return ty_hash_bytes_std((const uint8_t*)s, len);
+static inline uint32_t ty_text_hash(const ty_varlena_t* s) {
+    return ty_hash_bytes_std((const uint8_t*)ty_vl_data(s), ty_vl_len(s));
 }
-static inline uint64_t ty_text_hash_extended(const char* s, size_t len,
+static inline uint64_t ty_text_hash_extended(const ty_varlena_t* s,
                                              uint64_t seed) {
-    return ty_hash_bytes((const uint8_t*)s, len, seed);
+    return ty_hash_bytes((const uint8_t*)ty_vl_data(s), ty_vl_len(s), seed);
 }
 
-/* How many characters the string has. */
-size_t ty_text_length(const char* s, size_t len);
+/*
+ * How many characters the string has; the _bytes form is for a string that
+ * is not a varlena.
+ */
+size_t ty_text_length(const ty_varlena_t* s);
+size_t ty_text_length_bytes(const char* s, size_t len);
+
+/*
+ * a || b. TY_ERR_RANGE ("requested length too large") if the result passes
+ * TY_VARLENA_MAX_LEN.
+ */
+static inline int ty_text_concat(const ty_varlena_t* a, const ty_varlena_t* b,
+                                 ty_varlena_t** out) {
+    size_t alen = ty_vl_len(a);
+    size_t blen = ty_vl_len(b);
+    char* d;
+
+    /* no sum can overflow: each is below 2^30 */
+    if (ty_vl_new(alen + blen, out, &d) != 0) {
+        return -1;
+    }
+    memcpy(d, ty_vl_data(a), alen);
+    memcpy(d + alen, ty_vl_data(b), blen);
+    return 0;
+}
 
 /*
  * SUBSTRING(s FROM start FOR count): the characters from start (one-based,
  * and may be below 1) up to count of them; has_count is 0 for FROM alone.
  * A negative count is TY_ERR_INVALID ("negative substring length not
- * allowed"). The result is a part of s: its place is *off and its size
- * *outlen, so that no copy is needed.
+ * allowed").
  */
-int ty_text_substr(const char* s, size_t len, int32_t start, int32_t count,
-                   int has_count, size_t* off, size_t* outlen);
+int ty_text_substr(const ty_varlena_t* s, int32_t start, int32_t count,
+                   int has_count, ty_varlena_t** out);
 
 /*
  * left(s, n) and right(s, n), by the rules of PostgreSQL: a negative n is
- * all but the last (left) or the first (right) -n characters. The result
- * is a part of s, as above.
+ * all but the last (left) or the first (right) -n characters.
  */
-void ty_text_left(const char* s, size_t len, int32_t n, size_t* off,
-                  size_t* outlen);
-void ty_text_right(const char* s, size_t len, int32_t n, size_t* off,
-                   size_t* outlen);
+int ty_text_left(const ty_varlena_t* s, int32_t n, ty_varlena_t** out);
+int ty_text_right(const ty_varlena_t* s, int32_t n, ty_varlena_t** out);
 
-/* s reversed by characters; out has len bytes. */
-void ty_text_reverse(const char* s, size_t len, char* out);
+/* s reversed by characters. */
+int ty_text_reverse(const ty_varlena_t* s, ty_varlena_t** out);
 
 /*
  * OVERLAY(s PLACING r FROM start FOR count): s with count characters from
  * start replaced by r. A start of 0 or less is TY_ERR_INVALID ("negative
  * substring length not allowed"); start + count past int32 is TY_ERR_RANGE
- * ("integer out of range"). A negative count makes the head and the tail
- * overlap, so out has 2 * len + rlen bytes.
+ * ("integer out of range").
  */
-int ty_text_overlay(const char* s, size_t len, const char* r, size_t rlen,
-                    int32_t start, int32_t count, char* out, size_t* outlen);
+int ty_text_overlay(const ty_varlena_t* s, const ty_varlena_t* r,
+                    int32_t start, int32_t count, ty_varlena_t** out);
 
 /*
  * The one-based character place of the first copy of needle in s, or 0 if
  * there is none; an empty needle is at 1.
  */
-int32_t ty_text_position(const char* s, size_t len, const char* needle,
-                         size_t nlen);
+int32_t ty_text_position(const ty_varlena_t* s, const ty_varlena_t* needle);
 
 /*
- * A search for needle (not empty) in s, copy after copy, none overlapping.
- * Make it with ty_text_find_init; ty_text_find_next gives the byte place of
- * the next copy, or -1.
+ * replace(s, from, to): every copy of from replaced. TY_ERR_RANGE ("string
+ * buffer exceeds maximum allowed length (1073741823 bytes)") if the result
+ * is too long. If there is nothing to replace, *out is s itself.
  */
-typedef struct ty_text_find_t {
-    const char* s;
-    size_t len;
-    const char* needle;
-    size_t nlen;
-    size_t pos;
-    int skipmask;
-    int skip[256];
-} ty_text_find_t;
-
-void ty_text_find_init(ty_text_find_t* f, const char* s, size_t len,
-                       const char* needle, size_t nlen);
-int64_t ty_text_find_next(ty_text_find_t* f);
+int ty_text_replace(const ty_varlena_t* s, const ty_varlena_t* from,
+                    const ty_varlena_t* to, ty_varlena_t** out);
 
 /*
- * replace(s, from, to): every copy of from replaced. The size of the result
- * first (TY_ERR_RANGE, past TY_TEXT_MAX_LEN, with PostgreSQL's message), then the
- * result, in out of that size. If *found is 0 there was nothing to replace:
- * the result is s itself, and the caller need not copy.
+ * split_part(s, sep, n): the n-th field, from the end if n is negative. n of
+ * 0 is TY_ERR_INVALID ("field position must not be zero").
  */
-int ty_text_replace_size(const char* s, size_t len, const char* from,
-                         size_t flen, size_t tlen, size_t* outlen,
-                         int* found);
-void ty_text_replace(const char* s, size_t len, const char* from, size_t flen,
-                     const char* to, size_t tlen, char* out);
+int ty_text_split_part(const ty_varlena_t* s, const ty_varlena_t* sep,
+                       int32_t n, ty_varlena_t** out);
 
 /*
- * split_part(s, sep, n): the n-th field, from the end if n is negative. The
- * result is a part of s. n of 0 is TY_ERR_INVALID ("field position must not
- * be zero").
+ * repeat(s, n). A result past TY_VARLENA_MAX_LEN is TY_ERR_RANGE
+ * ("requested length too large").
  */
-int ty_text_split_part(const char* s, size_t len, const char* sep,
-                       size_t seplen, int32_t n, size_t* off, size_t* outlen);
-
-/*
- * repeat(s, n): the size of the result, then the result. A size past
- * TY_TEXT_MAX_LEN is TY_ERR_RANGE ("requested length too large").
- */
-int ty_text_repeat_size(size_t len, int32_t count, size_t* outlen);
-void ty_text_repeat(const char* s, size_t len, int32_t count, char* out);
-
-/* TY_ERR_RANGE ("requested length too large") if bytes passes the limit. */
-int ty_text_size_check(size_t bytes);
-
-/*
- * a || b. The result is in memory from the thread's alloc function
- * (ty_set_alloc): headroom bytes, which ty does not write, then the len1 +
- * len2 bytes of the text. A host with a header in front of the bytes, such as
- * digres's varlena, gives its size as the headroom, and has the result in
- * its own memory with no copy. *out is the start of the memory, the
- * headroom's, and *outlen the length of the text. TY_ERR_RANGE if the
- * headroom and the text pass TY_TEXT_MAX_LEN, and TY_ERR_NOMEM if alloc
- * returns NULL. The caller frees the memory as its alloc function suggests.
- */
-int ty_text_concat_error(size_t alen, size_t blen, size_t headroom);
-static inline int ty_text_concat(const char* a, size_t alen, const char* b, size_t blen,
-                                 size_t headroom, char** out, size_t* outlen) {
-    size_t len = alen + blen;
-    /* PostgreSQL's MaxAllocSize, 0x3fffffff, is the limit of the whole block. */
-    const size_t max_block = TY_TEXT_MAX_LEN + 4;
-    char* p;
-
-    if (TY_UNLIKELY(len > max_block || headroom > max_block - len)) {
-        return ty_text_concat_error(alen, blen, headroom);
-    }
-    p = (char*)ty_alloc(headroom + len);
-    if (TY_UNLIKELY(p == NULL)) {
-        return ty_text_concat_error(alen, blen, headroom);
-    }
-    memcpy(p + headroom, a, alen);
-    memcpy(p + headroom + alen, b, blen);
-    *out = p;
-    *outlen = len;
-    return 0;
-}
+int ty_text_repeat(const ty_varlena_t* s, int32_t count, ty_varlena_t** out);
 
 /*
  * lpad(s, n, fill) and rpad(s, n, fill): s cut or padded to n characters,
  * the fill used again and again; with an empty fill s is only cut.
- * ty_text_pad_prepare gives the number of characters of the result, *eff,
- * and checks PostgreSQL's rule that 4 * eff bytes are within the limit
- * (TY_ERR_RANGE, "requested length too large"); out then must hold 4 * eff
- * bytes.
+ * PostgreSQL's rule is that 4 bytes a character of the result are within
+ * the limit: TY_ERR_RANGE ("requested length too large").
  */
-int ty_text_pad_prepare(const char* s, size_t len, int32_t n, size_t flen,
-                        int32_t* eff);
-void ty_text_lpad(const char* s, size_t len, int32_t eff, const char* fill,
-                  size_t flen, char* out, size_t* outlen);
-void ty_text_rpad(const char* s, size_t len, int32_t eff, const char* fill,
-                  size_t flen, char* out, size_t* outlen);
+int ty_text_lpad(const ty_varlena_t* s, int32_t n, const ty_varlena_t* fill,
+                 ty_varlena_t** out);
+int ty_text_rpad(const ty_varlena_t* s, int32_t n, const ty_varlena_t* fill,
+                 ty_varlena_t** out);
 
 /*
  * btrim, ltrim and rtrim: the characters that are in set taken from the
- * ends. The result is a part of s.
+ * ends.
  */
-void ty_text_trim(const char* s, size_t len, const char* set, size_t setlen,
-                  int left, int right, size_t* off, size_t* outlen);
+int ty_text_trim(const ty_varlena_t* s, const ty_varlena_t* set, int left,
+                 int right, ty_varlena_t** out);
 
 /*
  * translate(s, from, to): each character of s that is in from becomes the
- * character of to at the same place, or nothing if to is shorter. out has
- * 4 * len bytes, and the caller checks that with ty_text_size_check. The
- * result size is returned in *outlen.
+ * character of to at the same place, or nothing if to is shorter. 4 bytes a
+ * character of s must be within the limit (TY_ERR_RANGE). If s is empty,
+ * *out is s itself.
  */
-void ty_text_translate(const char* s, size_t len, const char* from,
-                       size_t flen, const char* to, size_t tlen, char* out,
-                       size_t* outlen);
+int ty_text_translate(const ty_varlena_t* s, const ty_varlena_t* from,
+                      const ty_varlena_t* to, ty_varlena_t** out);
 
 /*
  * ascii(s): the code point of the first character, 0 for an empty string.
  * A first byte that begins no character is TY_ERR_INVALID.
  */
-int ty_text_ascii(const char* s, size_t len, int32_t* out);
+int ty_text_ascii(const ty_varlena_t* s, int32_t* out);
 
 /*
- * chr(n): the character of code point n, in out of 4 bytes; the size is
- * returned in *outlen. A negative n is TY_ERR_INVALID ("character number
- * must be positive"); 0, a point past 0x10FFFF, and a surrogate are
- * TY_ERR_RANGE.
+ * chr(n): the character of code point n. A negative n is TY_ERR_INVALID
+ * ("character number must be positive"); 0, a point past 0x10FFFF, and a
+ * surrogate are TY_ERR_RANGE.
  */
-int ty_text_chr(int32_t n, char* out, size_t* outlen);
-
-/*
- * The bytes of the first nchars characters of s (all of s if it has fewer);
- * and the longest part of s of at most nbytes bytes that ends at a character
- * boundary (PostgreSQL's pg_mbcliplen).
- */
-size_t ty_text_cliplen(const char* s, size_t len, size_t nchars);
-size_t ty_text_clipbytes(const char* s, size_t len, size_t nbytes);
+int ty_text_chr(int32_t n, ty_varlena_t** out);
 
 /*
  * character(n) and character varying(n). Fit s to maxchars characters: if it
- * has more, the part kept is *keep bytes, and a character cut off that is not
- * a space is TY_ERR_RANGE unless force (the host words "value too long").
- * *total is the bytes of the result: for character(n) the part kept, and
- * spaces to make n characters; pad is 1 for that and 0 for varying.
+ * has more, the part kept is cut off, and a character cut off that is not
+ * a space is TY_ERR_RANGE ("value too long") unless force. If s has fewer
+ * characters, character(n) (pad is 1) has spaces added to make n of them. If
+ * s is as it should be, *out is s itself.
  */
-int ty_bpchar_fit(const char* s, size_t len, size_t maxchars, int force,
-                  int pad, size_t* keep, size_t* total);
+int ty_bpchar_fit(const ty_varlena_t* s, size_t maxchars, int force, int pad,
+                  ty_varlena_t** out);
 
-/* The length of a character(n) value without its trailing spaces. */
-static inline size_t ty_bpchar_truelen(const char* s, size_t len) {
-    while (len > 0 && s[len - 1] == ' ') {
+/*
+ * The same for a value that comes in as a C string of len bytes, which is
+ * not a varlena: *out is always a new value.
+ */
+int ty_bpchar_in(const char* s, size_t len, size_t maxchars, int force, int pad,
+                 ty_varlena_t** out);
+
+/*
+ * The length of a character(n) value without its trailing spaces; the _bytes
+ * form is for a string that is not a varlena.
+ */
+static inline size_t ty_bpchar_truelen_bytes(const char* d, size_t len) {
+    while (len > 0 && d[len - 1] == ' ') {
         len--;
     }
     return len;
+}
+static inline size_t ty_bpchar_truelen(const ty_varlena_t* s) {
+    return ty_bpchar_truelen_bytes(ty_vl_data(s), ty_vl_len(s));
 }
 
 /*
  * The order and equality of two character(n) values: the C order of the
  * values without trailing spaces.
  */
-static inline int ty_bpchar_cmp(const char* a, size_t alen, const char* b,
-                                size_t blen) {
-    return ty_text_cmp(a, ty_bpchar_truelen(a, alen), b,
-                       ty_bpchar_truelen(b, blen));
-}
+int ty_bpchar_cmp(const ty_varlena_t* a, const ty_varlena_t* b);
+int ty_bpchar_eq(const ty_varlena_t* a, const ty_varlena_t* b);
 
 /* The hash of the value without its trailing spaces. */
-static inline uint32_t ty_bpchar_hash(const char* s, size_t len) {
-    return ty_text_hash(s, ty_bpchar_truelen(s, len));
-}
-static inline uint64_t ty_bpchar_hash_extended(const char* s, size_t len,
-                                               uint64_t seed) {
-    return ty_text_hash_extended(s, ty_bpchar_truelen(s, len), seed);
-}
+uint32_t ty_bpchar_hash(const ty_varlena_t* s);
+uint64_t ty_bpchar_hash_extended(const ty_varlena_t* s, uint64_t seed);
 
 /*
  * name: NAMEDATALEN bytes, a NUL-ended string cut to 63 bytes at a character
- * boundary. Write the name from s to out (zero-filled); the order is of
- * the bytes up to the NUL.
+ * boundary; it is not a varlena. Write the name from the text s to out
+ * (zero-filled; for character(n), with the trailing spaces of s taken off
+ * if trim is 1); or from the C string s of len bytes. The order is of the
+ * bytes up to the NUL.
  */
 #define TY_NAMEDATALEN 64
+void ty_name_from_text(const ty_varlena_t* s, int trim, char* out);
 void ty_name_parse(const char* s, size_t len, char* out);
 static inline int ty_name_cmp(const char* a, const char* b) {
     return strncmp(a, b, TY_NAMEDATALEN);
@@ -300,26 +272,29 @@ static inline int ty_name_cmp(const char* a, const char* b) {
  * in PostgreSQL, which finds it only if it gets there; a pattern with so many
  * % that the nesting passes 5000 is TY_ERR_RANGE ("stack depth limit
  * exceeded"). utf8 is 1 for text, where _ and % step over a whole character,
- * and 0 for bytea, where they step over a byte.
+ * and 0 for bytea, where they step over a byte. A match with the bytes of a
+ * text that is not a varlena is ty_text_like_bytes.
  */
-int ty_text_like(const char* t, size_t tlen, const char* p, size_t plen,
-                 int utf8);
+int ty_text_like(const ty_varlena_t* t, const ty_varlena_t* p, int utf8);
+int ty_text_like_bytes(const char* t, size_t tlen, const char* p, size_t plen,
+                       int utf8);
 
 /*
  * The pattern of LIKE ... ESCAPE esc, made into the pattern of the default
- * escape, a backslash: out has 2 * plen bytes, and *outlen is the result's
- * size. An escape of more than one character is TY_ERR_INVALID ("invalid
- * escape string"). An empty escape makes every backslash plain. utf8 is as
- * in ty_text_like: a character is a whole UTF-8 character, or a byte.
+ * escape, a backslash. An escape of more than one character is
+ * TY_ERR_INVALID ("invalid escape string"). An empty escape makes every
+ * backslash plain. utf8 is as in ty_text_like: a character is a whole UTF-8
+ * character, or a byte.
  */
-int ty_text_like_escape(const char* pat, size_t plen, const char* esc,
-                        size_t elen, int utf8, char* out, size_t* outlen);
+int ty_text_like_escape(const ty_varlena_t* pat, const ty_varlena_t* esc,
+                        int utf8, ty_varlena_t** out);
 
 /*
  * The case of ASCII letters, for the C ctype: only A-Z and a-z change, any
- * other byte (a byte of a multibyte character included) stays. out may be s.
- * initcap makes the first letter of each word upper case and the rest lower;
- * a word is a run of ASCII letters and digits.
+ * other byte (a byte of a multibyte character included) stays. These work
+ * on a C string, not a varlena. out may be s. initcap makes the first letter
+ * of each word upper case and the rest lower; a word is a run of ASCII
+ * letters and digits.
  */
 static inline void ty_ascii_lower(const char* s, size_t len, char* out) {
     for (size_t i = 0; i < len; i++) {

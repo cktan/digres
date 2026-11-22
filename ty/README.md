@@ -46,14 +46,15 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty_int.h` | the integer operations |
 | `include/ty_bool.h` | the boolean parse |
 | `include/ty_uuid.h` | the uuid operations |
-| `include/ty_bytea.h` | the bytea operations |
+| `include/ty_varlena.h` | the varlena: text, bytea and character values, as PostgreSQL has them |
+| `include/ty_bytea.h` | the bytea operations, on varlenas |
 | `include/ty_float.h` | the float4 and float8 operations, with their text |
 | `include/ty_hash.h` | the hash of every type, PostgreSQL's |
-| `include/ty_text.h` | the text operations, UTF-8 |
+| `include/ty_text.h` | the text operations, UTF-8, on varlenas |
 | `include/ty_interval.h` | the arithmetic of interval |
 | `include/ty_datetime.h` | the calendar, date, time and timestamp arithmetic |
 | `include/ty_error.h` | the error codes |
-| `src/` | the library |
+| `src/` | the library; `text_raw.h` and `bytea_raw.h` are the operations on a pointer and a length that `text_vl.cc` and `bytea_vl.cc` call |
 | `test/` | the unit tests, in doctest, and the vectors |
 | `test/gen_vectors.py` | a reference of plain Python integers that writes `test/vectors.txt` |
 | `test/vectors.txt` | about 152,000 vectors of the operations of every type, with the result or the error kind |

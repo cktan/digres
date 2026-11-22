@@ -216,7 +216,7 @@ $(SERVER): $(OBJS) $(LIBSQ) $(LIBTY) $(LINK_SM) $(LINK_AA) $(ROCKSDB_LIB)
 	    -DDG_ROCKSDB_BUILD="\"static, $$(cat $(dir $(ROCKSDB_LIB))flags)\"" \
 	    -c -o $(OBJDIR)/rocksdb_build.o src/backend/main/rocksdb_build.cc
 	$(CXX) $(OPT) -o $@ $(OBJDIR)/rocksdb_build.o $(OBJS) \
-	    $(LIBSQ) $(LIBTY) $(LINK_AA) $(LINK_SM) $(LDLIBS)
+	    $(LIBSQ) $(LINK_AA) $(LINK_SM) $(LIBTY) $(LDLIBS)
 
 $(OBJDIR)/%.o: src/%.c
 	@mkdir -p $(dir $@)

@@ -8,16 +8,17 @@
  * ty; the forms it reads and writes, and the cases of each function, are
  * those of PostgreSQL's bytea.
  *
- * A bytea is a pointer to its bytes and a length. A function that makes
- * bytes writes them to a buffer of the caller's, whose size the caller can
- * tell before the call, from the size function of the operation or from the
- * length of its input. ty does not allocate for them, so a host puts the
- * result where it keeps its own, with no copy: digres writes it after the
- * 4 bytes of a varlena's header. (ty_set_alloc is for a result whose size
- * only ty can know; none of bytea's is.)
+ * A bytea is a varlena (ty_varlena.h): the host gives the value as it has
+ * it, with a short or a long header, and not toasted. A function that makes
+ * a bytea allocates it with the thread's alloc function (ty_set_alloc), and
+ * gives it in *out, with a long header. A text that these functions read or
+ * write, the hex form and the escaped form of a bytea, is a C string: a
+ * pointer and a length with no NUL.
  *
  * A function that can fail returns 0, or -1 with the thread's error set,
- * and sets its output only on success.
+ * and sets its output only on success. A function that makes a value fails
+ * with TY_ERR_RANGE ("requested length too large") if the value is past
+ * TY_VARLENA_MAX_LEN, and TY_ERR_NOMEM if the alloc function returns NULL.
  */
 #ifndef TY_BYTEA_H
 #define TY_BYTEA_H
@@ -27,6 +28,7 @@
 #include <string.h>
 
 #include "ty.h"
+#include "ty_varlena.h"
 
 /*
  * Record the error of a negative SUBSTRING length (TY_ERR_INVALID), or of an
@@ -39,8 +41,7 @@ int ty_bytea_err_index(long long index, long long limit);
 /* ---- text ---- */
 
 /*
- * Read the len bytes at s as the text of a bytea, into out, which has room
- * for len bytes; *outlen is how many it wrote. Two forms:
+ * Read the len bytes at s as the text of a bytea. Two forms:
  *
  *   - "\x" and then pairs of hexadecimal digits, any case. A space, a tab,
  *     a newline or a return may stand between pairs, not inside one.
@@ -51,7 +52,7 @@ int ty_bytea_err_index(long long index, long long limit);
  * the hex form, an invalid digit, with the character, or an odd number of
  * digits; for the escaped form, a backslash not followed so.
  */
-int ty_bytea_parse(const char* s, size_t len, uint8_t* out, size_t* outlen);
+int ty_bytea_parse(const char* s, size_t len, ty_varlena_t** out);
 
 /* True if the len bytes at s begin the hex form: "\x". */
 static inline int ty_bytea_is_hex_text(const char* s, size_t len) {
@@ -59,11 +60,11 @@ static inline int ty_bytea_is_hex_text(const char* s, size_t len) {
 }
 
 /*
- * The text of n bytes in the hex form, "\x" and lowercase digits, is
- * ty_bytea_hex_size(n) characters; format_hex writes them, with no NUL.
+ * The text of a bytea in the hex form, "\x" and lowercase digits, is
+ * ty_bytea_hex_size characters; format_hex writes them to out, with no NUL.
  */
-static inline size_t ty_bytea_hex_size(size_t n) { return 2 * n + 2; }
-void ty_bytea_format_hex(const uint8_t* data, size_t n, char* out);
+size_t ty_bytea_hex_size(const ty_varlena_t* a);
+void ty_bytea_format_hex(const ty_varlena_t* a, char* out);
 
 /*
  * The escaped form: a backslash is two characters, a byte below 0x20 or
@@ -71,8 +72,8 @@ void ty_bytea_format_hex(const uint8_t* data, size_t n, char* out);
  * escape_size says how many characters that is, and format_escape writes
  * them, with no NUL.
  */
-size_t ty_bytea_escape_size(const uint8_t* data, size_t n);
-void ty_bytea_format_escape(const uint8_t* data, size_t n, char* out);
+size_t ty_bytea_escape_size(const ty_varlena_t* a);
+void ty_bytea_format_escape(const ty_varlena_t* a, char* out);
 
 /* ---- encode and decode ---- */
 
@@ -95,25 +96,20 @@ typedef enum ty_bytea_enc_t {
 int ty_bytea_encoding(const char* name, ty_bytea_enc_t* enc);
 
 /*
- * The text of n bytes in an encoding is at most encode_size characters;
- * encode writes it, with no NUL, to out of that size, and returns its length.
+ * ENCODE: the text, a varlena of the bytes of the encoding of data, with no
+ * NUL.
  */
-size_t ty_bytea_encode_size(ty_bytea_enc_t enc, const uint8_t* data, size_t n);
-size_t ty_bytea_encode(ty_bytea_enc_t enc, const uint8_t* data, size_t n,
-                       char* out);
+int ty_bytea_encode(ty_bytea_enc_t enc, const ty_varlena_t* data,
+                    ty_varlena_t** out);
 
 /*
- * The bytes of the n characters of text at s are at most decode_size: out
- * needs that room. decode writes them, sets *outlen to how many, and returns
- * 0. A fault is TY_ERR_INVALID, with PostgreSQL's message: for hex an
- * invalid digit or an odd number of digits; for base64 an unexpected "=", an
- * invalid symbol, or "invalid base64 end sequence"; for escape a stray
- * backslash. decode_size fails the same way for escape, which it must scan.
+ * DECODE: the bytea of the encoded text. A fault is TY_ERR_INVALID, with
+ * PostgreSQL's message: for hex an invalid digit or an odd number of digits;
+ * for base64 an unexpected "=", an invalid symbol, or "invalid base64 end
+ * sequence"; for escape a stray backslash.
  */
-int ty_bytea_decode_size(ty_bytea_enc_t enc, const char* s, size_t n,
-                         size_t* size);
-int ty_bytea_decode(ty_bytea_enc_t enc, const char* s, size_t n, uint8_t* out,
-                    size_t* outlen);
+int ty_bytea_decode(ty_bytea_enc_t enc, const ty_varlena_t* text,
+                    ty_varlena_t** out);
 
 /* ---- compare and hash ---- */
 
@@ -121,10 +117,11 @@ int ty_bytea_decode(ty_bytea_enc_t enc, const char* s, size_t n, uint8_t* out,
  * Negative, zero or positive as a is below, equal to or above b: the
  * bytes compare, and a prefix is below what it begins.
  */
-static inline int ty_bytea_cmp(const uint8_t* a, size_t na, const uint8_t* b,
-                               size_t nb) {
+static inline int ty_bytea_cmp(const ty_varlena_t* a, const ty_varlena_t* b) {
+    size_t na = ty_vl_len(a);
+    size_t nb = ty_vl_len(b);
     size_t n = na < nb ? na : nb;
-    int c = n > 0 ? memcmp(a, b, n) : 0;
+    int c = n > 0 ? memcmp(ty_vl_data(a), ty_vl_data(b), n) : 0;
 
     if (c == 0 && na != nb) {
         return na < nb ? -1 : 1;
@@ -133,45 +130,54 @@ static inline int ty_bytea_cmp(const uint8_t* a, size_t na, const uint8_t* b,
 }
 
 /* The predicates of the compare, 1 or 0; eq is false at once for lengths. */
-static inline int ty_bytea_eq(const uint8_t* a, size_t na, const uint8_t* b,
-                              size_t nb) {
-    return na == nb && (na == 0 || memcmp(a, b, na) == 0);
+static inline int ty_bytea_eq(const ty_varlena_t* a, const ty_varlena_t* b) {
+    size_t na = ty_vl_len(a);
+
+    return na == ty_vl_len(b) &&
+           (na == 0 || memcmp(ty_vl_data(a), ty_vl_data(b), na) == 0);
 }
-static inline int ty_bytea_ne(const uint8_t* a, size_t na, const uint8_t* b,
-                              size_t nb) {
-    return !ty_bytea_eq(a, na, b, nb);
+static inline int ty_bytea_ne(const ty_varlena_t* a, const ty_varlena_t* b) {
+    return !ty_bytea_eq(a, b);
 }
-static inline int ty_bytea_lt(const uint8_t* a, size_t na, const uint8_t* b,
-                              size_t nb) {
-    return ty_bytea_cmp(a, na, b, nb) < 0;
+static inline int ty_bytea_lt(const ty_varlena_t* a, const ty_varlena_t* b) {
+    return ty_bytea_cmp(a, b) < 0;
 }
-static inline int ty_bytea_le(const uint8_t* a, size_t na, const uint8_t* b,
-                              size_t nb) {
-    return ty_bytea_cmp(a, na, b, nb) <= 0;
+static inline int ty_bytea_le(const ty_varlena_t* a, const ty_varlena_t* b) {
+    return ty_bytea_cmp(a, b) <= 0;
 }
-static inline int ty_bytea_gt(const uint8_t* a, size_t na, const uint8_t* b,
-                              size_t nb) {
-    return ty_bytea_cmp(a, na, b, nb) > 0;
+static inline int ty_bytea_gt(const ty_varlena_t* a, const ty_varlena_t* b) {
+    return ty_bytea_cmp(a, b) > 0;
 }
-static inline int ty_bytea_ge(const uint8_t* a, size_t na, const uint8_t* b,
-                              size_t nb) {
-    return ty_bytea_cmp(a, na, b, nb) >= 0;
+static inline int ty_bytea_ge(const ty_varlena_t* a, const ty_varlena_t* b) {
+    return ty_bytea_cmp(a, b) >= 0;
 }
 
 /*
  * A 64-bit hash of the bytes by a seed; the low 32 bits with seed 0 are
  * the standard 32-bit hash. It cannot fail.
  */
-uint64_t ty_bytea_hash(const uint8_t* data, size_t n, uint64_t seed);
+uint64_t ty_bytea_hash(const ty_varlena_t* a, uint64_t seed);
 
 /* ---- making bytes ---- */
 
-/* out gets a, then b: na + nb bytes. */
-void ty_bytea_cat(const uint8_t* a, size_t na, const uint8_t* b, size_t nb,
-                  uint8_t* out);
+/* a, then b. */
+static inline int ty_bytea_cat(const ty_varlena_t* a, const ty_varlena_t* b,
+                               ty_varlena_t** out) {
+    size_t na = ty_vl_len(a);
+    size_t nb = ty_vl_len(b);
+    char* d;
 
-/* out gets the bytes of a in the other order: n bytes. */
-void ty_bytea_reverse(const uint8_t* a, size_t n, uint8_t* out);
+    /* no sum can overflow: each is below 2^30 */
+    if (ty_vl_new(na + nb, out, &d) != 0) {
+        return -1;
+    }
+    memcpy(d, ty_vl_data(a), na);
+    memcpy(d + na, ty_vl_data(b), nb);
+    return 0;
+}
+
+/* The bytes of a in the other order. */
+int ty_bytea_reverse(const ty_varlena_t* a, ty_varlena_t** out);
 
 /*
  * The part of a bytea that SUBSTRING(s FROM start FOR len) names: start is
@@ -215,14 +221,11 @@ static inline int ty_bytea_substr_range(int32_t start, int32_t len,
 
 /*
  * OVERLAY(a PLACING b FROM start FOR len): a, with the len bytes from
- * start (one-based) replaced by b. overlay_size gives the length of the
- * result, and overlay writes it to out, which has that room. A start below
- * 1 is TY_ERR_INVALID; start + len past int32 is TY_ERR_RANGE.
+ * start (one-based) replaced by b. A start below 1 is TY_ERR_INVALID;
+ * start + len past int32 is TY_ERR_RANGE ("integer out of range").
  */
-int ty_bytea_overlay_size(size_t na, size_t nb, int32_t start, int32_t len,
-                          size_t* size);
-int ty_bytea_overlay(const uint8_t* a, size_t na, const uint8_t* b, size_t nb,
-                     int32_t start, int32_t len, uint8_t* out);
+int ty_bytea_overlay(const ty_varlena_t* a, const ty_varlena_t* b,
+                     int32_t start, int32_t len, ty_varlena_t** out);
 
 /* ---- looking inside ---- */
 
@@ -230,42 +233,47 @@ int ty_bytea_overlay(const uint8_t* a, size_t na, const uint8_t* b, size_t nb,
  * The one-based place of the first copy of b in a, or 0 if there is none;
  * an empty b is at 1.
  */
-int64_t ty_bytea_position(const uint8_t* a, size_t na, const uint8_t* b,
-                          size_t nb);
+int64_t ty_bytea_position(const ty_varlena_t* a, const ty_varlena_t* b);
 
 /* How many bits of the bytes are set. */
-int64_t ty_bytea_bit_count(const uint8_t* a, size_t n);
+int64_t ty_bytea_bit_count(const ty_varlena_t* a);
 
 /*
  * The byte at index (from 0), or the bit at index (from 0, the least
  * significant of byte 0 first). TY_ERR_RANGE if the index is outside; the
  * message names the valid range.
  */
-static inline int ty_bytea_get_byte(const uint8_t* a, size_t n, int32_t index,
+static inline int ty_bytea_get_byte(const ty_varlena_t* a, int32_t index,
                                     int32_t* r) {
+    size_t n = ty_vl_len(a);
+
     if (TY_UNLIKELY(index < 0 || (size_t)index >= n)) {
         return ty_bytea_err_index(index, (long long)n);
     }
-    *r = a[index];
+    *r = (unsigned char)ty_vl_data(a)[index];
     return 0;
 }
 
-static inline int ty_bytea_get_bit(const uint8_t* a, size_t n, int64_t index,
+static inline int ty_bytea_get_bit(const ty_varlena_t* a, int64_t index,
                                    int32_t* r) {
+    size_t n = ty_vl_len(a);
+
     if (TY_UNLIKELY(index < 0 || (uint64_t)index >= (uint64_t)n * 8)) {
         return ty_bytea_err_index(index, (long long)n * 8);
     }
-    *r = (a[index / 8] >> (index % 8)) & 1;
+    *r = ((unsigned char)ty_vl_data(a)[index / 8] >> (index % 8)) & 1;
     return 0;
 }
 
 /*
- * Set the byte at index to value (its low 8 bits), or the bit at index to
- * 0 or 1, in the n bytes at a, which the caller has copied. TY_ERR_RANGE
- * for an index outside; TY_ERR_INVALID for a bit that is not 0 or 1.
+ * A copy of a with the byte at index set to value (its low 8 bits), or the
+ * bit at index set to 0 or 1. TY_ERR_RANGE for an index outside;
+ * TY_ERR_INVALID for a bit that is not 0 or 1.
  */
-int ty_bytea_set_byte(uint8_t* a, size_t n, int32_t index, int32_t value);
-int ty_bytea_set_bit(uint8_t* a, size_t n, int64_t index, int32_t bit);
+int ty_bytea_set_byte(const ty_varlena_t* a, int32_t index, int32_t value,
+                      ty_varlena_t** out);
+int ty_bytea_set_bit(const ty_varlena_t* a, int64_t index, int32_t bit,
+                     ty_varlena_t** out);
 
 /* ---- and integers ---- */
 
@@ -273,14 +281,14 @@ int ty_bytea_set_bit(uint8_t* a, size_t n, int64_t index, int32_t bit);
  * The integer of at most N bytes, most significant first, as an unsigned
  * number of the type's width, which then becomes the signed type: so the two
  * bytes 0xFFFF are -1 as an int16 and 65535 as an int32. More than N bytes
- * is TY_ERR_RANGE. The other way, ty_intN_to_bytea writes the N bytes of an
- * integer, most significant first, to out.
+ * is TY_ERR_RANGE. The other way, ty_intN_to_bytea makes the bytea of the N
+ * bytes of an integer, most significant first.
  */
-int ty_bytea_to_int16(const uint8_t* a, size_t n, int16_t* r);
-int ty_bytea_to_int32(const uint8_t* a, size_t n, int32_t* r);
-int ty_bytea_to_int64(const uint8_t* a, size_t n, int64_t* r);
-void ty_int16_to_bytea(int16_t v, uint8_t out[2]);
-void ty_int32_to_bytea(int32_t v, uint8_t out[4]);
-void ty_int64_to_bytea(int64_t v, uint8_t out[8]);
+int ty_bytea_to_int16(const ty_varlena_t* a, int16_t* r);
+int ty_bytea_to_int32(const ty_varlena_t* a, int32_t* r);
+int ty_bytea_to_int64(const ty_varlena_t* a, int64_t* r);
+int ty_int16_to_bytea(int16_t v, ty_varlena_t** out);
+int ty_int32_to_bytea(int32_t v, ty_varlena_t** out);
+int ty_int64_to_bytea(int64_t v, ty_varlena_t** out);
 
 #endif /* TY_BYTEA_H */

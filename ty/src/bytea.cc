@@ -6,6 +6,7 @@
 /*
  * bytea.cc -- the operations of bytea.
  */
+#include "bytea_raw.h"
 #include "ty_bytea.h"
 
 #include <limits.h>
@@ -291,10 +292,10 @@ int ty_bytea_err_index(long long index, long long limit) {
  *    digits (the first 0 to 3), or two backslashes; any other backslash
  *    is invalid.
  */
-int ty_bytea_parse(const char *s, size_t len, uint8_t *out, size_t *outlen) {
+int tyr_bytea_parse(const char *s, size_t len, uint8_t *out, size_t *outlen) {
   size_t p = 0, n = 0;
 
-  if (ty_bytea_is_hex_text(s, len)) {
+  if (tyr_bytea_is_hex_text(s, len)) {
     return parse_hex(s, len, 2, out, outlen);
   }
   while (p < len) {
@@ -319,7 +320,7 @@ int ty_bytea_parse(const char *s, size_t len, uint8_t *out, size_t *outlen) {
 }
 
 /* Write "\x" and the bytes as lowercase hexadecimal digits, a pair a byte. */
-void ty_bytea_format_hex(const uint8_t *data, size_t n, char *out) {
+void tyr_bytea_format_hex(const uint8_t *data, size_t n, char *out) {
   *out++ = '\\';
   *out++ = 'x';
   for (size_t i = 0; i < n; i++) {
@@ -329,7 +330,7 @@ void ty_bytea_format_hex(const uint8_t *data, size_t n, char *out) {
 }
 
 /* The length of the escaped form of the bytes. */
-size_t ty_bytea_escape_size(const uint8_t *data, size_t n) {
+size_t tyr_bytea_escape_size(const uint8_t *data, size_t n) {
   size_t size = 0;
 
   for (size_t i = 0; i < n; i++) {
@@ -339,7 +340,7 @@ size_t ty_bytea_escape_size(const uint8_t *data, size_t n) {
 }
 
 /* Write the escaped form of the bytes. */
-void ty_bytea_format_escape(const uint8_t *data, size_t n, char *out) {
+void tyr_bytea_format_escape(const uint8_t *data, size_t n, char *out) {
   for (size_t i = 0; i < n; i++) {
     uint8_t c = data[i];
 
@@ -358,13 +359,13 @@ void ty_bytea_format_escape(const uint8_t *data, size_t n, char *out) {
 }
 
 /* The hash of bytes: PostgreSQL's hash of the byte string. */
-uint64_t ty_bytea_hash(const uint8_t *data, size_t n, uint64_t seed) {
+uint64_t tyr_bytea_hash(const uint8_t *data, size_t n, uint64_t seed) {
   return ty_hash_bytes(data, n, seed);
 }
 
 /* Copy a, then b, to out. */
-void ty_bytea_cat(const uint8_t *a, size_t na, const uint8_t *b, size_t nb,
-                  uint8_t *out) {
+void tyr_bytea_cat(const uint8_t *a, size_t na, const uint8_t *b, size_t nb,
+                   uint8_t *out) {
   if (na > 0) {
     memcpy(out, a, na);
   }
@@ -374,7 +375,7 @@ void ty_bytea_cat(const uint8_t *a, size_t na, const uint8_t *b, size_t nb,
 }
 
 /* Copy a to out, last byte first: 8 bytes at a time, then the rest. */
-void ty_bytea_reverse(const uint8_t *a, size_t n, uint8_t *out) {
+void tyr_bytea_reverse(const uint8_t *a, size_t n, uint8_t *out) {
   size_t i = 0;
 
   for (; i + 8 <= n; i += 8) {
@@ -417,8 +418,8 @@ int overlay_cuts(size_t na, int32_t start, int32_t len, size_t *pre,
 } // namespace
 
 /* The length of the overlay. */
-int ty_bytea_overlay_size(size_t na, size_t nb, int32_t start, int32_t len,
-                          size_t *size) {
+int tyr_bytea_overlay_size(size_t na, size_t nb, int32_t start, int32_t len,
+                           size_t *size) {
   size_t pre, from;
 
   if (overlay_cuts(na, start, len, &pre, &from) != 0) {
@@ -429,14 +430,14 @@ int ty_bytea_overlay_size(size_t na, size_t nb, int32_t start, int32_t len,
 }
 
 /* Write the overlay: a before start, b, a from start + len. */
-int ty_bytea_overlay(const uint8_t *a, size_t na, const uint8_t *b, size_t nb,
-                     int32_t start, int32_t len, uint8_t *out) {
+int tyr_bytea_overlay(const uint8_t *a, size_t na, const uint8_t *b, size_t nb,
+                      int32_t start, int32_t len, uint8_t *out) {
   size_t pre, from;
 
   if (overlay_cuts(na, start, len, &pre, &from) != 0) {
     return -1;
   }
-  ty_bytea_cat(a, pre, b, nb, out);
+  tyr_bytea_cat(a, pre, b, nb, out);
   if (na > from) {
     memcpy(out + pre + nb, a + from, na - from);
   }
@@ -444,8 +445,8 @@ int ty_bytea_overlay(const uint8_t *a, size_t na, const uint8_t *b, size_t nb,
 }
 
 /* Find b in a by trying each place; an empty b is at 1. */
-int64_t ty_bytea_position(const uint8_t *a, size_t na, const uint8_t *b,
-                          size_t nb) {
+int64_t tyr_bytea_position(const uint8_t *a, size_t na, const uint8_t *b,
+                           size_t nb) {
   if (nb == 0) {
     return 1;
   }
@@ -458,7 +459,7 @@ int64_t ty_bytea_position(const uint8_t *a, size_t na, const uint8_t *b,
 }
 
 /* Add up the set bits of the bytes: 8 bytes at a time, then the rest. */
-int64_t ty_bytea_bit_count(const uint8_t *a, size_t n) {
+int64_t tyr_bytea_bit_count(const uint8_t *a, size_t n) {
   int64_t count = 0;
   size_t i = 0;
 
@@ -475,7 +476,7 @@ int64_t ty_bytea_bit_count(const uint8_t *a, size_t n) {
 }
 
 /* Set the byte at index to the low 8 bits of value. */
-int ty_bytea_set_byte(uint8_t *a, size_t n, int32_t index, int32_t value) {
+int tyr_bytea_set_byte(uint8_t *a, size_t n, int32_t index, int32_t value) {
   if (index < 0 || (size_t)index >= n) {
     return ty_bytea_err_index(index, (long long)n);
   }
@@ -484,7 +485,7 @@ int ty_bytea_set_byte(uint8_t *a, size_t n, int32_t index, int32_t value) {
 }
 
 /* Set the bit at index; the index is checked before the bit. */
-int ty_bytea_set_bit(uint8_t *a, size_t n, int64_t index, int32_t bit) {
+int tyr_bytea_set_bit(uint8_t *a, size_t n, int64_t index, int32_t bit) {
   if (index < 0 || (uint64_t)index >= (uint64_t)n * 8) {
     return ty_bytea_err_index(index, (long long)n * 8);
   }
@@ -498,7 +499,7 @@ int ty_bytea_set_bit(uint8_t *a, size_t n, int64_t index, int32_t bit) {
 }
 
 /* The int16 of at most 2 bytes. */
-int ty_bytea_to_int16(const uint8_t *a, size_t n, int16_t *r) {
+int tyr_bytea_to_int16(const uint8_t *a, size_t n, int16_t *r) {
   uint16_t v;
 
   if (to_unsigned<uint16_t>(a, n, &v) != 0) {
@@ -509,7 +510,7 @@ int ty_bytea_to_int16(const uint8_t *a, size_t n, int16_t *r) {
 }
 
 /* The int32 of at most 4 bytes. */
-int ty_bytea_to_int32(const uint8_t *a, size_t n, int32_t *r) {
+int tyr_bytea_to_int32(const uint8_t *a, size_t n, int32_t *r) {
   uint32_t v;
 
   if (to_unsigned<uint32_t>(a, n, &v) != 0) {
@@ -520,7 +521,7 @@ int ty_bytea_to_int32(const uint8_t *a, size_t n, int32_t *r) {
 }
 
 /* The int64 of at most 8 bytes. */
-int ty_bytea_to_int64(const uint8_t *a, size_t n, int64_t *r) {
+int tyr_bytea_to_int64(const uint8_t *a, size_t n, int64_t *r) {
   uint64_t v;
 
   if (to_unsigned<uint64_t>(a, n, &v) != 0) {
@@ -531,17 +532,17 @@ int ty_bytea_to_int64(const uint8_t *a, size_t n, int64_t *r) {
 }
 
 /* The 2 bytes of an int16. */
-void ty_int16_to_bytea(int16_t v, uint8_t out[2]) {
+void tyr_int16_to_bytea(int16_t v, uint8_t out[2]) {
   from_unsigned<uint16_t>((uint16_t)v, out);
 }
 
 /* The 4 bytes of an int32. */
-void ty_int32_to_bytea(int32_t v, uint8_t out[4]) {
+void tyr_int32_to_bytea(int32_t v, uint8_t out[4]) {
   from_unsigned<uint32_t>((uint32_t)v, out);
 }
 
 /* The 8 bytes of an int64. */
-void ty_int64_to_bytea(int64_t v, uint8_t out[8]) {
+void tyr_int64_to_bytea(int64_t v, uint8_t out[8]) {
   from_unsigned<uint64_t>((uint64_t)v, out);
 }
 
@@ -556,7 +557,7 @@ static bool is_name(const char *name, const char *lit) {
 }
 
 /* The encoding of a name, in any case. */
-int ty_bytea_encoding(const char *name, ty_bytea_enc_t *enc) {
+int tyr_bytea_encoding(const char *name, ty_bytea_enc_t *enc) {
   char msg[128];
 
   switch (name[0] | 0x20) {
@@ -584,7 +585,8 @@ int ty_bytea_encoding(const char *name, ty_bytea_enc_t *enc) {
 }
 
 /* The most characters the encoding of n bytes takes. */
-size_t ty_bytea_encode_size(ty_bytea_enc_t enc, const uint8_t *data, size_t n) {
+size_t tyr_bytea_encode_size(ty_bytea_enc_t enc, const uint8_t *data,
+                             size_t n) {
   switch (enc) {
   case TY_BYTEA_ENC_HEX:
     return n * 2;
@@ -603,8 +605,8 @@ size_t ty_bytea_encode_size(ty_bytea_enc_t enc, const uint8_t *data, size_t n) {
 }
 
 /* Write the encoding of the bytes; the length written. */
-size_t ty_bytea_encode(ty_bytea_enc_t enc, const uint8_t *data, size_t n,
-                       char *out) {
+size_t tyr_bytea_encode(ty_bytea_enc_t enc, const uint8_t *data, size_t n,
+                        char *out) {
   switch (enc) {
   case TY_BYTEA_ENC_HEX:
     for (size_t i = 0; i < n; i++) {
@@ -637,8 +639,8 @@ size_t ty_bytea_encode(ty_bytea_enc_t enc, const uint8_t *data, size_t n,
 }
 
 /* The most bytes the n characters decode to; escape is scanned for faults. */
-int ty_bytea_decode_size(ty_bytea_enc_t enc, const char *s, size_t n,
-                         size_t *size) {
+int tyr_bytea_decode_size(ty_bytea_enc_t enc, const char *s, size_t n,
+                          size_t *size) {
   switch (enc) {
   case TY_BYTEA_ENC_HEX:
     *size = n / 2;
@@ -669,8 +671,8 @@ int ty_bytea_decode_size(ty_bytea_enc_t enc, const char *s, size_t n,
 }
 
 /* Decode the text. */
-int ty_bytea_decode(ty_bytea_enc_t enc, const char *s, size_t n, uint8_t *out,
-                    size_t *outlen) {
+int tyr_bytea_decode(ty_bytea_enc_t enc, const char *s, size_t n, uint8_t *out,
+                     size_t *outlen) {
   switch (enc) {
   case TY_BYTEA_ENC_HEX:
     return parse_hex(s, n, 0, out, outlen);
@@ -679,4 +681,227 @@ int ty_bytea_decode(ty_bytea_enc_t enc, const char *s, size_t n, uint8_t *out,
   default:
     return decode_escape(s, n, out, outlen);
   }
+}
+
+/* ---- the operations on a varlena: each reads its inputs' bytes, calls the
+ * function above, and puts a result in memory from the thread's alloc ---- */
+
+namespace {
+
+/* The place and length of the bytes of v. */
+struct bytes_t {
+  const uint8_t *p;
+  size_t n;
+  explicit bytes_t(const ty_varlena_t *v)
+      : p((const uint8_t *)ty_vl_data(v)), n(ty_vl_len(v)) {}
+};
+
+} // namespace
+
+int ty_bytea_parse(const char *s, size_t len, ty_varlena_t **out) {
+  ty_varlena_t *r;
+  char *d;
+  size_t n;
+
+  /* the most bytes the text can hold: a hex pair, or a character */
+  size_t room = ty_bytea_is_hex_text(s, len) ? (len - 2) / 2 : len;
+
+  if (ty_vl_new(room, &r, &d) != 0) {
+    return -1;
+  }
+  if (tyr_bytea_parse(s, len, (uint8_t *)d, &n) != 0) {
+    ty_free(r);
+    return -1;
+  }
+  ty_vl_set_len(r, n);
+  *out = r;
+  return 0;
+}
+
+size_t ty_bytea_hex_size(const ty_varlena_t *a) {
+  return tyr_bytea_hex_size(ty_vl_len(a));
+}
+
+void ty_bytea_format_hex(const ty_varlena_t *a, char *out) {
+  bytes_t x(a);
+
+  tyr_bytea_format_hex(x.p, x.n, out);
+}
+
+size_t ty_bytea_escape_size(const ty_varlena_t *a) {
+  bytes_t x(a);
+
+  return tyr_bytea_escape_size(x.p, x.n);
+}
+
+void ty_bytea_format_escape(const ty_varlena_t *a, char *out) {
+  bytes_t x(a);
+
+  tyr_bytea_format_escape(x.p, x.n, out);
+}
+
+int ty_bytea_encoding(const char *name, ty_bytea_enc_t *enc) {
+  return tyr_bytea_encoding(name, enc);
+}
+
+int ty_bytea_encode(ty_bytea_enc_t enc, const ty_varlena_t *data,
+                    ty_varlena_t **out) {
+  bytes_t x(data);
+  ty_varlena_t *r;
+  char *d;
+  size_t n = tyr_bytea_encode_size(enc, x.p, x.n);
+
+  if (ty_vl_new(n, &r, &d) != 0) {
+    return -1;
+  }
+  ty_vl_set_len(r, tyr_bytea_encode(enc, x.p, x.n, d));
+  *out = r;
+  return 0;
+}
+
+int ty_bytea_decode(ty_bytea_enc_t enc, const ty_varlena_t *text,
+                    ty_varlena_t **out) {
+  const char *s = ty_vl_data(text);
+  size_t n = ty_vl_len(text), size, len;
+  ty_varlena_t *r;
+  char *d;
+
+  if (tyr_bytea_decode_size(enc, s, n, &size) != 0 ||
+      ty_vl_new(size, &r, &d) != 0) {
+    return -1;
+  }
+  if (tyr_bytea_decode(enc, s, n, (uint8_t *)d, &len) != 0) {
+    ty_free(r);
+    return -1;
+  }
+  ty_vl_set_len(r, len);
+  *out = r;
+  return 0;
+}
+
+uint64_t ty_bytea_hash(const ty_varlena_t *a, uint64_t seed) {
+  bytes_t x(a);
+
+  return tyr_bytea_hash(x.p, x.n, seed);
+}
+
+int ty_bytea_reverse(const ty_varlena_t *a, ty_varlena_t **out) {
+  bytes_t x(a);
+  char *d;
+
+  if (ty_vl_new(x.n, out, &d) != 0) {
+    return -1;
+  }
+  tyr_bytea_reverse(x.p, x.n, (uint8_t *)d);
+  return 0;
+}
+
+int ty_bytea_overlay(const ty_varlena_t *a, const ty_varlena_t *b,
+                     int32_t start, int32_t len, ty_varlena_t **out) {
+  bytes_t x(a), y(b);
+  size_t size;
+  char *d;
+
+  if (tyr_bytea_overlay_size(x.n, y.n, start, len, &size) != 0 ||
+      ty_vl_new(size, out, &d) != 0) {
+    return -1;
+  }
+  /* the sizes are checked, so this cannot fail */
+  tyr_bytea_overlay(x.p, x.n, y.p, y.n, start, len, (uint8_t *)d);
+  return 0;
+}
+
+int64_t ty_bytea_position(const ty_varlena_t *a, const ty_varlena_t *b) {
+  bytes_t x(a), y(b);
+
+  return tyr_bytea_position(x.p, x.n, y.p, y.n);
+}
+
+int64_t ty_bytea_bit_count(const ty_varlena_t *a) {
+  bytes_t x(a);
+
+  return tyr_bytea_bit_count(x.p, x.n);
+}
+
+/* A copy of a, for the functions that change a byte or a bit of it. */
+static int copy_of(const ty_varlena_t *a, ty_varlena_t **r, uint8_t **d) {
+  char *p;
+
+  if (ty_vl_new_copy(ty_vl_data(a), ty_vl_len(a), r) != 0) {
+    return -1;
+  }
+  p = (char *)ty_vl_data(*r);
+  *d = (uint8_t *)p;
+  return 0;
+}
+
+int ty_bytea_set_byte(const ty_varlena_t *a, int32_t index, int32_t value,
+                      ty_varlena_t **out) {
+  ty_varlena_t *r;
+  uint8_t *d;
+
+  if (copy_of(a, &r, &d) != 0) {
+    return -1;
+  }
+  if (tyr_bytea_set_byte(d, ty_vl_len(r), index, value) != 0) {
+    ty_free(r);
+    return -1;
+  }
+  *out = r;
+  return 0;
+}
+
+int ty_bytea_set_bit(const ty_varlena_t *a, int64_t index, int32_t bit,
+                     ty_varlena_t **out) {
+  ty_varlena_t *r;
+  uint8_t *d;
+
+  if (copy_of(a, &r, &d) != 0) {
+    return -1;
+  }
+  if (tyr_bytea_set_bit(d, ty_vl_len(r), index, bit) != 0) {
+    ty_free(r);
+    return -1;
+  }
+  *out = r;
+  return 0;
+}
+
+int ty_bytea_to_int16(const ty_varlena_t *a, int16_t *r) {
+  bytes_t x(a);
+
+  return tyr_bytea_to_int16(x.p, x.n, r);
+}
+
+int ty_bytea_to_int32(const ty_varlena_t *a, int32_t *r) {
+  bytes_t x(a);
+
+  return tyr_bytea_to_int32(x.p, x.n, r);
+}
+
+int ty_bytea_to_int64(const ty_varlena_t *a, int64_t *r) {
+  bytes_t x(a);
+
+  return tyr_bytea_to_int64(x.p, x.n, r);
+}
+
+int ty_int16_to_bytea(int16_t v, ty_varlena_t **out) {
+  uint8_t b[2];
+
+  tyr_int16_to_bytea(v, b);
+  return ty_vl_new_copy((const char *)b, sizeof b, out);
+}
+
+int ty_int32_to_bytea(int32_t v, ty_varlena_t **out) {
+  uint8_t b[4];
+
+  tyr_int32_to_bytea(v, b);
+  return ty_vl_new_copy((const char *)b, sizeof b, out);
+}
+
+int ty_int64_to_bytea(int64_t v, ty_varlena_t **out) {
+  uint8_t b[8];
+
+  tyr_int64_to_bytea(v, b);
+  return ty_vl_new_copy((const char *)b, sizeof b, out);
 }

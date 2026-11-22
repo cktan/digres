@@ -15,6 +15,7 @@
 #include "mem.h"
 #include "ty.h"
 #include "ty_text.h"
+#include "vl.h"
 
 namespace {
 
@@ -157,41 +158,40 @@ TEST_CASE("the alloc and free functions belong to one thread") {
   CHECK(0 == t_count.frees);
 }
 
-// Verify that ty_text_concat makes a || b in the thread's alloc memory, after
-// the headroom, and reports a limit and an alloc that fails.
-// 1. Concatenate two texts with a headroom of 4 bytes, with the counting hook.
-// 2. Check the text is after the headroom, the length is right, and one alloc.
-// 3. Concatenate with an empty side and no headroom.
-// 4. Check a total past the limit is TY_ERR_RANGE, with no alloc.
-// 5. Check an alloc that fails is TY_ERR_NOMEM.
-TEST_CASE("ty_text_concat uses the thread's alloc and keeps the headroom") {
+// Verify that ty_text_concat makes a || b in the thread's alloc memory, with a
+// long header, and reports a limit and an alloc that fails.
+// 1. Concatenate two texts, with the counting hook.
+// 2. Check the text, the long header, and one alloc.
+// 3. Concatenate with an empty side.
+// 4. Check an alloc that fails is TY_ERR_NOMEM.
+// 5. Check a value past the limit is TY_ERR_RANGE, with no alloc.
+TEST_CASE("ty_text_concat uses the thread's alloc") {
   reset_t reset;
-  char *out = nullptr;
-  size_t n = 0;
+  ty_varlena_t *out = nullptr;
 
-  // 1. Concatenate two texts with a headroom of 4 bytes, with the counting
-  // hook.
+  // 1. Concatenate two texts, with the counting hook.
   ty_set_alloc(counting_alloc, counting_free);
   t_count = count_t();
-  REQUIRE(0 == ty_text_concat("ab", 2, "cde", 3, 4, &out, &n));
-  // 2. Check the text is after the headroom, the length is right, and one
-  // alloc.
-  CHECK(5 == n);
-  CHECK(0 == memcmp(out + 4, "abcde", 5));
+  REQUIRE(0 == ty_text_concat(vl_t("ab"), vl_t("cde"), &out));
+  // 2. Check the text, the long header, and one alloc.
+  CHECK(vl_str(out) == "abcde");
+  CHECK(!TY_VL_SHORT(*(unsigned char *)out));
   CHECK(1 == t_count.allocs);
-  free(out);
-  // 3. Concatenate with an empty side and no headroom.
-  REQUIRE(0 == ty_text_concat("", 0, "xy", 2, 0, &out, &n));
-  CHECK(2 == n);
-  CHECK(0 == memcmp(out, "xy", 2));
-  free(out);
-  // 4. Check a total past the limit is TY_ERR_RANGE, with no alloc.
+  ty_free(out);
+  CHECK(1 == t_count.frees);
+  // 3. Concatenate with an empty side.
+  REQUIRE(0 == ty_text_concat(vl_t(""), vl_t("xy"), &out));
+  CHECK(vl_str(out) == "xy");
+  ty_free(out);
+  // 4. Check an alloc that fails is TY_ERR_NOMEM.
+  ty_set_alloc(failing_alloc, plain_free);
+  CHECK(-1 == ty_text_concat(vl_t("a"), vl_t("b"), &out));
+  CHECK(TY_ERR_NOMEM == ty_errnum());
+  // 5. Check a value past the limit is TY_ERR_RANGE, with no alloc.
+  ty_set_alloc(counting_alloc, counting_free);
   t_count = count_t();
-  CHECK(-1 == ty_text_concat("a", (size_t)0x3fffffff, "b", 1, 4, &out, &n));
+  char *data = nullptr;
+  CHECK(-1 == ty_vl_new(TY_VARLENA_MAX_LEN + 1, &out, &data));
   CHECK(TY_ERR_RANGE == ty_errnum());
   CHECK(0 == t_count.allocs);
-  // 5. Check an alloc that fails is TY_ERR_NOMEM.
-  ty_set_alloc(failing_alloc, plain_free);
-  CHECK(-1 == ty_text_concat("a", 1, "b", 1, 0, &out, &n));
-  CHECK(TY_ERR_NOMEM == ty_errnum());
 }

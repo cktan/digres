@@ -522,8 +522,39 @@ copied from PostgreSQL keeps its copyright notice
      +0.12%; of a column and a literal -0.05%; of a column and
      a number as text -0.03%. The first version, a call to
      ty with a call to a function that calls `palloc_extended`,
-     was +1.7% to +1.9%. sm does not call `ty_set_alloc` yet:
-     sm does not link ty.
+     was +1.7% to +1.9%. sm's threads set ty's alloc to an
+     arena of the thread (next item).
+   - **sm links ty; its threads set ty's alloc (2026-11-22).**
+     `sm1::ty_thread_init()` is the first act of the garbage
+     collector, the database reaper, the log zeroing, the
+     index builders, the sealer and the btree reapers. A piece
+     is a multiple of 8 bytes of a `thread_local` arena that the
+     thread's end frees, and `free` does nothing. The timer
+     thread of sm0 has none: sm0 depends on nothing. The
+     Makefiles of sm1, sm2, sm3, rel and aa link `libty.a`, from
+     `ty/ty.mk`; digres's link line now has ty after sm. No call
+     of sm allocates through ty yet.
+   - **ty reads varlenas; ty allocates the result (2026-11-22).**
+     A text, bytea or bpchar parameter is a PostgreSQL varlena:
+     a 1-byte or a 4-byte header, and no toast. dg detoasts
+     first. A result is a `ty_varlena_t **` that ty allocates
+     with the thread's alloc, with a 4-byte header. A function
+     with nothing to change may give its input back. The
+     old (pointer, length) code is `tyr_*` in `src/text_raw.h`
+     and `src/bytea_raw.h`; the varlena wrappers are in the
+     same translation unit, so the compiler inlines them.
+     Callgrind, against the build before the change: compare,
+     `=`, `LIKE`, sort, hash, `position` and `ascii` are
+     within 0.25%. A statement that makes a string: `char(n)`
+     and `varchar(n)` casts +4.7%; `substr`, `left`, `right`,
+     `split_part` +3.95%; `lpad`, `btrim`, `reverse`, `repeat`
+     +2.6%; bytea `||`, `reverse`, `overlay` +3.0%; `encode`,
+     `decode` +3.0%; `replace`, `translate` +0.9%. The cost is
+     40 to 60 instructions for each result: the call through
+     the alloc function pointer, `palloc_extended`, and the
+     wrapper. The user accepted the cost: a leaner dg alloc
+     function, or a result buffer from dg, only moves the
+     allocation into dg.
    - **The C-ctype case functions moved (2026-11-21).**
      `ty_ascii_lower`, `ty_ascii_upper` and `ty_ascii_initcap`,
      for `lower`, `upper` and `initcap` in the C ctype. The

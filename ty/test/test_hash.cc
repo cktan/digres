@@ -14,6 +14,7 @@
 #include "doctest.h"
 #include "ty_bool.h"
 #include "ty_bytea.h"
+#include "vl.h"
 #include "ty_hash.h"
 #include "ty_int.h"
 #include "ty_uuid.h"
@@ -121,5 +122,6 @@ TEST_CASE("the hashes keep PostgreSQL's relations") {
   // 4. A bytea of the 16 bytes of a uuid hashes as the uuid does.
   ty_uuid_t u;
   memcpy(u.data, buf, 16);
-  CHECK(ty_uuid_hash(&u, 9) == ty_bytea_hash(buf, 16, 9));
+  CHECK(ty_uuid_hash(&u, 9) ==
+        ty_bytea_hash(vl_t(std::string((const char *)buf, 16)), 9));
 }

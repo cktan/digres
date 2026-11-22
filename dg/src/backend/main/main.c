@@ -41,7 +41,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/ps_status.h"
-#include "utils/ty_thread.h"
+#include "utils/ty_glue.h"
 #include "sm.h"
 #include "sq.h"
 

@@ -103,10 +103,16 @@ returns NULL.
   session thread and each adopted thread run: the functions are
   `palloc_extended()` with `MCXT_ALLOC_NO_OOM` (and NULL past
   `MaxAllocSize`, so that none throws) and `pfree()`, so a result
-  is in the memory context of the call. sm
-  calls it at the start of each of its own threads, such as an
-  index-build worker, with functions that cut from an arena of
-  the thread.
+  is in the memory context of the call. sm calls it at the start
+  of each of its own threads, with functions that cut from an
+  arena of the thread: `sm1::ty_thread_init()`
+  (`../sm/sm1/include/sm1_ty.h`) in the garbage collector, the
+  reaper of databases, the zeroing of the log, the index
+  builders, the sealer and the btree reapers. The arena goes at
+  the thread's end, so `free` does nothing. The timer thread of
+  sm0 calls none, and sm0 does not link ty. An index-build thread
+  that digres adopts is given the functions of digres then. sm's
+  builds link ty (`ty.mk`).
 - A thread calls it before its first call that returns a result.
   It does not change the functions while a result of the thread
   is live, as `free` would no longer match `alloc`.
@@ -133,6 +139,30 @@ Why per thread, and not per process:
   X. There is no `realloc`.
 - **On an error, ty frees what it allocated** and returns no
   result.
+
+### 3.4 The varlena
+
+A value of variable width, text, bytea, `character(n)` and
+`character varying(n)`, is a varlena: `include/ty_varlena.h`. It
+is PostgreSQL's form, so that digres passes its Datum to ty and
+takes ty's result with no copy.
+
+- A varlena has a header, then the bytes. A short header is one
+  byte and gives the size of the whole, up to 127. A long header
+  is four bytes and gives the size, up to `0x3fffffff`.
+- ty reads both forms. A value that ty makes has a long header.
+- **ty does not handle toast.** A varlena that is compressed or
+  stored outside the row is not an input. The host makes the
+  bytes plain first: digres uses `PG_GETARG_TEXT_PP`, which
+  detoasts and leaves a short header as it is.
+- A function that makes a value calls `ty_vl_new`, which
+  allocates with the thread's alloc function. A value past
+  `TY_VARLENA_MAX_LEN` is `TY_ERR_RANGE` ("requested length too
+  large"), and a NULL from the alloc function is `TY_ERR_NOMEM`.
+- The host frees a value as its alloc function says. A function
+  that gives its input back, as `replace` does when it finds
+  nothing, sets the output to the input: the host must not free
+  both.
 
 ## 4. Errors
 
@@ -263,47 +293,46 @@ are in `test/test_uuid.cc` and 627 vectors.
 
 ## 9. bytea
 
-`ty_bytea.h` holds the operations of a byte string, on a pointer
-and a length. It does not allocate. Where a result has bytes,
-the caller gives a buffer, and the caller can tell its size
-before the call: from `ty_bytea_hex_size`,
-`ty_bytea_escape_size`, `ty_bytea_overlay_size`, or from the
-length of the inputs. A host then writes a result where it
-keeps its own: digres writes after the 4 bytes of a varlena's
-header, with no copy. This differs from the plan's use of
-`ty_set_alloc` for results (`../sm/TYPEMOVE_PLAN.md` section 3)
-on purpose: that is for a result whose size only ty can know,
-and none of bytea's is.
+`ty_bytea.h` holds the operations of a byte string. A bytea is a
+varlena (section 3.4): ty reads its header, so the host gives the
+value as it has it. A function that makes a bytea allocates it
+with the thread's alloc function and gives it in an
+out-parameter. The text forms, hex and escape, are C strings: a
+pointer and a length.
 
 - **Text.** `ty_bytea_parse` reads the hex form (`\x`, pairs of
   digits, any case, a space, tab, newline or return between
   pairs) and the escaped form (a byte, `\nnn` octal up to 377,
-  `\\`). Its error is `TY_ERR_INVALID`, and its message is
-  PostgreSQL's text for a hex fault. `ty_bytea_format_hex` and
-  `ty_bytea_format_escape` write both forms; which one a
-  session wants is the host's setting (`bytea_output`).
+  `\\`). It makes the bytea. Its error is `TY_ERR_INVALID`, and
+  its message is PostgreSQL's text for a hex fault.
+  `ty_bytea_format_hex` and `ty_bytea_format_escape` write both
+  forms to the caller's buffer, after `_hex_size` and
+  `_escape_size` give its size; which one a session wants is
+  the host's setting (`bytea_output`).
 - **Compare and hash.** `ty_bytea_cmp` compares the bytes, and a
   prefix is less. `ty_bytea_hash` is PostgreSQL's hash of the
   bytes, 64 bits with a seed (section 10).
 - **Making bytes.** `ty_bytea_cat`, `ty_bytea_reverse`, and
   `ty_bytea_overlay`. `ty_bytea_substr_range` gives the place and
-  count that SUBSTRING names and needs no length, so a host that
-  fetches part of a stored value fetches that part.
+  count that SUBSTRING names and needs no value, so a host that
+  fetches part of a stored value fetches that part, and gives
+  ty the part.
 - **Looking inside.** `ty_bytea_position`, `ty_bytea_bit_count`,
   `ty_bytea_get_byte`, `ty_bytea_get_bit`; and
-  `ty_bytea_set_byte` and `ty_bytea_set_bit`, which change bytes
-  the caller copied. An index outside is `TY_ERR_RANGE`, with
+  `ty_bytea_set_byte` and `ty_bytea_set_bit`, which make a copy
+  with the change. An index outside is `TY_ERR_RANGE`, with
   PostgreSQL's message.
 - **Integers.** A bytea of at most N bytes is an unsigned number
   of N bytes, which then becomes the signed type, and a longer
-  one is `TY_ERR_RANGE`. `ty_intN_to_bytea` is the other way.
+  one is `TY_ERR_RANGE`. `ty_intN_to_bytea` is the other way, and
+  makes a bytea.
 
 `ty_bytea_eq` and the other predicates are in line with
-`ty_bytea_cmp`. `ty_bytea_encoding`, `ty_bytea_encode_size`,
-`ty_bytea_encode`, `ty_bytea_decode_size` and `ty_bytea_decode`
-are ENCODE and DECODE for hex, base64 (a line feed after 76
-characters) and escape; the buffers are the caller's, as above,
-and a fault is `TY_ERR_INVALID` with PostgreSQL's message.
+`ty_bytea_cmp`. `ty_bytea_encoding`, `ty_bytea_encode` and
+`ty_bytea_decode` are ENCODE and DECODE for hex, base64 (a line
+feed after 76 characters) and escape. `encode` makes a text and
+`decode` a bytea, and a fault is `TY_ERR_INVALID` with
+PostgreSQL's message.
 
 Not here: the `string_agg` state, which is an aggregate's memory
 and stays in digres. The tests are in `test/test_bytea.cc` and
@@ -440,18 +469,25 @@ which calls ty only for the C collation. The input is valid
 UTF-8: the host checks it when the text comes in. A function
 never reads past its string, whatever the bytes.
 
-A string is a pointer and a length. A function that makes a
-string writes it to the caller's buffer, and says in `ty_text.h`
-how large the buffer must be; a function that cuts a string, such
-as `substr`, gives the place of the part in the input, so that no
-copy is needed. A position or a count is in characters.
+A text, and each `character(n)` and `character varying(n)`, is a
+varlena (section 3.4). A function that makes a text allocates it
+with the thread's alloc function and gives it in an
+out-parameter, with a long header; `substr`, `left`, `right`,
+`split_part` and the trims copy the part they cut. A function
+that may have nothing to change (`replace`, `translate`,
+`character(n)`) may give its input as its result, and says so. A
+position or a count is in characters.
 
-`a || b` is the one function of text that allocates its result,
-`ty_text_concat`, in memory of the thread's alloc function. The
-host gives the size of the header it keeps before its bytes, as the
-headroom: ty leaves it and writes the text after it, so digres
-gets a varlena with no copy. ty is given a pointer and a length of
-each side, not a varlena: the host has detoasted them.
+Inside, each function reads the bytes and the length of its
+inputs, and calls a function of `src/text.cc` that works on a
+pointer and a length (`src/text_raw.h`). That layer is not part
+of the interface. The comparisons and the hash, with `a || b`,
+are in line in `ty_text.h`. The `_bytes` forms
+(`ty_text_cmp_bytes`, `ty_text_eq_bytes`, `ty_text_length_bytes`,
+`ty_bpchar_truelen_bytes`, `ty_text_like_bytes`) are for a host's
+own strings that are not varlenas, such as a collation's sort
+key; `ty_ascii_lower`, `_upper` and `_initcap` work on a C
+string.
 
 The functions are `cmp`, `eq`, `starts_with` and the hash;
 `length`; `substr`, `left`, `right`, `reverse` and `overlay`;
@@ -459,7 +495,7 @@ The functions are `cmp`, `eq`, `starts_with` and the hash;
 PostgreSQL (a skip table of a size that fits the length of the
 text); `repeat`, `lpad`, `rpad`, the trims and `translate`; and
 `ascii` and `chr`. `replace` counts the copies first, so that the
-result is made in one buffer. The limits are PostgreSQL's: a
+result is made in one allocation. The limits are PostgreSQL's: a
 result may not pass `MaxAllocSize`, and `lpad` and `rpad` apply
 the limit to four bytes a character, as PostgreSQL does.
 
@@ -467,9 +503,10 @@ the limit to four bytes a character, as PostgreSQL does.
 functions: `ty_bpchar_fit` cuts to n characters or pads to n with
 spaces (a character cut off that is not a space is an error,
 unless the cast is explicit), the order and the hash ignore
-trailing spaces, and `ty_name_parse` cuts a name to 63 bytes at a
-character boundary. The typmod text, the error text and the
-binary forms stay in digres.
+trailing spaces, and `ty_name_from_text` and `ty_name_parse` cut
+a name to 63 bytes at a character boundary (a name is not a
+varlena). The typmod text, the error text and the binary forms
+stay in digres.
 
 LIKE is `ty_text_like`, for text (a character is a whole UTF-8
 character) and for bytea (a byte). It keeps PostgreSQL's three

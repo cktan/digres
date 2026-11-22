@@ -30,6 +30,7 @@
 #include "utils/pg_locale.h"
 #include "utils/varlena.h"
 #include "ty_text.h"
+#include "utils/ty_glue.h"
 
 /* common code for bpchartypmodin and varchartypmodin */
 static int32 anychar_typmodin(ArrayType *ta, const char *typename_) {
@@ -126,26 +127,22 @@ static char *anychar_typmodout(int32 typmod) {
 static BpChar *bpchar_input(const char *s, size_t len, int32 atttypmod,
                             Node *escontext) {
   BpChar *result;
-  char *r;
-  size_t keep, total;
 
-  if (atttypmod < (int32)VARHDRSZ) {
-    keep = total = len;
-  } else {
+  if (atttypmod < (int32)VARHDRSZ)
+    return (BpChar *)cstring_to_text_with_len(s, len);
+
+  {
     size_t maxlen = atttypmod - VARHDRSZ;
 
     /* ty cuts to maxlen characters, or pads with spaces to maxlen */
-    if (ty_bpchar_fit(s, len, maxlen, 0, 1, &keep, &total))
+    if (ty_bpchar_in(s, len, maxlen, 0, 1, TYVO(&result))) {
+      if (ty_errnum() == TY_ERR_NOMEM)
+        ty_raise_alloc();
       ereturn(escontext, NULL,
               (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
                errmsg("value too long for type character(%d)", (int)maxlen)));
+    }
   }
-  result = (BpChar *)palloc(total + VARHDRSZ);
-  SET_VARSIZE(result, total + VARHDRSZ);
-  r = VARDATA(result);
-  memcpy(r, s, keep);
-  if (total > keep)
-    memset(r + keep, ' ', total - keep);
   return result;
 }
 
@@ -223,10 +220,6 @@ Datum bpchar(PG_FUNCTION_ARGS) {
   int32 maxlen = PG_GETARG_INT32(1);
   bool isExplicit = PG_GETARG_BOOL(2);
   BpChar *result;
-  int32 len;
-  char *r;
-  char *s;
-  size_t keep, total;
 
   /* No work if typmod is invalid */
   if (maxlen < (int32)VARHDRSZ)
@@ -234,24 +227,16 @@ Datum bpchar(PG_FUNCTION_ARGS) {
 
   maxlen -= VARHDRSZ;
 
-  len = VARSIZE_ANY_EXHDR(source);
-  s = VARDATA_ANY(source);
-
-  /* ty cuts to maxlen characters or pads with spaces to maxlen */
-  if (ty_bpchar_fit(s, len, maxlen, isExplicit, 1, &keep, &total))
+  /*
+   * ty cuts to maxlen characters or pads with spaces to maxlen; if the data
+   * is already of the right size, the result is the source.
+   */
+  if (ty_bpchar_fit(TYV(source), maxlen, isExplicit, 1, TYVO(&result))) {
+    if (ty_errnum() == TY_ERR_NOMEM)
+      ty_raise_alloc();
     ereport(ERROR, (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
                     errmsg("value too long for type character(%d)", maxlen)));
-
-  /* No work if the supplied data is already of the right size */
-  if (total == (size_t)len && keep == total)
-    PG_RETURN_BPCHAR_P(source);
-
-  result = (BpChar *)palloc(total + VARHDRSZ);
-  SET_VARSIZE(result, total + VARHDRSZ);
-  r = VARDATA(result);
-  memcpy(r, s, keep);
-  if (total > keep)
-    memset(r + keep, ' ', total - keep);
+  }
 
   PG_RETURN_BPCHAR_P(result);
 }
@@ -276,23 +261,12 @@ Datum char_bpchar(PG_FUNCTION_ARGS) {
  */
 Datum bpchar_name(PG_FUNCTION_ARGS) {
   BpChar *s = PG_GETARG_BPCHAR_PP(0);
-  char *s_data;
   Name result;
-  int len;
-
-  len = VARSIZE_ANY_EXHDR(s);
-  s_data = VARDATA_ANY(s);
-
-  /* Truncate oversize input */
-  if (len >= NAMEDATALEN)
-    len = ty_text_clipbytes(s_data, len, NAMEDATALEN - 1);
-
-  /* Remove trailing blanks */
-  len = ty_bpchar_truelen(s_data, len);
 
   /* We use palloc0 here to ensure result is zero-padded */
   result = (Name)palloc0(NAMEDATALEN);
-  memcpy(NameStr(*result), s_data, len);
+  /* ty cuts oversize input at a character, and removes trailing blanks */
+  ty_name_from_text(TYV(s), 1, NameStr(*result));
 
   PG_RETURN_NAME(result);
 }
@@ -354,16 +328,16 @@ static VarChar *varchar_input(const char *s, size_t len, int32 atttypmod,
   maxlen = atttypmod - VARHDRSZ;
 
   if (atttypmod >= (int32)VARHDRSZ && len > maxlen) {
-    size_t keep, total;
-
     /* ty clips to maxlen characters; the rest must be spaces */
-    if (ty_bpchar_fit(s, len, maxlen, 0, 0, &keep, &total))
+    if (ty_bpchar_in(s, len, maxlen, 0, 0, TYVO(&result))) {
+      if (ty_errnum() == TY_ERR_NOMEM)
+        ty_raise_alloc();
       ereturn(escontext, NULL,
               (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
                errmsg("value too long for type character varying(%d)",
                       (int)maxlen)));
-
-    len = keep;
+    }
+    return result;
   }
 
   /*
@@ -485,11 +459,9 @@ Datum varchar(PG_FUNCTION_ARGS) {
   int32 typmod = PG_GETARG_INT32(1);
   bool isExplicit = PG_GETARG_BOOL(2);
   int32 len, maxlen;
-  size_t keep, total;
-  char *s_data;
+  VarChar *result;
 
   len = VARSIZE_ANY_EXHDR(source);
-  s_data = VARDATA_ANY(source);
   maxlen = typmod - VARHDRSZ;
 
   /* No work if typmod is invalid or supplied data fits it already */
@@ -497,12 +469,15 @@ Datum varchar(PG_FUNCTION_ARGS) {
     PG_RETURN_VARCHAR_P(source);
 
   /* only reach here if string is too long: ty clips it at a character */
-  if (ty_bpchar_fit(s_data, len, maxlen, isExplicit, 0, &keep, &total))
+  if (ty_bpchar_fit(TYV(source), maxlen, isExplicit, 0, TYVO(&result))) {
+    if (ty_errnum() == TY_ERR_NOMEM)
+      ty_raise_alloc();
     ereport(ERROR, (errcode(ERRCODE_STRING_DATA_RIGHT_TRUNCATION),
                     errmsg("value too long for type character varying(%d)",
                            maxlen)));
+  }
 
-  PG_RETURN_VARCHAR_P((VarChar *)cstring_to_text_with_len(s_data, keep));
+  PG_RETURN_VARCHAR_P(result);
 }
 
 Datum varchartypmodin(PG_FUNCTION_ARGS) {
@@ -527,14 +502,15 @@ static inline int bcTruelen(BpChar *arg) {
 }
 
 int bpchartruelen(char *s, int len) {
-  return (int)ty_bpchar_truelen(s, len);
+  return (int)ty_bpchar_truelen_bytes(s, len);
 }
 
 Datum bpcharlen(PG_FUNCTION_ARGS) {
   BpChar *arg = PG_GETARG_BPCHAR_PP(0);
 
   /* the characters of the value without its trailing spaces */
-  PG_RETURN_INT32((int32)ty_text_length(VARDATA_ANY(arg), bcTruelen(arg)));
+  PG_RETURN_INT32(
+      (int32)ty_text_length_bytes(VARDATA_ANY(arg), bcTruelen(arg)));
 }
 
 Datum bpcharoctetlen(PG_FUNCTION_ARGS) {
@@ -590,7 +566,8 @@ Datum bpchareq(PG_FUNCTION_ARGS) {
     if (len1 != len2)
       result = false;
     else
-      result = ty_text_eq(VARDATA_ANY(arg1), len1, VARDATA_ANY(arg2), len2);
+      result =
+          ty_text_eq_bytes(VARDATA_ANY(arg1), len1, VARDATA_ANY(arg2), len2);
   } else {
     result = (varstr_cmp(VARDATA_ANY(arg1), len1, VARDATA_ANY(arg2), len2,
                          collid) == 0);
@@ -798,7 +775,7 @@ Datum hashbpchar(PG_FUNCTION_ARGS) {
   mylocale = pg_newlocale_from_collation(collid);
 
   if (mylocale->deterministic) {
-    result = UInt32GetDatum(ty_text_hash(keydata, keylen));
+    result = UInt32GetDatum(ty_bpchar_hash(TYV(key)));
   } else {
     Size bsize, rsize;
     char *buf;
@@ -851,7 +828,7 @@ Datum hashbpcharextended(PG_FUNCTION_ARGS) {
 
   if (mylocale->deterministic) {
     result = Int64GetDatum(
-        ty_text_hash_extended(keydata, keylen, PG_GETARG_INT64(1)));
+        ty_bpchar_hash_extended(TYV(key), PG_GETARG_INT64(1)));
   } else {
     Size bsize, rsize;
     char *buf;
@@ -889,8 +866,7 @@ Datum hashbpcharextended(PG_FUNCTION_ARGS) {
  */
 
 static int internal_bpchar_pattern_compare(BpChar *arg1, BpChar *arg2) {
-  return ty_bpchar_cmp(VARDATA_ANY(arg1), VARSIZE_ANY_EXHDR(arg1),
-                       VARDATA_ANY(arg2), VARSIZE_ANY_EXHDR(arg2));
+  return ty_bpchar_cmp(TYV(arg1), TYV(arg2));
 }
 
 Datum bpchar_pattern_lt(PG_FUNCTION_ARGS) {

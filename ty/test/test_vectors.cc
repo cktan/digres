@@ -24,7 +24,9 @@
 #include "ty_hash.h"
 #include "ty_datetime.h"
 #include "ty_interval.h"
+#include "text_raw.h"
 #include "ty_text.h"
+#include "vl.h"
 #include "ty_int.h"
 #include "ty_uuid.h"
 
@@ -220,8 +222,12 @@ bool run_hash(const vec_t &v) {
 
   if (op == "hash.bytes" || op == "bytea.hash") {
     std::vector<uint8_t> k = bytes_of(v.args[0]);
-    got = op == "hash.bytes" ? ty_hash_bytes(k.data(), k.size(), seed)
-                             : ty_bytea_hash(k.data(), k.size(), seed);
+    got = op == "hash.bytes"
+              ? ty_hash_bytes(k.data(), k.size(), seed)
+              : ty_bytea_hash(
+                    vl_t(std::string(reinterpret_cast<const char *>(k.data()),
+                                     k.size())),
+                    seed);
     if (seed == 0) {
       INFO(v.line);
       CHECK((uint32_t)got == ty_hash_bytes_std(k.data(), k.size()));
@@ -544,34 +550,38 @@ bool run_bpchar(const vec_t &v) {
   std::string a(reinterpret_cast<const char *>(ab.data()), ab.size());
   INFO(v.line);
   if (op == "bpchar.truelen") {
-    CHECK(std::stoll(v.res[0]) ==
-          (int64_t)ty_bpchar_truelen(a.data(), a.size()));
+    CHECK(std::stoll(v.res[0]) == (int64_t)ty_bpchar_truelen(vl_t(a)));
   } else if (op == "bpchar.cmp") {
     std::vector<uint8_t> bb = bytes_of(v.args[1]);
     std::string b(reinterpret_cast<const char *>(bb.data()), bb.size());
-    int c = ty_bpchar_cmp(a.data(), a.size(), b.data(), b.size());
+    int c = ty_bpchar_cmp(vl_t(a), vl_t(b, true));
 
     CHECK(std::stoi(v.res[0]) == (c > 0) - (c < 0));
+    CHECK(ty_bpchar_eq(vl_t(a), vl_t(b)) == (c == 0));
   } else if (op == "text.cliplen") {
-    CHECK(std::stoll(v.res[0]) ==
-          (int64_t)ty_text_cliplen(a.data(), a.size(), std::stoull(v.args[1])));
-  } else if (op == "text.clipbytes") {
     CHECK(
         std::stoll(v.res[0]) ==
-        (int64_t)ty_text_clipbytes(a.data(), a.size(), std::stoull(v.args[1])));
+        (int64_t)tyr_text_cliplen(a.data(), a.size(), std::stoull(v.args[1])));
+  } else if (op == "text.clipbytes") {
+    CHECK(std::stoll(v.res[0]) ==
+          (int64_t)tyr_text_clipbytes(a.data(), a.size(),
+                                      std::stoull(v.args[1])));
   } else if (op == "bpchar.fit") {
-    size_t keep = 0, total = 0;
-    int rc = ty_bpchar_fit(a.data(), a.size(), std::stoull(v.args[1]),
-                           std::stoi(v.args[2]), std::stoi(v.args[3]), &keep,
-                           &total);
+    vl_t A(a);
+    vl_out_t o(A);
+    int rc = ty_bpchar_fit(A, std::stoull(v.args[1]), std::stoi(v.args[2]),
+                           std::stoi(v.args[3]), &o);
 
     if (v.res[0] == "E") {
       CHECK(-1 == rc);
       CHECK(errnum_of(v.res[1]) == ty_errnum());
     } else {
       REQUIRE(0 == rc);
-      CHECK(std::stoll(v.res[0]) == (int64_t)keep);
-      CHECK(std::stoll(v.res[1]) == (int64_t)total);
+      /* known as the bytes kept, and the bytes of the result */
+      std::string r = o.str();
+      CHECK(std::stoll(v.res[1]) == (int64_t)r.size());
+      CHECK(std::stoll(v.res[0]) <= (int64_t)r.size());
+      CHECK(0 == memcmp(r.data(), a.data(), (size_t)std::stoll(v.res[0])));
     }
   } else {
     char out[TY_NAMEDATALEN];
@@ -983,8 +993,10 @@ bool run_text(const vec_t &v) {
     }
   };
   std::string a = str(0), b, c;
-  size_t off = 0, n = 0;
   int rc = 0;
+  /* the two forms of a header are used in turn */
+  static unsigned form = 0;
+  bool lg = (form++ & 1) != 0;
 
   if (v.args.size() > 1 && name != "left" && name != "right" &&
       name != "repeat" && name != "chr" && name != "length" &&
@@ -992,11 +1004,21 @@ bool run_text(const vec_t &v) {
       name != "lower" && name != "upper" && name != "initcap") {
     b = str(1);
   }
-  if (name == "chr") {
-    char buf[8];
+  /* a result that is a varlena, or an error; frees the result */
+  auto vcheck = [&](int r, vl_out_t &o) {
+    if (r == 0) {
+      std::string got = o.str();
 
-    rc = ty_text_chr((int32_t)num(0), buf, &n);
-    check(rc, tok(buf, n));
+      check(r, tok(got.data(), got.size()));
+    } else {
+      check(r, "");
+    }
+  };
+  if (name == "chr") {
+    vl_out_t o;
+
+    rc = ty_text_chr((int32_t)num(0), &o);
+    vcheck(rc, o);
     return true;
   }
   if (v.args.size() > 2 && name != "substr" && name != "overlay" &&
@@ -1005,103 +1027,60 @@ bool run_text(const vec_t &v) {
     c = str(2);
   }
   INFO(v.line);
+  vl_t A(a, lg), B(b, lg), C(c, lg);
+  vl_out_t o(A);
+
   if (name == "length") {
-    CHECK(std::stoll(v.res[0]) == (int64_t)ty_text_length(a.data(), a.size()));
+    CHECK(std::stoll(v.res[0]) == (int64_t)ty_text_length(A));
   } else if (name == "cmp") {
-    int r = ty_text_cmp(a.data(), a.size(), b.data(), b.size());
+    int r = ty_text_cmp(A, B);
     CHECK(std::stoi(v.res[0]) == (r > 0) - (r < 0));
+    CHECK(ty_text_eq(A, B) == (r == 0));
   } else if (name == "starts_with") {
-    CHECK(std::stoi(v.res[0]) ==
-          ty_text_starts_with(a.data(), a.size(), b.data(), b.size()));
+    CHECK(std::stoi(v.res[0]) == ty_text_starts_with(A, B));
   } else if (name == "position") {
-    CHECK(std::stoi(v.res[0]) ==
-          ty_text_position(a.data(), a.size(), b.data(), b.size()));
+    CHECK(std::stoi(v.res[0]) == ty_text_position(A, B));
   } else if (name == "reverse") {
-    std::string out(a.size() + 1, '\0');
-
-    ty_text_reverse(a.data(), a.size(), &out[0]);
-    CHECK(v.res[0] == tok(out.data(), a.size()));
+    rc = ty_text_reverse(A, &o);
+    vcheck(rc, o);
   } else if (name == "replace") {
-    int found = 0;
-    size_t total = 0;
-
-    rc = ty_text_replace_size(a.data(), a.size(), b.data(), b.size(), c.size(),
-                              &total, &found);
-    REQUIRE(0 == rc);
-    if (!found) {
-      CHECK(v.res[0] == tok(a.data(), a.size()));
-    } else {
-      std::string out(total + 1, '\0');
-
-      ty_text_replace(a.data(), a.size(), b.data(), b.size(), c.data(),
-                      c.size(), &out[0]);
-      CHECK(v.res[0] == tok(out.data(), total));
-    }
+    rc = ty_text_replace(A, B, C, &o);
+    vcheck(rc, o);
   } else if (name == "left" || name == "right") {
-    if (name == "left") {
-      ty_text_left(a.data(), a.size(), (int32_t)num(1), &off, &n);
-    } else {
-      ty_text_right(a.data(), a.size(), (int32_t)num(1), &off, &n);
-    }
-    CHECK(v.res[0] == tok(a.data() + off, n));
+    rc = name == "left" ? ty_text_left(A, (int32_t)num(1), &o)
+                        : ty_text_right(A, (int32_t)num(1), &o);
+    vcheck(rc, o);
   } else if (name == "substr") {
-    rc = ty_text_substr(a.data(), a.size(), (int32_t)num(1), (int32_t)num(2),
-                        (int)num(3), &off, &n);
-    check(rc, tok(a.data() + off, n));
+    rc = ty_text_substr(A, (int32_t)num(1), (int32_t)num(2), (int)num(3), &o);
+    vcheck(rc, o);
   } else if (name == "overlay") {
-    std::string r = str(1), out(2 * a.size() + r.size() + 1, '\0');
+    vl_t R(str(1), lg);
 
-    rc = ty_text_overlay(a.data(), a.size(), r.data(), r.size(),
-                         (int32_t)num(2), (int32_t)num(3), &out[0], &n);
-    check(rc, tok(out.data(), n));
+    rc = ty_text_overlay(A, R, (int32_t)num(2), (int32_t)num(3), &o);
+    vcheck(rc, o);
   } else if (name == "split_part") {
-    std::string sep = str(1);
+    vl_t sep(str(1), lg);
 
-    rc = ty_text_split_part(a.data(), a.size(), sep.data(), sep.size(),
-                            (int32_t)num(2), &off, &n);
-    check(rc, tok(a.data() + off, n));
+    rc = ty_text_split_part(A, sep, (int32_t)num(2), &o);
+    vcheck(rc, o);
   } else if (name == "repeat") {
-    rc = ty_text_repeat_size(a.size(), (int32_t)num(1), &n);
-    if (rc == 0) {
-      std::string out(n + 1, '\0');
-
-      ty_text_repeat(a.data(), a.size(), (int32_t)num(1), &out[0]);
-      check(rc, tok(out.data(), n));
-    } else {
-      check(rc, "");
-    }
+    rc = ty_text_repeat(A, (int32_t)num(1), &o);
+    vcheck(rc, o);
   } else if (name == "lpad" || name == "rpad") {
-    std::string fill = str(2);
-    int32_t eff = 0;
+    vl_t fill(str(2), lg);
 
-    rc = ty_text_pad_prepare(a.data(), a.size(), (int32_t)num(1), fill.size(),
-                             &eff);
-    if (rc == 0) {
-      std::string out((size_t)eff * 4 + 1, '\0');
-
-      if (name == "lpad") {
-        ty_text_lpad(a.data(), a.size(), eff, fill.data(), fill.size(), &out[0],
-                     &n);
-      } else {
-        ty_text_rpad(a.data(), a.size(), eff, fill.data(), fill.size(), &out[0],
-                     &n);
-      }
-      check(rc, tok(out.data(), n));
-    } else {
-      check(rc, "");
-    }
+    rc = name == "lpad" ? ty_text_lpad(A, (int32_t)num(1), fill, &o)
+                        : ty_text_rpad(A, (int32_t)num(1), fill, &o);
+    vcheck(rc, o);
   } else if (name == "trim") {
-    std::string set = str(1), mode = v.args[2];
+    vl_t set(str(1), lg);
+    std::string mode = v.args[2];
 
-    ty_text_trim(a.data(), a.size(), set.data(), set.size(), mode != "r",
-                 mode != "l", &off, &n);
-    CHECK(v.res[0] == tok(a.data() + off, n));
+    rc = ty_text_trim(A, set, mode != "r", mode != "l", &o);
+    vcheck(rc, o);
   } else if (name == "translate") {
-    std::string out(a.size() * 4 + 1, '\0');
-
-    ty_text_translate(a.data(), a.size(), b.data(), b.size(), c.data(),
-                      c.size(), &out[0], &n);
-    CHECK(v.res[0] == tok(out.data(), n));
+    rc = ty_text_translate(A, B, C, &o);
+    vcheck(rc, o);
   } else if (name == "lower" || name == "upper" || name == "initcap") {
     std::string out(a.size() + 1, '\0');
 
@@ -1114,20 +1093,19 @@ bool run_text(const vec_t &v) {
     }
     CHECK(v.res[0] == tok(out.data(), a.size()));
   } else if (name == "like") {
-    std::string pat = str(1);
+    vl_t pat(str(1), lg);
 
-    rc = ty_text_like(a.data(), a.size(), pat.data(), pat.size(), 1);
+    rc = ty_text_like(A, pat, 1);
     CHECK(std::stoi(v.res[0]) == rc);
   } else if (name == "like_escape") {
-    std::string pat = a, esc = str(1), out(2 * pat.size() + 1, '\0');
+    vl_t esc(str(1), lg);
 
-    rc = ty_text_like_escape(pat.data(), pat.size(), esc.data(), esc.size(), 1,
-                             &out[0], &n);
-    check(rc, tok(out.data(), n));
+    rc = ty_text_like_escape(A, esc, 1, &o);
+    vcheck(rc, o);
   } else if (name == "ascii") {
     int32_t r = 0;
 
-    rc = ty_text_ascii(a.data(), a.size(), &r);
+    rc = ty_text_ascii(A, &r);
     check_int(v, rc, r);
   } else {
     return false;
@@ -1429,9 +1407,10 @@ bool run_known(const vec_t &v) {
   }
   if (op == "like.pair") {
     std::vector<uint8_t> tb = bytes_of(v.args[0]), pb = bytes_of(v.args[1]);
-    int rc =
-        ty_text_like(reinterpret_cast<const char *>(tb.data()), tb.size(),
-                     reinterpret_cast<const char *>(pb.data()), pb.size(), 1);
+    int rc = ty_text_like(
+        vl_t(std::string(reinterpret_cast<const char *>(tb.data()), tb.size())),
+        vl_t(std::string(reinterpret_cast<const char *>(pb.data()), pb.size())),
+        1);
 
     INFO(v.line);
     if (v.res[0] == "E") {
@@ -1483,6 +1462,18 @@ bool run_float_text(const vec_t &v) {
   return false;
 }
 
+/* A string of the bytes of a vector. */
+static std::string str_of(const std::vector<uint8_t> &b) {
+  return std::string(reinterpret_cast<const char *>(b.data()), b.size());
+}
+
+/* The bytes of a varlena that ty made. */
+static std::vector<uint8_t> bytes_of_vl(const ty_varlena_t *p) {
+  const uint8_t *d = reinterpret_cast<const uint8_t *>(ty_vl_data(p));
+
+  return std::vector<uint8_t>(d, d + ty_vl_len(p));
+}
+
 /* Run one bytea vector; false if its op is not one of them. */
 bool run_bytea(const vec_t &v) {
   const std::string &op = v.op;
@@ -1493,98 +1484,86 @@ bool run_bytea(const vec_t &v) {
   std::string name = op.substr(6);
   auto arg = [&](size_t i) { return bytes_of(v.args[i]); };
   auto num = [&](size_t i) { return std::stoll(v.args[i]); };
+  /* the two forms of a header are used in turn */
+  static unsigned form = 0;
+  bool lg = (form++ & 1) != 0;
+  /* a result that is a varlena, or an error */
+  auto vcheck = [&](int rc, vl_out_t &o) {
+    check_bytes(v, rc, rc == 0 ? bytes_of_vl(o.p) : std::vector<uint8_t>());
+  };
 
   if (name == "parse") {
     std::string t = text_of(v.args[0]);
-    std::vector<uint8_t> out(t.size() + 1);
-    size_t n = 0;
-    int rc = ty_bytea_parse(t.data(), t.size(), out.data(), &n);
-    out.resize(n);
-    check_bytes(v, rc, out);
+    vl_out_t o;
+    int rc = ty_bytea_parse(t.data(), t.size(), &o);
+    vcheck(rc, o);
   } else if (name == "fmthex") {
-    std::vector<uint8_t> a = arg(0);
-    std::string out(ty_bytea_hex_size(a.size()), '\0');
-    ty_bytea_format_hex(a.data(), a.size(), &out[0]);
+    vl_t a(str_of(arg(0)), lg);
+    std::string out(ty_bytea_hex_size(a), '\0');
+    ty_bytea_format_hex(a, &out[0]);
     INFO(v.line);
     CHECK(v.res[0] == out);
   } else if (name == "fmtesc") {
-    std::vector<uint8_t> a = arg(0);
-    std::string out(ty_bytea_escape_size(a.data(), a.size()), '\0');
-    ty_bytea_format_escape(a.data(), a.size(), &out[0]);
+    vl_t a(str_of(arg(0)), lg);
+    std::string out(ty_bytea_escape_size(a), '\0');
+    ty_bytea_format_escape(a, &out[0]);
     INFO(v.line);
     CHECK(text_of(v.res[0]) == out);
   } else if (name == "cmp") {
-    std::vector<uint8_t> a = arg(0), b = arg(1);
-    int c = ty_bytea_cmp(a.data(), a.size(), b.data(), b.size());
+    vl_t a(str_of(arg(0)), lg), b(str_of(arg(1)), !lg);
+    int c = ty_bytea_cmp(a, b);
     INFO(v.line);
     CHECK(std::stoi(v.res[0]) == (c > 0) - (c < 0));
   } else if (name == "eq" || name == "ne" || name == "lt" || name == "le" ||
              name == "gt" || name == "ge") {
-    std::vector<uint8_t> a = arg(0), b = arg(1);
-    const uint8_t *pa = a.data(), *pb = b.data();
-    int got = name == "eq"   ? ty_bytea_eq(pa, a.size(), pb, b.size())
-              : name == "ne" ? ty_bytea_ne(pa, a.size(), pb, b.size())
-              : name == "lt" ? ty_bytea_lt(pa, a.size(), pb, b.size())
-              : name == "le" ? ty_bytea_le(pa, a.size(), pb, b.size())
-              : name == "gt" ? ty_bytea_gt(pa, a.size(), pb, b.size())
-                             : ty_bytea_ge(pa, a.size(), pb, b.size());
+    vl_t a(str_of(arg(0)), lg), b(str_of(arg(1)), !lg);
+    int got = name == "eq"   ? ty_bytea_eq(a, b)
+              : name == "ne" ? ty_bytea_ne(a, b)
+              : name == "lt" ? ty_bytea_lt(a, b)
+              : name == "le" ? ty_bytea_le(a, b)
+              : name == "gt" ? ty_bytea_gt(a, b)
+                             : ty_bytea_ge(a, b);
     INFO(v.line);
     CHECK(std::stoi(v.res[0]) == got);
   } else if (name == "enc" || name == "dec") {
     ty_bytea_enc_t enc;
     REQUIRE(0 == ty_bytea_encoding(v.args[0].c_str(), &enc));
-    std::vector<uint8_t> in = bytes_of(v.args[1]), out;
-    int rc = 0;
-    if (name == "enc") {
-      out.resize(ty_bytea_encode_size(enc, in.data(), in.size()));
-      size_t n = ty_bytea_encode(enc, in.data(), in.size(),
-                                 reinterpret_cast<char *>(out.data()));
-      REQUIRE(n <= out.size());
-      out.resize(n);
-    } else {
-      size_t size = 0, n = 0;
-      rc = ty_bytea_decode_size(enc, reinterpret_cast<const char *>(in.data()),
-                                in.size(), &size);
-      if (rc == 0) {
-        out.resize(size);
-        rc = ty_bytea_decode(enc, reinterpret_cast<const char *>(in.data()),
-                             in.size(), out.data(), &n);
-        out.resize(rc == 0 ? n : 0);
-      }
-    }
-    check_bytes(v, rc, out);
+    vl_t in(str_of(bytes_of(v.args[1])), lg);
+    vl_out_t o;
+    int rc = name == "enc" ? ty_bytea_encode(enc, in, &o)
+                           : ty_bytea_decode(enc, in, &o);
+    vcheck(rc, o);
   } else if (name == "cat") {
-    std::vector<uint8_t> a = arg(0), b = arg(1), out(a.size() + b.size());
-    ty_bytea_cat(a.data(), a.size(), b.data(), b.size(), out.data());
-    check_bytes(v, 0, out);
+    vl_t a(str_of(arg(0)), lg), b(str_of(arg(1)), !lg);
+    vl_out_t o;
+    int rc = ty_bytea_cat(a, b, &o);
+    vcheck(rc, o);
   } else if (name == "reverse") {
-    std::vector<uint8_t> a = arg(0), out(a.size());
-    ty_bytea_reverse(a.data(), a.size(), out.data());
-    check_bytes(v, 0, out);
+    vl_t a(str_of(arg(0)), lg);
+    vl_out_t o;
+    int rc = ty_bytea_reverse(a, &o);
+    vcheck(rc, o);
   } else if (name == "position") {
-    std::vector<uint8_t> a = arg(0), b = arg(1);
+    vl_t a(str_of(arg(0)), lg), b(str_of(arg(1)), !lg);
     INFO(v.line);
-    CHECK(std::stoll(v.res[0]) ==
-          ty_bytea_position(a.data(), a.size(), b.data(), b.size()));
+    CHECK(std::stoll(v.res[0]) == ty_bytea_position(a, b));
   } else if (name == "bitcount") {
-    std::vector<uint8_t> a = arg(0);
+    vl_t a(str_of(arg(0)), lg);
     INFO(v.line);
-    CHECK(std::stoll(v.res[0]) == ty_bytea_bit_count(a.data(), a.size()));
+    CHECK(std::stoll(v.res[0]) == ty_bytea_bit_count(a));
   } else if (name == "getbyte" || name == "getbit") {
-    std::vector<uint8_t> a = arg(0);
+    vl_t a(str_of(arg(0)), lg);
     int32_t r = 0;
-    int rc = name == "getbyte"
-                 ? ty_bytea_get_byte(a.data(), a.size(), (int32_t)num(1), &r)
-                 : ty_bytea_get_bit(a.data(), a.size(), num(1), &r);
+    int rc = name == "getbyte" ? ty_bytea_get_byte(a, (int32_t)num(1), &r)
+                               : ty_bytea_get_bit(a, num(1), &r);
     check_int(v, rc, r);
   } else if (name == "setbyte" || name == "setbit") {
-    std::vector<uint8_t> a = arg(0);
-    int rc =
-        name == "setbyte"
-            ? ty_bytea_set_byte(a.data(), a.size(), (int32_t)num(1),
-                                (int32_t)num(2))
-            : ty_bytea_set_bit(a.data(), a.size(), num(1), (int32_t)num(2));
-    check_bytes(v, rc, a);
+    vl_t a(str_of(arg(0)), lg);
+    vl_out_t o;
+    int rc = name == "setbyte"
+                 ? ty_bytea_set_byte(a, (int32_t)num(1), (int32_t)num(2), &o)
+                 : ty_bytea_set_bit(a, num(1), (int32_t)num(2), &o);
+    vcheck(rc, o);
   } else if (name == "substr") {
     int32_t off = 0, count = 0;
     int rc = ty_bytea_substr_range((int32_t)num(0), (int32_t)num(1),
@@ -1599,40 +1578,29 @@ bool run_bytea(const vec_t &v) {
       CHECK(std::stoll(v.res[1]) == count);
     }
   } else if (name == "overlay") {
-    std::vector<uint8_t> a = arg(0), b = arg(1), out;
-    size_t size = 0;
-    int rc = ty_bytea_overlay_size(a.size(), b.size(), (int32_t)num(2),
-                                   (int32_t)num(3), &size);
-    if (rc == 0) {
-      out.resize(size);
-      rc = ty_bytea_overlay(a.data(), a.size(), b.data(), b.size(),
-                            (int32_t)num(2), (int32_t)num(3), out.data());
-    }
-    check_bytes(v, rc, out);
+    vl_t a(str_of(arg(0)), lg), b(str_of(arg(1)), !lg);
+    vl_out_t o;
+    int rc = ty_bytea_overlay(a, b, (int32_t)num(2), (int32_t)num(3), &o);
+    vcheck(rc, o);
   } else if (name == "toint16" || name == "toint32" || name == "toint64") {
-    std::vector<uint8_t> a = arg(0);
+    vl_t a(str_of(arg(0)), lg);
     int16_t r16 = 0;
     int32_t r32 = 0;
     int64_t r64 = 0;
-    int rc = name == "toint16"   ? ty_bytea_to_int16(a.data(), a.size(), &r16)
-             : name == "toint32" ? ty_bytea_to_int32(a.data(), a.size(), &r32)
-                                 : ty_bytea_to_int64(a.data(), a.size(), &r64);
+    int rc = name == "toint16"   ? ty_bytea_to_int16(a, &r16)
+             : name == "toint32" ? ty_bytea_to_int32(a, &r32)
+                                 : ty_bytea_to_int64(a, &r64);
     check_int(v, rc, name == "toint16" ? r16 : name == "toint32" ? r32 : r64);
-  } else if (name == "fromint16") {
-    uint8_t out[2];
-    ty_int16_to_bytea((int16_t)num(0), out);
+  } else if (name == "fromint16" || name == "fromint32" ||
+             name == "fromint64") {
+    vl_out_t o;
+    int rc = name == "fromint16"   ? ty_int16_to_bytea((int16_t)num(0), &o)
+             : name == "fromint32" ? ty_int32_to_bytea((int32_t)num(0), &o)
+                                   : ty_int64_to_bytea(num(0), &o);
+    REQUIRE(0 == rc);
+    std::vector<uint8_t> out = bytes_of_vl(o.p);
     INFO(v.line);
-    CHECK(v.res[0] == token_of(out, 2));
-  } else if (name == "fromint32") {
-    uint8_t out[4];
-    ty_int32_to_bytea((int32_t)num(0), out);
-    INFO(v.line);
-    CHECK(v.res[0] == token_of(out, 4));
-  } else if (name == "fromint64") {
-    uint8_t out[8];
-    ty_int64_to_bytea(num(0), out);
-    INFO(v.line);
-    CHECK(v.res[0] == token_of(out, 8));
+    CHECK(v.res[0] == token_of(out.data(), out.size()));
   } else {
     return false;
   }

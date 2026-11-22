@@ -48,7 +48,7 @@
 #include "utils/session_thread.h"
 #include "utils/hooks.h"
 #include "utils/snapmgr.h"
-#include "utils/ty_thread.h"
+#include "utils/ty_glue.h"
 
 /* What a parent hands its new thread, in malloc'd memory the thread frees. */
 typedef struct session_start_t {

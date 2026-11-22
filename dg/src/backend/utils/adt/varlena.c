@@ -46,6 +46,7 @@
 #include "utils/varlena.h"
 #include "ty_text.h"
 #include "ty_bytea.h"
+#include "utils/ty_glue.h"
 #include "utils/control_block.h"
 
 /* GUC variable */
@@ -288,13 +289,12 @@ Datum byteain(PG_FUNCTION_ARGS) {
   Node *escontext = fcinfo->context;
   size_t len = strlen(inputText);
   bool hex = ty_bytea_is_hex_text(inputText, len);
-  /* the most bytes the text can hold: a hex pair, or a character */
-  size_t room = hex ? (len - 2) / 2 : len;
-  bytea *result = (bytea *)palloc(room + VARHDRSZ);
-  size_t n;
+  bytea *result;
 
-  /* ty reads both forms into the varlena's data, with no copy */
-  if (ty_bytea_parse(inputText, len, (uint8_t *)VARDATA(result), &n) != 0) {
+  /* ty reads both forms, and makes the bytea */
+  if (ty_bytea_parse(inputText, len, TYVO(&result)) != 0) {
+    if (ty_errnum() != TY_ERR_INVALID)
+      ty_raise_alloc();
     if (hex)
       ereturn(escontext, (Datum)0,
               (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -303,7 +303,6 @@ Datum byteain(PG_FUNCTION_ARGS) {
             (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
              errmsg("invalid input syntax for type %s", "bytea")));
   }
-  SET_VARSIZE(result, n + VARHDRSZ); /* actual length */
 
   PG_RETURN_BYTEA_P(result);
 }
@@ -317,20 +316,18 @@ Datum byteain(PG_FUNCTION_ARGS) {
  */
 Datum byteaout(PG_FUNCTION_ARGS) {
   bytea *vlena = PG_GETARG_BYTEA_PP(0);
-  const uint8_t *data = (const uint8_t *)VARDATA_ANY(vlena);
-  size_t n = VARSIZE_ANY_EXHDR(vlena);
   char *result;
 
   if (tcb->guc.bytea_output == BYTEA_OUTPUT_HEX) {
     /* Print hex format */
-    size_t size = ty_bytea_hex_size(n);
+    size_t size = ty_bytea_hex_size(TYV(vlena));
 
     result = (char *)palloc(size + 1);
-    ty_bytea_format_hex(data, n, result);
+    ty_bytea_format_hex(TYV(vlena), result);
     result[size] = '\0';
   } else if (tcb->guc.bytea_output == BYTEA_OUTPUT_ESCAPE) {
     /* Print traditional escaped format */
-    uint64 size = ty_bytea_escape_size(data, n);
+    uint64 size = ty_bytea_escape_size(TYV(vlena));
 
     /*
      * In principle size can't overflow uint32 if the input fit in 1GB, but
@@ -342,7 +339,7 @@ Datum byteaout(PG_FUNCTION_ARGS) {
                       errmsg_internal(
                           "result of bytea output conversion is too large")));
     result = (char *)palloc(size + 1);
-    ty_bytea_format_escape(data, n, result);
+    ty_bytea_format_escape(TYV(vlena), result);
     result[size] = '\0';
   } else {
     elog(ERROR, "unrecognized \"bytea_output\" setting: %d",
@@ -574,7 +571,7 @@ static int32 text_length(Datum str) {
   /* the database encoding is UTF8: ty counts the characters */
   text *t = DatumGetTextPP(str);
 
-  return (int32)ty_text_length(VARDATA_ANY(t), VARSIZE_ANY_EXHDR(t));
+  return (int32)ty_text_length(TYV(t));
 }
 
 /*
@@ -614,18 +611,10 @@ Datum textcat(PG_FUNCTION_ARGS) {
  */
 static text *text_catenate(text *t1, text *t2) {
   text *result;
-  size_t len;
 
-  /* ty makes the result with a varlena header's room before its bytes. */
-  if (ty_text_concat(VARDATA_ANY(t1), VARSIZE_ANY_EXHDR(t1), VARDATA_ANY(t2),
-                     VARSIZE_ANY_EXHDR(t2), VARHDRSZ, (char **)&result,
-                     &len)) {
-    if (ty_errnum() == TY_ERR_NOMEM)
-      ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
-    ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                    errmsg("requested length too large")));
-  }
-  SET_VARSIZE(result, VARHDRSZ + len);
+  /* ty makes the result in the current memory context */
+  if (ty_text_concat(TYV(t1), TYV(t2), TYVO(&result)))
+    ty_raise_alloc();
 
   return result;
 }
@@ -713,7 +702,6 @@ static text *text_substring(Datum str, int32 start, int32 length,
   int32 E;
   text *slice;
   text *ret;
-  size_t off, len;
 
   /*
    * A character is at most 4 bytes, so the first E - 1 characters are in the
@@ -734,13 +722,14 @@ static text *text_substring(Datum str, int32 start, int32 length,
   else
     slice = (text *)DatumGetPointer(str);
 
-  /* ty finds the part: its place in the slice, and its size */
-  if (ty_text_substr(VARDATA_ANY(slice), VARSIZE_ANY_EXHDR(slice), start,
-                     length, !length_not_specified, &off, &len))
-    ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
-                    errmsg("negative substring length not allowed")));
-
-  ret = cstring_to_text_with_len(VARDATA_ANY(slice) + off, len);
+  /* ty makes the part, in the current memory context */
+  if (ty_text_substr(TYV(slice), start, length, !length_not_specified,
+                     TYVO(&ret))) {
+    if (ty_errnum() == TY_ERR_INVALID)
+      ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
+                      errmsg("negative substring length not allowed")));
+    ty_raise_alloc();
+  }
   if (slice != (text *)DatumGetPointer(str))
     pfree(slice);
   return ret;
@@ -774,20 +763,18 @@ Datum textoverlay_no_len(PG_FUNCTION_ARGS) {
 }
 
 static text *text_overlay(text *t1, text *t2, int sp, int sl) {
-  size_t len1 = VARSIZE_ANY_EXHDR(t1), len2 = VARSIZE_ANY_EXHDR(t2), outlen;
   text *result;
 
-  /* the head and the tail may overlap, if the length is negative */
-  result = (text *)palloc(VARHDRSZ + 2 * len1 + len2);
-  if (ty_text_overlay(VARDATA_ANY(t1), len1, VARDATA_ANY(t2), len2, sp, sl,
-                      VARDATA(result), &outlen)) {
+  if (ty_text_overlay(TYV(t1), TYV(t2), sp, sl, TYVO(&result))) {
     if (ty_errnum() == TY_ERR_INVALID)
       ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
                       errmsg("negative substring length not allowed")));
+    if (ty_errnum() == TY_ERR_NOMEM ||
+        strcmp(ty_errmsg(), "requested length too large") == 0)
+      ty_raise_alloc();
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("integer out of range")));
   }
-  SET_VARSIZE(result, VARHDRSZ + outlen);
   return result;
 }
 
@@ -836,8 +823,7 @@ static int text_position(text *t1, text *t2, Oid collid) {
 
   /* a deterministic collation: ty searches the bytes */
   if (pg_newlocale_from_collation(collid)->deterministic)
-    return ty_text_position(VARDATA_ANY(t1), VARSIZE_ANY_EXHDR(t1),
-                            VARDATA_ANY(t2), VARSIZE_ANY_EXHDR(t2));
+    return ty_text_position(TYV(t1), TYV(t2));
 
   text_position_setup(t1, t2, collid, &state);
   /* don't need greedy mode here */
@@ -1241,7 +1227,7 @@ int varstr_cmp(const char *arg1, int len1, const char *arg2, int len2,
   mylocale = pg_newlocale_from_collation(collid);
 
   if (mylocale->collate_is_c) {
-    result = ty_text_cmp(arg1, len1, arg2, len2);
+    result = ty_text_cmp_bytes(arg1, len1, arg2, len2);
   } else {
     /*
      * memcmp() can't tell us which of two unequal strings sorts first,
@@ -1322,8 +1308,7 @@ Datum texteq(PG_FUNCTION_ARGS) {
       text *targ1 = DatumGetTextPP(arg1);
       text *targ2 = DatumGetTextPP(arg2);
 
-      result = ty_text_eq(VARDATA_ANY(targ1), len1 - VARHDRSZ,
-                          VARDATA_ANY(targ2), len2 - VARHDRSZ);
+      result = ty_text_eq(TYV(targ1), TYV(targ2));
 
       PG_FREE_IF_COPY(targ1, 0);
       PG_FREE_IF_COPY(targ2, 1);
@@ -1364,8 +1349,7 @@ Datum textne(PG_FUNCTION_ARGS) {
       text *targ1 = DatumGetTextPP(arg1);
       text *targ2 = DatumGetTextPP(arg2);
 
-      result = !ty_text_eq(VARDATA_ANY(targ1), len1 - VARHDRSZ,
-                           VARDATA_ANY(targ2), len2 - VARHDRSZ);
+      result = !ty_text_eq(TYV(targ1), TYV(targ2));
 
       PG_FREE_IF_COPY(targ1, 0);
       PG_FREE_IF_COPY(targ2, 1);
@@ -1637,16 +1621,9 @@ void varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid) {
 static int varstrfastcmp_c(Datum x, Datum y, SortSupport ssup) {
   VarString *arg1 = DatumGetVarStringPP(x);
   VarString *arg2 = DatumGetVarStringPP(y);
-  char *a1p, *a2p;
-  int len1, len2, result;
+  int result;
 
-  a1p = VARDATA_ANY(arg1);
-  a2p = VARDATA_ANY(arg2);
-
-  len1 = VARSIZE_ANY_EXHDR(arg1);
-  len2 = VARSIZE_ANY_EXHDR(arg2);
-
-  result = ty_text_cmp(a1p, len1, a2p, len2);
+  result = ty_text_cmp(TYV(arg1), TYV(arg2));
 
   /* We can't afford to leak memory here. */
   if (PointerGetDatum(arg1) != x)
@@ -2457,24 +2434,10 @@ Datum byteacat(PG_FUNCTION_ARGS) {
  */
 static bytea *bytea_catenate(bytea *t1, bytea *t2) {
   bytea *result;
-  int len1, len2, len;
 
-  len1 = VARSIZE_ANY_EXHDR(t1);
-  len2 = VARSIZE_ANY_EXHDR(t2);
-
-  /* paranoia ... probably should throw error instead? */
-  if (len1 < 0)
-    len1 = 0;
-  if (len2 < 0)
-    len2 = 0;
-
-  len = len1 + len2 + VARHDRSZ;
-  result = (bytea *)palloc(len);
-  SET_VARSIZE(result, len);
-
-  ty_bytea_cat((const uint8_t *)VARDATA_ANY(t1), len1,
-               (const uint8_t *)VARDATA_ANY(t2), len2,
-               (uint8_t *)VARDATA(result));
+  /* ty makes the result in the current memory context */
+  if (ty_bytea_cat(TYV(t1), TYV(t2), TYVO(&result)))
+    ty_raise_alloc();
 
   return result;
 }
@@ -2556,24 +2519,17 @@ Datum byteaoverlay_no_len(PG_FUNCTION_ARGS) {
 
 static bytea *bytea_overlay(bytea *t1, bytea *t2, int sp, int sl) {
   bytea *result;
-  size_t size;
-  size_t n1 = VARSIZE_ANY_EXHDR(t1);
-  size_t n2 = VARSIZE_ANY_EXHDR(t2);
 
-  if (ty_bytea_overlay_size(n1, n2, sp, sl, &size) != 0) {
+  if (ty_bytea_overlay(TYV(t1), TYV(t2), sp, sl, TYVO(&result)) != 0) {
     if (ty_errnum() == TY_ERR_INVALID)
       ereport(ERROR, (errcode(ERRCODE_SUBSTRING_ERROR),
                       errmsg("negative substring length not allowed")));
+    if (ty_errnum() == TY_ERR_NOMEM ||
+        strcmp(ty_errmsg(), "requested length too large") == 0)
+      ty_raise_alloc();
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("integer out of range")));
   }
-
-  result = (bytea *)palloc(size + VARHDRSZ);
-  SET_VARSIZE(result, size + VARHDRSZ);
-  /* the sizes are checked, so this cannot fail */
-  ty_bytea_overlay((const uint8_t *)VARDATA_ANY(t1), n1,
-                   (const uint8_t *)VARDATA_ANY(t2), n2, sp, sl,
-                   (uint8_t *)VARDATA(result));
 
   return result;
 }
@@ -2584,8 +2540,7 @@ static bytea *bytea_overlay(bytea *t1, bytea *t2, int sp, int sl) {
 Datum bytea_bit_count(PG_FUNCTION_ARGS) {
   bytea *t1 = PG_GETARG_BYTEA_PP(0);
 
-  PG_RETURN_INT64(ty_bytea_bit_count((const uint8_t *)VARDATA_ANY(t1),
-                                     VARSIZE_ANY_EXHDR(t1)));
+  PG_RETURN_INT64(ty_bytea_bit_count(TYV(t1)));
 }
 
 /*
@@ -2598,9 +2553,7 @@ Datum byteapos(PG_FUNCTION_ARGS) {
   bytea *t1 = PG_GETARG_BYTEA_PP(0);
   bytea *t2 = PG_GETARG_BYTEA_PP(1);
 
-  PG_RETURN_INT32((int32)ty_bytea_position(
-      (const uint8_t *)VARDATA_ANY(t1), VARSIZE_ANY_EXHDR(t1),
-      (const uint8_t *)VARDATA_ANY(t2), VARSIZE_ANY_EXHDR(t2)));
+  PG_RETURN_INT32((int32)ty_bytea_position(TYV(t1), TYV(t2)));
 }
 
 /*-------------------------------------------------------------
@@ -2626,8 +2579,7 @@ Datum byteaGetByte(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
   int32 byte;
 
-  if (ty_bytea_get_byte((const uint8_t *)VARDATA_ANY(v), VARSIZE_ANY_EXHDR(v),
-                        PG_GETARG_INT32(1), &byte) != 0)
+  if (ty_bytea_get_byte(TYV(v), PG_GETARG_INT32(1), &byte) != 0)
     bytea_index_raise();
 
   PG_RETURN_INT32(byte);
@@ -2645,8 +2597,7 @@ Datum byteaGetBit(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
   int32 bit;
 
-  if (ty_bytea_get_bit((const uint8_t *)VARDATA_ANY(v), VARSIZE_ANY_EXHDR(v),
-                       PG_GETARG_INT64(1), &bit) != 0)
+  if (ty_bytea_get_bit(TYV(v), PG_GETARG_INT64(1), &bit) != 0)
     bytea_index_raise();
 
   PG_RETURN_INT32(bit);
@@ -2661,11 +2612,15 @@ Datum byteaGetBit(PG_FUNCTION_ARGS) {
  *-------------------------------------------------------------
  */
 Datum byteaSetByte(PG_FUNCTION_ARGS) {
-  bytea *res = PG_GETARG_BYTEA_P_COPY(0);
+  bytea *v = PG_GETARG_BYTEA_PP(0);
+  bytea *res;
 
-  if (ty_bytea_set_byte((uint8_t *)VARDATA(res), VARSIZE(res) - VARHDRSZ,
-                        PG_GETARG_INT32(1), PG_GETARG_INT32(2)) != 0)
+  if (ty_bytea_set_byte(TYV(v), PG_GETARG_INT32(1), PG_GETARG_INT32(2),
+                        TYVO(&res)) != 0) {
+    if (ty_errnum() == TY_ERR_NOMEM)
+      ty_raise_alloc();
     bytea_index_raise();
+  }
 
   PG_RETURN_BYTEA_P(res);
 }
@@ -2679,11 +2634,15 @@ Datum byteaSetByte(PG_FUNCTION_ARGS) {
  *-------------------------------------------------------------
  */
 Datum byteaSetBit(PG_FUNCTION_ARGS) {
-  bytea *res = PG_GETARG_BYTEA_P_COPY(0);
+  bytea *v = PG_GETARG_BYTEA_PP(0);
+  bytea *res;
 
-  if (ty_bytea_set_bit((uint8_t *)VARDATA(res), VARSIZE(res) - VARHDRSZ,
-                       PG_GETARG_INT64(1), PG_GETARG_INT32(2)) != 0)
+  if (ty_bytea_set_bit(TYV(v), PG_GETARG_INT64(1), PG_GETARG_INT32(2),
+                       TYVO(&res)) != 0) {
+    if (ty_errnum() == TY_ERR_NOMEM)
+      ty_raise_alloc();
     bytea_index_raise();
+  }
 
   PG_RETURN_BYTEA_P(res);
 }
@@ -2693,12 +2652,10 @@ Datum byteaSetBit(PG_FUNCTION_ARGS) {
  */
 Datum bytea_reverse(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
-  int len = VARSIZE_ANY_EXHDR(v);
-  bytea *result = (bytea *)palloc(len + VARHDRSZ);
+  bytea *result;
 
-  SET_VARSIZE(result, len + VARHDRSZ);
-  ty_bytea_reverse((const uint8_t *)VARDATA_ANY(v), len,
-                   (uint8_t *)VARDATA(result));
+  if (ty_bytea_reverse(TYV(v), TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_BYTEA_P(result);
 }
@@ -2709,17 +2666,11 @@ Datum bytea_reverse(PG_FUNCTION_ARGS) {
 Datum text_name(PG_FUNCTION_ARGS) {
   text *s = PG_GETARG_TEXT_PP(0);
   Name result;
-  int len;
-
-  len = VARSIZE_ANY_EXHDR(s);
-
-  /* Truncate oversize input */
-  if (len >= NAMEDATALEN)
-    len = pg_mbcliplen(VARDATA_ANY(s), len, NAMEDATALEN - 1);
 
   /* We use palloc0 here to ensure result is zero-padded */
   result = (Name)palloc0(NAMEDATALEN);
-  memcpy(NameStr(*result), VARDATA_ANY(s), len);
+  /* ty cuts oversize input at a character */
+  ty_name_from_text(TYV(s), 0, NameStr(*result));
 
   PG_RETURN_NAME(result);
 }
@@ -3110,8 +3061,7 @@ Datum byteaeq(PG_FUNCTION_ARGS) {
     bytea *barg2 = DatumGetByteaPP(arg2);
 
     /* the lengths are equal; ty compares the bytes */
-    result = ty_bytea_eq((const uint8_t *)VARDATA_ANY(barg1), len1 - VARHDRSZ,
-                         (const uint8_t *)VARDATA_ANY(barg2), len1 - VARHDRSZ);
+    result = ty_bytea_eq(TYV(barg1), TYV(barg2));
 
     PG_FREE_IF_COPY(barg1, 0);
     PG_FREE_IF_COPY(barg2, 1);
@@ -3138,8 +3088,7 @@ Datum byteane(PG_FUNCTION_ARGS) {
     bytea *barg1 = DatumGetByteaPP(arg1);
     bytea *barg2 = DatumGetByteaPP(arg2);
 
-    result = ty_bytea_ne((const uint8_t *)VARDATA_ANY(barg1), len1 - VARHDRSZ,
-                         (const uint8_t *)VARDATA_ANY(barg2), len1 - VARHDRSZ);
+    result = ty_bytea_ne(TYV(barg1), TYV(barg2));
 
     PG_FREE_IF_COPY(barg1, 0);
     PG_FREE_IF_COPY(barg2, 1);
@@ -3153,10 +3102,7 @@ Datum bytealt(PG_FUNCTION_ARGS) {
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
   bool result;
 
-  result = ty_bytea_lt((const uint8_t *)VARDATA_ANY(arg1),
-                         VARSIZE_ANY_EXHDR(arg1),
-                         (const uint8_t *)VARDATA_ANY(arg2),
-                         VARSIZE_ANY_EXHDR(arg2));
+  result = ty_bytea_lt(TYV(arg1), TYV(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
@@ -3169,10 +3115,7 @@ Datum byteale(PG_FUNCTION_ARGS) {
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
   bool result;
 
-  result = ty_bytea_le((const uint8_t *)VARDATA_ANY(arg1),
-                         VARSIZE_ANY_EXHDR(arg1),
-                         (const uint8_t *)VARDATA_ANY(arg2),
-                         VARSIZE_ANY_EXHDR(arg2));
+  result = ty_bytea_le(TYV(arg1), TYV(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
@@ -3185,10 +3128,7 @@ Datum byteagt(PG_FUNCTION_ARGS) {
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
   bool result;
 
-  result = ty_bytea_gt((const uint8_t *)VARDATA_ANY(arg1),
-                         VARSIZE_ANY_EXHDR(arg1),
-                         (const uint8_t *)VARDATA_ANY(arg2),
-                         VARSIZE_ANY_EXHDR(arg2));
+  result = ty_bytea_gt(TYV(arg1), TYV(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
@@ -3201,10 +3141,7 @@ Datum byteage(PG_FUNCTION_ARGS) {
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
   bool result;
 
-  result = ty_bytea_ge((const uint8_t *)VARDATA_ANY(arg1),
-                         VARSIZE_ANY_EXHDR(arg1),
-                         (const uint8_t *)VARDATA_ANY(arg2),
-                         VARSIZE_ANY_EXHDR(arg2));
+  result = ty_bytea_ge(TYV(arg1), TYV(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
@@ -3217,10 +3154,7 @@ Datum byteacmp(PG_FUNCTION_ARGS) {
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
   int cmp;
 
-  cmp = ty_bytea_cmp((const uint8_t *)VARDATA_ANY(arg1),
-                     VARSIZE_ANY_EXHDR(arg1),
-                     (const uint8_t *)VARDATA_ANY(arg2),
-                     VARSIZE_ANY_EXHDR(arg2));
+  cmp = ty_bytea_cmp(TYV(arg1), TYV(arg2));
 
   PG_FREE_IF_COPY(arg1, 0);
   PG_FREE_IF_COPY(arg2, 1);
@@ -3232,10 +3166,7 @@ Datum bytea_larger(PG_FUNCTION_ARGS) {
   bytea *arg1 = PG_GETARG_BYTEA_PP(0);
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
 
-  PG_RETURN_BYTEA_P(ty_bytea_gt((const uint8_t *)VARDATA_ANY(arg1),
-                                VARSIZE_ANY_EXHDR(arg1),
-                                (const uint8_t *)VARDATA_ANY(arg2),
-                                VARSIZE_ANY_EXHDR(arg2))
+  PG_RETURN_BYTEA_P(ty_bytea_gt(TYV(arg1), TYV(arg2))
                         ? arg1
                         : arg2);
 }
@@ -3244,10 +3175,7 @@ Datum bytea_smaller(PG_FUNCTION_ARGS) {
   bytea *arg1 = PG_GETARG_BYTEA_PP(0);
   bytea *arg2 = PG_GETARG_BYTEA_PP(1);
 
-  PG_RETURN_BYTEA_P(ty_bytea_lt((const uint8_t *)VARDATA_ANY(arg1),
-                                VARSIZE_ANY_EXHDR(arg1),
-                                (const uint8_t *)VARDATA_ANY(arg2),
-                                VARSIZE_ANY_EXHDR(arg2))
+  PG_RETURN_BYTEA_P(ty_bytea_lt(TYV(arg1), TYV(arg2))
                         ? arg1
                         : arg2);
 }
@@ -3271,8 +3199,7 @@ Datum bytea_int2(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
   int16 result;
 
-  if (ty_bytea_to_int16((const uint8_t *)VARDATA_ANY(v),
-                          VARSIZE_ANY_EXHDR(v), &result) != 0)
+  if (ty_bytea_to_int16(TYV(v), &result) != 0)
     ereport(ERROR, errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
             errmsg("smallint out of range"));
 
@@ -3284,8 +3211,7 @@ Datum bytea_int4(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
   int32 result;
 
-  if (ty_bytea_to_int32((const uint8_t *)VARDATA_ANY(v),
-                          VARSIZE_ANY_EXHDR(v), &result) != 0)
+  if (ty_bytea_to_int32(TYV(v), &result) != 0)
     ereport(ERROR, errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
             errmsg("integer out of range"));
 
@@ -3297,8 +3223,7 @@ Datum bytea_int8(PG_FUNCTION_ARGS) {
   bytea *v = PG_GETARG_BYTEA_PP(0);
   int64 result;
 
-  if (ty_bytea_to_int64((const uint8_t *)VARDATA_ANY(v),
-                          VARSIZE_ANY_EXHDR(v), &result) != 0)
+  if (ty_bytea_to_int64(TYV(v), &result) != 0)
     ereport(ERROR, errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
             errmsg("bigint out of range"));
 
@@ -3307,30 +3232,30 @@ Datum bytea_int8(PG_FUNCTION_ARGS) {
 
 /* Cast int2 -> bytea; can just use int2send() */
 Datum int2_bytea(PG_FUNCTION_ARGS) {
-  bytea *result = (bytea *)palloc(VARHDRSZ + 2);
+  bytea *result;
 
-  SET_VARSIZE(result, VARHDRSZ + 2);
-  ty_int16_to_bytea(PG_GETARG_INT16(0), (uint8_t *)VARDATA(result));
+  if (ty_int16_to_bytea(PG_GETARG_INT16(0), TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_BYTEA_P(result);
 }
 
 /* Cast int4 -> bytea; can just use int4send() */
 Datum int4_bytea(PG_FUNCTION_ARGS) {
-  bytea *result = (bytea *)palloc(VARHDRSZ + 4);
+  bytea *result;
 
-  SET_VARSIZE(result, VARHDRSZ + 4);
-  ty_int32_to_bytea(PG_GETARG_INT32(0), (uint8_t *)VARDATA(result));
+  if (ty_int32_to_bytea(PG_GETARG_INT32(0), TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_BYTEA_P(result);
 }
 
 /* Cast int8 -> bytea; can just use int8send() */
 Datum int8_bytea(PG_FUNCTION_ARGS) {
-  bytea *result = (bytea *)palloc(VARHDRSZ + 8);
+  bytea *result;
 
-  SET_VARSIZE(result, VARHDRSZ + 8);
-  ty_int64_to_bytea(PG_GETARG_INT64(0), (uint8_t *)VARDATA(result));
+  if (ty_int64_to_bytea(PG_GETARG_INT64(0), TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_BYTEA_P(result);
 }
@@ -3378,22 +3303,10 @@ Datum replace_text(PG_FUNCTION_ARGS) {
   /* a deterministic collation: ty counts the copies, then replaces them */
   check_collation_set(PG_GET_COLLATION());
   if (pg_newlocale_from_collation(PG_GET_COLLATION())->deterministic) {
-    size_t total;
-    int any;
-
-    if (ty_text_replace_size(VARDATA_ANY(src_text), src_text_len,
-                             VARDATA_ANY(from_sub_text), from_sub_text_len,
-                             VARSIZE_ANY_EXHDR(to_sub_text), &total, &any))
-      ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                      errmsg("%s", ty_errmsg())));
-    if (!any)
-      PG_RETURN_TEXT_P(src_text);
-    ret_text = (text *)palloc(VARHDRSZ + total);
-    SET_VARSIZE(ret_text, VARHDRSZ + total);
-    ty_text_replace(VARDATA_ANY(src_text), src_text_len,
-                    VARDATA_ANY(from_sub_text), from_sub_text_len,
-                    VARDATA_ANY(to_sub_text), VARSIZE_ANY_EXHDR(to_sub_text),
-                    VARDATA(ret_text));
+    /* ty makes the result, or gives src_text if there is nothing to replace */
+    if (ty_text_replace(TYV(src_text), TYV(from_sub_text), TYV(to_sub_text),
+                        TYVO(&ret_text)))
+      ty_raise_alloc();
     PG_RETURN_TEXT_P(ret_text);
   }
 
@@ -3732,14 +3645,11 @@ Datum split_part(PG_FUNCTION_ARGS) {
   if (inputstring_len >= 1 && fldsep_len >= 1)
     check_collation_set(PG_GET_COLLATION());
   if (pg_newlocale_from_collation(PG_GET_COLLATION())->deterministic) {
-    size_t off, len;
+    text *field;
 
-    ty_text_split_part(VARDATA_ANY(inputstring), inputstring_len,
-                       VARDATA_ANY(fldsep), fldsep_len, fldnum, &off, &len);
-    if (off == 0 && len == (size_t)inputstring_len)
-      PG_RETURN_TEXT_P(inputstring);
-    PG_RETURN_TEXT_P(
-        cstring_to_text_with_len(VARDATA_ANY(inputstring) + off, len));
+    if (ty_text_split_part(TYV(inputstring), TYV(fldsep), fldnum, TYVO(&field)))
+      ty_raise_alloc();
+    PG_RETURN_TEXT_P(field);
   }
 
   /* return empty string for empty input string */
@@ -4764,10 +4674,11 @@ Datum text_left(PG_FUNCTION_ARGS) {
 
   if (n < 0) {
     text *str = PG_GETARG_TEXT_PP(0);
-    size_t off, len;
+    text *result;
 
-    ty_text_left(VARDATA_ANY(str), VARSIZE_ANY_EXHDR(str), n, &off, &len);
-    PG_RETURN_TEXT_P(cstring_to_text_with_len(VARDATA_ANY(str), len));
+    if (ty_text_left(TYV(str), n, TYVO(&result)))
+      ty_raise_alloc();
+    PG_RETURN_TEXT_P(result);
   } else
     PG_RETURN_TEXT_P(text_substring(PG_GETARG_DATUM(0), 1, n, false));
 }
@@ -4779,10 +4690,11 @@ Datum text_left(PG_FUNCTION_ARGS) {
 Datum text_right(PG_FUNCTION_ARGS) {
   text *str = PG_GETARG_TEXT_PP(0);
   int n = PG_GETARG_INT32(1);
-  size_t off, len;
+  text *result;
 
-  ty_text_right(VARDATA_ANY(str), VARSIZE_ANY_EXHDR(str), n, &off, &len);
-  PG_RETURN_TEXT_P(cstring_to_text_with_len(VARDATA_ANY(str) + off, len));
+  if (ty_text_right(TYV(str), n, TYVO(&result)))
+    ty_raise_alloc();
+  PG_RETURN_TEXT_P(result);
 }
 
 /*
@@ -4790,12 +4702,10 @@ Datum text_right(PG_FUNCTION_ARGS) {
  */
 Datum text_reverse(PG_FUNCTION_ARGS) {
   text *str = PG_GETARG_TEXT_PP(0);
-  int len = VARSIZE_ANY_EXHDR(str);
   text *result;
 
-  result = (text *)palloc(len + VARHDRSZ);
-  SET_VARSIZE(result, len + VARHDRSZ);
-  ty_text_reverse(VARDATA_ANY(str), len, VARDATA(result));
+  if (ty_text_reverse(TYV(str), TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_TEXT_P(result);
 }

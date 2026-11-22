@@ -22,6 +22,7 @@
 #include "utils/memutils.h"
 #include "varatt.h"
 #include "ty_bytea.h"
+#include "utils/ty_glue.h"
 
 /*
  * Encoding conversion API.
@@ -60,9 +61,6 @@ Datum binary_encode(PG_FUNCTION_ARGS) {
   text *result;
   char *namebuf;
   ty_bytea_enc_t enc;
-  size_t datalen;
-  size_t resultlen;
-  size_t res;
 
   namebuf = TextDatumGetCString(name);
 
@@ -70,30 +68,13 @@ Datum binary_encode(PG_FUNCTION_ARGS) {
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unrecognized encoding: \"%s\"", namebuf)));
 
-  datalen = VARSIZE_ANY_EXHDR(data);
-
-  /* ty tells the most the text can take, and writes into the varlena */
-  resultlen = ty_bytea_encode_size(enc, (const uint8_t *)VARDATA_ANY(data),
-                                   datalen);
-
-  /*
-   * resultlen possibly overflows uint32, therefore on 32-bit machines it's
-   * unsafe to rely on palloc's internal check.
-   */
-  if (resultlen > MaxAllocSize - VARHDRSZ)
-    ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                    errmsg("result of encoding conversion is too large")));
-
-  result = (text *)palloc(VARHDRSZ + resultlen);
-
-  res = ty_bytea_encode(enc, (const uint8_t *)VARDATA_ANY(data), datalen,
-                        VARDATA(result));
-
-  /* Make this FATAL 'cause we've trodden on memory ... */
-  if (res > resultlen)
-    elog(FATAL, "overflow - encode estimate too small");
-
-  SET_VARSIZE(result, VARHDRSZ + res);
+  /* ty makes the text; a result past 1 GB is an error */
+  if (ty_bytea_encode(enc, TYV(data), TYVO(&result)) != 0) {
+    if (ty_errnum() == TY_ERR_RANGE)
+      ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+                      errmsg("result of encoding conversion is too large")));
+    ty_raise_alloc();
+  }
 
   PG_RETURN_TEXT_P(result);
 }
@@ -104,9 +85,6 @@ Datum binary_decode(PG_FUNCTION_ARGS) {
   bytea *result;
   char *namebuf;
   ty_bytea_enc_t enc;
-  size_t datalen;
-  size_t resultlen;
-  size_t res;
 
   namebuf = TextDatumGetCString(name);
 
@@ -114,30 +92,15 @@ Datum binary_decode(PG_FUNCTION_ARGS) {
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unrecognized encoding: \"%s\"", namebuf)));
 
-  datalen = VARSIZE_ANY_EXHDR(data);
-
-  if (ty_bytea_decode_size(enc, VARDATA_ANY(data), datalen, &resultlen) != 0)
+  /* ty makes the bytea, or says what is wrong with the text */
+  if (ty_bytea_decode(enc, TYV(data), TYVO(&result)) != 0) {
+    if (ty_errnum() == TY_ERR_NOMEM)
+      ty_raise_alloc();
+    if (ty_errnum() == TY_ERR_RANGE)
+      ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+                      errmsg("result of decoding conversion is too large")));
     binary_decode_raise(enc);
-
-  /*
-   * resultlen possibly overflows uint32, therefore on 32-bit machines it's
-   * unsafe to rely on palloc's internal check.
-   */
-  if (resultlen > MaxAllocSize - VARHDRSZ)
-    ereport(ERROR, (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-                    errmsg("result of decoding conversion is too large")));
-
-  result = (bytea *)palloc(VARHDRSZ + resultlen);
-
-  if (ty_bytea_decode(enc, VARDATA_ANY(data), datalen,
-                      (uint8_t *)VARDATA(result), &res) != 0)
-    binary_decode_raise(enc);
-
-  /* Make this FATAL 'cause we've trodden on memory ... */
-  if (res > resultlen)
-    elog(FATAL, "overflow - decode estimate too small");
-
-  SET_VARSIZE(result, VARHDRSZ + res);
+  }
 
   PG_RETURN_BYTEA_P(result);
 }
