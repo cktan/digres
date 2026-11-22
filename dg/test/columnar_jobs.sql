@@ -1,0 +1,34 @@
+-- Verify a column store table's rows stay right while the sealer's
+-- jobs rewrite its row groups under the statements that write them:
+-- RG compaction into versions, and elimination. The jobs run when
+-- they run; every result here is the same whenever they do.
+-- 1. A table of its own name, as 8 sessions run this file at once;
+--    INSERT ... SELECT loads 30,000 rows: three row groups.
+-- 2. DELETE a quarter of the rows: each row group is a fifth dead,
+--    and the sealer is queued to compact it.
+-- 3. UPDATE another quarter, by the scan's name of each row, while
+--    the sealer may compact: a writer of a version the sealer
+--    replaces writes the row's newest place.
+-- 4. DELETE another quarter: under half live, the sealer is queued
+--    to eliminate the row groups.
+-- 5. At REPEATABLE READ, a count before and after an UPDATE of the
+--    rows left: the same rows, each once.
+-- 6. The counts and sums of what is left.
+select 'columnar_jobs_' || pg_backend_pid() as cj \gset
+create table :cj (id int not null, v int) with (storage = columnar);
+insert into :cj select g, g from generate_series(1, 30000) g;
+select count(*), sum(v) from :cj;
+delete from :cj where id % 4 = 0;
+select count(*), sum(v) from :cj;
+update :cj set v = v + 1 where id % 4 = 1;
+select count(*), sum(v) from :cj;
+delete from :cj where id % 4 = 2;
+select count(*), sum(v) from :cj;
+begin isolation level repeatable read;
+select count(*), sum(v) from :cj;
+update :cj set v = -v where id % 4 = 3;
+select count(*), sum(v) from :cj;
+commit;
+select count(*), sum(v), min(v), max(v) from :cj;
+select count(*) from :cj where id % 4 = 1 and v <> id + 1;
+drop table :cj;

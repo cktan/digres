@@ -3101,7 +3101,8 @@ std::map<int32_t, uint64_t> ids_by_a(col_db_t &db, uint64_t c) {
 //    another transaction does so to an odd row; or a job runs: a seal,
 //    or a fold, an RG compaction or an elimination of a version.
 //    A write of W in four is under a savepoint, rolled back half the
-//    time.
+//    time. A round in three, W prepares, and jobs run while it is
+//    prepared.
 // 3. Every 8 steps, W's view is its snapshot and its own writes, each
 //    row once; R's, a reader of the same age, is its snapshot.
 // 4. W commits: a new transaction's view is the model.
@@ -3266,8 +3267,20 @@ TEST_CASE("an old writer agrees across the sealer's jobs") {
                         "R: round " << round << " step " << step);
       }
     }
-    // 4. W commits.
-    REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+    // 4. W commits; a round in three, W prepares first, and jobs run
+    //    while it is prepared, before COMMIT PREPARED.
+    if (rng() % 3 == 0) {
+      std::string gid = "w" + std::to_string(round);
+      REQUIRE_MESSAGE(sm3::prepare(ss2, gid) == 0, sm1::errmsg());
+      for (int j = 0; j < 4; j++) {
+        std::vector<uint64_t> rgs = rg_ids(db, c);
+        run_job(ss3, rgs.empty() ? 0 : rng() % 4,
+                rgs.empty() ? 0 : rgs[rng() % rgs.size()]);
+      }
+      REQUIRE_MESSAGE(sm3::commit_prepared(db.ss, gid) == 0, sm1::errmsg());
+    } else {
+      REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+    }
     REQUIRE(sm3::commit(ss4) == 0);
     for (auto it = model.begin(); it != model.end();) {
       it = (it->first & 1) == 0 ? model.erase(it) : std::next(it);
@@ -3312,6 +3325,15 @@ TEST_CASE("READ COMMITTED writers agree across the sealer's jobs") {
   sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
   REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
   REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  // SM3_SEALER, if set, runs the sealer's own jobs too.
+  const bool sealer = std::getenv("SM3_SEALER") != nullptr;
+  sm1::env_t *env = db.env();
+  if (sealer) {
+    REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+              sm1::session_t *s = nullptr;
+              return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+            }) == 0);
+  }
   const char *seed = std::getenv("SM3_SEED");
   std::mt19937 rng(seed ? std::strtoul(seed, nullptr, 10) : 20261123);
   auto any = [&]() {
@@ -3335,8 +3357,16 @@ TEST_CASE("READ COMMITTED writers agree across the sealer's jobs") {
              : job == 1 ? sm3::tbl_fold(t, fsid, done)
              : job == 2 ? sm3::tbl_compact_rg(t, fsid, done)
                         : sm3::tbl_eliminate_rg(t, fsid, done);
-    REQUIRE_MESSAGE(rc == 0, "job " << job << ": " << sm1::errmsg());
+    sm1::errnum_t e = rc == 0 ? sm1::SM_OK : sm1::errnum();
     sm3::tbl_close(t);
+    if (rc != 0) {
+      // A version the sealer took, or a row it holds.
+      REQUIRE_MESSAGE(
+          (sealer && (e == sm1::SM_ERR_NOTFOUND || e == sm1::SM_ERR_SEALED)),
+          "job " << job << ": " << sm1::errmsg());
+      sm3::abort(ss3);
+      return;
+    }
     REQUIRE(sm3::commit(ss3) == 0);
   };
   for (int step = 0; step < 300 && model.size() > 50; step++) {
@@ -3419,6 +3449,9 @@ TEST_CASE("READ COMMITTED writers agree across the sealer's jobs") {
   CHECK(scan_rows(db, c) == model);
   sm3::session_close(ss2);
   sm3::session_close(ss3);
+  if (sealer) {
+    sm3::sealer_detach(db.cat);
+  }
 }
 
 // Verify a read of the newest version of a row the seal took from the
@@ -3538,7 +3571,7 @@ TEST_CASE("a write of a row updated since and folded is told it was updated") {
 // 3. A conflict ends W's round, aborted: it must be on a row changed
 //    since. A write that goes must be on a row not changed since.
 // 4. At the round's end W commits, and a new transaction's view is
-//    the model.
+//    the model, and ANALYZE's count of live rows its size.
 TEST_CASE("first-committer-wins agrees across the sealer's jobs") {
   col_db_t db(100);
   db.begin();
@@ -3669,6 +3702,17 @@ TEST_CASE("first-committer-wins agrees across the sealer's jobs") {
       }
     }
     REQUIRE_MESSAGE(scan_rows(db, c) == model, "after round " << round);
+    // ANALYZE's count of live rows is exact: the versions' rows less
+    // their dead ones, and the delta store's.
+    db.begin(sm1::xctlevel_t::repeatable_read);
+    sm3::table_t *t = nullptr;
+    REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+    std::mt19937_64 srng(round);
+    sm3::sample_t smp;
+    REQUIRE_MESSAGE(sm3::sample_table(t, 1, srng, smp) == 0, sm1::errmsg());
+    CHECK_MESSAGE(smp.live_rows == model.size(), "after round " << round);
+    sm3::tbl_close(t);
+    db.commit();
   }
   CHECK(conflicts > 0);
   CHECK(goes > 0);
@@ -3726,4 +3770,109 @@ TEST_CASE("an RR writer by _id of a row deleted since conflicts") {
   sm3::session_close(ss2);
   sm3::session_close(ss3);
   sm3::session_close(ss4);
+}
+
+// Verify the by-value datums of 1, 2 and 4 bytes of a column store
+// table's row groups read back as they were written, negative ones
+// too: in a scan, after RG compaction, and after elimination, whose
+// rows go into the delta store from the row group's bytes.
+// 1. A table of (a int4, b int2, c bool, d float4); row groups of 100
+//    rows; load 100 rows, b = -3a, c = a odd, d = -a / 4.
+// 2. A scan gives each row's values.
+// 3. Delete a = 0 .. 19, and compact: the same.
+// 4. Eliminate: the same, from the delta store.
+TEST_CASE("a row group's small by-value datums read back as written") {
+  col_db_t db(100);
+  db.begin();
+  std::vector<sm3::column_spec_t> cols = {
+      {"a", sm2::type_int4.code, -1, true},
+      {"b", sm2::type_int2.code, -1, false},
+      {"c", sm2::type_bool.code, -1, false},
+      {"d", sm2::type_float4.code, -1, false}};
+  uint64_t c = 0;
+  REQUIRE(sm3::create_table(db.ss, sm3::nsp_public, "s", cols, c, true) == 0);
+  db.commit();
+  // 1. The load.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  sm3::loader_t *l = nullptr;
+  REQUIRE(sm3::tbl_load_open(t, l) == 0);
+  for (int32_t a = 0; a < 100; a++) {
+    sm2::datum_t d[4] = {sm2::datum_from_int32(a),
+                         sm2::datum_from_int16(static_cast<int16_t>(-3 * a)),
+                         sm2::datum_from_bool(a % 2 == 1),
+                         sm2::datum_from_float(-a / 4.0f)};
+    bool null[4] = {false, false, false, false};
+    uint64_t id = 0;
+    REQUIRE(sm3::tbl_load_add(l, d, null, id) == 0);
+  }
+  REQUIRE(sm3::tbl_load_close(l) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  // Each row's values, as a new transaction scans them.
+  auto check = [&](size_t n, const char *when) {
+    db.begin(sm1::xctlevel_t::repeatable_read);
+    REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+    sm3::scan_t *scan = nullptr;
+    REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+    uint64_t id;
+    std::string_view tuple;
+    size_t rows = 0;
+    while (sm3::tbl_scannxt(scan, id, tuple) == 0) {
+      sm2::datum_t d[4];
+      bool null[4];
+      REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+      int32_t a = sm2::datum_to_int32(d[0]);
+      CHECK_MESSAGE(sm2::datum_to_int16(d[1]) == -3 * a, when << " a " << a);
+      CHECK_MESSAGE(sm2::datum_to_bool(d[2]) == (a % 2 == 1), when);
+      CHECK_MESSAGE(sm2::datum_to_float(d[3]) == -a / 4.0f, when);
+      CHECK_MESSAGE(a >= static_cast<int32_t>(100 - n), when << " a " << a);
+      rows++;
+    }
+    sm3::tbl_scanend(scan);
+    sm3::tbl_close(t);
+    db.commit();
+    CHECK_MESSAGE(rows == n, when);
+  };
+  // 2. A scan.
+  check(100, "the load");
+  // 3. RG compaction, after the deletes of a = 0 .. 19 by their
+  //    places.
+  std::vector<uint64_t> rgs = rg_ids(db, c);
+  REQUIRE(rgs.size() == 1);
+  uint64_t fsid = rgs[0];
+  db.begin();
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  {
+    std::vector<std::pair<sm3::place_t, uint64_t>> gone;
+    sm3::scan_t *scan = nullptr;
+    REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+    uint64_t id;
+    std::string_view tuple;
+    while (sm3::tbl_scannxt(scan, id, tuple) == 0) {
+      sm2::datum_t d[4];
+      bool null[4];
+      REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+      if (sm2::datum_to_int32(d[0]) < 20) {
+        gone.emplace_back(sm3::tbl_scan_place(scan), id);
+      }
+    }
+    sm3::tbl_scanend(scan);
+    REQUIRE(gone.size() == 20);
+    for (auto [p, id] : gone) {
+      REQUIRE(sm3::tbl_delete_at(t, p, id) == 0);
+    }
+  }
+  sm3::tbl_close(t);
+  db.commit();
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(compact(ss3, c, fsid));
+  check(80, "RG compaction");
+  // 4. Elimination.
+  REQUIRE(eliminate(ss3, c, fsid + 1));
+  REQUIRE(row_groups(db, c) == 0);
+  check(80, "elimination");
+  sm3::session_close(ss3);
 }

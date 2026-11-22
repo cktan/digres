@@ -1343,13 +1343,15 @@ random CGs and random bounds, against a test of every value.
 24. **Random workloads across the sealer's jobs**, run by hand
     between the steps: a REPEATABLE READ writer and a reader of the
     same age, whose views are their snapshots and the writer's own
-    writes, each row once; READ COMMITTED writers of the same rows,
-    retried after `SM_ERR_UPDATED` as digres retries, which end as
-    one after the other; a REPEATABLE READ writer of any row, whose
-    write fails with `SM_ERR_CONFLICT` exactly on a row changed
-    since. `SM3_SEED` picks another workload, `SM3_SEALER` runs the
-    sealer's own jobs too, and `SM3_TOAST` writes values out of
-    line.
+    writes, each row once, with savepoints rolled back and rounds
+    prepared before `COMMIT PREPARED`; READ COMMITTED writers of the
+    same rows, retried after `SM_ERR_UPDATED` as digres retries,
+    which end as one after the other; a REPEATABLE READ writer of
+    any row, whose write fails with `SM_ERR_CONFLICT` exactly on a
+    row changed since, and ANALYZE's count of live rows exact after
+    each round. `SM3_SEED` picks another workload, `SM3_SEALER`
+    runs the sealer's own jobs too, and `SM3_TOAST` writes values
+    out of line.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.
@@ -1399,6 +1401,12 @@ precision, against a row store copy; `TABLESAMPLE` refused with
 `0A000`; a `DELETE ... USING` that matches a row of an RG twice,
 at REPEATABLE READ, deletes it once; a value of 2,049 bytes
 refused with `54000`.
+`dg/test/columnar_jobs.sql`: `DELETE`s and `UPDATE`s of a quarter of
+a table's rows each, which queue the sealer to compact and then
+eliminate its RGs while the statements that follow write them; a
+REPEATABLE READ transaction across them. The jobs run when they
+run, alone and in 8 sessions at once; every result is the same
+whenever they do.
 
 ### 15.5 Layers with no test
 
