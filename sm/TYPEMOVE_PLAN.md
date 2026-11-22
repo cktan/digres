@@ -602,7 +602,7 @@ copied from PostgreSQL keeps its copyright notice
      because a zone database cannot be passed). The offset of a
      zone is not computed: no caller of the three reads it,
      which saves work. The text in of timestamptz and timetz
-     stays in digres, and uses the same decoders next. The
+     moved next, with the same decoders (the entry below). The
      tests: 4,383 known answers from the old digres (three
      types, three date orders), hand tests of the hooks, and
      `dg/test/select_datetime_in.sql`, which prints the same as
