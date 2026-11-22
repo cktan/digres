@@ -217,9 +217,24 @@ void special_key(const sm2::cg_column_t &col, std::string_view t,
   }
 }
 
+/*
+ * Whether t has NaN or an infinity, values that sort outside its
+ * finite ones (../../COLSTORE.md §6.1). A string type is not one: its
+ * in takes any text, 'NaN' as any other.
+ */
+bool has_specials(const sm2::type_t *t) {
+  return t == &sm2::type_float4 || t == &sm2::type_float8 ||
+         t == &sm2::type_date || t == &sm2::type_timestamp ||
+         t == &sm2::type_timestamptz || t == &sm2::type_interval;
+}
+
 /* The special keys of col's type: by its text, as PostgreSQL's. */
 specials_t specials_of(const sm2::cg_column_t &col) {
   specials_t s;
+  // A type with none keeps every value in min and max.
+  if (!has_specials(col.type)) {
+    return s;
+  }
   special_key(col, "NaN", s.nan);
   special_key(col, "Infinity", s.pos_inf);
   special_key(col, "-Infinity", s.neg_inf);

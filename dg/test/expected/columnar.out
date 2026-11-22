@@ -33,6 +33,10 @@
 --     or past its precision, give what a row store copy gives: two
 --     row groups, d 0.00 to 99.99 and 100.00 to 199.99, and the
 --     delta store.
+-- 15. A text column of a row group holding 'NaN', 'zebra', '!' and
+--     '-Infinity': s > 'p' and s < '#' give what a row store copy
+--     gives, as text has no NaN or infinity to sort outside min and
+--     max.
 \set ON_ERROR_STOP off
 create temp table columnar_ref (id int primary key);
 create temp table columnar_t (
@@ -41,14 +45,14 @@ create temp table columnar_t (
   ref int references columnar_ref (id),
   amount int)
   with (storage = columnar);
-psql:test/columnar.sql:43: WARNING:  column store table "columnar_t" has no primary key: it is not made
-psql:test/columnar.sql:43: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
-psql:test/columnar.sql:43: WARNING:  column store table "columnar_t" has no foreign key: it is not made
+psql:test/columnar.sql:47: WARNING:  column store table "columnar_t" has no primary key: it is not made
+psql:test/columnar.sql:47: WARNING:  column store table "columnar_t" has no unique constraint: it is not made
+psql:test/columnar.sql:47: WARNING:  column store table "columnar_t" has no foreign key: it is not made
 insert into columnar_t values (null, 'x', null, 1);
-psql:test/columnar.sql:44: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
+psql:test/columnar.sql:48: ERROR:  null value in column "id" of relation "columnar_t" violates not-null constraint
 DETAIL:  Failing row contains (null, x, null, 1).
 create index columnar_t_amount on columnar_t (amount);
-psql:test/columnar.sql:45: WARNING:  column store table "columnar_t" has no index: it is not made
+psql:test/columnar.sql:49: WARNING:  column store table "columnar_t" has no index: it is not made
 insert into columnar_t
   select g, 'c' || g, null, g % 10 from generate_series(1, 25000) g;
 insert into columnar_t values (0, 'zero', 7, 0);
@@ -311,7 +315,7 @@ select * from columnar_ctas where k = 5 order by id;
 drop table columnar_ctas;
 begin isolation level serializable;
 select count(*) from columnar_t;
-psql:test/columnar.sql:129: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
+psql:test/columnar.sql:133: ERROR:  could not open a table: a column store table cannot be used in a SERIALIZABLE transaction
 LINE 1: select count(*) from columnar_t;
                              ^
 \echo :SQLSTATE
@@ -326,10 +330,10 @@ select * from columnar_row;
 (1 row)
 
 create temp table columnar_bad (a int) with (storage = banana);
-psql:test/columnar.sql:135: ERROR:  invalid value for option "storage": banana
+psql:test/columnar.sql:139: ERROR:  invalid value for option "storage": banana
 HINT:  Valid values are "row" and "columnar".
 create temp table columnar_child (r int references columnar_t (id));
-psql:test/columnar.sql:136: ERROR:  there is no unique constraint matching given keys for referenced table "columnar_t"
+psql:test/columnar.sql:140: ERROR:  there is no unique constraint matching given keys for referenced table "columnar_t"
 create temp table columnar_n (d numeric(10,2)) with (storage = columnar);
 insert into columnar_n select g / 100.0 from generate_series(0, 24999) g;
 create temp table columnar_nr as select * from columnar_n;
@@ -372,7 +376,7 @@ union all select 'row', count(*) from columnar_nr where d < 1e20;
 drop table columnar_nr;
 drop table columnar_n;
 select count(*) from columnar_t tablesample bernoulli (100);
-psql:test/columnar.sql:154: ERROR:  TABLESAMPLE is not supported on column store table "columnar_t"
+psql:test/columnar.sql:158: ERROR:  TABLESAMPLE is not supported on column store table "columnar_t"
 \echo :SQLSTATE
 0A000
 create temp table columnar_dup (id int, v int) with (storage = columnar);
@@ -403,7 +407,7 @@ drop table columnar_dup;
 create temp table columnar_len (s text) with (storage = columnar);
 insert into columnar_len values (repeat('x', 2048));
 insert into columnar_len values (repeat('x', 2049));
-psql:test/columnar.sql:168: ERROR:  could not insert a row: value of 2049 bytes in column s of columnar_len, a column store table, which takes 2048 bytes at most
+psql:test/columnar.sql:172: ERROR:  could not insert a row: value of 2049 bytes in column s of columnar_len, a column store table, which takes 2048 bytes at most
 \echo :SQLSTATE
 54000
 select octet_length(s) from columnar_len;
@@ -413,6 +417,30 @@ select octet_length(s) from columnar_len;
 (1 row)
 
 drop table columnar_len;
+create temp table columnar_s (s text) with (storage = columnar);
+insert into columnar_s
+  select case g when 1 then 'NaN' when 2 then 'zebra' when 3 then '!'
+    when 4 then '-Infinity' else 'm' end
+  from generate_series(1, 10000) g;
+create temp table columnar_sr as select * from columnar_s;
+select 'columnar' as t, count(*) from columnar_s where s > 'p'
+union all select 'row', count(*) from columnar_sr where s > 'p';
+    t     | count 
+----------+-------
+ columnar |     1
+ row      |     1
+(2 rows)
+
+select 'columnar' as t, count(*) from columnar_s where s < '#'
+union all select 'row', count(*) from columnar_sr where s < '#';
+    t     | count 
+----------+-------
+ columnar |     1
+ row      |     1
+(2 rows)
+
+drop table columnar_sr;
+drop table columnar_s;
 drop table columnar_row;
 drop table columnar_t;
 drop table columnar_ref;

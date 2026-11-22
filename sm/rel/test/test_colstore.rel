@@ -25,7 +25,9 @@
 #    restart: no snapshot sees their rows before COMMIT PREPARED;
 #    the committed one's row group is read, the aborted one's not.
 # 9. Bounds on a text column through sm.h: of two row groups, b "aa"
-#    and b "zz", b < 'b' and b IN ('zz') each read one.
+#    and b "zz", b < 'b' and b IN ('zz') each read one. A third row
+#    group holds "NaN", "zebra", "!" and "-Infinity" as text: b > 'p'
+#    and b < '#' each read it, as text has no NaN or infinity.
 # 10. 10,000 rows inserted one at a time and prepared: COMMIT PREPARED
 #     counts them toward the seal, which seals them.
 # 11. 150 rows of a row group deleted by name: the sealer folds their
@@ -229,6 +231,17 @@
                "b < 'b' reads the first row group")
     (assert-eq (length (scan-columns tt [] [[:b :in ["zz"]]])) 10000
                "b IN ('zz') reads the second")
+(commit)
+(begin :rc)
+    (load tt (map (fn [i] [i (get {20000 "NaN" 20001 "zebra" 20002 "!"
+                                   20003 "-Infinity"} i "m")])
+                  (range 20000 30000)))
+(commit)
+(begin :rr)
+    (assert-eq (length (scan-columns tt [] [[:b :> "p"]])) 20000
+               "b > 'p' reads the second and the third, its max 'zebra'")
+    (assert-eq (length (scan-columns tt [] [[:b :< "#"]])) 10000
+               "b < '#' reads the third, its min '!'")
 (commit)
 
 # 10. A prepared transaction's inserts count at COMMIT PREPARED. No

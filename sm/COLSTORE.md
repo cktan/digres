@@ -402,6 +402,9 @@ it.
 These follow and need no field:
 
 - **A CG of one value** has `min = max` and a null count of 0.
+- **A string type has no NaN and no infinity.** Its `in` takes
+  any text, so `'NaN'` and `'Infinity'` are values as any other,
+  in min and max (`has_specials` in `sm2/src/col/cg.cc`).
 - **`count(*)` of an RG** is its row count less its visible
   delete markers.
 
@@ -1273,8 +1276,9 @@ file is corruption; a dropped store's directory goes.
 
 `sm2/test/test_cg.cc`, the CG file and the statistics (§5, §6):
 a CG of each encoding read back; a changed byte is corruption;
-NaN and infinity in the flags; pruning skips only CGs that
-cannot match; a bpchar CG's filter matches a padded value; a CG
+NaN and infinity in the flags; a string CG takes `'NaN'` and
+the infinities as text; pruning skips only CGs that cannot
+match; a bpchar CG's filter matches a padded value; a CG
 of another collation version is not pruned by value; a
 dictionary only where it is smaller than plain; the exact set to
 4 KB of keys and a bloom filter above, with few
@@ -1385,7 +1389,8 @@ across a restart; SERIALIZABLE and an index refused; a delete by
 name and an abort; the seal's job; an update and a delete by
 `_id` alone; a scan of some columns, with bounds; an update
 counted toward the seal; two loads prepared across a restart,
-one committed and one aborted; bounds on a text column; a
+one committed and one aborted; bounds on a text column, with
+`"NaN"` and `"-Infinity"` as text in an RG; a
 prepared transaction's inserts sealed after `COMMIT PREPARED`;
 the fold; RG compaction into the next version, with a REPEATABLE
 READ writer older than it; elimination of an RG under half live,
@@ -1425,7 +1430,8 @@ references a column store table, which fails; bounds on a
 precision, against a row store copy; `TABLESAMPLE` refused with
 `0A000`; a `DELETE ... USING` that matches a row of an RG twice,
 at REPEATABLE READ, deletes it once; a value of 2,049 bytes
-refused with `54000`.
+refused with `54000`; bounds on a text column whose RG holds
+`'NaN'` and `'-Infinity'`, against a row store copy.
 `dg/test/columnar_jobs.sql`: `DELETE`s and `UPDATE`s of a quarter of
 a table's rows each, which queue the sealer to compact and then
 eliminate its RGs while the statements that follow write them; a

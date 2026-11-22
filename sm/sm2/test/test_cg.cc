@@ -235,6 +235,48 @@ TEST_CASE("pruning skips only CGs that cannot match") {
   CHECK(sm2::cg_may_match(fcol, fb.stats, fb.filter, big));
 }
 
+// Verify that a string CG takes 'NaN' and the infinities as text, not
+// as special values that sort outside min and max.
+// 1. A text CG of 'NaN' and 'zebra': no flag; its max is 'zebra',
+//    so x > 'p' may match.
+// 2. A text CG of '!' and '-Infinity': no flag; its min is '!', so
+//    x < '#' may match.
+// 3. Each string type's CG of 'Infinity': no flag; x = 'Infinity'
+//    may match.
+TEST_CASE("a string CG takes NaN and infinity as text") {
+  // 1. 'NaN' sorts below 'zebra'.
+  sm2::cg_column_t col = column(sm2::type_text);
+  std::vector<std::string> d = {datum(sm2::type_text, "NaN"),
+                                datum(sm2::type_text, "zebra")};
+  sm2::cg_built_t b = round_trip(col, values(d));
+  CHECK_FALSE(b.stats.has_nan);
+  CHECK(b.stats.min == key(sm2::type_text, "NaN"));
+  CHECK(b.stats.max == key(sm2::type_text, "zebra"));
+  sm2::cg_bound_t gt;
+  gt.has_lo = true;
+  gt.lo_incl = false;
+  gt.lo = key(sm2::type_text, "p");
+  CHECK(sm2::cg_may_match(col, b.stats, b.filter, gt));
+  // 2. '-Infinity' sorts above '!'.
+  d = {datum(sm2::type_text, "!"), datum(sm2::type_text, "-Infinity")};
+  b = round_trip(col, values(d));
+  CHECK_FALSE(b.stats.has_neg_inf);
+  CHECK(b.stats.min == key(sm2::type_text, "!"));
+  sm2::cg_bound_t lt;
+  lt.has_hi = true;
+  lt.hi_incl = false;
+  lt.hi = key(sm2::type_text, "#");
+  CHECK(sm2::cg_may_match(col, b.stats, b.filter, lt));
+  // 3. Every string type.
+  for (const sm2::type_t *t : {&sm2::type_text, &sm2::type_varchar,
+                               &sm2::type_bpchar, &sm2::type_name}) {
+    sm2::cg_column_t c = column(*t);
+    b = round_trip(c, values({datum(*t, "Infinity")}));
+    CHECK_FALSE(b.stats.has_pos_inf);
+    CHECK(sm2::cg_may_match(c, b.stats, b.filter, eq(key(*t, "Infinity"))));
+  }
+}
+
 // Verify that a bpchar CG's filter matches a padded value by its key,
 // which leaves out its trailing spaces.
 // 1. Build a bpchar CG of "b" and of "a" padded to 2,000 bytes.

@@ -33,6 +33,10 @@
 --     or past its precision, give what a row store copy gives: two
 --     row groups, d 0.00 to 99.99 and 100.00 to 199.99, and the
 --     delta store.
+-- 15. A text column of a row group holding 'NaN', 'zebra', '!' and
+--     '-Infinity': s > 'p' and s < '#' give what a row store copy
+--     gives, as text has no NaN or infinity to sort outside min and
+--     max.
 \set ON_ERROR_STOP off
 create temp table columnar_ref (id int primary key);
 create temp table columnar_t (
@@ -169,6 +173,18 @@ insert into columnar_len values (repeat('x', 2049));
 \echo :SQLSTATE
 select octet_length(s) from columnar_len;
 drop table columnar_len;
+create temp table columnar_s (s text) with (storage = columnar);
+insert into columnar_s
+  select case g when 1 then 'NaN' when 2 then 'zebra' when 3 then '!'
+    when 4 then '-Infinity' else 'm' end
+  from generate_series(1, 10000) g;
+create temp table columnar_sr as select * from columnar_s;
+select 'columnar' as t, count(*) from columnar_s where s > 'p'
+union all select 'row', count(*) from columnar_sr where s > 'p';
+select 'columnar' as t, count(*) from columnar_s where s < '#'
+union all select 'row', count(*) from columnar_sr where s < '#';
+drop table columnar_sr;
+drop table columnar_s;
 drop table columnar_row;
 drop table columnar_t;
 drop table columnar_ref;
