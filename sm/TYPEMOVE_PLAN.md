@@ -642,6 +642,24 @@ copied from PostgreSQL keeps its copyright notice
      each hook. The user accepted the +2.19% on `timetz`: it is
      the cost of two layers (ty's and the wrapper's) and one hook
      call, and it is the rarest of the types.
+   - **The time zone rules moved, with their data
+     (2026-11-22).** `ty_timezone.h`: PostgreSQL's IANA library
+     (`localtime.c`, `pg_tzset` of `pgtz.c`, and
+     `DetermineTimeZoneOffset`) in `ty/src/timezone.cc`, with the
+     zone files held in the library as C data, `ty/src/tzdata.cc`,
+     so that no call reads a file or a setting, and sm can use
+     zones with no help of digres. The data is PostgreSQL's own
+     (`ext/pg18.6`, tzdata 2026c, compiled by its `zic`);
+     `ty/TZDATA.md` says how the file is made again when
+     PostgreSQL has newer data, and the pack it holds can be
+     replaced by a file the host maps. Digres still reads the
+     operating system's files (2026e on this machine), and does
+     not use these functions yet. The tests: 16,618 answers of
+     Python's `zoneinfo` on the same zone files (the offset, the
+     DST flag, the abbreviation and the fields of a UTC instant;
+     the offset of a local time, with PostgreSQL's rule for a
+     gap and a fold), and hand tests of the lookup, the POSIX
+     specs, the abbreviations, a bad pack and a pack of the host.
    - **The typmod of interval, timestamp and time, and
      `make_interval` moved (2026-11-21).**
      `ty_interval_adjust_typmod`, `ty_timestamp_adjust_typmod`,

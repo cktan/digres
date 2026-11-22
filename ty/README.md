@@ -53,6 +53,7 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty_text.h` | the text operations, UTF-8, on varlenas |
 | `include/ty_interval.h` | the arithmetic of interval |
 | `include/ty_datetime.h` | the calendar, date, time and timestamp arithmetic |
+| `include/ty_timezone.h` | time zones: the rules of the IANA database, and its data ([`TZDATA.md`](TZDATA.md)) |
 | `include/ty_error.h` | the error codes |
 | `src/` | the library; `text_raw.h` and `bytea_raw.h` are the operations on a pointer and a length that `text_vl.cc` and `bytea_vl.cc` call |
 | `test/` | the unit tests, in doctest, and the vectors |

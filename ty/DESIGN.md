@@ -696,3 +696,50 @@ formulation of the Julian day (the Wikipedia formula and
 Richards' inverse, not PostgreSQL's), about 3,500;
 `test/test_datetime.cc`; and `dg/test/select_datetime_ops.sql`,
 which prints the same as the digres before the move.
+
+
+## 20. Time zones
+
+`ty_timezone.h` holds the rules of the IANA time zone database,
+and the data of the zones. A zone is found by its name in any case,
+by a POSIX spec (`EST5EDT`, `UTC+3`), or by an offset, as
+PostgreSQL's `pg_tzset` and `pg_tzset_offset` do. The pointer it
+gives stays good for the life of the process, and the calls are
+safe for many threads: a lookup takes a lock, so a host that asks
+often keeps the pointer.
+
+The code is PostgreSQL's, with its notices, in `src/timezone.cc`:
+the IANA library of `localtime.c` (the zone file reader, the POSIX
+rule parser, UTC to local time, the next DST boundary, the
+meaning of an abbreviation), `pg_tzset` of `pgtz.c`, and
+`DetermineTimeZoneOffset` of `datetime.c`. Three things differ
+from PostgreSQL's:
+
+1. A zone file is not read from the disk. The data is in
+   `src/tzdata.cc`, as C data, and `ty_tz_find` reads a zone from
+   it. [`TZDATA.md`](TZDATA.md) says how the file is made, and how
+   to make it again when PostgreSQL has newer data.
+2. The zones found are kept for the process, in one table, not for
+   a thread.
+3. No setting is read: the session's zone is the host's, who
+   passes the zone, or NULL where a call has one.
+
+The functions: `ty_tz_localtime` (a UTC instant in a zone: the
+fields, the offset, the abbreviation); `ty_tz_offset_for_local` (the
+offset of a local time, with the rule for a time a transition
+skips and for one it repeats); `ty_tz_abbrev_offset`,
+`ty_tz_abbrev_at` and `ty_tz_abbrev_is_known` (what a zone means
+by an abbreviation); `ty_tz_fixed_offset`; and the data's release
+and names. A host with a file of zones may give ty a pack to use
+in place of its own, by `ty_tz_use_data`; ty checks it first.
+
+The text in of timestamptz and timetz asks the host for the offset
+of a zone (section 19). The host may now answer from these calls.
+
+The tests: `test/tz_known.txt`, 16,618 lines that Python's
+`zoneinfo` gave for the same zone files, for every distinct zone
+(341), at fixed instants and local times and around the
+transitions of the zone, with the rule of PostgreSQL for a skipped
+and a repeated time; and hand tests of the lookup, the POSIX
+specs, the abbreviations, the bad packs, and a process that is
+given a pack of the host.
