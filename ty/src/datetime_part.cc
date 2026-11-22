@@ -106,7 +106,6 @@ date_unit(int code, int year, int mon, int mday, int64_t *v) {
 int ty_timestamp_part(int reserved, int code, int64_t ts, ty_part_t *out) {
   ty_tm_t tm;
   int32_t fsec;
-  int64_t v;
 
   if (reserved) {
     if (code != TY_UNIT_EPOCH) {
@@ -128,6 +127,14 @@ int ty_timestamp_part(int reserved, int code, int64_t ts, ty_part_t *out) {
   if (ty_timestamp_to_tm(ts, &tm, &fsec) != 0) {
     return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
   }
+  return ty_tm_part(code, &tm, fsec, out);
+}
+
+/* The part of broken-down time: what ty_timestamp_part picks of a timestamp. */
+int ty_tm_part(int code, const ty_tm_t *ptm, int32_t fsec, ty_part_t *out) {
+  const ty_tm_t &tm = *ptm;
+  int64_t v;
+
   switch (code) {
   case TY_UNIT_MICROSEC:
     return set_int(out, tm.sec * INT64_C(1000000) + fsec);

@@ -539,6 +539,38 @@ int ty_timestamp_trunc(int code, int64_t timestamp, int64_t *out) {
   if (ty_timestamp_to_tm(timestamp, &tm, &fsec) != 0) {
     return ts_range();
   }
+  if (ty_tm_trunc(code, &tm, &fsec) != 0) {
+    return -1;
+  }
+  if (ty_tm_to_timestamp(&tm, fsec, out) != 0) {
+    return ts_range();
+  }
+  return 0;
+}
+
+/*
+ * The cut of broken-down time at a unit: what ty_timestamp_trunc does to the
+ * fields. An unsupported unit is TY_ERR_INVALID.
+ */
+int ty_tm_trunc(int code, ty_tm_t *ptm, int32_t *pfsec) {
+  enum {
+    WEEK = 22,
+    MONTH = 23,
+    QUARTER = 24,
+    YEAR = 25,
+    DECADE = 26,
+    CENTURY = 27,
+    MILLENNIUM = 28,
+    MILLISEC = 29,
+    MICROSEC = 30,
+    SECOND = 18,
+    MINUTE = 19,
+    HOUR = 20,
+    DAY = 21
+  };
+  ty_tm_t &tm = *ptm;
+  int32_t &fsec = *pfsec;
+
   switch (code) {
   case WEEK: {
     int woy = ty_date2isoweek(tm.year, tm.mon, tm.mday);
@@ -614,9 +646,6 @@ int ty_timestamp_trunc(int code, int64_t timestamp, int64_t *out) {
     break;
   default:
     return ty_internal::set_error(TY_ERR_INVALID, "unit not supported");
-  }
-  if (ty_tm_to_timestamp(&tm, fsec, out) != 0) {
-    return ts_range();
   }
   return 0;
 }
@@ -710,11 +739,22 @@ int ty_timestamp_age(int64_t dt1, int64_t dt2, ty_interval_t *result) {
       ty_timestamp_to_tm(dt2, &tm2, &fsec2) != 0) {
     return ts_range();
   }
+  return ty_age_of_fields(&tm1, fsec1, &tm2, fsec2, dt1 < dt2, result);
+}
+
+/*
+ * The symbolic difference of two broken-down times (age of two timestamps),
+ * from the fields of the first and of the second; neg says that the first is
+ * the earlier, which the caller knows from the instants.
+ */
+int ty_age_of_fields(const ty_tm_t *ptm1, int32_t fsec1, const ty_tm_t *ptm2,
+                     int32_t fsec2, int neg_in, ty_interval_t *result) {
+  const ty_tm_t &tm1 = *ptm1, &tm2 = *ptm2;
   int64_t usec = fsec1 - fsec2, hour = tm1.hour - tm2.hour;
   int sec = tm1.sec - tm2.sec, min = tm1.min - tm2.min;
   int mday = tm1.mday - tm2.mday, mon = tm1.mon - tm2.mon,
       year = tm1.year - tm2.year;
-  bool neg = dt1 < dt2;
+  bool neg = neg_in != 0;
 
   if (neg) {
     usec = -usec;

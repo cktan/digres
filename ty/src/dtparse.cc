@@ -1796,11 +1796,6 @@ dt_abbrev_offset(const struct pg_tm *tm, const char *abbrev, const void *tz,
   }
 }
 
-/* Whether the host has a hook for the offsets: the others skip the work. */
-static bool dt_has_offsets() {
-  return g_zone != nullptr && g_zone->offset != nullptr;
-}
-
 static int DecodeDate(char *str, int fmask, int *tmask, bool *is2digits,
                       struct pg_tm *tm);
 int ValidateDate(int fmask, bool isjulian, bool is2digits, bool bc,

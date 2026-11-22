@@ -686,6 +686,26 @@ copied from PostgreSQL keeps its copyright notice
      `ts::timestamp` -2.2%; `ts::timestamp::timestamptz` -1.9%;
      `ts::date` -2.4%; `date::timestamptz` -1.3%; `AT TIME ZONE` a
      zone name -1.8%.
+   - **The arithmetic, the trunc, the parts and the age of
+     timestamptz moved (2026-11-22).** `ty_timestamptz_add_interval`,
+     `_sub_interval`, `ty_timestamptz_trunc`, `ty_timestamptz_part` and
+     `ty_timestamptz_age`, each taking the zone; and the generate_series
+     of timestamptz, which calls the sum. They work on the fields once,
+     with `ty_tm_trunc`, `ty_tm_part` and `ty_age_of_fields`, new cores
+     that the timestamp versions now call too. The tests: 12,384 more
+     lines of `tz_known.txt` from Python's `zoneinfo` (an interval added
+     across a daylight change, trunc, and the parts, over every fourth
+     zone), a hand test of age, and the pinned
+     `dg/test/select_timezone_ops.sql`. Measured by callgrind over
+     100,000 rows, the statement (old, new): `ts + interval '1 day'`
+     -3.8%; `+ interval '1 month'` -3.5%; `date_trunc('day')` -2.8%;
+     `extract(hour)` +0.36%; `age` -4.7%; `date_part('timezone_hour')`
+     -0.4%. The first version of the trunc and the part was +6.4% and
+     +5.6%: it turned the fields into a timestamp and back; the cores on
+     the fields removed that. Not moved: the conversions of timetz that
+     read the clock of the transaction, `make_timestamptz` with a zone
+     name and `to_char` (they stay with the host's parsing of a zone
+     name and its clock).
    - **The typmod of interval, timestamp and time, and
      `make_interval` moved (2026-11-21).**
      `ty_interval_adjust_typmod`, `ty_timestamp_adjust_typmod`,

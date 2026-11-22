@@ -49,7 +49,7 @@ std::vector<std::string> split(const std::string &line) {
 TEST_CASE("the zones of ty agree with zoneinfo on the same files") {
   std::ifstream in("test/tz_known.txt");
   std::string line;
-  size_t nl = 0, no = 0;
+  size_t nl = 0, no = 0, na = 0, nt = 0, np = 0;
 
   REQUIRE(in.good());
   while (std::getline(in, line)) {
@@ -101,6 +101,44 @@ TEST_CASE("the zones of ty agree with zoneinfo on the same files") {
       REQUIRE(0 == ty_timestamptz_to_date(tz, ts, &date));
       CHECK(date ==
             ty_date2j(tm.year, tm.mon, tm.mday) - TY_POSTGRES_EPOCH_JDATE);
+    } else if (w[0] == "A") {
+      // A ZONE EPOCH MONTHS DAYS USECS => INSTANT (microseconds since 1970)
+      ty_interval_t span = {std::stoll(w[5]), (int32_t)std::stoi(w[4]),
+                            (int32_t)std::stoi(w[3])};
+      int64_t ts = (std::stoll(w[2]) - 946684800) * 1000000, r, sub;
+      ty_interval_t negspan;
+
+      REQUIRE(0 == ty_timestamptz_add_interval(tz, ts, &span, &r));
+      CHECK(std::stoll(w[7]) - INT64_C(946684800000000) == r);
+      // minus the negated interval is the same sum
+      REQUIRE(0 == ty_interval_neg(&span, &negspan));
+      REQUIRE(0 == ty_timestamptz_sub_interval(tz, ts, &negspan, &sub));
+      CHECK(r == sub);
+      na++;
+    } else if (w[0] == "T") {
+      // T ZONE EPOCH UNIT => INSTANT (microseconds since 1970)
+      int code, r_code;
+      int64_t ts = (std::stoll(w[2]) - 946684800) * 1000000, r;
+
+      REQUIRE(1 == ty_datetime_unit(w[3].c_str(), &code));
+      r_code = ty_timestamptz_trunc(tz, code, ts, &r);
+      REQUIRE(0 == r_code);
+      CHECK(std::stoll(w[5]) - INT64_C(946684800000000) == r);
+      nt++;
+    } else if (w[0] == "P") {
+      // P ZONE EPOCH UNIT => VALUE
+      int code, kind;
+      int64_t ts = (std::stoll(w[2]) - 946684800) * 1000000;
+      ty_part_t p;
+
+      kind = ty_datetime_part_unit(w[3].c_str(), 0, &code);
+      REQUIRE(0 != kind);
+      REQUIRE(0 == ty_timestamptz_part(tz, kind == 2, code, ts, &p));
+      CHECK(std::stod(w[5]) == p.f);
+      if (p.kind == TY_PART_INT) {
+        CHECK(std::stoll(w[5]) == p.num);
+      }
+      np++;
     } else {
       // O ZONE Y M D h m s => OFFSET_WEST ISDST
       ty_tm_t tm = {std::stoi(w[2]), std::stoi(w[3]), std::stoi(w[4]),
@@ -133,6 +171,9 @@ TEST_CASE("the zones of ty agree with zoneinfo on the same files") {
   }
   CHECK(nl > 5000);
   CHECK(no > 3000);
+  CHECK(na > 2000);
+  CHECK(nt > 3000);
+  CHECK(np > 5000);
 }
 
 // Verify how a zone is found.
@@ -478,4 +519,46 @@ TEST_CASE("the casts of timestamptz keep the infinities and the edges") {
   CHECK(std::string("date out of range for timestamp") == ty_errmsg());
   CHECK(0 == ty_date_to_timestamptz(ny, big, &out, &over));
   CHECK(1 == over);
+}
+
+// Verify age of timestamptz: the local times' symbolic difference.
+// 1. In UTC it is what age of two timestamps gives.
+// 2. In New York, across the change to daylight time, the clock differs by
+//    an hour more than the instants: 2 days 1 hour.
+// 3. The sign is from the instants: swapped, the interval is negated.
+// 4. An infinity is what the difference of timestamps gives.
+TEST_CASE("age of timestamptz is the difference of the local times") {
+  const ty_tz_t *utc = ty_tz_find("UTC");
+  const ty_tz_t *ny = ty_tz_find("America/New_York");
+  int64_t a = (INT64_C(1710158400) - 946684800) * 1000000; // 2024-03-11 12:00Z
+  int64_t b = (INT64_C(1709985600) - 946684800) * 1000000; // 2024-03-09 12:00Z
+  ty_interval_t x, y, z;
+
+  REQUIRE(nullptr != utc);
+  REQUIRE(nullptr != ny);
+  // 1. In UTC it is what age of two timestamps gives.
+  REQUIRE(0 == ty_timestamptz_age(utc, a, b, &x));
+  REQUIRE(0 == ty_timestamp_age(a, b, &y));
+  CHECK(x.month == y.month);
+  CHECK(x.day == y.day);
+  CHECK(x.time == y.time);
+  CHECK(2 == x.day);
+  CHECK(0 == x.time);
+
+  // 2. In New York, across the change to daylight time: 2 days 1 hour.
+  REQUIRE(0 == ty_timestamptz_age(ny, a, b, &z));
+  CHECK(0 == z.month);
+  CHECK(2 == z.day);
+  CHECK(TY_USECS_PER_HOUR == z.time);
+
+  // 3. The sign is from the instants: swapped, the interval is negated.
+  REQUIRE(0 == ty_timestamptz_age(ny, b, a, &z));
+  CHECK(-2 == z.day);
+  CHECK(-TY_USECS_PER_HOUR == z.time);
+
+  // 4. An infinity is what the difference of timestamps gives.
+  REQUIRE(0 == ty_timestamptz_age(ny, TY_TIMESTAMP_NOEND, a, &z));
+  CHECK(ty_interval_is_noend(&z));
+  CHECK(-1 ==
+        ty_timestamptz_age(ny, TY_TIMESTAMP_NOEND, TY_TIMESTAMP_NOEND, &z));
 }

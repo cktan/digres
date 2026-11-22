@@ -2185,103 +2185,16 @@ static TimestampTz timestamptz_pl_interval_internal(TimestampTz timestamp,
                                                     Interval *span,
                                                     pg_tz *attimezone) {
   TimestampTz result;
-  int tz;
 
-  /*
-   * Handle infinities.
-   *
-   * We treat anything that amounts to "infinity - infinity" as an error,
-   * since the timestamptz type has nothing equivalent to NaN.
-   */
-  if (INTERVAL_IS_NOBEGIN(span)) {
-    if (TIMESTAMP_IS_NOEND(timestamp))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-    else
-      TIMESTAMP_NOBEGIN(result);
-  } else if (INTERVAL_IS_NOEND(span)) {
-    if (TIMESTAMP_IS_NOBEGIN(timestamp))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-    else
-      TIMESTAMP_NOEND(result);
-  } else if (TIMESTAMP_NOT_FINITE(timestamp))
-    result = timestamp;
-  else {
-    /* Use session timezone if caller asks for default */
-    if (attimezone == NULL)
-      attimezone = session_timezone;
+  /* Use session timezone if caller asks for default */
+  if (attimezone == NULL)
+    attimezone = session_timezone;
 
-    if (span->month != 0) {
-      struct pg_tm tt, *tm = &tt;
-      fsec_t fsec;
-
-      if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, attimezone) != 0)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-
-      if (pg_add_s32_overflow(tm->tm_mon, span->month, &tm->tm_mon))
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-      if (tm->tm_mon > MONTHS_PER_YEAR) {
-        tm->tm_year += (tm->tm_mon - 1) / MONTHS_PER_YEAR;
-        tm->tm_mon = ((tm->tm_mon - 1) % MONTHS_PER_YEAR) + 1;
-      } else if (tm->tm_mon < 1) {
-        tm->tm_year += tm->tm_mon / MONTHS_PER_YEAR - 1;
-        tm->tm_mon = tm->tm_mon % MONTHS_PER_YEAR + MONTHS_PER_YEAR;
-      }
-
-      /* adjust for end of month boundary problems... */
-      if (tm->tm_mday > day_tab[isleap(tm->tm_year)][tm->tm_mon - 1])
-        tm->tm_mday = (day_tab[isleap(tm->tm_year)][tm->tm_mon - 1]);
-
-      tz = DetermineTimeZoneOffset(tm, attimezone);
-
-      if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-    }
-
-    if (span->day != 0) {
-      struct pg_tm tt, *tm = &tt;
-      fsec_t fsec;
-      int julian;
-
-      if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, attimezone) != 0)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-
-      /*
-       * Add days by converting to and from Julian.  We need an overflow
-       * check here since j2date expects a non-negative integer input.
-       * In practice though, it will give correct answers for small
-       * negative Julian dates; we should allow -1 to avoid
-       * timezone-dependent failures, as discussed in timestamp.h.
-       */
-      julian = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday);
-      if (pg_add_s32_overflow(julian, span->day, &julian) || julian < -1)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-      j2date(julian, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
-
-      tz = DetermineTimeZoneOffset(tm, attimezone);
-
-      if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
-        ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                        errmsg("timestamp out of range")));
-    }
-
-    if (pg_add_s64_overflow(timestamp, span->time, &timestamp))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-
-    if (!IS_VALID_TIMESTAMP(timestamp))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-
-    result = timestamp;
-  }
-
+  /* ty adds the months, the days and the microseconds, in the zone */
+  if (ty_timestamptz_add_interval(attimezone, timestamp, (ty_interval_t *)span,
+                                  &result))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
   return result;
 }
 
@@ -2888,117 +2801,16 @@ Datum timestamp_age(PG_FUNCTION_ARGS) {
 Datum timestamptz_age(PG_FUNCTION_ARGS) {
   TimestampTz dt1 = PG_GETARG_TIMESTAMPTZ(0);
   TimestampTz dt2 = PG_GETARG_TIMESTAMPTZ(1);
-  Interval *result;
-  fsec_t fsec1, fsec2;
-  struct pg_itm tt, *tm = &tt;
-  struct pg_tm tt1, *tm1 = &tt1;
-  struct pg_tm tt2, *tm2 = &tt2;
-  int tz1;
-  int tz2;
-
-  result = (Interval *)palloc(sizeof(Interval));
+  Interval *result = (Interval *)palloc(sizeof(Interval));
 
   /*
-   * Handle infinities.
-   *
-   * We treat anything that amounts to "infinity - infinity" as an error,
-   * since the interval type has nothing equivalent to NaN.
+   * ty subtracts the fields of the local times, with the borrows, and
+   * handles the infinities. Any difference between the offsets of the two
+   * is ignored on purpose.
    */
-  if (TIMESTAMP_IS_NOBEGIN(dt1)) {
-    if (TIMESTAMP_IS_NOBEGIN(dt2))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-    else
-      INTERVAL_NOBEGIN(result);
-  } else if (TIMESTAMP_IS_NOEND(dt1)) {
-    if (TIMESTAMP_IS_NOEND(dt2))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-    else
-      INTERVAL_NOEND(result);
-  } else if (TIMESTAMP_IS_NOBEGIN(dt2))
-    INTERVAL_NOEND(result);
-  else if (TIMESTAMP_IS_NOEND(dt2))
-    INTERVAL_NOBEGIN(result);
-  else if (timestamp2tm(dt1, &tz1, tm1, &fsec1, NULL, NULL) == 0 &&
-           timestamp2tm(dt2, &tz2, tm2, &fsec2, NULL, NULL) == 0) {
-    /* form the symbolic difference */
-    tm->tm_usec = fsec1 - fsec2;
-    tm->tm_sec = tm1->tm_sec - tm2->tm_sec;
-    tm->tm_min = tm1->tm_min - tm2->tm_min;
-    tm->tm_hour = tm1->tm_hour - tm2->tm_hour;
-    tm->tm_mday = tm1->tm_mday - tm2->tm_mday;
-    tm->tm_mon = tm1->tm_mon - tm2->tm_mon;
-    tm->tm_year = tm1->tm_year - tm2->tm_year;
-
-    /* flip sign if necessary... */
-    if (dt1 < dt2) {
-      tm->tm_usec = -tm->tm_usec;
-      tm->tm_sec = -tm->tm_sec;
-      tm->tm_min = -tm->tm_min;
-      tm->tm_hour = -tm->tm_hour;
-      tm->tm_mday = -tm->tm_mday;
-      tm->tm_mon = -tm->tm_mon;
-      tm->tm_year = -tm->tm_year;
-    }
-
-    /* propagate any negative fields into the next higher field */
-    while (tm->tm_usec < 0) {
-      tm->tm_usec += USECS_PER_SEC;
-      tm->tm_sec--;
-    }
-
-    while (tm->tm_sec < 0) {
-      tm->tm_sec += SECS_PER_MINUTE;
-      tm->tm_min--;
-    }
-
-    while (tm->tm_min < 0) {
-      tm->tm_min += MINS_PER_HOUR;
-      tm->tm_hour--;
-    }
-
-    while (tm->tm_hour < 0) {
-      tm->tm_hour += HOURS_PER_DAY;
-      tm->tm_mday--;
-    }
-
-    while (tm->tm_mday < 0) {
-      if (dt1 < dt2) {
-        tm->tm_mday += day_tab[isleap(tm1->tm_year)][tm1->tm_mon - 1];
-        tm->tm_mon--;
-      } else {
-        tm->tm_mday += day_tab[isleap(tm2->tm_year)][tm2->tm_mon - 1];
-        tm->tm_mon--;
-      }
-    }
-
-    while (tm->tm_mon < 0) {
-      tm->tm_mon += MONTHS_PER_YEAR;
-      tm->tm_year--;
-    }
-
-    /*
-     * Note: we deliberately ignore any difference between tz1 and tz2.
-     */
-
-    /* recover sign if necessary... */
-    if (dt1 < dt2) {
-      tm->tm_usec = -tm->tm_usec;
-      tm->tm_sec = -tm->tm_sec;
-      tm->tm_min = -tm->tm_min;
-      tm->tm_hour = -tm->tm_hour;
-      tm->tm_mday = -tm->tm_mday;
-      tm->tm_mon = -tm->tm_mon;
-      tm->tm_year = -tm->tm_year;
-    }
-
-    if (itm2interval(tm, result) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("interval out of range")));
-  } else
+  if (ty_timestamptz_age(session_timezone, dt1, dt2, (ty_interval_t *)result))
     ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("timestamp out of range")));
+                    errmsg("%s", ty_errmsg())));
 
   PG_RETURN_INTERVAL_P(result);
 }
@@ -3127,156 +2939,27 @@ Datum timestamptz_bin(PG_FUNCTION_ARGS) {
 static TimestampTz
 timestamptz_trunc_internal(text *units, TimestampTz timestamp, pg_tz *tzp) {
   TimestampTz result;
-  int tz;
   int type, val;
-  bool redotz = false;
   char *lowunits;
-  fsec_t fsec;
-  struct pg_tm tt, *tm = &tt;
 
   lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
                                           VARSIZE_ANY_EXHDR(units), false);
 
-  type = DecodeUnits(0, lowunits, &val);
+  type = ty_datetime_unit(lowunits, &val);
 
-  if (type == UNITS) {
-    if (TIMESTAMP_NOT_FINITE(timestamp)) {
-      /*
-       * Errors thrown here for invalid units should exactly match those
-       * below, else there will be unexpected discrepancies between
-       * finite- and infinite-input cases.
-       */
-      switch (val) {
-      case DTK_WEEK:
-      case DTK_MILLENNIUM:
-      case DTK_CENTURY:
-      case DTK_DECADE:
-      case DTK_YEAR:
-      case DTK_QUARTER:
-      case DTK_MONTH:
-      case DTK_DAY:
-      case DTK_HOUR:
-      case DTK_MINUTE:
-      case DTK_SECOND:
-      case DTK_MILLISEC:
-      case DTK_MICROSEC:
-        return timestamp;
-        break;
-
-      default:
-        ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                        errmsg("unit \"%s\" not supported for type %s",
-                               lowunits, format_type_be(TIMESTAMPTZOID))));
-        result = 0;
-      }
-    }
-
-    if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, tzp) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-
-    switch (val) {
-    case DTK_WEEK: {
-      int woy;
-
-      woy = date2isoweek(tm->tm_year, tm->tm_mon, tm->tm_mday);
-
-      /*
-       * If it is week 52/53 and the month is January, then the
-       * week must belong to the previous year. Also, some
-       * December dates belong to the next year.
-       */
-      if (woy >= 52 && tm->tm_mon == 1)
-        --tm->tm_year;
-      if (woy <= 1 && tm->tm_mon == MONTHS_PER_YEAR)
-        ++tm->tm_year;
-      isoweek2date(woy, &(tm->tm_year), &(tm->tm_mon), &(tm->tm_mday));
-      tm->tm_hour = 0;
-      tm->tm_min = 0;
-      tm->tm_sec = 0;
-      fsec = 0;
-      redotz = true;
-      break;
-    }
-      /* one may consider DTK_THOUSAND and DTK_HUNDRED... */
-    case DTK_MILLENNIUM:
-
-      /*
-       * truncating to the millennium? what is this supposed to
-       * mean? let us put the first year of the millennium... i.e.
-       * -1000, 1, 1001, 2001...
-       */
-      if (tm->tm_year > 0)
-        tm->tm_year = ((tm->tm_year + 999) / 1000) * 1000 - 999;
-      else
-        tm->tm_year = -((999 - (tm->tm_year - 1)) / 1000) * 1000 + 1;
-      /* FALL THRU */
-    case DTK_CENTURY:
-      /* truncating to the century? as above: -100, 1, 101... */
-      if (tm->tm_year > 0)
-        tm->tm_year = ((tm->tm_year + 99) / 100) * 100 - 99;
-      else
-        tm->tm_year = -((99 - (tm->tm_year - 1)) / 100) * 100 + 1;
-      /* FALL THRU */
-    case DTK_DECADE:
-
-      /*
-       * truncating to the decade? first year of the decade. must
-       * not be applied if year was truncated before!
-       */
-      if (val != DTK_MILLENNIUM && val != DTK_CENTURY) {
-        if (tm->tm_year > 0)
-          tm->tm_year = (tm->tm_year / 10) * 10;
-        else
-          tm->tm_year = -((8 - (tm->tm_year - 1)) / 10) * 10;
-      }
-      /* FALL THRU */
-    case DTK_YEAR:
-      tm->tm_mon = 1;
-      /* FALL THRU */
-    case DTK_QUARTER:
-      tm->tm_mon = (3 * ((tm->tm_mon - 1) / 3)) + 1;
-      /* FALL THRU */
-    case DTK_MONTH:
-      tm->tm_mday = 1;
-      /* FALL THRU */
-    case DTK_DAY:
-      tm->tm_hour = 0;
-      redotz = true; /* for all cases >= DAY */
-                     /* FALL THRU */
-    case DTK_HOUR:
-      tm->tm_min = 0;
-      /* FALL THRU */
-    case DTK_MINUTE:
-      tm->tm_sec = 0;
-      /* FALL THRU */
-    case DTK_SECOND:
-      fsec = 0;
-      break;
-    case DTK_MILLISEC:
-      fsec = (fsec / 1000) * 1000;
-      break;
-    case DTK_MICROSEC:
-      break;
-
-    default:
-      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                      errmsg("unit \"%s\" not supported for type %s", lowunits,
-                             format_type_be(TIMESTAMPTZOID))));
-      result = 0;
-    }
-
-    if (redotz)
-      tz = DetermineTimeZoneOffset(tm, tzp);
-
-    if (tm2timestamp(tm, fsec, &tz, &result) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-  } else {
+  if (!type)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unit \"%s\" not recognized for type %s", lowunits,
                            format_type_be(TIMESTAMPTZOID))));
-    result = 0;
+
+  /* ty cuts the local time in the zone at the unit (an infinity passes) */
+  if (ty_timestamptz_trunc(tzp, val, timestamp, &result)) {
+    if (ty_errnum() == TY_ERR_INVALID)
+      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                      errmsg("unit \"%s\" not supported for type %s",
+                             lowunits, format_type_be(TIMESTAMPTZOID))));
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("timestamp out of range")));
   }
 
   return result;
@@ -3577,23 +3260,21 @@ Datum extract_timestamp(PG_FUNCTION_ARGS) {
 static Datum timestamptz_part_common(PG_FUNCTION_ARGS, bool retnumeric) {
   text *units = PG_GETARG_TEXT_PP(0);
   TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
-  int64 intresult;
-  Timestamp epoch;
-  int tz;
   int type, val;
   char *lowunits;
-  fsec_t fsec;
-  struct pg_tm tt, *tm = &tt;
+  ty_part_t part;
 
+  /* Lowercase the units string and look it up. */
   lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
                                           VARSIZE_ANY_EXHDR(units), false);
 
-  type = DecodeUnits(0, lowunits, &val);
-  if (type == UNKNOWN_FIELD)
-    type = DecodeSpecial(0, lowunits, &val);
+  type = ty_datetime_part_unit(lowunits, 0, &val);
 
   if (TIMESTAMP_NOT_FINITE(timestamp)) {
-    double r = NonFiniteTimestampTzPart(type, val, lowunits,
+    double r = NonFiniteTimestampTzPart(type == 1 ? UNITS
+                                        : type == 2 ? RESERV
+                                                    : UNKNOWN_FIELD,
+                                        val, lowunits,
                                         TIMESTAMP_IS_NOBEGIN(timestamp), true);
 
     if (r != 0.0) {
@@ -3612,203 +3293,22 @@ static Datum timestamptz_part_common(PG_FUNCTION_ARGS, bool retnumeric) {
       PG_RETURN_NULL();
   }
 
-  if (type == UNITS) {
-    if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
-
-    switch (val) {
-    case DTK_TZ:
-      intresult = -tz;
-      break;
-
-    case DTK_TZ_MINUTE:
-      intresult = (-tz / SECS_PER_MINUTE) % MINS_PER_HOUR;
-      break;
-
-    case DTK_TZ_HOUR:
-      intresult = -tz / SECS_PER_HOUR;
-      break;
-
-    case DTK_MICROSEC:
-      intresult = tm->tm_sec * INT64CONST(1000000) + fsec;
-      break;
-
-    case DTK_MILLISEC:
-      if (retnumeric)
-        /*---
-         * tm->tm_sec * 1000 + fsec / 1000
-         * = (tm->tm_sec * 1'000'000 + fsec) / 1000
-         */
-        PG_RETURN_NUMERIC(int64_div_fast_to_numeric(
-            tm->tm_sec * INT64CONST(1000000) + fsec, 3));
-      else
-        PG_RETURN_FLOAT8(tm->tm_sec * 1000.0 + fsec / 1000.0);
-      break;
-
-    case DTK_SECOND:
-      if (retnumeric)
-        /*---
-         * tm->tm_sec + fsec / 1'000'000
-         * = (tm->tm_sec * 1'000'000 + fsec) / 1'000'000
-         */
-        PG_RETURN_NUMERIC(int64_div_fast_to_numeric(
-            tm->tm_sec * INT64CONST(1000000) + fsec, 6));
-      else
-        PG_RETURN_FLOAT8(tm->tm_sec + fsec / 1000000.0);
-      break;
-
-    case DTK_MINUTE:
-      intresult = tm->tm_min;
-      break;
-
-    case DTK_HOUR:
-      intresult = tm->tm_hour;
-      break;
-
-    case DTK_DAY:
-      intresult = tm->tm_mday;
-      break;
-
-    case DTK_MONTH:
-      intresult = tm->tm_mon;
-      break;
-
-    case DTK_QUARTER:
-      intresult = (tm->tm_mon - 1) / 3 + 1;
-      break;
-
-    case DTK_WEEK:
-      intresult = date2isoweek(tm->tm_year, tm->tm_mon, tm->tm_mday);
-      break;
-
-    case DTK_YEAR:
-      if (tm->tm_year > 0)
-        intresult = tm->tm_year;
-      else
-        /* there is no year 0, just 1 BC and 1 AD */
-        intresult = tm->tm_year - 1;
-      break;
-
-    case DTK_DECADE:
-      /* see comments in timestamp_part */
-      if (tm->tm_year > 0)
-        intresult = tm->tm_year / 10;
-      else
-        intresult = -((8 - (tm->tm_year - 1)) / 10);
-      break;
-
-    case DTK_CENTURY:
-      /* see comments in timestamp_part */
-      if (tm->tm_year > 0)
-        intresult = (tm->tm_year + 99) / 100;
-      else
-        intresult = -((99 - (tm->tm_year - 1)) / 100);
-      break;
-
-    case DTK_MILLENNIUM:
-      /* see comments in timestamp_part */
-      if (tm->tm_year > 0)
-        intresult = (tm->tm_year + 999) / 1000;
-      else
-        intresult = -((999 - (tm->tm_year - 1)) / 1000);
-      break;
-
-    case DTK_JULIAN:
-      if (retnumeric)
-        PG_RETURN_NUMERIC(numeric_add_opt_error(
-            int64_to_numeric(date2j(tm->tm_year, tm->tm_mon, tm->tm_mday)),
-            numeric_div_opt_error(
-                int64_to_numeric(
-                    ((((tm->tm_hour * MINS_PER_HOUR) + tm->tm_min) *
-                      SECS_PER_MINUTE) +
-                     tm->tm_sec) *
-                        INT64CONST(1000000) +
-                    fsec),
-                int64_to_numeric(SECS_PER_DAY * INT64CONST(1000000)), NULL),
-            NULL));
-      else
-        PG_RETURN_FLOAT8(
-            date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) +
-            ((((tm->tm_hour * MINS_PER_HOUR) + tm->tm_min) * SECS_PER_MINUTE) +
-             tm->tm_sec + (fsec / 1000000.0)) /
-                (double)SECS_PER_DAY);
-      break;
-
-    case DTK_ISOYEAR:
-      intresult = date2isoyear(tm->tm_year, tm->tm_mon, tm->tm_mday);
-      /* Adjust BC years */
-      if (intresult <= 0)
-        intresult -= 1;
-      break;
-
-    case DTK_DOW:
-    case DTK_ISODOW:
-      intresult = j2day(date2j(tm->tm_year, tm->tm_mon, tm->tm_mday));
-      if (val == DTK_ISODOW && intresult == 0)
-        intresult = 7;
-      break;
-
-    case DTK_DOY:
-      intresult = (date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) -
-                   date2j(tm->tm_year, 1, 1) + 1);
-      break;
-
-    default:
-      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                      errmsg("unit \"%s\" not supported for type %s", lowunits,
-                             format_type_be(TIMESTAMPTZOID))));
-      intresult = 0;
-    }
-  } else if (type == RESERV) {
-    switch (val) {
-    case DTK_EPOCH:
-      epoch = SetEpochTimestamp();
-      /* (timestamp - epoch) / 1000000 */
-      if (retnumeric) {
-        Numeric result;
-
-        if (timestamp < (PG_INT64_MAX + epoch))
-          result = int64_div_fast_to_numeric(timestamp - epoch, 6);
-        else {
-          result = numeric_div_opt_error(
-              numeric_sub_opt_error(int64_to_numeric(timestamp),
-                                    int64_to_numeric(epoch), NULL),
-              int64_to_numeric(1000000), NULL);
-          result = DatumGetNumeric(DirectFunctionCall2(
-              numeric_round, NumericGetDatum(result), Int32GetDatum(6)));
-        }
-        PG_RETURN_NUMERIC(result);
-      } else {
-        float8 result;
-
-        /* try to avoid precision loss in subtraction */
-        if (timestamp < (PG_INT64_MAX + epoch))
-          result = (timestamp - epoch) / 1000000.0;
-        else
-          result = ((float8)timestamp - epoch) / 1000000.0;
-        PG_RETURN_FLOAT8(result);
-      }
-      break;
-
-    default:
-      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                      errmsg("unit \"%s\" not supported for type %s", lowunits,
-                             format_type_be(TIMESTAMPTZOID))));
-      intresult = 0;
-    }
-  } else {
+  if (type == 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unit \"%s\" not recognized for type %s", lowunits,
                            format_type_be(TIMESTAMPTZOID))));
 
-    intresult = 0;
+  /* ty takes the local time in the session's zone apart and picks the unit */
+  if (ty_timestamptz_part(session_timezone, type == 2, val, timestamp,
+                          &part)) {
+    if (ty_errnum() == TY_ERR_RANGE)
+      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                      errmsg("timestamp out of range")));
+    ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                    errmsg("unit \"%s\" not supported for type %s", lowunits,
+                           format_type_be(TIMESTAMPTZOID))));
   }
-
-  if (retnumeric)
-    PG_RETURN_NUMERIC(int64_to_numeric(intresult));
-  else
-    PG_RETURN_FLOAT8(intresult);
+  return ty_part_datum(&part, retnumeric);
 }
 
 Datum timestamptz_part(PG_FUNCTION_ARGS) {

@@ -316,6 +316,13 @@ int ty_datetime_unit(const char* lowtoken, int* code);
 int ty_timestamp_trunc(int code, int64_t ts, int64_t* out);
 
 /*
+ * The cut of broken-down time, with its microseconds, at a unit: what
+ * ty_timestamp_trunc does to the fields, for a caller that has them (a
+ * timestamptz in a zone). An unsupported unit is TY_ERR_INVALID.
+ */
+int ty_tm_trunc(int code, ty_tm_t* tm, int32_t* fsec);
+
+/*
  * date_trunc of an interval: cut at a unit as ty_timestamp_trunc does. A
  * week, and a code that is no unit of an interval, is TY_ERR_INVALID
  * ("unit not supported"); a result out of range is TY_ERR_RANGE.
@@ -382,6 +389,14 @@ static inline int ty_timestamp_bin(const ty_interval_t* stride, int64_t ts,
 int ty_timestamp_age(int64_t a, int64_t b, ty_interval_t* out);
 
 /*
+ * The core of age: the symbolic difference of two broken-down times, from
+ * the first and the second, with neg set if the first instant is the
+ * earlier. TY_ERR_RANGE if the interval does not fit.
+ */
+int ty_age_of_fields(const ty_tm_t* tm1, int32_t fsec1, const ty_tm_t* tm2,
+                     int32_t fsec2, int neg, ty_interval_t* out);
+
+/*
  * extract and date_part. A unit is a word as PostgreSQL knows it, in lower
  * case; ty_datetime_part_unit gives 1 for a unit, 2 for a reserved word
  * (such as epoch), and 0 for a word that is not known. With epoch_only
@@ -442,6 +457,9 @@ typedef struct ty_part_t {
  * for is TY_ERR_INVALID; a timestamp that is out of range, TY_ERR_RANGE.
  */
 int ty_timestamp_part(int reserved, int code, int64_t ts, ty_part_t* out);
+
+/* The part of broken-down time, as ty_timestamp_part takes it of a timestamp. */
+int ty_tm_part(int code, const ty_tm_t* tm, int32_t fsec, ty_part_t* out);
 int ty_date_part(int reserved, int code, int32_t date, ty_part_t* out);
 int ty_time_part(int reserved, int code, int64_t t, ty_part_t* out);
 int ty_interval_part(int reserved, int code, const ty_interval_t* iv,

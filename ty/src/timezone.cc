@@ -2529,6 +2529,209 @@ int ty_timestamptz_to_date(const ty_tz_t *tz, int64_t ts, int32_t *out) {
   return 0;
 }
 
+/*
+ * tm2timestamp with a zone: the local fields as the instant, the offset
+ * (west of Greenwich) added; the range is checked on the result.
+ */
+static int tm2ts_tz(const ty_tm_t *tm, int32_t fsec, int west, int64_t *out) {
+  if (!IS_VALID_JULIAN(tm->year, tm->mon, tm->mday)) {
+    return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+  }
+  int64_t date =
+      ty_date2j(tm->year, tm->mon, tm->mday) - TY_POSTGRES_EPOCH_JDATE;
+  int64_t time =
+      (((int64_t)tm->hour * 60 + tm->min) * 60 + tm->sec) * 1000000 + fsec;
+  int64_t r;
+
+  if (__builtin_mul_overflow(date, INT64_C(86400000000), &r) ||
+      __builtin_add_overflow(r, time, &r)) {
+    return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+  }
+  r += (int64_t)west * 1000000;
+  if (!ty_timestamp_valid(r)) {
+    return ty_internal::set_error(TY_ERR_RANGE, "timestamp out of range");
+  }
+  *out = r;
+  return 0;
+}
+
+/* timestamptz_pl_interval_internal: see ty_timezone.h. */
+int ty_timestamptz_add_interval(const ty_tz_t *tz, int64_t timestamp,
+                                const ty_interval_t *span, int64_t *out) {
+  const ty_errnum_t kRange = TY_ERR_RANGE;
+  const char *msg = "timestamp out of range";
+  ty_tm_t tm;
+  int32_t fsec;
+  int west, isdst;
+
+  /*
+   * Handle infinities. We treat anything that amounts to "infinity -
+   * infinity" as an error.
+   */
+  if (ty_interval_is_nobegin(span)) {
+    if (timestamp == TY_TIMESTAMP_NOEND) {
+      return ty_internal::set_error(kRange, msg);
+    }
+    *out = TY_TIMESTAMP_NOBEGIN;
+    return 0;
+  }
+  if (ty_interval_is_noend(span)) {
+    if (timestamp == TY_TIMESTAMP_NOBEGIN) {
+      return ty_internal::set_error(kRange, msg);
+    }
+    *out = TY_TIMESTAMP_NOEND;
+    return 0;
+  }
+  if (!ty_timestamp_finite(timestamp)) {
+    *out = timestamp;
+    return 0;
+  }
+  if (span->month != 0) {
+    if (ty_timestamptz_to_local(tz, timestamp, &tm, &fsec, &west, &isdst,
+                                nullptr) != 0 ||
+        __builtin_add_overflow(tm.mon, span->month, &tm.mon)) {
+      return ty_internal::set_error(kRange, msg);
+    }
+    if (tm.mon > 12) {
+      tm.year += (tm.mon - 1) / 12;
+      tm.mon = ((tm.mon - 1) % 12) + 1;
+    } else if (tm.mon < 1) {
+      tm.year += tm.mon / 12 - 1;
+      tm.mon = tm.mon % 12 + 12;
+    }
+    /* adjust for end of month boundary problems... */
+    if (tm.mday > ty_days_in_month(tm.year, tm.mon)) {
+      tm.mday = ty_days_in_month(tm.year, tm.mon);
+    }
+    west = ty_tz_offset_for_local(tz, &tm, &isdst, nullptr);
+    if (tm2ts_tz(&tm, fsec, west, &timestamp) != 0) {
+      return -1;
+    }
+  }
+  if (span->day != 0) {
+    int julian;
+
+    if (ty_timestamptz_to_local(tz, timestamp, &tm, &fsec, &west, &isdst,
+                                nullptr) != 0) {
+      return -1;
+    }
+    /*
+     * Add days by converting to and from Julian. We need an overflow check
+     * here since j2date expects a non-negative integer input; -1 is allowed,
+     * to avoid timezone-dependent failures.
+     */
+    julian = ty_date2j(tm.year, tm.mon, tm.mday);
+    if (__builtin_add_overflow(julian, span->day, &julian) || julian < -1) {
+      return ty_internal::set_error(kRange, msg);
+    }
+    ty_j2date(julian, &tm.year, &tm.mon, &tm.mday);
+    west = ty_tz_offset_for_local(tz, &tm, &isdst, nullptr);
+    if (tm2ts_tz(&tm, fsec, west, &timestamp) != 0) {
+      return -1;
+    }
+  }
+  if (__builtin_add_overflow(timestamp, span->time, &timestamp) ||
+      !ty_timestamp_valid(timestamp)) {
+    return ty_internal::set_error(kRange, msg);
+  }
+  *out = timestamp;
+  return 0;
+}
+
+/* timestamptz_mi_interval_internal: add the negated interval. */
+int ty_timestamptz_sub_interval(const ty_tz_t *tz, int64_t ts,
+                                const ty_interval_t *span, int64_t *out) {
+  ty_interval_t neg;
+
+  if (ty_interval_neg(span, &neg) != 0) {
+    return ty_internal::set_error(TY_ERR_RANGE, "interval out of range");
+  }
+  return ty_timestamptz_add_interval(tz, ts, &neg, out);
+}
+
+/*
+ * date_trunc of a timestamptz: see ty_timezone.h.
+ * 1. An infinity is what ty_timestamp_trunc says of it.
+ * 2. Take the local fields of the instant, and cut them at the unit.
+ * 3. A unit of a day or longer (codes 21 to 28) finds the offset again at the
+ *    new local time; a shorter one keeps the offset of the instant.
+ */
+int ty_timestamptz_trunc(const ty_tz_t *tz, int code, int64_t ts,
+                         int64_t *out) {
+  ty_tm_t tm;
+  int32_t fsec;
+  int west, isdst;
+
+  if (!ty_timestamp_finite(ts)) {
+    return ty_timestamp_trunc(code, ts, out);
+  }
+  if (ty_timestamptz_to_local(tz, ts, &tm, &fsec, &west, &isdst, nullptr) !=
+          0 ||
+      ty_tm_trunc(code, &tm, &fsec) != 0) {
+    return -1;
+  }
+  if (code >= 21 && code <= 28) {
+    west = ty_tz_offset_for_local(tz, &tm, &isdst, nullptr);
+  }
+  return tm2ts_tz(&tm, fsec, west, out);
+}
+
+/* timestamptz_part: see ty_timezone.h. */
+int ty_timestamptz_part(const ty_tz_t *tz, int reserved, int code, int64_t ts,
+                        ty_part_t *out) {
+  enum { TZ = 4, TZ_HOUR = 34, TZ_MINUTE = 35 };
+  ty_tm_t tm;
+  int32_t fsec;
+  int west, isdst;
+
+  if (reserved) { /* epoch: the instant, whatever the zone */
+    return ty_timestamp_part(reserved, code, ts, out);
+  }
+  if (ty_timestamptz_to_local(tz, ts, &tm, &fsec, &west, &isdst, nullptr) !=
+      0) {
+    return -1;
+  }
+  int64_t v;
+
+  switch (code) {
+  case TZ:
+    v = -west;
+    break;
+  case TZ_MINUTE:
+    v = (-west / 60) % 60;
+    break;
+  case TZ_HOUR:
+    v = -west / 3600;
+    break;
+  default:
+    return ty_tm_part(code, &tm, fsec, out);
+  }
+  out->kind = TY_PART_INT;
+  out->scale = 0;
+  out->num = v;
+  out->num2 = 0;
+  out->f = (double)v;
+  return 0;
+}
+
+/* timestamptz_age: see ty_timezone.h. */
+int ty_timestamptz_age(const ty_tz_t *tz, int64_t dt1, int64_t dt2,
+                       ty_interval_t *out) {
+  ty_tm_t tm1, tm2;
+  int32_t fsec1, fsec2;
+  int w, d;
+
+  if (!ty_timestamp_finite(dt1) || !ty_timestamp_finite(dt2)) {
+    return ty_timestamp_diff(dt1, dt2, out);
+  }
+  if (ty_timestamptz_to_local(tz, dt1, &tm1, &fsec1, &w, &d, nullptr) != 0 ||
+      ty_timestamptz_to_local(tz, dt2, &tm2, &fsec2, &w, &d, nullptr) != 0) {
+    return -1;
+  }
+  /* The difference of the zones' offsets is ignored, on purpose. */
+  return ty_age_of_fields(&tm1, fsec1, &tm2, fsec2, dt1 < dt2, out);
+}
+
 int ty_tz_file(const char *name, char *canonname, const unsigned char **data,
                size_t *size) {
   return pack_find(name, canonname, data, size);

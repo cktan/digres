@@ -148,6 +148,41 @@ int ty_date_to_timestamptz(const ty_tz_t* tz, int32_t d, int64_t* out,
 int ty_timestamptz_to_date(const ty_tz_t* tz, int64_t ts, int32_t* out);
 
 /*
+ * timestamptz + interval and - interval, in the zone (timestamptz_pl_interval
+ * and _mi_interval): the months are added to the local time, then the days,
+ * each time finding the offset of the new local time, so that a day is a day
+ * of the clock across a change of daylight time; then the microseconds, in
+ * UTC. An infinite interval makes an infinity, as for a timestamp.
+ */
+int ty_timestamptz_add_interval(const ty_tz_t* tz, int64_t ts,
+                                const ty_interval_t* span, int64_t* out);
+int ty_timestamptz_sub_interval(const ty_tz_t* tz, int64_t ts,
+                                const ty_interval_t* span, int64_t* out);
+
+/*
+ * date_trunc of a timestamptz in the zone (timestamptz_trunc_internal): the
+ * local time is cut at the unit (a code of ty_datetime_unit), and for a day
+ * or a longer unit the offset is found again for the new local time.
+ */
+int ty_timestamptz_trunc(const ty_tz_t* tz, int code, int64_t ts,
+                         int64_t* out);
+
+/*
+ * extract and date_part of a finite timestamptz in the zone: the units of
+ * the local time, the zone's own (timezone, timezone_hour, timezone_minute),
+ * and epoch, which is the instant. reserved is as for ty_timestamp_part.
+ */
+int ty_timestamptz_part(const ty_tz_t* tz, int reserved, int code, int64_t ts,
+                        ty_part_t* out);
+
+/*
+ * age of two timestamptz in the zone (timestamptz_age): the symbolic
+ * difference of the local times, with the sign from the instants.
+ */
+int ty_timestamptz_age(const ty_tz_t* tz, int64_t a, int64_t b,
+                       ty_interval_t* out);
+
+/*
  * PostgreSQL's own shapes, for a host whose code is PostgreSQL's (digres).
  * A ty_tz_pgtm_t is PostgreSQL's pg_tm: the month counts from 0 and the year
  * from 1900, as in the IANA library.

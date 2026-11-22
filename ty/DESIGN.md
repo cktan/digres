@@ -742,6 +742,17 @@ zone), `ty_timestamp_to_timestamptz` and `ty_timestamptz_to_timestamp`
 pass through, an overflow is an error or, if the caller asks, an
 infinity and a flag, and the messages are PostgreSQL's.
 
+The arithmetic and the parts of a timestamptz are there as well:
+`ty_timestamptz_add_interval` and `_sub_interval` (the months, then the
+days, each time finding the offset of the new local time, so that a day
+is a day of the clock across a change of daylight time; then the
+microseconds), `ty_timestamptz_trunc`, `ty_timestamptz_part` (the units
+of the local time, the zone's own, and the epoch, which is the instant)
+and `ty_timestamptz_age`. Each works on the fields once, as the code of
+PostgreSQL does: `ty_tm_trunc`, `ty_tm_part` and `ty_age_of_fields`
+are the cores of the timestamp versions, which take the fields, so that
+no call turns the fields into a timestamp and back.
+
 The text in of timestamptz and timetz asks the host for the offset
 of a zone (section 19). The host may now answer from these calls.
 
