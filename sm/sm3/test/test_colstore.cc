@@ -2843,3 +2843,52 @@ TEST_CASE("an older writer's update out of line over a moved-in row") {
   sm3::session_close(ss2);
   sm3::session_close(ss3);
 }
+
+// Verify a REPEATABLE READ writer whose snapshot is older than the
+// seal of a row no longer sees the row after it deletes it, as after
+// any delete, and sees an update's new version once.
+// 1. Row groups of 100 rows; insert 100 rows one at a time: all in
+//    the delta store. R (REPEATABLE READ) counts 100.
+// 2. The seal: one row group of the 100 rows.
+// 3. R deletes a = 5 by its _id: R counts 99, without a = 5.
+// 4. R updates a = 6 by its _id: R counts 99, a = 6 once.
+// 5. R commits: 99 rows, a = 6 updated.
+TEST_CASE("a writer older than the seal no longer sees the row it deleted") {
+  col_db_t db(100);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows; R.
+  insert_rows(db, c, 0, 100);
+  uint64_t id5 = where(db, c, 5).second;
+  uint64_t id6 = where(db, c, 6).second;
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(count_in(ss2, c) == 100);
+  // 2. The seal.
+  REQUIRE(seal(ss3, c));
+  REQUIRE(where(db, c, 5).first.fsid != 0);
+  // 3. R's delete.
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete(t, id5) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  CHECK_FALSE(sees(ss2, c, 5));
+  CHECK(count_in(ss2, c) == 99);
+  // 4. R's update.
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  row_t r6(6, "r");
+  REQUIRE_MESSAGE(sm3::tbl_update(t, id6, r6.d, r6.null) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  CHECK(count_in(ss2, c) == 99);
+  // 5. Committed.
+  REQUIRE_MESSAGE(sm3::commit(ss2) == 0, sm1::errmsg());
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 99);
+  CHECK(rows.count(5) == 0);
+  CHECK(rows[6] == "r");
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}

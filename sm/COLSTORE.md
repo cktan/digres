@@ -622,6 +622,15 @@ an RG, at the place its snapshot sees (`mark_deleted` in
   its snapshot does not see (`sm1::wrote_over_moved_in`), it
   finds the place its snapshot sees the row at. A place other
   than the one it wrote gets a shadow marker (`shadow_seen`).
+- **A delete older than the seal hides the delta row.** A writer
+  whose snapshot is older than the seal of the row reads the row
+  in the delta store, live, and deletes it by its marker in
+  version 0, which its snapshot cannot see. So it puts a tombstone
+  of its own over the seal's (`sm2::rel_hide_sealed`): an empty
+  version, which an insert may put over a sealed tombstone, and
+  its erase. Another transaction sees a plain tombstone over the
+  seal's, and the marker in version 0. An update needs none: its
+  new version at the delta key hides the old one.
 - **An update of a row in an RG writes two keys in one
   transaction.** The delta key may hold a sealed tombstone. The
   insert goes in over it, as over any tombstone.
@@ -1314,6 +1323,8 @@ random CGs and random bounds, against a test of every value.
     fails with `SM_ERR_CONFLICT`; of an RG under half live, whose
     rows a later seal takes; a write by `_id` in a statement
     marks its row once.
+23. A delete by a writer older than the seal hides the delta row,
+    and an update's new version hides the old one.
 
 A test can give its catalog smaller RGs (§3), so that a seal or
 an RG compaction comes after a few hundred rows.
@@ -1376,14 +1387,6 @@ decided.
    S3, that is hundreds of ms. The alternative is optimistic:
    write the files first, then erase, and redo the files on a
    conflict.
-
-2. **A writer's own delete after the seal.** An RR writer whose
-   snapshot is older than the seal writes its marker into version
-   0, which its snapshot cannot see. Its own scans read the delta
-   row, where the row looks live. A shadow write over the sealed
-   tombstone would hide it, but it changes the rule of the sealed
-   tombstone, and the mvcc scenario `s06` with it. A test must
-   show it before a fix is designed.
 
 ### 16.2 Deferred
 

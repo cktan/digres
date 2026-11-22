@@ -1668,6 +1668,23 @@ static int shadow_seen(table_t *table, uint64_t id, place_t written = {}) {
 }
 
 /*
+ * Hide row id, deleted in its row group, from the transaction's own
+ * reads of the delta store, when its snapshot is older than the seal
+ * that took the row there (../COLSTORE.md §9): its snapshot reads the
+ * delta row, live. A tombstone of its own over the seal's then hides
+ * it; a snapshot that sees the seal needs none.
+ */
+static int hide_sealed(table_t *table, uint64_t id) {
+  std::string key = sm2::id_key(id);
+  std::string_view tuple;
+  int r = sm2::rel_read(table->rel, key, tuple);
+  if (r != 0) {
+    return r < 0 ? -1 : 0;
+  }
+  return sm2::rel_hide_sealed(table->rel, key);
+}
+
+/*
  * A write of row id whose write in the delta store gave rc: in a column
  * store table, a row the delta store has no version of
  * (SM_ERR_NOTFOUND), or a seal's tombstone of (SM_ERR_SEALED), is
@@ -1681,6 +1698,8 @@ static int shadow_seen(table_t *table, uint64_t id, place_t written = {}) {
  * 4. Delete it there by its marker; an update puts values into the
  *    delta store as its new version.
  * 5. The snapshot sees the row at an older place: a shadow marker.
+ *    A delete whose snapshot sees the row in the delta store, older
+ *    than the seal that took it: a tombstone of its own there.
  * 6. With ref, pin the row read into ref, for old to view.
  */
 static int col_write(table_t *table, uint64_t id, int rc,
@@ -1700,6 +1719,7 @@ static int col_write(table_t *table, uint64_t id, int rc,
       sm1::errnum() != sm1::SM_ERR_SEALED) {
     return rc;
   }
+  const bool sealed = sm1::errnum() == sm1::SM_ERR_SEALED;
   // 2. Its place in a row group.
   place_t place;
   int f = col_find_latest(table, id, place);
@@ -1721,7 +1741,8 @@ static int col_write(table_t *table, uint64_t id, int rc,
   // 4. The write; 5. a shadow marker at an older place.
   if ((values ? tbl_update_at(table, place, id, *values, isnull)
               : tbl_delete_at(table, place, id)) != 0 ||
-      shadow_seen(table, id, place) != 0) {
+      shadow_seen(table, id, place) != 0 ||
+      (sealed && !values && hide_sealed(table, id) != 0)) {
     return -1;
   }
   // 6. The row as it was, pinned.

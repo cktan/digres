@@ -836,6 +836,22 @@ int rel_reinsert_at(rel_t *rel, uint64_t id, std::span<const datum_t> datums,
   return insert_row(rel, datums, isnull, r, k, id, true);
 }
 
+/* A tombstone of the transaction's own over the seal's; see sm2.h. */
+int rel_hide_sealed(rel_t *rel, std::string_view key) {
+  std::string k = row_key(rel->relid, key);
+  // 1. An empty version over the seal's tombstone; 2. its erase.
+  if (rel->chained) {
+    return sm1::chain_insert(rel->session, rel->storeid, k, "") != 0 ||
+                   sm1::chain_erase(rel->session, rel->storeid, k) != 0
+               ? -1
+               : 0;
+  }
+  return sm1::insert(rel->session, rel->storeid, k, "") != 0 ||
+                 sm1::erase(rel->session, rel->storeid, k) != 0
+             ? -1
+             : 0;
+}
+
 /* Move a row in under an _id, a moved-in version; see sm2.h. */
 int rel_movein_at(rel_t *rel, uint64_t id, std::span<const datum_t> datums,
                   std::span<const bool> isnull) {

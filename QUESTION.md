@@ -1,5 +1,33 @@
 # Questions
 
+## 8. A delete older than the seal: how it hides the delta row (2026-11-22)
+
+**Branch:** `wip-colstore2-1`.
+
+**Question.** A REPEATABLE READ writer whose snapshot is older than
+the seal of a row deleted it in its row group, and then still saw
+it: its snapshot reads the delta row, live, and not the row group
+(`COLSTORE.md` §16.1 asked this). How does the writer hide the
+delta row from its own reads?
+
+```sql
+-- R: BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) -> 100
+-- The seal moves the 100 delta rows into RG 1.
+DELETE FROM ev WHERE _id = 5;   -- R: the marker in RG 1
+SELECT count(*) FROM ev;        -- R: 100 before, 99 now
+```
+
+| Option | What changes | Cost |
+| --- | --- | --- |
+| A. Two writes of sm1 as it is: an empty version over the seal's tombstone, then its erase (`sm2::rel_hide_sealed`) | sm2 and sm3 | two writes, only for a delete by a writer older than the seal of its row |
+| B. A new write of sm1, a tombstone over a sealed tombstone | a rule of sm1, and an mvcc scenario | one write; sm1 grows a fourth kind of sealed write |
+
+**Recommendation, built:** A. It needs no rule of sm1: an insert
+goes in over a sealed tombstone already (`s01`), and the erase is
+of the transaction's own version. No other transaction sees the
+empty version. An update needed nothing: its new version at the
+delta key hides the old one.
+
 ## 7. COLSTORE2: elimination takes the small RGs too (2026-11-21)
 
 **Branch:** `wip-colstore2-1`.
