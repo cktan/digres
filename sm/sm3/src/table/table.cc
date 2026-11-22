@@ -1667,9 +1667,9 @@ static int col_write(table_t *table, uint64_t id, int rc,
        sm1::errnum() != sm1::SM_ERR_SEALED)) {
     return rc;
   }
-  // 1. Its row group.
-  uint64_t rg_id = 0;
-  int f = col_find_latest(table, id, rg_id);
+  // 1. Its place in a row group.
+  place_t place;
+  int f = col_find_latest(table, id, place);
   if (f != 0) {
     return f < 0 ? -1
                  : sm1::seterr(sm1::SM_ERR_NOTFOUND,
@@ -1686,8 +1686,8 @@ static int col_write(table_t *table, uint64_t id, int rc,
     }
   }
   // 3. The write.
-  if ((values ? tbl_update_at(table, rg_id, id, *values, isnull)
-              : tbl_delete_at(table, rg_id, id)) != 0) {
+  if ((values ? tbl_update_at(table, place, id, *values, isnull)
+              : tbl_delete_at(table, place, id)) != 0) {
     return -1;
   }
   // 4. The row as it was, pinned.
@@ -1803,16 +1803,59 @@ static int lock_row(table_t *table, uint64_t id, sm1::lockmode_t mode,
 }
 
 /*
- * Delete row id of row group rg_id by its marker (../COLSTORE.md §9):
+ * Whether the row at place is deleted by a bit of its validmap: 0 if
+ * not; else -1, with SM_ERR_NOTFOUND if the transaction's view sees
+ * the bit, or at read committed, and SM_ERR_CONFLICT if a fold since
+ * the snapshot set it (../COLSTORE2.md §6.3).
+ */
+static int need_not_folded(table_t *table, place_t place) {
+  sm1::session_t *s = table->session->sm1;
+  const std::string key = validmap_key(place.fsid);
+  // 1. The newest validmap: a fold holds X on the row group, so none
+  //    runs while this writer holds IX.
+  bool was = false;
+  if (sm1::view_latest(s, true, &was) != 0) {
+    return -1;
+  }
+  std::string_view bits;
+  int r = sm1::read(s, table->def->storeid, key, bits);
+  bool newest = r == 0 && validmap_test(bits, place.rno);
+  sm1::view_latest(s, was);
+  if (r < 0) {
+    return -1;
+  }
+  if (!newest) {
+    return 0;
+  }
+  // 2. Set: deleted before the view, or since it.
+  r = sm1::read(s, table->def->storeid, key, bits);
+  if (r < 0) {
+    return -1;
+  }
+  bool seen = r == 0 && validmap_test(bits, place.rno);
+  if (seen || table->session->level == sm1::xctlevel_t::read_committed) {
+    return sm1::seterr(sm1::SM_ERR_NOTFOUND,
+                       "column store: the row was deleted");
+  }
+  return sm1::seterr(sm1::SM_ERR_CONFLICT,
+                     "column store: the row was deleted since the snapshot");
+}
+
+/*
+ * Delete row id, at place in a row group, by its marker
+ * (../COLSTORE.md §9, ../COLSTORE2.md §6.3):
  * 1. Take the row's exclusive lock, on its _id, as any write of it
  *    does: a FOR UPDATE holder is waited for.
- * 2. Put the marker.
- * 3. A marker there already that the running statement put: the
+ * 2. Take IX on the row group, which keeps its fold and its
+ *    compaction out until the commit.
+ * 3. A bit of the validmap set: the row was deleted, and folded.
+ * 4. Put the marker.
+ * 5. A marker there already that the running statement put: the
  *    statement changed the row already (SM_ERR_SELFMODIFIED).
- * 4. Another, at read committed, is a delete since, or an update
+ * 6. Another, at read committed, is a delete since, or an update
  *    since whose new version is in the delta store.
  */
-static int mark_deleted(table_t *table, uint64_t rg_id, uint64_t id) {
+static int mark_deleted(table_t *table, place_t place, uint64_t id) {
   if (need_writable(table) != 0) {
     return -1;
   }
@@ -1826,15 +1869,22 @@ static int mark_deleted(table_t *table, uint64_t rg_id, uint64_t id) {
   //    write to the row's new row group (../COLSTORE.md §11).
   sm1::session_t *s = table->session->sm1;
   for (int follows = 0;; follows++) {
-    if (sm1::insert(s, table->def->storeid, marker_key(rg_id, id), "") == 0) {
+    // IX on the row group, held to the commit: its fold waits for no
+    // writer, and gives up while one holds it.
+    if (sm1::lock_row(s, table->def->storeid, rg_lock_key(place.fsid >> 2),
+                      sm1::SM_LOCKMODE_IX, false, rglock_relid) != 0 ||
+        need_not_folded(table, place) != 0) {
+      return -1;
+    }
+    if (sm1::insert(s, table->def->storeid, marker_key(place), "") == 0) {
       // Counted at the commit, for RG compaction (§11.1).
-      table->session->col_marks[{table->def->oid, rg_id}]++;
+      table->session->col_marks[{table->def->oid, place.fsid}]++;
       return 0;
     }
     if (sm1::errnum() != sm1::SM_ERR_SEALED || follows >= 8) {
       break;
     }
-    int f = col_find_latest(table, id, rg_id);
+    int f = col_find_latest(table, id, place);
     if (f != 0) {
       return f < 0 ? -1
                    : sm1::seterr(sm1::SM_ERR_NOTFOUND,
@@ -1844,14 +1894,14 @@ static int mark_deleted(table_t *table, uint64_t rg_id, uint64_t id) {
   if (sm1::errnum() != sm1::SM_ERR_DUPKEY) {
     return -1;
   }
-  // 3. The statement's own marker: the marker's lock, taken as a row
+  // 5. The statement's own marker: the marker's lock, taken as a row
   //    read, fails with SM_ERR_SELFMODIFIED, as a row store's write
   //    does. It is taken only here, past a marker there already.
-  if (sm1::lock_row(s, table->def->storeid, marker_key(rg_id, id),
+  if (sm1::lock_row(s, table->def->storeid, marker_key(place),
                     sm1::SM_LOCKMODE_EX, true, marker_relid) != 0) {
     return -1;
   }
-  // 4. Another's.
+  // 6. Another's.
   std::string_view tuple;
   int r = tbl_read_latest(table, id, tuple);
   if (r < 0) {
@@ -1864,23 +1914,24 @@ static int mark_deleted(table_t *table, uint64_t rg_id, uint64_t id) {
                               "column store: the row was deleted");
 }
 
-/* Delete a column store table's row (rg_id, id); see sm3.h. */
-int tbl_delete_at(table_t *table, uint64_t rg_id, uint64_t id) {
+/* Delete a column store table's row (place, id); see sm3.h. */
+int tbl_delete_at(table_t *table, place_t place, uint64_t id) {
   // The delta store's row, or the row group's that holds it.
-  return rg_id == 0 ? tbl_delete(table, id) : mark_deleted(table, rg_id, id);
+  return 0 == place.fsid ? tbl_delete(table, id)
+                         : mark_deleted(table, place, id);
 }
 
-/* Update a column store table's row (rg_id, id); see sm3.h. */
-int tbl_update_at(table_t *table, uint64_t rg_id, uint64_t id,
+/* Update a column store table's row (place, id); see sm3.h. */
+int tbl_update_at(table_t *table, place_t place, uint64_t id,
                   std::span<const sm2::datum_t> values,
                   std::span<const bool> isnull) {
   // The delta store's row, or the row group's that holds it.
-  if (rg_id == 0) {
+  if (0 == place.fsid) {
     return tbl_update(table, id, values, isnull);
   }
   if (need_not_null(table, isnull) != 0 ||
       need_values_fit(table, values, isnull) != 0 ||
-      mark_deleted(table, rg_id, id) != 0) {
+      mark_deleted(table, place, id) != 0) {
     return -1;
   }
   // The new version, in the delta store, under the row's _id: over
@@ -2002,9 +2053,22 @@ int tbl_compact_rgs(table_t *table, std::span<const uint64_t> rgs, bool &done) {
   return col_compact(table, rgs, done);
 }
 
-/* The rg_id of a scan's last row; see sm3.h. */
-uint64_t tbl_scan_rg(const scan_t *scan) {
-  return scan->col ? col_scan_rg(scan->col) : 0;
+/* Fold a column store table's file set fsid; see sm3.h. */
+int tbl_fold(table_t *table, uint64_t fsid, bool &done) {
+  done = false;
+  if (!table->def->column_store) {
+    return sm1::seterr(sm1::SM_ERR_INVALID, "table: " + table->def->name +
+                                                " is no column store table");
+  }
+  if (need_writable(table) != 0) {
+    return -1;
+  }
+  return col_fold(table, fsid, done);
+}
+
+/* The place of a scan's last row; see sm3.h. */
+place_t tbl_scan_place(const scan_t *scan) {
+  return scan->col ? col_scan_place(scan->col) : place_t();
 }
 
 /* Lock the row with _id id without writing it; see sm3.h. */

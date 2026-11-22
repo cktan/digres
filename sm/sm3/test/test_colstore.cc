@@ -347,9 +347,9 @@ TEST_CASE("an aborted bulk load leaves no row group") {
 
 namespace {
 
-/* Where row a is: (rg_id, _id), read by a scan of c. */
-std::pair<uint64_t, uint64_t> where(col_db_t &db, uint64_t c, int32_t a) {
-  std::pair<uint64_t, uint64_t> at{UINT64_MAX, 0};
+/* Where row a is: (place, _id), read by a scan of c. */
+std::pair<sm3::place_t, uint64_t> where(col_db_t &db, uint64_t c, int32_t a) {
+  std::pair<sm3::place_t, uint64_t> at{{UINT64_MAX, 0}, 0};
   db.begin();
   sm3::table_t *t = nullptr;
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
@@ -362,7 +362,7 @@ std::pair<uint64_t, uint64_t> where(col_db_t &db, uint64_t c, int32_t a) {
     bool null[2];
     REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
     if (!null[0] && sm2::datum_to_int32(d[0]) == a) {
-      at = {sm3::tbl_scan_rg(scan), id};
+      at = {sm3::tbl_scan_place(scan), id};
     }
   }
   sm3::tbl_scanend(scan);
@@ -402,9 +402,9 @@ TEST_CASE("a row of a row group is deleted and updated") {
   auto [rg7, id7] = where(db, c, 7);
   auto [rg8, id8] = where(db, c, 8);
   auto [rg12, id12] = where(db, c, 12000);
-  CHECK(rg7 != 0);
-  CHECK(rg8 == rg7);
-  CHECK(rg12 == 0);
+  CHECK(rg7.fsid != 0);
+  CHECK(rg8.fsid == rg7.fsid);
+  CHECK(rg12.fsid == 0);
   // 2. Delete a = 7.
   db.begin();
   sm3::table_t *t = nullptr;
@@ -433,12 +433,12 @@ TEST_CASE("a row of a row group is deleted and updated") {
   CHECK(rows.size() == 14999);
   CHECK(rows[8] == "x");
   auto [rg8b, id8b] = where(db, c, 8);
-  CHECK(rg8b == 0);
+  CHECK(rg8b.fsid == 0);
   CHECK(id8b == id8);
   // 4. Delete in the delta store.
   db.begin();
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
-  REQUIRE(sm3::tbl_delete_at(t, 0, id12) == 0);
+  REQUIRE(sm3::tbl_delete_at(t, {}, id12) == 0);
   sm3::tbl_close(t);
   db.commit();
   CHECK(scan_rows(db, c).count(12000) == 0);
@@ -491,7 +491,7 @@ TEST_CASE("concurrent writers of a row of a row group") {
   REQUIRE(sm3::commit(ss2) == 0);
   CHECK(sm3::tbl_delete_at(t, rg10, id10) == -1);
   CHECK(sm1::errnum() == sm1::SM_ERR_UPDATED);
-  REQUIRE_MESSAGE(sm3::tbl_delete_at(t, 0, id10) == 0, sm1::errmsg());
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t, {}, id10) == 0, sm1::errmsg());
   sm3::tbl_close(t);
   db.commit();
   CHECK(scan_rows(db, c).count(10) == 0);
@@ -555,8 +555,8 @@ TEST_CASE("the seal moves rows into a row group, never a partial one") {
   auto rows = scan_rows(db, c);
   REQUIRE(rows.size() == 12000);
   CHECK(rows[11999] == "n" + std::to_string(11999 % 7));
-  CHECK(where(db, c, 5).first != 0);
-  CHECK(where(db, c, 11000).first == 0);
+  CHECK(where(db, c, 5).first.fsid != 0);
+  CHECK(where(db, c, 11000).first.fsid == 0);
   // 3. Too few rows.
   CHECK_FALSE(seal(db.ss, c));
   CHECK(row_groups(db, c) == 1);
@@ -582,7 +582,7 @@ TEST_CASE("the seal passes over a locked row; a writer follows a sealed row") {
   // 1. The rows, and a lock on one.
   insert_rows(db, c, 0, 10001);
   auto [rg3, id3] = where(db, c, 3);
-  CHECK(rg3 == 0);
+  CHECK(rg3.fsid == 0);
   sm1::session_t *s2 = db.open();
   sm3::session_t *ss2 = nullptr;
   REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
@@ -595,22 +595,22 @@ TEST_CASE("the seal passes over a locked row; a writer follows a sealed row") {
   sm3::session_t *ss3 = nullptr;
   REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
   CHECK(seal(ss3, c));
-  CHECK(where(db, c, 3).first == 0);
-  CHECK(where(db, c, 4).first != 0);
+  CHECK(where(db, c, 3).first.fsid == 0);
+  CHECK(where(db, c, 4).first.fsid != 0);
   sm3::tbl_close(t2);
   REQUIRE(sm3::commit(ss2) == 0);
   // 3. R, then a second seal, then R's update.
   insert_rows(db, c, 10001, 20001);
   auto [rgx, idx] = where(db, c, 15000);
-  CHECK(rgx == 0);
+  CHECK(rgx.fsid == 0);
   REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
   REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
   std::string_view tuple;
   REQUIRE(sm3::tbl_read(t2, idx, tuple) == 0);
   CHECK(seal(ss3, c));
-  CHECK(where(db, c, 15000).first != 0);
+  CHECK(where(db, c, 15000).first.fsid != 0);
   row_t r(15000, "r");
-  REQUIRE_MESSAGE(sm3::tbl_update_at(t2, 0, idx, r.d, r.null) == 0,
+  REQUIRE_MESSAGE(sm3::tbl_update_at(t2, {}, idx, r.d, r.null) == 0,
                   sm1::errmsg());
   sm3::tbl_close(t2);
   REQUIRE(sm3::commit(ss2) == 0);
@@ -668,7 +668,7 @@ bool compact(sm3::session_t *ss, uint64_t c, std::vector<uint64_t> rgs) {
 
 /* Delete rows a = from .. to - 1 of c by their names. */
 void delete_rows(col_db_t &db, uint64_t c, int from, int to) {
-  std::vector<std::pair<uint64_t, uint64_t>> names;
+  std::vector<std::pair<sm3::place_t, uint64_t>> names;
   for (int a = from; a < to; a++) {
     names.push_back(where(db, c, a));
   }
@@ -697,7 +697,7 @@ TEST_CASE("RG compaction rewrites live rows, and gives up on a writer") {
   db.commit();
   // 1. The rows, some deleted.
   load_rows(db, c, 10000);
-  uint64_t rg = where(db, c, 100).first;
+  uint64_t rg = where(db, c, 100).first.fsid;
   REQUIRE(rg != 0);
   delete_rows(db, c, 0, 30);
   // 2. A writer in flight.
@@ -712,13 +712,13 @@ TEST_CASE("RG compaction rewrites live rows, and gives up on a writer") {
   sm3::session_t *ss3 = nullptr;
   REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
   CHECK_FALSE(compact(ss3, c, {rg}));
-  CHECK(where(db, c, 100).first == rg);
+  CHECK(where(db, c, 100).first.fsid == rg);
   sm3::tbl_close(t2);
   REQUIRE(sm3::commit(ss2) == 0);
   // 3. Now.
   CHECK(compact(ss3, c, {rg}));
   CHECK(row_groups(db, c) == 1);
-  uint64_t rg2 = where(db, c, 100).first;
+  uint64_t rg2 = where(db, c, 100).first.fsid;
   CHECK(rg2 != 0);
   CHECK(rg2 != rg);
   auto rows = scan_rows(db, c);
@@ -754,7 +754,7 @@ TEST_CASE("a writer follows a row RG compaction moved") {
   sm1::session_t *s3 = db.open();
   sm3::session_t *ss3 = nullptr;
   REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
-  CHECK(compact(ss3, c, {rg7}));
+  CHECK(compact(ss3, c, {rg7.fsid}));
   // 2. R's delete at the old name.
   REQUIRE_MESSAGE(sm3::tbl_delete_at(t2, rg7, id7) == 0, sm1::errmsg());
   sm3::tbl_close(t2);
@@ -788,17 +788,17 @@ TEST_CASE("the sealer compacts a row group a fifth dead") {
             return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
           }) == 0);
   load_rows(db, c, 100);
-  uint64_t rg = where(db, c, 50).first;
+  uint64_t rg = where(db, c, 50).first.fsid;
   REQUIRE(rg != 0);
   REQUIRE(row_groups(db, c) == 1);
   // 2. Not yet.
   delete_rows(db, c, 0, 19);
   sm3::sealer_wait_idle(db.cat);
-  CHECK(where(db, c, 50).first == rg);
+  CHECK(where(db, c, 50).first.fsid == rg);
   // 3. Now.
   delete_rows(db, c, 19, 20);
   sm3::sealer_wait_idle(db.cat);
-  uint64_t rg2 = where(db, c, 50).first;
+  uint64_t rg2 = where(db, c, 50).first.fsid;
   CHECK(rg2 != 0);
   CHECK(rg2 != rg);
   CHECK(row_groups(db, c) == 1);
@@ -844,8 +844,8 @@ TEST_CASE("a read and a write by _id alone find a row of a row group") {
   load_rows(db, c, 15000);
   auto [rg5, id5] = where(db, c, 5);
   auto [rg6, id6] = where(db, c, 6);
-  REQUIRE(rg5 != 0);
-  REQUIRE(rg6 == rg5);
+  REQUIRE(rg5.fsid != 0);
+  REQUIRE(rg6.fsid == rg5.fsid);
   // 2. The reads, at READ COMMITTED: a newest read needs it.
   db.begin(sm1::xctlevel_t::read_committed);
   sm3::table_t *t = nullptr;
@@ -881,11 +881,11 @@ TEST_CASE("a read and a write by _id alone find a row of a row group") {
   CHECK(rows.size() == 14999);
   CHECK(rows[5] == "five");
   CHECK(rows.count(6) == 0);
-  CHECK(where(db, c, 5).first == 0);
+  CHECK(where(db, c, 5).first.fsid == 0);
   // 5. A row RG compaction moved.
   auto [rg8, id8] = where(db, c, 8);
-  REQUIRE(compact(db.ss, c, {rg8}));
-  CHECK(where(db, c, 8).first != rg8);
+  REQUIRE(compact(db.ss, c, {rg8.fsid}));
+  CHECK(where(db, c, 8).first.fsid != rg8.fsid);
   db.begin();
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
   REQUIRE(sm3::tbl_read(t, id8, tuple) == 0);
@@ -918,7 +918,7 @@ TEST_CASE("ANALYZE samples a column store table's row groups and delta") {
   std::set<uint64_t> gone;
   for (int32_t a = 0; a < 10; a++) {
     auto [rg, id] = where(db, c, a);
-    REQUIRE(rg != 0);
+    REQUIRE(rg.fsid != 0);
     db.begin();
     sm3::table_t *t = nullptr;
     REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
@@ -1132,9 +1132,9 @@ uint64_t rg_rows(col_db_t &db, uint64_t c) {
   return n;
 }
 
-/* Delete the first n live rows of row group rg of c, by their names. */
+/* Delete the first n live rows of file set rg of c, by their names. */
 void delete_in(col_db_t &db, uint64_t c, uint64_t rg, size_t n) {
-  std::vector<uint64_t> ids;
+  std::vector<std::pair<sm3::place_t, uint64_t>> ids;
   db.begin();
   sm3::table_t *t = nullptr;
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
@@ -1143,14 +1143,14 @@ void delete_in(col_db_t &db, uint64_t c, uint64_t rg, size_t n) {
   uint64_t id;
   std::string_view tuple;
   while (ids.size() < n && sm3::tbl_scannxt(scan, id, tuple) == 0) {
-    if (sm3::tbl_scan_rg(scan) == rg) {
-      ids.push_back(id);
+    if (sm3::tbl_scan_place(scan).fsid == rg) {
+      ids.emplace_back(sm3::tbl_scan_place(scan), id);
     }
   }
   sm3::tbl_scanend(scan);
   REQUIRE(ids.size() == n);
-  for (uint64_t x : ids) {
-    REQUIRE_MESSAGE(sm3::tbl_delete_at(t, rg, x) == 0, sm1::errmsg());
+  for (auto [place, x] : ids) {
+    REQUIRE_MESSAGE(sm3::tbl_delete_at(t, place, x) == 0, sm1::errmsg());
   }
   sm3::tbl_close(t);
   db.commit();
@@ -1234,7 +1234,7 @@ TEST_CASE("an update of a row group's rows counts toward the seal") {
   db.begin();
   sm3::table_t *t = nullptr;
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
-  std::vector<std::tuple<uint64_t, uint64_t, int32_t>> rows;
+  std::vector<std::tuple<sm3::place_t, uint64_t, int32_t>> rows;
   sm3::scan_t *scan = nullptr;
   REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
   uint64_t id;
@@ -1243,7 +1243,7 @@ TEST_CASE("an update of a row group's rows counts toward the seal") {
     sm2::datum_t d[2];
     bool null[2];
     REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
-    rows.emplace_back(sm3::tbl_scan_rg(scan), id, sm2::datum_to_int32(d[0]));
+    rows.emplace_back(sm3::tbl_scan_place(scan), id, sm2::datum_to_int32(d[0]));
   }
   sm3::tbl_scanend(scan);
   REQUIRE(rows.size() == 100);
@@ -1380,7 +1380,7 @@ TEST_CASE("a FOR SHARE lock and a prepared writer hold off RG compaction "
   uint64_t c = make(db, "c", true);
   db.commit();
   load_rows(db, c, 100);
-  uint64_t rg = where(db, c, 5).first;
+  uint64_t rg = where(db, c, 5).first.fsid;
   REQUIRE(rg != 0);
   sm1::session_t *s2 = db.open();
   sm3::session_t *ss2 = nullptr;
@@ -1396,7 +1396,7 @@ TEST_CASE("a FOR SHARE lock and a prepared writer hold off RG compaction "
   CHECK_FALSE(compact(ss3, c, {rg}));
   sm3::tbl_close(t2);
   REQUIRE(sm3::commit(ss2) == 0);
-  CHECK(where(db, c, 5).first == rg);
+  CHECK(where(db, c, 5).first.fsid == rg);
   // 2. A prepared delete.
   auto [rg6, id6] = where(db, c, 6);
   REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
@@ -1407,24 +1407,24 @@ TEST_CASE("a FOR SHARE lock and a prepared writer hold off RG compaction "
   CHECK_FALSE(compact(ss3, c, {rg}));
   REQUIRE_MESSAGE(sm1::commit_prepared(db.s, "g1") == 0, sm1::errmsg());
   CHECK(compact(ss3, c, {rg}));
-  CHECK(where(db, c, 5).first != rg);
+  CHECK(where(db, c, 5).first.fsid != rg);
   CHECK(scan_rows(db, c).size() == 99);
   // 3. A prepared update of a delta row.
   insert_rows(db, c, 1000, 1100);
   auto [rg0, id1050] = where(db, c, 1050);
-  REQUIRE(rg0 == 0);
+  REQUIRE(rg0.fsid == 0);
   REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::read_committed) == 0);
   REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
   row_t r(1050, "p");
-  REQUIRE(sm3::tbl_update_at(t2, 0, id1050, r.d, r.null) == 0);
+  REQUIRE(sm3::tbl_update_at(t2, {}, id1050, r.d, r.null) == 0);
   sm3::tbl_close(t2);
   REQUIRE_MESSAGE(sm3::prepare(ss2, "g2") == 0, sm1::errmsg());
   CHECK_FALSE(seal(ss3, c));
-  CHECK(where(db, c, 1000).first == 0);
+  CHECK(where(db, c, 1000).first.fsid == 0);
   REQUIRE_MESSAGE(sm1::abort_prepared(db.s, "g2") == 0, sm1::errmsg());
   CHECK(seal(ss3, c));
-  CHECK(where(db, c, 1000).first != 0);
-  CHECK(where(db, c, 1050).first != 0);
+  CHECK(where(db, c, 1000).first.fsid != 0);
+  CHECK(where(db, c, 1050).first.fsid != 0);
   sm3::session_close(ss2);
   sm3::session_close(ss3);
 }
@@ -1883,7 +1883,7 @@ TEST_CASE("a second write of a row group's row in a statement is "
   load_rows(db, c, 100);
   auto [rg5, id5] = where(db, c, 5);
   auto [rg6, id6] = where(db, c, 6);
-  REQUIRE(rg5 != 0);
+  REQUIRE(rg5.fsid != 0);
   db.begin();
   sm3::table_t *t = nullptr;
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
@@ -1956,7 +1956,7 @@ TEST_CASE("a prepared transaction's rows count at COMMIT PREPARED") {
   std::vector<uint64_t> rgs = rg_ids(db, c);
   REQUIRE(rgs.size() == 1);
   // 2. Deletes.
-  std::vector<std::pair<uint64_t, uint64_t>> names;
+  std::vector<std::pair<sm3::place_t, uint64_t>> names;
   for (int a = 0; a < 20; a++) {
     names.push_back(where(db, c, a));
   }
@@ -2029,7 +2029,7 @@ TEST_CASE("a column store table takes a value of 2,048 bytes at most") {
   // 2. A row of a row group.
   load_rows(db, c, 100);
   auto [rg, rid] = where(db, c, 50);
-  REQUIRE(rg != 0);
+  REQUIRE(rg.fsid != 0);
   db.begin();
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
   CHECK(sm3::tbl_update_at(t, rg, rid, over.d, over.null) == -1);
@@ -2052,4 +2052,214 @@ TEST_CASE("a column store table takes a value of 2,048 bytes at most") {
   CHECK(sm3::tbl_insert(t, over.d, over.null, id2) == 0);
   sm3::tbl_close(t);
   db.commit();
+}
+
+namespace {
+
+/* Fold file set fsid of c in a transaction of its own; done. */
+bool fold(sm3::session_t *ss, uint64_t c, uint64_t fsid) {
+  REQUIRE(sm3::begin(ss, sm1::xctlevel_t::read_committed) == 0);
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  bool done = false;
+  REQUIRE_MESSAGE(sm3::tbl_fold(t, fsid, done) == 0, sm1::errmsg());
+  sm3::tbl_close(t);
+  REQUIRE(sm3::commit(ss) == 0);
+  return done;
+}
+
+/* The rows of file set fsid of c deleted: by its validmap, by markers. */
+std::pair<uint32_t, uint32_t> dead_of(col_db_t &db, uint64_t c, uint64_t fsid,
+                                      uint32_t rows) {
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  std::vector<bool> dead;
+  uint32_t ndead = 0, markers = 0;
+  REQUIRE(sm3::col_dead(t, fsid, rows, dead, ndead, markers) == 0);
+  sm3::tbl_close(t);
+  db.commit();
+  return {ndead - markers, markers};
+}
+
+/* The rows of c a transaction of ss counts, by a scan. */
+size_t count_in(sm3::session_t *ss, uint64_t c) {
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  size_t n = 0;
+  while (sm3::tbl_scannxt(scan, id, tuple) == 0) {
+    n++;
+  }
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  return n;
+}
+
+} // namespace
+
+// Verify a fold moves a row group's delete markers into its validmap,
+// and that a snapshot older than the fold counts the same rows.
+// 1. Load 10,000 rows, and delete a = 0 .. 149 by their names.
+// 2. R (REPEATABLE READ) counts 9,850 rows.
+// 3. Fold the row group: its 150 markers become 150 validmap bits.
+// 4. R counts 9,850 still, and so does a new transaction.
+// 5. A second fold finds no marker, and changes nothing.
+TEST_CASE("a fold moves markers into the validmap; snapshots agree") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows, some deleted.
+  load_rows(db, c, 10000);
+  uint64_t fsid = where(db, c, 500).first.fsid;
+  REQUIRE(fsid != 0);
+  delete_rows(db, c, 0, 150);
+  CHECK(dead_of(db, c, fsid, 10000) == std::pair<uint32_t, uint32_t>(0, 150));
+  // 2. R, before the fold.
+  sm1::session_t *s2 = db.open();
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s2, ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(count_in(ss2, c) == 9850);
+  // 3. The fold.
+  sm1::session_t *s3 = db.open();
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, s3, ss3) == 0);
+  CHECK(fold(ss3, c, fsid));
+  CHECK(dead_of(db, c, fsid, 10000) == std::pair<uint32_t, uint32_t>(150, 0));
+  // 4. Every snapshot counts the same rows.
+  CHECK(count_in(ss2, c) == 9850);
+  REQUIRE(sm3::commit(ss2) == 0);
+  auto rows = scan_rows(db, c);
+  CHECK(rows.size() == 9850);
+  CHECK(rows.count(149) == 0);
+  CHECK(rows.count(150) == 1);
+  // 5. Nothing more to fold.
+  CHECK(fold(ss3, c, fsid));
+  CHECK(dead_of(db, c, fsid, 10000) == std::pair<uint32_t, uint32_t>(150, 0));
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify a fold gives up while a writer of the row group holds IX on
+// it, and that writers of different rows of one row group do not wait
+// for each other.
+// 1. Load 10,000 rows. S1 and S2, at REPEATABLE READ, each delete a
+//    row of the one row group, and neither waits.
+// 2. A fold gives up while they are in flight, and writes nothing.
+// 3. Both commit; the fold now moves both markers.
+TEST_CASE("a fold gives up on a writer; writers of one RG do not wait") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  load_rows(db, c, 10000);
+  auto [p1, id1] = where(db, c, 10);
+  auto [p2, id2] = where(db, c, 20);
+  REQUIRE(p1.fsid == p2.fsid);
+  // 1. Two writers of the row group.
+  sm3::session_t *ss[2] = {nullptr, nullptr};
+  sm3::table_t *t[2] = {nullptr, nullptr};
+  for (int i = 0; i < 2; i++) {
+    REQUIRE(sm3::session_open(db.cat, db.open(), ss[i]) == 0);
+    REQUIRE(sm3::begin(ss[i], sm1::xctlevel_t::repeatable_read) == 0);
+    REQUIRE(sm3::tbl_open(ss[i], c, sm1::SM_LOCKMODE_IX, t[i]) == 0);
+  }
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t[0], p1, id1) == 0, sm1::errmsg());
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t[1], p2, id2) == 0, sm1::errmsg());
+  // 2. The fold, while they hold IX.
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  CHECK_FALSE(fold(ss3, c, p1.fsid));
+  // 3. Both commit.
+  for (int i = 0; i < 2; i++) {
+    sm3::tbl_close(t[i]);
+    REQUIRE_MESSAGE(sm3::commit(ss[i]) == 0, sm1::errmsg());
+  }
+  CHECK(dead_of(db, c, p1.fsid, 10000) == std::pair<uint32_t, uint32_t>(0, 2));
+  CHECK(fold(ss3, c, p1.fsid));
+  CHECK(dead_of(db, c, p1.fsid, 10000) == std::pair<uint32_t, uint32_t>(2, 0));
+  CHECK(scan_rows(db, c).size() == 9998);
+  for (int i = 0; i < 2; i++) {
+    sm3::session_close(ss[i]);
+  }
+  sm3::session_close(ss3);
+}
+
+// Verify a write of a row whose delete a fold has folded fails: at
+// REPEATABLE READ with a snapshot from before the delete, with
+// SM_ERR_CONFLICT; at READ COMMITTED, with SM_ERR_NOTFOUND.
+// 1. Load 10,000 rows; R (REPEATABLE READ) reads a = 7 and keeps its
+//    name.
+// 2. Another transaction deletes a = 7; a fold folds it.
+// 3. R's delete of a = 7 fails with SM_ERR_CONFLICT.
+// 4. A READ COMMITTED delete at the same name fails with
+//    SM_ERR_NOTFOUND.
+TEST_CASE("a write of a folded row fails as a write of a deleted one") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  load_rows(db, c, 10000);
+  auto [p7, id7] = where(db, c, 7);
+  // 1. R, before the delete.
+  sm3::session_t *ss2 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(count_in(ss2, c) == 10000);
+  // 2. The delete, folded.
+  delete_rows(db, c, 7, 8);
+  sm3::session_t *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  CHECK(fold(ss3, c, p7.fsid));
+  // 3. R's delete.
+  sm3::table_t *t2 = nullptr;
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t2) == 0);
+  CHECK(sm3::tbl_delete_at(t2, p7, id7) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_CONFLICT);
+  sm3::tbl_close(t2);
+  REQUIRE(sm3::abort(ss2) == 0);
+  // 4. At READ COMMITTED.
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  CHECK(sm3::tbl_delete_at(t, p7, id7) == -1);
+  CHECK(sm1::errnum() == sm1::SM_ERR_NOTFOUND);
+  sm3::tbl_close(t);
+  REQUIRE(sm3::abort(db.ss) == 0);
+  CHECK(scan_rows(db, c).size() == 9999);
+  sm3::session_close(ss2);
+  sm3::session_close(ss3);
+}
+
+// Verify the sealer folds a row group whose committed delete markers
+// reach 1% of a row group's rows.
+// 1. Load 10,000 rows, with the sealer attached.
+// 2. Delete 120 rows by name, and commit: past 100 markers.
+// 3. When the sealer is idle, the row group has 120 validmap bits and
+//    no marker; a scan gives 9,880 rows.
+TEST_CASE("the sealer folds a row group past 1% markers") {
+  col_db_t db;
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows, and the sealer.
+  load_rows(db, c, 10000);
+  sm1::env_t *env = db.env();
+  REQUIRE(sm3::sealer_attach(db.cat, [env]() -> sm1::session_t * {
+            sm1::session_t *s = nullptr;
+            return sm1::opendb(env, "db", s) == 0 ? s : nullptr;
+          }) == 0);
+  uint64_t fsid = where(db, c, 500).first.fsid;
+  // 2. The deletes.
+  delete_rows(db, c, 0, 120);
+  // 3. Folded.
+  sm3::sealer_wait_idle(db.cat);
+  CHECK(dead_of(db, c, fsid, 10000) == std::pair<uint32_t, uint32_t>(120, 0));
+  CHECK(scan_rows(db, c).size() == 9880);
+  sm3::sealer_detach(db.cat);
 }

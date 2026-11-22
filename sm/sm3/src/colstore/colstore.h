@@ -24,9 +24,14 @@
 
 namespace sm3 {
 
-/* The relids of a column store table's keys (../COLSTORE.md §4.3). */
+/*
+ * The relids of a column store table's keys (../COLSTORE.md §4.3,
+ * ../COLSTORE2.md §4). An RG lock's is a lock-table name alone.
+ */
 constexpr uint16_t marker_relid = 2;
+constexpr uint16_t validmap_relid = 3;
 constexpr uint16_t filter_relid = 4;
+constexpr uint16_t rglock_relid = 5;
 
 /* The rows of a row group (../COLSTORE.md §7). */
 constexpr uint32_t rg_max_rows = 10000;
@@ -97,35 +102,40 @@ int rg_build_flush(rg_build_t &b);
 
 /*
  * A row group read for a scan: its metadata, the CGs of the columns
- * the scan reads, the _ids its delete markers name, and the row it
+ * the scan reads, the rows its delete markers name, and the row it
  * is at.
  */
 struct rg_read_t {
-  uint64_t rg_id = 0;
+  uint64_t fsid = 0;
   rg_meta_t meta;
   std::vector<sm2::cg_t *> cgs; /* by column; nullptr: not read */
   /* By column: added since, no CG here, read as its missing value. */
   std::vector<bool> added;
   sm2::cg_t *ids = nullptr;
-  std::set<uint64_t> deleted;
+  std::vector<bool> deleted; /* by rno: its validmap's, or a marker's */
+  uint32_t ndeleted = 0;     /* the bits set in deleted */
+  uint32_t nmarkers = 0;     /* the rows of deleted its markers name */
   uint32_t at = 0;
+  uint32_t last = 0; /* the rno of the row read last */
 };
 
 /* Free what r holds. */
 void rg_read_close(rg_read_t &r);
 
 /*
- * Read row group rg_id, with metadata meta, for a scan of table:
- * the CGs of the columns in cols, every column if cols is empty,
- * and its delete markers at the transaction's view. Returns 0 or -1.
+ * Read the row group of file set fsid, with metadata meta, for a
+ * scan of table: the CGs of the columns in cols, every column if
+ * cols is empty, and its delete markers at the transaction's view.
+ * Returns 0 or -1.
  */
-int rg_read_open(table_t *table, uint64_t rg_id, rg_meta_t meta,
+int rg_read_open(table_t *table, uint64_t fsid, rg_meta_t meta,
                  const std::vector<bool> &cols, rg_read_t &r);
 
 /*
  * The next live row of r, as datums into values and isnull, one per
- * column of the table; a column not read is null. 0 with id set, 1
- * at the end, or -1. The datums view r, until its next call.
+ * column of the table; a column not read is null. 0 with id and
+ * r.last set, 1 at the end, or -1. The datums view r, until its next
+ * call.
  */
 int rg_read_next(table_t *table, rg_read_t &r, uint64_t &id,
                  std::span<sm2::datum_t> values, std::span<bool> isnull);
@@ -147,7 +157,7 @@ int rg_build_to_delta(
  */
 struct col_scan_t {
   table_t *table = nullptr;
-  std::vector<std::pair<uint64_t, std::string>> rgs; /* (rg_id, key value) */
+  std::vector<std::pair<uint64_t, std::string>> rgs; /* (fsid, key value) */
   size_t next = 0;
   bool open = false;
   rg_read_t rg;
@@ -178,14 +188,16 @@ int col_scan_next(col_scan_t *c, uint64_t &id, std::string_view &tuple);
 /* Close the row group part of a scan; nullptr is a no-op. */
 void col_scan_close(col_scan_t *c);
 
-/* The rg_id of the row group c's last row came from. */
-inline uint64_t col_scan_rg(const col_scan_t *c) { return c->rg.rg_id; }
+/* The place of c's last row. */
+inline place_t col_scan_place(const col_scan_t *c) {
+  return {c->rg.fsid, c->rg.last};
+}
 
 /*
- * The _ids of row group rg_id's delete markers that the transaction
- * sees, into ids: its rows deleted (§4.3).
+ * The rnos of the delete markers of file set fsid that the
+ * transaction sees, into rnos: its rows deleted (../COLSTORE2.md §4).
  */
-int col_markers(table_t *table, uint64_t rg_id, std::set<uint64_t> &ids);
+int col_markers(table_t *table, uint64_t fsid, std::vector<uint32_t> &rnos);
 
 /*
  * The bytes of the CGs of the row groups the transaction sees, their
@@ -199,19 +211,56 @@ int col_bytes(table_t *table, uint64_t &bytes);
  */
 int tbl_scan_delta(table_t *table, scan_t *&out);
 
-/* The key of row id's delete marker in row group rg_id (§4.3). */
-std::string marker_key(uint64_t rg_id, uint64_t id);
+/* The key of the delete marker of the row at place (../COLSTORE2.md §4). */
+std::string marker_key(place_t place);
+
+/* The key of file set fsid's validmap (../COLSTORE2.md §4). */
+std::string validmap_key(uint64_t fsid);
+
+/* The lock-table name of row group rg_id (../COLSTORE2.md §4, §5). */
+std::string rg_lock_key(uint64_t rg_id);
 
 /*
- * The row group that holds row id's live copy at the newest
- * committed state, not the transaction's snapshot: a writer follows
- * a row the seal moved (../COLSTORE.md §10.2). 0 with rg_id set, 1
- * if no row group does, or -1.
+ * Whether bit rno of a validmap's bytes is set: the row is deleted
+ * (../COLSTORE2.md §4).
  */
-int col_find_latest(table_t *table, uint64_t id, uint64_t &rg_id);
+inline bool validmap_test(std::string_view bits, uint32_t rno) {
+  return rno / 8 < bits.size() &&
+         (static_cast<unsigned char>(bits[rno / 8]) >> (rno % 8)) & 1;
+}
 
 /*
- * Compact row groups rgs of table into new ones (../COLSTORE.md §11),
+ * The rows of file set fsid that are deleted, as the transaction
+ * sees them: the bits of its validmap, and its markers. Into dead,
+ * a bit for each of its rows rows; ndead the bits set, and markers
+ * those its markers name. Returns 0 or -1.
+ */
+int col_dead(table_t *table, uint64_t fsid, uint32_t rows,
+             std::vector<bool> &dead, uint32_t &ndead, uint32_t &markers);
+
+/*
+ * Fold the delete markers of file set fsid of table into its
+ * validmap (../COLSTORE2.md §6.6), in the caller's transaction, at
+ * the newest committed state: X on the row group, if it can be had
+ * now; then a new validmap, with a bit for each marker, and the
+ * markers erased. A writer of the row group in flight or prepared
+ * makes it give up, done false, with nothing written. A file set
+ * gone, or with no marker, is done with nothing written. Returns 0
+ * or -1.
+ */
+int col_fold(table_t *table, uint64_t fsid, bool &done);
+
+/*
+ * The place of row id's live copy in a row group, at the newest
+ * committed state, not the transaction's snapshot: a writer follows
+ * a row the seal moved (../COLSTORE.md §10.2). 0 with place set, 1
+ * if no row group holds it, or -1.
+ */
+int col_find_latest(table_t *table, uint64_t id, place_t &place);
+
+/*
+ * Compact row groups rgs of table, by their fsids, into new ones
+ * (../COLSTORE.md §11),
  * at the newest committed state: each live row locked if free now,
  * marked moved in its old row group, and added to the new; then the
  * old row groups' keys erased. A row with a writer in flight or
@@ -227,15 +276,18 @@ int col_compact(table_t *table, std::span<const uint64_t> rgs, bool &done);
 void sealer_count(const catalog_t *cat, uint64_t oid, uint64_t rows);
 
 /*
- * Count delete markers committed on row group rg_id of table oid; at
- * a fifth of a row group's rows, the row group is queued for its
- * compaction (sealer.cc). A no-op with no sealer.
+ * Count delete markers committed on the row group of file set fsid of
+ * table oid; at a fifth of a row group's rows, the row group is
+ * queued for its compaction (sealer.cc). A no-op with no sealer.
  */
-void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t rg_id,
+void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t fsid,
                         uint64_t marks);
 
-/* Queue row group rg_id of table oid for its compaction. */
-void sealer_enqueue_rg(const catalog_t *cat, uint64_t oid, uint64_t rg_id);
+/* Queue the row group of file set fsid of table oid for its compaction. */
+void sealer_enqueue_rg(const catalog_t *cat, uint64_t oid, uint64_t fsid);
+
+/* Queue file set fsid of table oid for its fold (../COLSTORE2.md §6.6). */
+void sealer_enqueue_fold(const catalog_t *cat, uint64_t oid, uint64_t fsid);
 
 /* Queue table oid for its seal; a no-op with no sealer. */
 void sealer_enqueue(const catalog_t *cat, uint64_t oid);

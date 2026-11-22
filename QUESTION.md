@@ -1,5 +1,40 @@
 # Questions
 
+## 5. COLSTORE2: the place at insert waits (2026-11-21)
+
+**Branch:** `wip-colstore2-1`, from `main` at `7e954535`.
+
+**Question.** The plan of `sm/COLSTORE2.md` §9 draws a row's
+place, `(rg_id, rno)`, at its insert, as its third step. A delta
+row's value then begins with its place (§4). That changes the
+value of every delta row, which sm2's row store paths read for
+the column store and the row store alike: `tbl_read`, the scans,
+TOAST, the seal. The other way is a second key for each delta
+row, which costs every insert one more write. Is the place at
+insert to be built before the validmap, the RG locks and the
+versions?
+
+```sql
+-- With the place at insert: _id 900 is at (rg 7, rno 899) from
+-- its INSERT; the seal keeps it, and its lock's name with it.
+-- Without it: the row has no rno until the seal; its lock is on
+-- delta key _id 900, before the seal and after it.
+```
+
+| Option | What changes | Cost |
+| --- | --- | --- |
+| A. Build it later; row locks stay on delta key `_id` | nothing in the delta store | the seal still try-locks each row and passes over a locked one; an insert still waits on nothing |
+| B. Build it now, the place at the head of the value | every read of a delta row strips 12 bytes | a change across sm2's and sm3's row paths |
+| C. Build it now, a key of its own for each delta row | the insert writes a second key | one more RocksDB write for every insert, a hot path |
+
+**Recommendation, built:** A. The validmap, the fold, the RG
+locks and versioned compaction need no place at insert. A row
+lock on delta key `_id` does not move when RG compaction
+renumbers a row group, so versioned compaction keeps every row
+lock as it is. The steps built on this branch are, in order: the
+place in the scan and the writes (§6.11) with markers keyed by
+`(fsid, rno)`; then the RG lock, the validmap and the fold.
+
 ## 4. TABLESAMPLE on a column store table (2026-11-20)
 
 **Branch:** `wip-colstore-31`, from `wip-colstore-30`.

@@ -709,11 +709,21 @@ int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, const void** tuple,
 int sm_row_scannxt(sm_row_scan_t* scan, uint64_t* id, sm_pin_ref_t* ref);
 
 /*
- * The row group of a column store table's row that sm_row_scannxt
- * handed out last, 0 for a row of its delta store, and of any other
- * table.
+ * A column store table's row's place (../COLSTORE2.md §6.11): the
+ * file set of the version of the row group it was read from, and
+ * its position there. fsid 0 is a row of the delta store.
  */
-uint64_t sm_row_scan_rg(const sm_row_scan_t* scan);
+typedef struct sm_row_place_t {
+    uint64_t fsid; /* rg_id << 2 | version; 0: the delta store */
+    uint32_t rno;
+} sm_row_place_t;
+
+/*
+ * The place of a column store table's row that sm_row_scannxt
+ * handed out last; fsid 0 for a row of its delta store, and of any
+ * other table.
+ */
+sm_row_place_t sm_row_scan_place(const sm_row_scan_t* scan);
 
 /* Move a cursor by _id, of a keyless table, forward to _id id. */
 int sm_row_scan_seek(sm_row_scan_t* scan, uint64_t id);
@@ -1588,14 +1598,14 @@ int sm_tbl_delete(sm_tbl_t* tbl, uint64_t id, sm_pin_ref_t* ref = nullptr,
                   const void** old = nullptr, size_t* len = nullptr);
 
 /*
- * A column store table's row by its name (rg_id, id), rg_id the row
- * group sm_row_scan_rg gave, 0 for the delta store
+ * A column store table's row by its name (place, id), place the one
+ * sm_row_scan_place gave, fsid 0 for the delta store
  * (../COLSTORE.md §8, §9): sm3's tbl_delete_at and tbl_update_at.
  * At read committed, a row updated since fails with SM_ERR_UPDATED;
- * the caller reads it again by (0, id).
+ * the caller reads it again by (fsid 0, id).
  */
-int sm_tbl_delete_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id);
-int sm_tbl_update_at(sm_tbl_t* tbl, uint64_t rg_id, uint64_t id,
+int sm_tbl_delete_at(sm_tbl_t* tbl, sm_row_place_t place, uint64_t id);
+int sm_tbl_update_at(sm_tbl_t* tbl, sm_row_place_t place, uint64_t id,
                      const sm_datum_t* values, const bool* isnull, size_t n);
 
 /*

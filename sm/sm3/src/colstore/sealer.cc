@@ -26,11 +26,18 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 
 namespace sm3 {
 
 namespace {
+
+/* The kinds of a sealer's job. */
+enum job_kind_t : int { job_seal = 0, job_compact = 1, job_fold = 2 };
+
+/* A job: (table, 0, seal), or (table, fsid, compaction or fold). */
+using job_t = std::tuple<uint64_t, uint64_t, int>;
 
 /* A catalog's sealer: its queue, its counts, and its thread. */
 struct sealer_t {
@@ -38,11 +45,13 @@ struct sealer_t {
   std::function<sm1::session_t *()> open;
   std::mutex mu;
   std::condition_variable cv;
-  /* Jobs, in order: (table, 0) a seal, (table, rg_id) a compaction. */
-  std::deque<std::pair<uint64_t, uint64_t>> queue;
-  std::set<std::pair<uint64_t, uint64_t>> queued; /* the jobs in queue */
-  /* Delete markers committed on a row group, by (table, rg_id). */
+  /* Jobs, in order. */
+  std::deque<job_t> queue;
+  std::set<job_t> queued; /* the jobs in queue */
+  /* Delete markers committed on a file set, by (table, fsid): since
+     its last compaction's job, and since its last fold's. */
   std::map<std::pair<uint64_t, uint64_t>, uint64_t> marks;
+  std::map<std::pair<uint64_t, uint64_t>, uint64_t> fold_marks;
   std::unordered_map<uint64_t, uint64_t> counts; /* delta rows put */
   bool stop = false;
   bool busy = false; /* a table is being sealed */
@@ -59,10 +68,12 @@ sealer_t *sealer_of(const catalog_t *cat) {
   return it == g_sealers.end() ? nullptr : it->second;
 }
 
-/* Queue table oid on z, once; under z->mu. */
-void enqueue_locked(sealer_t *z, uint64_t oid, uint64_t rg_id = 0) {
-  if (z->queued.insert({oid, rg_id}).second) {
-    z->queue.push_back({oid, rg_id});
+/* Queue a job of table oid on z, once; under z->mu. */
+void enqueue_locked(sealer_t *z, uint64_t oid, uint64_t fsid = 0,
+                    int kind = job_seal) {
+  job_t j{oid, fsid, kind};
+  if (z->queued.insert(j).second) {
+    z->queue.push_back(j);
     z->cv.notify_one();
   }
 }
@@ -108,18 +119,21 @@ void seal_table(sealer_t *z, session_t *ss, uint64_t oid) {
 }
 
 /*
- * The live rows of the row group whose RG key value is value, rg_id's,
- * into live, and its rows into rows: its rows less its delete markers.
+ * The live rows of the row group whose RG key value is value, of file
+ * set fsid, into live, and its rows into rows: its rows less those
+ * its validmap and its delete markers name.
  */
-int live_rows(table_t *t, uint64_t rg_id, std::string_view value,
-              uint64_t &live, uint64_t &rows) {
+int live_rows(table_t *t, uint64_t fsid, std::string_view value, uint64_t &live,
+              uint64_t &rows) {
   rg_meta_t meta;
-  std::set<uint64_t> dead;
-  if (rg_meta_decode(value, meta) != 0 || col_markers(t, rg_id, dead) != 0) {
+  std::vector<bool> dead;
+  uint32_t ndead = 0, markers = 0;
+  if (rg_meta_decode(value, meta) != 0 ||
+      col_dead(t, fsid, meta.rows, dead, ndead, markers) != 0) {
     return -1;
   }
   rows = meta.rows;
-  live = rows - std::min<uint64_t>(dead.size(), rows);
+  live = rows - std::min<uint64_t>(ndead, rows);
   return 0;
 }
 
@@ -217,6 +231,36 @@ void compact_rg(session_t *ss, uint64_t oid, uint64_t rg_id) {
   abort(ss);
 }
 
+/*
+ * Fold file set fsid of table oid (../../COLSTORE2.md §6.6), in a
+ * READ COMMITTED transaction of its own. A writer in flight makes it
+ * give up: the next delete markers committed on it, or a scan, queue
+ * it again.
+ */
+void fold_rg(session_t *ss, uint64_t oid, uint64_t fsid) {
+  if (begin(ss, sm1::xctlevel_t::read_committed) != 0) {
+    return;
+  }
+  table_t *t = nullptr;
+  bool done = false;
+  int rc = tbl_open(ss, oid, sm1::SM_LOCKMODE_IX, t);
+  if (rc == 0) {
+    rc = tbl_fold(t, fsid, done);
+    tbl_close(t);
+  }
+  if (rc == 0 && commit(ss) == 0) {
+    return;
+  }
+  // A table gone since ends the job.
+  if (sm1::errnum() != sm1::SM_ERR_NOTFOUND) {
+    sm0::log_msg(sm1::loglevel_t::warn,
+                 "column store: the fold of file set {} of table {} "
+                 "failed: {}",
+                 fsid, oid, sm1::errmsg());
+  }
+  abort(ss);
+}
+
 /* The worker: take a job from the queue, and do it. */
 void work(sealer_t *z) {
   std::unique_lock<std::mutex> g(z->mu);
@@ -225,19 +269,22 @@ void work(sealer_t *z) {
     if (z->stop) {
       return;
     }
-    auto [oid, rg_id] = z->queue.front();
+    job_t job = z->queue.front();
+    auto [oid, rg_id, kind] = job;
     z->queue.pop_front();
-    z->queued.erase({oid, rg_id});
+    z->queued.erase(job);
     z->busy = true;
     g.unlock();
     // A session of its own on the database, for this job.
     sm1::session_t *s = z->open();
     session_t *ss = nullptr;
     if (s && session_open(z->cat, s, ss) == 0) {
-      if (rg_id == 0) {
+      if (job_seal == kind) {
         seal_table(z, ss, oid);
-      } else {
+      } else if (job_compact == kind) {
         compact_rg(ss, oid, rg_id);
+      } else {
+        fold_rg(ss, oid, rg_id);
       }
       session_close(ss);
     }
@@ -304,8 +351,8 @@ void sealer_count(const catalog_t *cat, uint64_t oid, uint64_t rows) {
   }
 }
 
-/* Count delete markers committed on a row group; see colstore.h. */
-void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t rg_id,
+/* Count delete markers committed on a file set; see colstore.h. */
+void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t fsid,
                         uint64_t marks) {
   std::lock_guard<std::mutex> g(g_mu);
   sealer_t *z = sealer_of(cat);
@@ -313,22 +360,41 @@ void sealer_count_marks(const catalog_t *cat, uint64_t oid, uint64_t rg_id,
     return;
   }
   std::lock_guard<std::mutex> h(z->mu);
-  uint64_t &n = z->marks[{oid, rg_id}];
+  uint64_t &n = z->marks[{oid, fsid}];
+  uint64_t &f = z->fold_marks[{oid, fsid}];
   n += marks;
-  // A fifth of a row group's rows (../COLSTORE.md §11.1).
+  f += marks;
+  // A fifth of a row group's rows (../COLSTORE.md §11.1): compact it.
   if (n >= rg_rows(cat) / 5) {
-    z->marks.erase({oid, rg_id});
-    enqueue_locked(z, oid, rg_id);
+    z->marks.erase({oid, fsid});
+    z->fold_marks.erase({oid, fsid});
+    enqueue_locked(z, oid, fsid, job_compact);
+    return;
+  }
+  // 1% of its rows (../COLSTORE2.md §3): fold its markers.
+  if (f >= std::max<uint64_t>(1, rg_rows(cat) / 100)) {
+    z->fold_marks.erase({oid, fsid});
+    enqueue_locked(z, oid, fsid, job_fold);
   }
 }
 
 /* Queue a row group for its compaction; see colstore.h. */
-void sealer_enqueue_rg(const catalog_t *cat, uint64_t oid, uint64_t rg_id) {
+void sealer_enqueue_rg(const catalog_t *cat, uint64_t oid, uint64_t fsid) {
   std::lock_guard<std::mutex> g(g_mu);
   sealer_t *z = sealer_of(cat);
   if (z) {
     std::lock_guard<std::mutex> h(z->mu);
-    enqueue_locked(z, oid, rg_id);
+    enqueue_locked(z, oid, fsid, job_compact);
+  }
+}
+
+/* Queue a file set for its fold; see colstore.h. */
+void sealer_enqueue_fold(const catalog_t *cat, uint64_t oid, uint64_t fsid) {
+  std::lock_guard<std::mutex> g(g_mu);
+  sealer_t *z = sealer_of(cat);
+  if (z) {
+    std::lock_guard<std::mutex> h(z->mu);
+    enqueue_locked(z, oid, fsid, job_fold);
   }
 }
 

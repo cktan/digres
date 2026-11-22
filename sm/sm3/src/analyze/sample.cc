@@ -374,12 +374,14 @@ int sample_columnar(sm3::table_t *table, uint64_t want, std::mt19937_64 &rng,
   std::vector<uint64_t> live(rgs.size());
   uint64_t rg_live = 0;
   for (size_t i = 0; i < rgs.size(); i++) {
-    std::set<uint64_t> dead;
+    std::vector<bool> dead;
+    uint32_t ndead = 0, markers = 0;
     if (sm3::rg_meta_decode(rgs[i].second, metas[i]) != 0 ||
-        sm3::col_markers(table, rgs[i].first, dead) != 0) {
+        sm3::col_dead(table, rgs[i].first, metas[i].rows, dead, ndead,
+                      markers) != 0) {
       return -1;
     }
-    live[i] = metas[i].rows - std::min<uint64_t>(dead.size(), metas[i].rows);
+    live[i] = metas[i].rows - std::min<uint64_t>(ndead, metas[i].rows);
     rg_live += live[i];
   }
   // 2. The delta store, whole.

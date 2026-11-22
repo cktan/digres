@@ -883,12 +883,19 @@ to do (`sm_seal_wait`): a commit that put a row group's rows into
 a column store table's delta store has had them sealed.
 
 ### `(rg-of table id)`
-The row group a scan of the column store table finds the row with
-`_id` `id` in, 0 for its delta store; `nil` if no row has it.
+The file set of the row group a scan of the column store table
+finds the row with `_id` `id` in, 0 for its delta store; `nil` if
+no row has it.
 
-### `(delete-at table rg id)`
-Deletes a column store table's row by its name, its row group and
-its `_id` (`sm_tbl_delete_at`).
+### `(place-of table id)`
+The place where a scan of the column store table finds the row
+with `_id` `id`, as `[fsid rno]`: the file set of its row group's
+version and its position there, `fsid` 0 for its delta store;
+`nil` if no row has it.
+
+### `(delete-at table place id)`
+Deletes a column store table's row by its name, its place from
+`place-of` and its `_id` (`sm_tbl_delete_at`).
 
 ### `(scan table [:from first] [:to last])`
 Scans the table, keyless, in `_id` order over the `_id`s

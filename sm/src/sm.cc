@@ -1285,10 +1285,13 @@ int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, const void **tuple,
 }
 
 /* The next row, in the cursor's pin, which *ref then names. */
-/* The row group of a scan's last row; see sm.h. */
-uint64_t sm_row_scan_rg(const sm_row_scan_t *scan) {
-  return scan ? sm3::tbl_scan_rg(rel_scan_of(const_cast<sm_row_scan_t *>(scan)))
-              : 0;
+/* The place of a scan's last row; see sm.h. */
+sm_row_place_t sm_row_scan_place(const sm_row_scan_t *scan) {
+  sm3::place_t p;
+  if (scan) {
+    p = sm3::tbl_scan_place(rel_scan_of(const_cast<sm_row_scan_t *>(scan)));
+  }
+  return {p.fsid, p.rno};
 }
 
 int sm_row_scannxt(sm_row_scan_t *scan, uint64_t *id, sm_pin_ref_t *ref) {
@@ -2161,23 +2164,24 @@ int sm_tbl_update(sm_tbl_t *tbl, uint64_t id, const sm_datum_t *values,
 
 /* Delete a row and its index entries. */
 /* Delete a column store table's row by its name; see sm.h. */
-int sm_tbl_delete_at(sm_tbl_t *tbl, uint64_t rg_id, uint64_t id) {
+int sm_tbl_delete_at(sm_tbl_t *tbl, sm_row_place_t place, uint64_t id) {
   return guard(tbl ? tbl->session : nullptr, [&] {
     if (!tbl) {
       return null_arg("sm_tbl_delete_at", "tbl");
     }
-    return sm3::tbl_delete_at(tbl->table, rg_id, id);
+    return sm3::tbl_delete_at(tbl->table, {place.fsid, place.rno}, id);
   });
 }
 
 /* Update a column store table's row by its name; see sm.h. */
-int sm_tbl_update_at(sm_tbl_t *tbl, uint64_t rg_id, uint64_t id,
+int sm_tbl_update_at(sm_tbl_t *tbl, sm_row_place_t place, uint64_t id,
                      const sm_datum_t *values, const bool *isnull, size_t n) {
   return guard(tbl ? tbl->session : nullptr, [&] {
     if (check_row("sm_tbl_update_at", tbl, values, isnull, n) != 0) {
       return -1;
     }
-    return sm3::tbl_update_at(tbl->table, rg_id, id, {values, n}, {isnull, n});
+    return sm3::tbl_update_at(tbl->table, {place.fsid, place.rno}, id,
+                              {values, n}, {isnull, n});
   });
 }
 

@@ -6,7 +6,7 @@
 #    every row, after a restart too.
 # 2. A SERIALIZABLE transaction cannot read it, and it takes no
 #    index; the other levels read it.
-# 3. A row of a row group is deleted by its name (rg_id, _id); an
+# 3. A row of a row group is deleted by its name (place, _id); an
 #    aborted delete leaves it.
 # 4. 12,000 rows inserted one at a time: the commit queues the
 #    table, and the seal's job seals a row group of them; a seal by
@@ -28,6 +28,9 @@
 #    and b "zz", b < 'b' and b IN ('zz') each read one.
 # 10. 10,000 rows inserted one at a time and prepared: COMMIT PREPARED
 #     counts them toward the seal, which seals them.
+# 11. 150 rows of a row group deleted by name: the sealer folds their
+#     markers into the validmap; the count is the same, and a delete
+#     of a folded row finds no row.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_colstore"))
 (rm-rf test-dir)
@@ -86,8 +89,8 @@
 (def id7 (get ids 7))
 (def id8 (get ids 8))
 (begin :rc)
-    (def rg7 (rg-of ev id7))
-    (assert-eq (> rg7 0) true "a loaded row is in a row group")
+    (def rg7 (place-of ev id7))
+    (assert-eq (> (get rg7 0) 0) true "a loaded row is in a row group")
     (delete-at ev rg7 id7)
 (commit)
 (begin :rr)
@@ -95,7 +98,7 @@
     (assert-nil (rg-of ev id7) "no row has its _id")
 (commit)
 (begin :rc)
-    (delete-at ev (rg-of ev id8) id8)
+    (delete-at ev (place-of ev id8) id8)
 (abort)
 (begin :rr)
     (assert-eq (scan-count ev) 24999 "an aborted delete leaves the row")
@@ -233,6 +236,40 @@
     (assert-eq (> (rg-of tq 1) 0) true
                "COMMIT PREPARED's rows are sealed")
 (commit)
+
+# 11. Deletes by name of 150 rows of a row group of 10,000, past 1%
+# of its rows: the sealer folds their markers into its validmap.
+# Every snapshot counts each row once, and a delete of a folded row
+# fails as a delete of a deleted one.
+(begin :rc)
+    (table-create tf
+      (columns (a :int4) (b :text))
+      :column-store)
+(commit)
+(begin :rc)
+    (def fids (load tf (map (fn [i] [i "f"]) (range 10000))))
+(commit)
+(begin :rc)
+    (def fplaces (map (fn [i] (place-of tf (get fids i))) (range 150)))
+    (assert-eq (> (get (get fplaces 0) 0) 0) true "a loaded row is in a row group")
+(commit)
+(begin :rr)
+    (assert-eq (scan-count tf) 10000 "before the deletes")
+(commit)
+(begin :rc)
+    (for i 0 150
+      (delete-at tf (get fplaces i) (get fids i)))
+(commit)
+(seal-wait)
+(begin :rr)
+    (assert-eq (scan-count tf) 9850 "the deleted rows are gone, once folded")
+    (assert-nil (rg-of tf (get fids 0)) "no row has a folded row's _id")
+(commit)
+(begin :rc)
+    (assert-eq (says (err-of (delete-at tf (get fplaces 0) (get fids 0)))
+                     "ERR_NOTFOUND")
+               true "a delete of a folded row finds no row")
+(abort)
 
 (db-close)
 (env-detach :force true)
