@@ -303,10 +303,13 @@ int make_ready(sm2::rel_t *rel, std::span<const sm2::datum_t> datums,
   return sm2::tup_encode(*rel->desc, d, isnull, out.tuple);
 }
 
-/* Write the datums a row moved out of line, after the row. */
-int write_moved(sm2::rel_t *rel, const ready_t &row) {
+/*
+ * Write the datums a row moved out of line, after the row; with
+ * moved_in, a moved-in row's, as moved-in versions.
+ */
+int write_moved(sm2::rel_t *rel, const ready_t &row, bool moved_in = false) {
   for (const moved_t &m : row.moved) {
-    if (sm2::toast_write(rel->session, m.ptr, m.data) != 0) {
+    if (sm2::toast_write(rel->session, m.ptr, m.data, moved_in) != 0) {
       return -1;
     }
   }
@@ -505,7 +508,7 @@ int insert_row(sm2::rel_t *rel, std::span<const sm2::datum_t> datums,
     k = sm2::id_key(r);
   }
   if (write_new(rel, k, row.tuple, written, moved_in) != 0 ||
-      write_moved(rel, row) != 0) {
+      write_moved(rel, row, moved_in) != 0) {
     return -1;
   }
   id = r;

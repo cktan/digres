@@ -12,7 +12,10 @@
 # 5. The values are there after the environment is attached again.
 # 6. A column store table's values of 2,000 bytes, in TOAST in its
 #    delta store, are sealed into a row group, and read back whole; a
-#    value past 2,048 bytes is refused.
+#    value past 2,048 bytes is refused. A REPEATABLE READ session
+#    older than the row group's elimination deletes and updates its
+#    rows, whose values elimination put back out of line: no
+#    conflict.
 # 7. With TOAST off, the default, a row past 64 KB is refused.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_toast"))
@@ -130,6 +133,26 @@
     (assert-eq (fails? (fn [] (insert cs [1 (string/repeat "y" 2049)]))) true
                "2,049 bytes are refused")
 (abort)
+(def cp (do (begin :rc) (def p (places cs)) (commit) p))
+(session-open s2 "tdb")
+(session-use s2)
+(begin :rr)
+    (assert-eq (scan-count cs) 10001 "s2's snapshot, of the row group")
+(session-use s1)
+(begin :rc)
+    (assert-eq (eliminate-rg cs (get (get cp 6) 0)) true "the elimination")
+(commit)
+(session-use s2)
+    (delete-at cs (get cp 6) 6)
+    (update cs 7 [6 "short"])
+    (assert-eq (scan-count cs) 10000 "s2's writes, no conflict")
+(commit)
+(session-use s1)
+(begin :rr)
+    (assert-eq (scan-count cs) 10000)
+    (assert-eq (read cs 7) [6 "short"])
+(commit)
+(session-close s2)
 (session-close s1)
 (env-detach)
 

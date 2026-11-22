@@ -945,8 +945,10 @@ of 0 to 2:
    write of the delta key would wait for it.
 4. Put each at delta key `_id` as a moved-in version
    (`sm2::rel_movein_at`, through `sm1::insert_moved_in`). A
-   value over 2,000 bytes goes to TOAST, as an insert's does. The
-   rows count toward the next seal.
+   value over 2,000 bytes goes to TOAST, as an insert's does, its
+   chunks moved-in versions too: a writer older than the
+   elimination erases them with no conflict. The rows count toward
+   the next seal.
 5. Erase the version's RG key and its filter keys.
 6. Commit; then give the sealer a cleanup of the version (§11.4).
 
@@ -1334,7 +1336,9 @@ random CGs and random bounds, against a test of every value.
     and an update's new version hides the old one; the newest
     version of a sealed row is read from its RG; a READ COMMITTED
     write of a row updated since and folded is `SM_ERR_UPDATED`;
-    an RR write by `_id` of a row deleted since conflicts;
+    an RR write by `_id` of a row deleted since conflicts; a writer
+    older than an elimination of a row out of line writes it with
+    no conflict;
     a writer of a row that a newer version dropped fails, at each
     level; an older writer's update, out of line, over a moved-in
     row hides the row; a writer of a row deleted before an
@@ -1382,7 +1386,9 @@ update by name (`update-at`) and the cleanup that waits for it; a
 prepared delete across a restart; a delete older than the seal.
 `rel/test/test_toast.rel`, with TOAST on: 10k rows of values of
 2,000 bytes inserted one at a time, sealed by the seal's job,
-read back whole; a value of 2,049 bytes refused.
+read back whole; a value of 2,049 bytes refused; a REPEATABLE
+READ session older than an RG's elimination deletes and updates
+rows whose values elimination put out of line again.
 
 `dg/test/columnar.sql`: `CREATE TABLE ... WITH (storage =
 columnar)`; the warnings of §14.1 but `EXCLUDE`'s, and the `NOT

@@ -18,9 +18,12 @@ namespace sm2 {
 /* The relid of a store's TOAST data (../ROWSTORE.md §8). */
 constexpr uint16_t toast_relid = 0xFFFF;
 
-/* Write data, the datum p names, as its chunks. */
+/*
+ * Write data, the datum p names, as its chunks; with moved_in, as
+ * moved-in versions (sm1::insert_moved_in), for a moved-in row.
+ */
 int toast_write(sm1::session_t *session, const toast_ptr_t &p,
-                std::string_view data);
+                std::string_view data, bool moved_in = false);
 
 /* Erase the chunks of the datum p names. */
 int toast_erase(sm1::session_t *session, const toast_ptr_t &p);

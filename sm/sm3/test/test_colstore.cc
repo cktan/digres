@@ -3218,7 +3218,9 @@ TEST_CASE("an old writer agrees across the sealer's jobs") {
                                    : sm3::tbl_update(t, id, r.d, r.null));
       REQUIRE_MESSAGE(rc == 0, "step " << step << " op " << op << " a " << a
                                        << " place " << p.fsid << "/" << p.rno
-                                       << ": " << sm1::errmsg());
+                                       << " by_place " << by_place << ": e "
+                                       << sm1::errnum() << " "
+                                       << std::string(sm1::errmsg()));
       if (op == 0) {
         m.erase(a);
       } else {
@@ -3874,5 +3876,63 @@ TEST_CASE("a row group's small by-value datums read back as written") {
   REQUIRE(eliminate(ss3, c, fsid + 1));
   REQUIRE(row_groups(db, c) == 0);
   check(80, "elimination");
+  sm3::session_close(ss3);
+}
+
+// Verify a writer older than an elimination deletes and updates a row
+// whose value is out of line: the TOAST chunks elimination wrote for
+// the moved-in row are moved-in too, so erasing them is no conflict.
+// 1. Row groups of 100 rows, TOAST on; insert 100 rows, a = 5 and
+//    a = 6 with b of 2,000 bytes, and seal them.
+// 2. R (REPEATABLE READ) finds a = 5 and a = 6; eliminate: the rows
+//    and their chunks are in the delta store.
+// 3. R deletes a = 5 by its place, and updates a = 6 by its _id: no
+//    conflict; R counts 99 rows.
+// 4. R commits: 99 rows, a = 6 updated.
+TEST_CASE("an older writer of an eliminated row out of line") {
+  col_db_t db(100, true);
+  db.begin();
+  uint64_t c = make(db, "c", true);
+  db.commit();
+  // 1. The rows, sealed.
+  const std::string big(2000, 'q');
+  db.begin();
+  sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  for (int32_t a = 0; a < 100; a++) {
+    row_t r(a, a == 5 || a == 6 ? big : "s");
+    uint64_t id = 0;
+    REQUIRE(sm3::tbl_insert(t, r.d, r.null, id) == 0);
+  }
+  sm3::tbl_close(t);
+  db.commit();
+  sm3::session_t *ss2 = nullptr, *ss3 = nullptr;
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss2) == 0);
+  REQUIRE(sm3::session_open(db.cat, db.open(), ss3) == 0);
+  REQUIRE(seal(ss3, c));
+  // 2. R; the elimination.
+  REQUIRE(sm3::begin(ss2, sm1::xctlevel_t::repeatable_read) == 0);
+  auto [p5, id5] = where_in(ss2, c, 5);
+  auto [p6, id6] = where_in(ss2, c, 6);
+  REQUIRE(p5.fsid != 0);
+  REQUIRE(eliminate(ss3, c, p5.fsid));
+  // 3. R's writes.
+  REQUIRE(sm3::tbl_open(ss2, c, sm1::SM_LOCKMODE_IX, t) == 0);
+  REQUIRE_MESSAGE(sm3::tbl_delete_at(t, p5, id5) == 0,
+                  std::string(sm1::errmsg()));
+  row_t r6(6, "r");
+  REQUIRE_MESSAGE(sm3::tbl_update(t, id6, r6.d, r6.null) == 0,
+                  std::string(sm1::errmsg()));
+  sm3::tbl_close(t);
+  CHECK(count_in(ss2, c) == 99);
+  // 4. Committed.
+  REQUIRE_MESSAGE(sm3::commit(ss2) == 0, std::string(sm1::errmsg()));
+  db.begin(sm1::xctlevel_t::repeatable_read);
+  auto rows = whole_rows(db.ss, c);
+  db.commit();
+  CHECK(rows.size() == 99);
+  CHECK(rows.count(5) == 0);
+  CHECK(rows[6] == "r");
+  sm3::session_close(ss2);
   sm3::session_close(ss3);
 }
