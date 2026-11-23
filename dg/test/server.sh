@@ -5054,23 +5054,25 @@ grep -q 'does not exist, skipping' "$work/drop2.out" || fail "drop if exists"
 
 # Verify that DROP TABLE and TRUNCATE free a table's files before they
 # return, though a REPEATABLE READ transaction older than them is open
-# (../../sm/GC.md §6).
-# 1. Fill tsp with 40,000 rows and vacuum it, so its rows are in sorted
+# (../../sm/GC.md §6), as pg_database_size() tells it: the database's
+# directory, as du -s gives it, but for RocksDB's logs.
+# 1. pg_database_size() of the database, by name and by oid, is above 0.
+# 2. Fill tsp with 40,000 rows and vacuum it, so its rows are in sorted
 #    files; a held session begins REPEATABLE READ and reads t12.
-# 2. DROP TABLE tsp: the sorted files are at least 500,000 bytes smaller
-#    when it returns.
-# 3. Fill tsp again, vacuum it, and TRUNCATE it: smaller in the same way.
-# 4. The held session commits.
+# 3. DROP TABLE tsp: the database is at least 500,000 bytes smaller when
+#    it returns.
+# 4. Fill tsp again, vacuum it, and TRUNCATE it: smaller in the same way.
+# 5. The held session commits.
 space_fill() {
   local_psql -c 'create table if not exists tsp (a int4, b text)' \
     -c "insert into tsp select g, md5(g::text) || md5((g + 1)::text)
         from generate_series(1, 40000) g" -c 'vacuum tsp' > /dev/null 2>&1
 }
-# The bytes of the sorted files in the data directory.
-db_bytes() {
-  find "$work/data" -name '*.sst' -printf '%s\n' |
-    awk '{ n += $1 } END { print n + 0 }'
-}
+db_bytes() { local_psql -c 'select pg_database_size(current_database())'; }
+[ "$(local_psql -c "select pg_database_size(current_database()) > 0,
+  pg_database_size(oid) > 0 from pg_database
+  where datname = current_database()" 2>&1)" = "t|t" ] ||
+  fail "drop space: pg_database_size by name and by oid"
 space_fill
 held_start spheld
 held_send spheld "begin isolation level repeatable read;

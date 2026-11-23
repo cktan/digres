@@ -21,6 +21,7 @@ extern void datadir_load(void);
 extern Oid datadir_database_oid(const char *dbname);
 extern void datadir_open_session(const char *dbname);
 extern char *datadir_database_name(Oid dboid);
+extern char *datadir_database_dir(Oid dboid);
 extern List *datadir_database_names(void);
 extern bool datadir_create_database(const char *dbname);
 

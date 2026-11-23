@@ -28,6 +28,7 @@
 #include "storage/fd.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/datadir.h"
 #include "utils/numeric.h"
 #include "utils/rel.h"
 #include "utils/relfilenumbermap.h"
@@ -68,52 +69,62 @@ struct size_bytes_unit_alias {
 static const struct size_bytes_unit_alias size_bytes_aliases[] = {{"B", 0},
                                                                   {NULL}};
 
-/* Return physical size of directory contents, or 0 if dir doesn't exist */
-static int64 db_dir_size(const char *path) {
-  int64 dirsize = 0;
+/*
+ * Whether name is a file of RocksDB's logs, which a database's size leaves
+ * out: its WAL (NNNNNN.log), and its info log (LOG, LOG.old.*).
+ */
+static bool is_log_file(const char *name) {
+  size_t len = strlen(name);
+
+  return 0 == strcmp(name, "LOG") || 0 == strncmp(name, "LOG.old.", 8) ||
+         (len > 4 && 0 == strcmp(name + len - 4, ".log"));
+}
+
+/*
+ * The bytes the files under path take on disk, at any depth, as du -s
+ * counts them: allocated blocks, a symbolic link not followed. The logs
+ * (is_log_file()) are left out. 0 if path does not exist.
+ */
+static int64 db_tree_size(const char *path) {
+  int64 size = 0;
   struct dirent *direntry;
   DIR *dirdesc;
   char filename[MAXPGPATH * 2];
 
   dirdesc = AllocateDir(path);
-
-  if (!dirdesc)
+  if (NULL == dirdesc)
     return 0;
-
-  while ((direntry = ReadDir(dirdesc, path)) != NULL) {
+  while (NULL != (direntry = ReadDir(dirdesc, path))) {
     struct stat fst;
 
     CHECK_FOR_INTERRUPTS();
-
-    if (strcmp(direntry->d_name, ".") == 0 ||
-        strcmp(direntry->d_name, "..") == 0)
+    if (0 == strcmp(direntry->d_name, ".") ||
+        0 == strcmp(direntry->d_name, ".."))
       continue;
-
     snprintf(filename, sizeof(filename), "%s/%s", path, direntry->d_name);
-
-    if (stat(filename, &fst) < 0) {
-      if (errno == ENOENT)
+    if (lstat(filename, &fst) < 0) {
+      /* A file RocksDB removed since the directory was read. */
+      if (ENOENT == errno)
         continue;
-      else
-        ereport(ERROR, (errcode_for_file_access(),
-                        errmsg("could not stat file \"%s\": %m", filename)));
+      ereport(ERROR, (errcode_for_file_access(),
+                      errmsg("could not stat file \"%s\": %m", filename)));
     }
-    dirsize += fst.st_size;
+    if (S_ISDIR(fst.st_mode))
+      size += db_tree_size(filename);
+    else if (!is_log_file(direntry->d_name))
+      size += (int64)fst.st_blocks * 512;
   }
-
   FreeDir(dirdesc);
-  return dirsize;
+  return size;
 }
 
 /*
- * calculate size of database in all tablespaces
+ * The size of a database: its directory, base/<dbid>, as du -s gives it,
+ * but for RocksDB's logs. digres has no tablespaces.
  */
 static int64 calculate_database_size(Oid dbOid) {
+  char *dir;
   int64 totalsize;
-  DIR *dirdesc;
-  struct dirent *direntry;
-  char dirpath[MAXPGPATH];
-  char pathname[MAXPGPATH + 21 + sizeof(TABLESPACE_VERSION_DIRECTORY)];
   AclResult aclresult;
 
   /*
@@ -128,29 +139,11 @@ static int64 calculate_database_size(Oid dbOid) {
   }
 
   /* Shared storage in pg_global is not counted */
-
-  /* Include pg_default storage */
-  snprintf(pathname, sizeof(pathname), "base/%u", dbOid);
-  totalsize = db_dir_size(pathname);
-
-  /* Scan the non-default tablespaces */
-  snprintf(dirpath, MAXPGPATH, PG_TBLSPC_DIR);
-  dirdesc = AllocateDir(dirpath);
-
-  while ((direntry = ReadDir(dirdesc, dirpath)) != NULL) {
-    CHECK_FOR_INTERRUPTS();
-
-    if (strcmp(direntry->d_name, ".") == 0 ||
-        strcmp(direntry->d_name, "..") == 0)
-      continue;
-
-    snprintf(pathname, sizeof(pathname), "%s/%s/%s/%u", PG_TBLSPC_DIR,
-             direntry->d_name, TABLESPACE_VERSION_DIRECTORY, dbOid);
-    totalsize += db_dir_size(pathname);
-  }
-
-  FreeDir(dirdesc);
-
+  dir = datadir_database_dir(dbOid);
+  if (NULL == dir)
+    return 0;
+  totalsize = db_tree_size(dir);
+  pfree(dir);
   return totalsize;
 }
 

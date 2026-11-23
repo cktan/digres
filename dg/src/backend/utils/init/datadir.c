@@ -201,6 +201,18 @@ Oid datadir_database_oid(const char *dbname) {
 }
 
 /*
+ * The directory of the database whose oid is dboid, base/<dbid>, palloc'd,
+ * relative to the data directory (../../../../CODE.md §5): the inverse of
+ * datadir_database_oid(). NULL for an oid below FirstNormalObjectId, which
+ * names no database of sm's.
+ */
+char *datadir_database_dir(Oid dboid) {
+  if (dboid < FirstNormalObjectId)
+    return NULL;
+  return psprintf("base/%u", dboid - FirstNormalObjectId);
+}
+
+/*
  * The name of the database whose oid is dboid, palloc'd, or NULL if there is
  * none: the one of sm's databases with that id.
  */

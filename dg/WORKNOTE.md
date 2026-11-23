@@ -13702,3 +13702,20 @@ A check hook took the new value as a `char **`, to change it with
 - **How**: sm3 refuses it with `SM_ERR_VALUETOOLONG`;
   `sm_sqlstate()` in `access/sm/smstore.c` maps it.
 - **Test**: step 14 of `test/columnar.sql`.
+
+## Step 457: pg_database_size() is the database's directory
+
+- **What it is**: `pg_database_size()`, by name or by oid, gives
+  the bytes the files under `base/<dbid>` take on disk, at any
+  depth, as `du -s` counts them: allocated blocks, a symbolic
+  link not followed. RocksDB's WAL (`NNNNNN.log`) and info logs
+  (`LOG`, `LOG.old.*`) are left out. It failed before: it read
+  `base/<oid>`, which is not where a database is, then scanned
+  `pg_tblspc`, which digres does not have (step 62).
+- **How**: `datadir_database_dir()` in `utils/init/datadir.c`
+  maps an oid to its directory, the inverse of
+  `datadir_database_oid()` ([`CODE.md`](CODE.md#5-sm) §5);
+  `db_tree_size()` in `utils/adt/dbsize.c` walks it.
+- **Test**: `test/server.sh`'s check of the space a DROP TABLE
+  and a TRUNCATE free measures with it, and checks it by name
+  and by oid.

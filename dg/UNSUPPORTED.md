@@ -78,7 +78,9 @@ regression files are taken out for it (`test/pgregress`,
   checksums and pages are gone (steps 58, 59, 65, 243); every
   table is in sm. `pg_relation_size()` and the other size
   functions answer a table's or an index's bytes in sm
-  (steps 120, 121).
+  (steps 120, 121). `pg_database_size()` answers the bytes of
+  the database's directory, as `du -s` counts them, but for
+  RocksDB's WAL and logs (step 457).
 - **Tables are clustered on their primary key** — differs. A
   sequential scan reads rows in key order, but a query's result
   has no order without ORDER BY: the plan can use an index, a
