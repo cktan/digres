@@ -108,8 +108,16 @@ struct sm1::session_t {
    * own versions.
    */
   uint64_t write_gen = 0;
-  std::vector<uint64_t> created;      /* storeids made by sm1::mkstore */
-  std::vector<uint64_t> dropped;      /* storeids removed by sm1::rmstore */
+  std::vector<uint64_t> created; /* storeids made by sm1::mkstore */
+  std::vector<uint64_t> dropped; /* storeids removed by sm1::rmstore */
+  /*
+   * Those of dropped removed with locked (sm1::rmstore): a commit
+   * hands the ones still in dropped to finish_drops. A rollback to a
+   * savepoint leaves an entry here that dropped no longer has.
+   */
+  std::vector<uint64_t> dropped_locked;
+  /* Committed drops for sm1::finish_drops; no transaction's state. */
+  std::vector<uint64_t> drops_due;
   std::vector<uint64_t> dropped_seqs; /* seqids removed by sm1::rmseq */
   /*
    * The temporary stores the session holds, from sm1::mkstore to the
@@ -331,10 +339,14 @@ struct sm1::session_t {
    * The handles of the stores the session looked up, each with the
    * database's stores_version it was read at (../DBMGR.md):
    * refreshed in place, and erased only at a transaction's end, so
-   * a reference to one stays good through a call.
+   * a reference to one stays good through a call. Between
+   * transactions an entry keeps its handle weakly (weak, and
+   * store.hold empty), so an idle session keeps no dropped store's
+   * files: the next lookup takes it back, or reads the map again.
    */
   struct store_handle_t {
     sm1_internal::store_t store;
+    std::weak_ptr<sm1_internal::cf_owner_t> weak;
     uint64_t version = 0;
   };
   std::unordered_map<uint64_t, store_handle_t> store_handles;

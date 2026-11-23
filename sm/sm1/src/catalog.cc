@@ -27,12 +27,15 @@
  */
 
 #include "error.h"
+#include "log.h"
 #include "session.h"
 #include "sm0_codec.h"
 #include "sm0_defer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <new>
+#include <thread>
 #include <vector>
 
 using namespace sm1_internal;
@@ -110,7 +113,7 @@ int mkstore(sm1::session_t *s, uint64_t *out, bool temporary, bool chained) {
 }
 
 /* sm1::rmstore, minus the out-of-memory guard. */
-int rmstore(sm1::session_t *s, uint64_t storeid) {
+int rmstore(sm1::session_t *s, uint64_t storeid, bool locked) {
   // Require an active, non-prepared transaction.
   if (xct_check_active(s) != 0) {
     return -1;
@@ -149,8 +152,12 @@ int rmstore(sm1::session_t *s, uint64_t storeid) {
                    nullptr) != 0) {
     return -1;
   }
-  // Remember the storeid, so GC drops its CF after commit.
+  // Remember the storeid, so GC drops its CF after commit; under the
+  // caller's lock, sm1::finish_drops drops it at once.
   s->dropped.push_back(storeid);
+  if (locked) {
+    s->dropped_locked.push_back(storeid);
+  }
   // X, after the catalog row's lock, so a second drop still waits on
   // the row: work on the store that began before ends first, and none
   // begins from now (sm1::store_work_begin).
@@ -251,8 +258,58 @@ int sm1::mkstore(sm1::session_t *session, uint64_t &storeid, bool temporary,
 }
 
 /* Drop a store and all of its rows. */
-int sm1::rmstore(sm1::session_t *session, uint64_t storeid) {
-  return ::rmstore(session, storeid);
+int sm1::rmstore(sm1::session_t *session, uint64_t storeid, bool locked) {
+  return ::rmstore(session, storeid, locked);
+}
+
+/*
+ * Drop the stores the session's commits dropped under a lock, then
+ * wait for their files; see sm1.h.
+ * 1. Drop each store's column family, and take its handle's flag.
+ * 2. Erase the session's own cached handles of them.
+ * 3. Wait until each handle's last copy is destroyed: RocksDB deletes
+ *    a dropped column family's files then, in that thread.
+ */
+int sm1::finish_drops(sm1::session_t *session) {
+  if (nullptr == session) {
+    return set_error(sm1::SM_ERR_INVALID, "finish_drops: session is NULL");
+  }
+  std::vector<uint64_t> due;
+  due.swap(session->drops_due);
+  int rc = 0;
+  // 1. Drop each one: no transaction reads it, under the caller's lock.
+  std::vector<std::pair<uint64_t, std::shared_ptr<std::atomic<bool>>>> waits;
+  for (uint64_t storeid : due) {
+    std::shared_ptr<std::atomic<bool>> gone;
+    if (db_drop_store_cf(session->db, storeid, &gone) != 0) {
+      rc = -1;
+    }
+    if (gone) {
+      waits.emplace_back(storeid, std::move(gone));
+    }
+  }
+  // 2. The session's own copies.
+  for (uint64_t storeid : due) {
+    session->store_handles.erase(storeid);
+  }
+  // 3. Another copy is held for a moment: a sweep's compaction of the
+  //    store, or statistics. A wait of more than 10 s is logged once.
+  for (const auto &[storeid, gone] : waits) {
+    auto start = std::chrono::steady_clock::now();
+    bool warned = false;
+    while (!gone->load(std::memory_order_acquire)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      if (!warned &&
+          std::chrono::steady_clock::now() - start > std::chrono::seconds(10)) {
+        log_msg(sm1::loglevel_t::warn,
+                "database {}: the drop of store {} waits for a copy of its "
+                "handle",
+                session->db->name.c_str(), storeid);
+        warned = true;
+      }
+    }
+  }
+  return rc;
 }
 
 /* List the stores visible to the transaction. */

@@ -456,14 +456,15 @@ int64_t sweep_txn_locked(db_t *db, bool start) {
     db->sweep_records = records;
     // Remember the filter's error count before the pass.
     uint64_t errors = db->gc_filter_errors.load();
-    // Collect every store CF.
-    std::vector<store_t> cfs;
+    // Collect every store's id; each handle is taken only while its
+    // store compacts, so the pass holds no dropped store's files
+    // (sm1::finish_drops).
+    std::vector<uint64_t> ids;
     {
       // Hold store_mu while reading the CF map.
       std::shared_lock<std::shared_mutex> guard(db->store_mu);
-      // Take each store's handle.
       for (auto &kv : db->stores) {
-        cfs.push_back(kv.second);
+        ids.push_back(kv.first);
       }
     }
     // Build the pass's compaction options.
@@ -475,9 +476,18 @@ int64_t sweep_txn_locked(db_t *db, bool start) {
     // Keep automatic compactions from running alongside.
     opt.exclusive_manual_compaction = true;
     // Run every store through the filter.
-    for (const store_t &st : cfs) {
+    for (uint64_t id : ids) {
+      // A store dropped since has no versions to stamp.
+      store_t st = db_store(db, id);
+      if (!st.cf) {
+        continue;
+      }
       // Compact the whole store, memtable first.
       rocksdb::Status s = st.rdb->CompactRange(opt, st.cf, nullptr, nullptr);
+      // Dropped while it compacted: nothing of it is left to stamp.
+      if (!s.ok() && !db_store(db, id).cf) {
+        continue;
+      }
       // A failed compaction leaves versions unstamped.
       if (!s.ok()) {
         log_msg(sm1::loglevel_t::error,

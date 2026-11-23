@@ -429,6 +429,29 @@ watermark reaches that commit, the worker calls
 `db_drop_store_cf()`. An older snapshot reads the store through
 the same storeid until then.
 
+**A drop under the caller's lock goes at its commit.** With
+`locked`, `sm1::rmstore` takes the caller's promise that nothing
+reads the store from then on. sm3's `DROP TABLE`, `TRUNCATE` and
+rewrite make it: the table-oid lock X keeps every reader out
+until the commit, and a reader after it reads the table's
+definition at the newest state, so it finds no table, or the new
+store (CATALOG.md §2.2). Then:
+
+1. The commit queues the store as any drop, and hands it to the
+   entry point's session (`committed_drops`).
+2. sm3 calls `sm1::finish_drops` after the commit, outside the
+   catalog's mutex.
+3. `finish_drops` drops the CF, and waits until its handle's last
+   copy is destroyed: RocksDB has then deleted its files.
+4. The queue's entry later finds the store gone.
+
+A crash between the commit and step 3 leaves a CF with no
+catalog row, which the orphan sweep drops at the next open: the
+catalog row's delete, in the commit's batch, is the drop's
+durable record. An older snapshot that reads the store through
+sm1 alone, with no lock, finds its CF missing (`SM_ERR_CORRUPT`):
+the caller broke its promise.
+
 - **The queue is volatile.** An entry lost to a crash is caught
   by the orphan sweep at the next open (DBMGR.md).
 - **A prepared drop** commits from its record's `dropped` list,
@@ -444,11 +467,21 @@ orphan sweep catches the CF.
 
 **When the files go.** RocksDB keeps a dropped CF's files until
 its last handle is destroyed, and the last copy of `store_t`
-destroys it. A session's `store_handles` entry is a copy that
-lasts until that session's transaction ends (DBMGR.md). So an
-idle session delays the space, and nothing else. A btree reaper's
-session has no transaction end, and keeps a store's handle until
-it closes, so it is opened for a short pass.
+destroys it. The thread that destroys it deletes the files
+(`ColumnFamilyHandleImpl`'s destructor), and `cf_owner_t` then
+sets its `gone` flag, which `finish_drops` waits for. A copy is
+held for a moment only:
+
+- **A session's `store_handles` entry** holds the handle within a
+  transaction, and only weakly between transactions (DBMGR.md
+  §7.6), so an idle session keeps no files.
+- **The `CF:txn` sweep** takes each store's handle only while it
+  compacts that store. A store dropped meanwhile is passed over.
+- **Statistics, the GC worker and the reapers** hold a copy for
+  one call or one pass. A drop under its X waits for the reapers'
+  and the GC worker's IX anyway (LOCKMGR.md §2.3).
+
+`finish_drops` logs a wait of more than 10 seconds.
 
 **Buffer pool frames.** A drop does not walk the frames. A
 dropped store's frames age out. No frame can be mistaken for
@@ -796,7 +829,12 @@ Paths are relative to `sm1/`.
   Tombstones are purged for each key, sparing live neighbours and
   a re-insert. Range tombstones flush by count. An idle
   read-committed transaction holds back the purge. A dropped
-  store's CF goes once no snapshot sees it. The sweep deletes
+  store's CF goes once no snapshot sees it. A run drops stores
+  first; the end of the last snapshot that sees a drop, and a
+  kick during a run, run the worker at once. A drop under the
+  caller's lock deletes its files before `finish_drops` returns,
+  past an idle session's cache and an older snapshot, and one
+  rolled back to a savepoint stays. The sweep deletes
   records only once every version is stamped, leaves every
   committed row readable, keeps records a snapshot may need, and
   starts past its threshold. A cursor from before the pass holds

@@ -5052,6 +5052,45 @@ grep -q 'table "t1" does not exist' "$work/drop2.out" || fail "drop twice"
 local_psql -c 'drop table if exists t1' > "$work/drop2.out" 2>&1
 grep -q 'does not exist, skipping' "$work/drop2.out" || fail "drop if exists"
 
+# Verify that DROP TABLE and TRUNCATE free a table's files before they
+# return, though a REPEATABLE READ transaction older than them is open
+# (../../sm/GC.md §6).
+# 1. Fill tsp with 40,000 rows and vacuum it, so its rows are in sorted
+#    files; a held session begins REPEATABLE READ and reads t12.
+# 2. DROP TABLE tsp: the sorted files are at least 500,000 bytes smaller
+#    when it returns.
+# 3. Fill tsp again, vacuum it, and TRUNCATE it: smaller in the same way.
+# 4. The held session commits.
+space_fill() {
+  local_psql -c 'create table if not exists tsp (a int4, b text)' \
+    -c "insert into tsp select g, md5(g::text) || md5((g + 1)::text)
+        from generate_series(1, 40000) g" -c 'vacuum tsp' > /dev/null 2>&1
+}
+# The bytes of the sorted files in the data directory.
+db_bytes() {
+  find "$work/data" -name '*.sst' -printf '%s\n' |
+    awk '{ n += $1 } END { print n + 0 }'
+}
+space_fill
+held_start spheld
+held_send spheld "begin isolation level repeatable read;
+select count(*) || ' sp go' from t12;"
+held_wait spheld "3 sp go" || fail "drop space: the held session reads"
+sp_before=$(db_bytes)
+local_psql -c 'drop table tsp' > /dev/null 2>&1
+sp_after=$(db_bytes)
+[ $((sp_before - sp_after)) -ge 500000 ] ||
+  fail "drop space: DROP TABLE frees its files ($sp_before, $sp_after)"
+space_fill
+sp_before=$(db_bytes)
+local_psql -c 'truncate tsp' > /dev/null 2>&1
+sp_after=$(db_bytes)
+[ $((sp_before - sp_after)) -ge 500000 ] ||
+  fail "drop space: TRUNCATE frees its files ($sp_before, $sp_after)"
+held_send spheld "commit;"
+held_end spheld
+local_psql -c 'drop table tsp' > /dev/null 2>&1
+
 # Verify that UPDATE and DELETE write a table in sm, with its indexes, in
 # their transaction; and that under READ COMMITTED a row another transaction
 # changed first is read again and checked again, as PostgreSQL does.

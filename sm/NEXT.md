@@ -501,22 +501,6 @@ Owed, and blocking nothing above:
   ([`../dg/GUCPLAN.md`](../dg/GUCPLAN.md) §5) must be set by
   `InitializeOneGUCOption()` before anything frees it.
 
-- **A drop returns only once its disk space is free.** A
-  transaction that drops a store, or a database, is to wait
-  after its commit, and return only when the disk space is
-  free.
-  - **A store:** the commit queues the store, and the GC
-    worker drops its column family once the watermark passes
-    the commit ([`GC.md`](GC.md#6-store-drops) §6). RocksDB
-    deletes the files when the last handle goes. The commit is
-    to wait for both. An older snapshot holds the space, so
-    the wait can be long: decide what the wait does then, for
-    example a timeout, or a notice.
-  - **A database:** `sm1::rmdb` removes the database's
-    directory before it returns. It refuses a database that a
-    session has open. Check that digres's `DROP DATABASE` frees
-    the space before it returns, too.
-
 - **The Column Store's parts not built**
   ([`COLSTORE.md`](COLSTORE.md)). Each is owed; none blocks the
   table's use:

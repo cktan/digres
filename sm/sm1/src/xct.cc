@@ -68,6 +68,22 @@ bool pending_prepared(sm1::session_t *s);
 thread_local std::vector<std::function<void()>> committed_fns;
 
 /*
+ * The stores the transaction this thread has just committed dropped
+ * with locked (sm1::rmstore), for its entry point to hand to the
+ * calling session's sm1::finish_drops.
+ */
+thread_local std::vector<uint64_t> committed_drops;
+
+/* Hand the stores the commit dropped under a lock to session. */
+void take_committed_drops(sm1::session_t *session) {
+  if (nullptr != session) {
+    session->drops_due.insert(session->drops_due.end(), committed_drops.begin(),
+                              committed_drops.end());
+  }
+  committed_drops.clear();
+}
+
+/*
  * Run what the commit kept, newest first, as the caller's code:
  * outside sm1 and outside any transaction.
  */
@@ -223,6 +239,7 @@ void reset(sm1::session_t *s) {
   s->wts_hi = 0;
   s->created.clear();
   s->dropped.clear();
+  s->dropped_locked.clear();
   s->dropped_seqs.clear();
   s->temp_touched = false;
   s->loaded_stores.clear();
@@ -249,6 +266,14 @@ void reset(sm1::session_t *s) {
   uint64_t version = s->db->stores_version.load(std::memory_order_acquire);
   std::erase_if(s->store_handles,
                 [&](const auto &kv) { return kv.second.version != version; });
+  // The rest it keeps weakly, so an idle session holds no store's
+  // files after a drop (sm1::finish_drops).
+  for (auto &kv : s->store_handles) {
+    if (kv.second.store.hold) {
+      kv.second.weak = kv.second.store.hold;
+      kv.second.store.hold.reset();
+    }
+  }
 }
 
 /*
@@ -1015,6 +1040,14 @@ void publish_commit(sm1::session_t *s, uint64_t commit_ts) noexcept {
   lock_release_all(s);
   // Queue its dropped stores for GC.
   gc_queue_drops(db, commit_ts, s->dropped);
+  // Those dropped under the caller's lock go at once, by the entry
+  // point's session (sm1::finish_drops); the queue is their net.
+  for (uint64_t storeid : s->dropped) {
+    if (std::find(s->dropped_locked.begin(), s->dropped_locked.end(),
+                  storeid) != s->dropped_locked.end()) {
+      committed_drops.push_back(storeid);
+    }
+  }
   // Drop each dropped sequence's lease; nothing reads it now
   // that its catalog row is gone.
   for (uint64_t seqid : s->dropped_seqs) {
@@ -1116,6 +1149,7 @@ std::unique_ptr<sm1::session_t> make_prepared(sm1::session_t *s,
   g->seq_hwm = s->seq_hwm;
   g->created = s->created;
   g->dropped = s->dropped;
+  g->dropped_locked = s->dropped_locked;
   g->dropped_seqs = s->dropped_seqs;
   g->begin_seq = s->begin_seq;
   // Name it by gid.
@@ -1860,6 +1894,7 @@ int sm1::xact_start(sm1::session_t *session, int64_t *out) {
 /* Commit the active transaction, then run its on_commit functions. */
 int sm1::commit(sm1::session_t *session) {
   int rc = ::commit(session);
+  take_committed_drops(session);
   run_committed_fns();
   return rc;
 }
@@ -1946,6 +1981,7 @@ static int commit_prepared_gid(sm1::session_t *session,
 /* Commit a prepared transaction by gid, then run its on_commit functions. */
 int sm1::commit_prepared(sm1::session_t *session, std::string_view gid_arg) {
   int rc = commit_prepared_gid(session, gid_arg);
+  take_committed_drops(session);
   run_committed_fns();
   return rc;
 }

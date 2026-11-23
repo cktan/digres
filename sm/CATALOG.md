@@ -212,11 +212,15 @@ other document points here for them.
 ### 2.2 What a store-level change does
 
 - **`DROP TABLE` is one `sm1::rmstore`**, sm1's O(1) column
-  family drop. It takes the indexes and TOAST data with it.
+  family drop. It takes the indexes and TOAST data with it. It is
+  made with `locked`, under the table-oid lock X, so the store's
+  files are deleted before the commit returns
+  ([`GC.md`](GC.md#6-store-drops) §6).
 - **`TRUNCATE` swaps the store.** `truncate_table` makes a new,
   empty store, points the table's record at it, makes each tree
   index empty in it, and drops the old store with `sm1::rmstore`,
-  under the table-oid lock X. All of it is transactional, so an
+  under the table-oid lock X, and with `locked`, as `DROP TABLE`
+  does. All of it is transactional, so an
   abort, or a rollback to a savepoint before it, brings the rows
   back. The cost is the same whatever the table holds. The
   columns, the index definitions with their relids and states,
@@ -1247,4 +1251,5 @@ sm3/test/test_stats.cc     statistics, recorded and read
 rel/test/test_catalog.rel  DDL through the C API, end to end
 rel/test/test_epoch.rel    the catalog's epoch
 rel/test/test_truncate.rel TRUNCATE
+rel/test/test_drop_space.rel DROP TABLE and TRUNCATE free their files at commit
 ```

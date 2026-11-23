@@ -111,6 +111,13 @@ struct store_t {
 struct cf_owner_t {
   rocksdb::DB *rdb = nullptr;
   rocksdb::ColumnFamilyHandle *cf = nullptr;
+  /*
+   * Set once the handle is destroyed. For a dropped column family,
+   * RocksDB has then deleted its files, in the destroying thread
+   * (../GC.md §6): sm1::finish_drops waits for it.
+   */
+  std::shared_ptr<std::atomic<bool>> gone =
+      std::make_shared<std::atomic<bool>>(false);
 
   /* Destroy the handle now, if it is not already. */
   void destroy() {
@@ -118,6 +125,7 @@ struct cf_owner_t {
       rdb->DestroyColumnFamilyHandle(cf);
     }
     cf = nullptr;
+    gone->store(true, std::memory_order_release);
   }
   ~cf_owner_t() { destroy(); }
 };
@@ -753,8 +761,12 @@ inline rocksdb::ColumnFamilyHandle *db_store_cf(db_t *db, uint64_t storeid) {
 int db_create_store_cf(db_t *db, uint64_t storeid,
                        sm1::session_t *owner = nullptr, bool chained = false);
 
-/* Drop storeid's CF and unregister it. Returns 0 or -1. */
-int db_drop_store_cf(db_t *db, uint64_t storeid);
+/*
+ * Drop storeid's CF and unregister it. Returns 0 or -1. With gone,
+ * *gone is the flag its handle's owner sets once the last copy goes.
+ */
+int db_drop_store_cf(db_t *db, uint64_t storeid,
+                     std::shared_ptr<std::atomic<bool>> *gone = nullptr);
 
 /*
  * The column family name of store storeid: store.<storeid>, or for a

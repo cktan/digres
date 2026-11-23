@@ -1133,15 +1133,35 @@ int mkstore(session_t* session, uint64_t& storeid, bool temporary = false,
  * Drop a store and all of its rows. Transactional, as
  * sm1::mkstore().
  *
- * Space is not reclaimed at commit, because transactions
- * holding an older snapshot may still legitimately read the
- * store; physical removal happens in the background once no
- * snapshot can see it.
+ * Without locked, the space is not reclaimed at commit: a
+ * transaction with an older snapshot may still read the store
+ * (mvcc a17). The GC worker removes it once no snapshot can see
+ * it.
+ *
+ * With locked, the caller promises that nothing reads the store
+ * from now on: it holds every reader out with a lock of its own
+ * until commit, and a reader that comes after reads the catalog
+ * at its newest state, so it finds no store. The store then goes
+ * right after the commit: sm1::finish_drops drops it, and returns
+ * once its files are deleted (../../GC.md §6).
  *
  * Errors: SM_ERR_NOTFOUND, SM_ERR_NOTRANS, SM_ERR_CONFLICT
  * (retryable), SM_ERR_INVALID (storeid 0), SM_ERR_PREPARED.
  */
-int rmstore(session_t* session, uint64_t storeid);
+int rmstore(session_t* session, uint64_t storeid, bool locked = false);
+
+/*
+ * Drop the stores that session's committed transactions dropped
+ * with sm1::rmstore(..., locked), and return once their files are
+ * deleted. Call it after sm1::commit or sm1::commit_prepared,
+ * outside any mutex of the caller's: it waits for every copy of
+ * each store's handle to go, which a sweep or statistics may hold
+ * for a moment. A store not dropped by it goes as an unlocked
+ * drop's does, by the GC worker, or at the next open.
+ * Returns 0, or -1 if a drop failed; the failed store goes at the
+ * next open.
+ */
+int finish_drops(session_t* session);
 
 /*
  * List the storeids of the stores the transaction sees, in

@@ -20,6 +20,8 @@
 #include <stdio.h>
 
 #include <chrono>
+#include <filesystem>
+#include <future>
 
 #include <memory>
 #include <string>
@@ -705,6 +707,152 @@ TEST_CASE("a drop committed during a GC run goes in a run right after") {
   gc_stop(f.db());
   f.db()->test_gc_after_drops = nullptr;
   CHECK(dropped);
+  sm1::closedb(s);
+}
+
+namespace {
+
+/* The paths of storeid's sorted files. */
+std::vector<std::string> sst_files(db_t *db, uint64_t storeid) {
+  std::string name = db_store(db, storeid).cf->GetName();
+  std::vector<rocksdb::LiveFileMetaData> live;
+  db->rdb->GetLiveFilesMetaData(&live);
+  std::vector<std::string> out;
+  for (const rocksdb::LiveFileMetaData &m : live) {
+    if (m.column_family_name == name) {
+      out.push_back(m.db_path + m.name);
+    }
+  }
+  return out;
+}
+
+/* Whether any of paths is still on disk. */
+bool any_exists(const std::vector<std::string> &paths) {
+  for (const std::string &p : paths) {
+    if (std::filesystem::exists(p)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* Make a store of 100 rows, committed and flushed into sorted files. */
+uint64_t flushed_store(gc_fixture_t &f, sm1::session_t *s) {
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  uint64_t storeid = mkstore(s);
+  for (int i = 0; i < 100; i++) {
+    put(s, storeid, "k" + std::to_string(i), std::string(100, 'v'));
+  }
+  REQUIRE(sm1::commit(s) == 0);
+  REQUIRE(
+      f.db()
+          ->rdb->Flush(rocksdb::FlushOptions(), db_store(f.db(), storeid).cf)
+          .ok());
+  REQUIRE_FALSE(sst_files(f.db(), storeid).empty());
+  return storeid;
+}
+
+/* Drop storeid under the caller's lock, in a transaction of s's. */
+void drop_locked(sm1::session_t *s, uint64_t storeid) {
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  REQUIRE(sm1::rmstore(s, storeid, true) == 0);
+  REQUIRE(sm1::commit(s) == 0);
+}
+
+} // namespace
+
+TEST_CASE("a drop under the caller's lock deletes its files before "
+          "finish_drops returns") {
+  // Verify finish_drops waits for the last copy of the handle
+  // (../GC.md §6).
+  // 1. Make store U with rows in sorted files.
+  // 2. A thread holds a copy of U's handle for 200 ms, then lets it go.
+  // 3. Drop U with locked and commit; finish_drops returns after the
+  //    copy is let go, and U's files are gone.
+  gc_fixture_t f;
+  sm1::session_t *s = f.open();
+  uint64_t ustoreid = flushed_store(f, s);
+  std::vector<std::string> files = sst_files(f.db(), ustoreid);
+
+  store_t copy = db_store(f.db(), ustoreid);
+  std::atomic<bool> let_go{false};
+  std::thread holder([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    let_go = true;
+    copy = store_t{};
+  });
+
+  drop_locked(s, ustoreid);
+  CHECK(sm1::finish_drops(s) == 0);
+  CHECK(let_go);
+  CHECK_FALSE(any_exists(files));
+  CHECK(db_store(f.db(), ustoreid).cf == nullptr);
+  holder.join();
+  sm1::closedb(s);
+}
+
+TEST_CASE("an idle session and an old snapshot keep no dropped store's "
+          "files") {
+  // Verify that only a lock keeps out a drop under one (../GC.md §6).
+  // 1. Make store U with rows in sorted files. Session I reads U and
+  //    commits: its cache keeps U's handle.
+  // 2. Reader R begins and reads store 1: its snapshot is older than
+  //    the drop.
+  // 3. S drops U with locked and commits; finish_drops returns within
+  //    5 s, and U's files are gone.
+  gc_fixture_t f;
+  sm1::session_t *s = f.open();
+  sm1::session_t *i = f.open();
+  sm1::session_t *r = f.open();
+  commit_put(s, "k", "v");
+  uint64_t ustoreid = flushed_store(f, s);
+  std::vector<std::string> files = sst_files(f.db(), ustoreid);
+  REQUIRE(sm1::begin(i, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(get(i, ustoreid, "k0") == std::string(100, 'v'));
+  REQUIRE(sm1::commit(i) == 0);
+  REQUIRE(sm1::begin(r, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(get(r, g_store, "k") == "v");
+
+  drop_locked(s, ustoreid);
+  std::future<int> done =
+      std::async(std::launch::async, [&] { return sm1::finish_drops(s); });
+  bool returned =
+      done.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+  CHECK(returned);
+  if (!returned) {
+    // Let it go, so the test ends.
+    sm1::closedb(i);
+    i = nullptr;
+  }
+  CHECK(done.get() == 0);
+  CHECK_FALSE(any_exists(files));
+  REQUIRE(sm1::commit(r) == 0);
+  if (i) {
+    sm1::closedb(i);
+  }
+  sm1::closedb(r);
+  sm1::closedb(s);
+}
+
+TEST_CASE("a drop under the caller's lock rolled back to a savepoint stays") {
+  // Verify finish_drops drops only what the commit dropped.
+  // 1. Make store U.
+  // 2. In a savepoint, drop U with locked; roll back to the savepoint;
+  //    commit.
+  // 3. finish_drops leaves U's CF, and U reads as before.
+  gc_fixture_t f;
+  sm1::session_t *s = f.open();
+  uint64_t ustoreid = flushed_store(f, s);
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  REQUIRE(sm1::savepoint(s) == 1);
+  REQUIRE(sm1::rmstore(s, ustoreid, true) == 0);
+  REQUIRE(sm1::rollback(s, 1) == 0);
+  REQUIRE(sm1::commit(s) == 0);
+  CHECK(sm1::finish_drops(s) == 0);
+  CHECK(db_store(f.db(), ustoreid).cf != nullptr);
+  REQUIRE(sm1::begin(s, sm1::xctlevel_t::repeatable_read) == 0);
+  CHECK(get(s, ustoreid, "k0") == std::string(100, 'v'));
+  REQUIRE(sm1::commit(s) == 0);
   sm1::closedb(s);
 }
 

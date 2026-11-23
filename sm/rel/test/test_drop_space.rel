@@ -1,0 +1,93 @@
+# test_drop_space.rel -- a DROP TABLE or a TRUNCATE frees the table's
+# sorted files before its commit returns, though a REPEATABLE READ
+# snapshot older than it is open (../../GC.md §6).
+#
+# 1. Fill t with 20,000 rows and compact it, so its rows are in
+#    sorted files. Session s2 begins REPEATABLE READ and reads v: its
+#    snapshot is older than the drop, and it holds no lock of t or u.
+# 2. Drop t and commit: the sorted files are under half their bytes
+#    at once.
+# 3. Fill u in the same way, truncate it and commit: the sorted files
+#    are under half their bytes again.
+# 4. s2 commits.
+
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_drop_space"))
+(rm-rf test-dir)
+(env-init test-dir)
+(env-attach test-dir)
+
+# The bytes of the sorted files under dir, at any depth.
+(defn sst-bytes [dir]
+  (var n 0)
+  (each f (os/dir dir)
+    (def p (string dir "/" f))
+    (def st (os/stat p))
+    (if (= (st :mode) :directory)
+      (+= n (sst-bytes p))
+      (if (string/has-suffix? ".sst" f)
+        (+= n (st :size)))))
+  n)
+
+# Text that compresses little.
+(defn noise [] (string (math/random) (math/random) (math/random)))
+
+(db-create "dsdb")
+(session-open s1 "dsdb")
+(session-open s2 "dsdb")
+
+(session-use s1)
+(begin :rc)
+    (table-create t (columns (a :int4 :not-null) (b :text)))
+    (table-create u (columns (a :int4 :not-null) (b :text)))
+    (table-create v (columns (a :int4 :not-null)))
+(commit)
+(begin :rc)
+    (insert v [1])
+(commit)
+
+# 1. t in sorted files; s2's snapshot older than the drop.
+(begin :rc)
+    (for i 0 20000 (insert t [i (noise)]))
+(commit)
+(begin :rc)
+    (compact t)
+(commit)
+(session-use s2)
+(begin :rr)
+    (assert-count 1 (scan v))
+(session-use s1)
+
+# 2. The drop frees t's files at its commit.
+(def before (sst-bytes test-dir))
+(begin :rc)
+    (table-drop t)
+(commit)
+(def after (sst-bytes test-dir))
+(assert-eq (< after (/ before 2)) true
+           (string "a drop frees its files: " before " bytes, then " after))
+
+# 3. The truncate frees u's files at its commit.
+(begin :rc)
+    (for i 2 20002 (insert u [i (noise)]))
+(commit)
+(begin :rc)
+    (compact u)
+(commit)
+(def before-t (sst-bytes test-dir))
+(begin :rc)
+    (truncate u)
+(commit)
+(def after-t (sst-bytes test-dir))
+(assert-eq (< after-t (/ before-t 2)) true
+           (string "a truncate frees its files: " before-t " bytes, then "
+                   after-t))
+
+# 4. s2 ends.
+(session-use s2)
+(commit)
+
+(session-close s1)
+(session-close s2)
+(env-detach)
+(rm-rf test-dir)
+(print "test_drop_space.rel: PASSED")

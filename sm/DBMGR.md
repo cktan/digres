@@ -790,7 +790,9 @@ work. So a session keeps its own handles:
   call, so a reference stays good across a nested lookup. At a
   transaction's end, the entries of an older version are erased,
   so a session that made and dropped many temporary tables keeps
-  none of them.
+  none of them. The rest keep their handles weakly until the
+  session's next lookup takes them back: an idle session holds no
+  dropped store's files (GC.md §6).
 - **A dropped store is no more dangerous than a copy.** What
   keeps a store from being dropped under a reader is its table's
   lock, and its catalog row read at the reader's view. A lookup

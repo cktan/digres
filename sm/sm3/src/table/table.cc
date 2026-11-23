@@ -3924,7 +3924,7 @@ int rewrite_table(session_t *session, uint64_t oid, table_rec_t rec,
   }
   // The old store goes at commit, with the rows and entries in it,
   // as a truncate's does (../CATALOG.md §8).
-  return sm1::rmstore(session->sm1, old_store);
+  return sm1::rmstore(session->sm1, old_store, true);
 }
 
 /* The value schema of one of the table's indexes; see sm3.h. */

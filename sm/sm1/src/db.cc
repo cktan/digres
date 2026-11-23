@@ -905,7 +905,14 @@ const store_t &session_store(sm1::session_t *s, uint64_t storeid) {
   uint64_t version = db->stores_version.load(std::memory_order_acquire);
   auto it = s->store_handles.find(storeid);
   if (it != s->store_handles.end() && it->second.version == version) {
-    return it->second.store;
+    // Kept weakly since the last transaction: take it back. A handle
+    // gone since is a store dropped; the map says so below.
+    if (!it->second.store.hold && it->second.store.cf) {
+      it->second.store.hold = it->second.weak.lock();
+    }
+    if (it->second.store.hold || !it->second.store.cf) {
+      return it->second.store;
+    }
   }
   // Hold store_mu shared while reading the map.
   std::shared_lock<std::shared_mutex> guard(db->store_mu);
@@ -964,8 +971,13 @@ int db_create_store_cf(db_t *db, uint64_t storeid, sm1::session_t *owner,
   return 0;
 }
 
-/* Drop store.<storeid> and unregister its handle. */
-int db_drop_store_cf(db_t *db, uint64_t storeid) {
+/*
+ * Drop store.<storeid> and unregister its handle. With gone, *gone is
+ * set once the handle's last copy is destroyed; it stays empty if the
+ * store was already gone.
+ */
+int db_drop_store_cf(db_t *db, uint64_t storeid,
+                     std::shared_ptr<std::atomic<bool>> *gone) {
   // Hold store_mu exclusively while dropping.
   std::unique_lock<std::shared_mutex> guard(db->store_mu);
   // Look up storeid's handle.
@@ -976,6 +988,9 @@ int db_drop_store_cf(db_t *db, uint64_t storeid) {
   }
   // Drop the store's column family, and stop counting its memtables.
   store_t st = it->second;
+  if (gone && st.hold) {
+    *gone = st.hold->gone;
+  }
   const std::string name = st.cf->GetName();
   (st.owner ? db->tmp_listener : db->listener.get())->remove(name);
   rocksdb::Status s = st.rdb->DropColumnFamily(st.cf);

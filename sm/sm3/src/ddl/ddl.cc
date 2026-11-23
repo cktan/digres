@@ -389,7 +389,7 @@ static int make_table(session_t *session, uint64_t nspoid,
     }
     sm1::rmseq(session->sm1, toast_seq_name(t));
     sm1::rmseq(session->sm1, rec.id_seq);
-    sm1::rmstore(session->sm1, rec.storeid);
+    sm1::rmstore(session->sm1, rec.storeid, true);
     sm1::seterr(error, reason);
   }
   return -1;
@@ -570,8 +570,9 @@ int drop_table(session_t *session, uint64_t oid) {
       cat_del_table(session, oid) != 0) {
     return -1;
   }
-  // Its store takes its rows and index entries with it (../DESIGN.md §5).
-  if (sm1::rmstore(session->sm1, rec.storeid) != 0 ||
+  // Its store takes its rows and index entries with it (../DESIGN.md §5),
+  // at commit: the table's X keeps every reader out until then.
+  if (sm1::rmstore(session->sm1, rec.storeid, true) != 0 ||
       sm1::rmseq(session->sm1, rec.id_seq) != 0 ||
       sm1::rmseq(session->sm1, toast_seq_name(oid)) != 0 ||
       (rec.column_store && sm1::rmseq(session->sm1, rg_seq_name(oid)) != 0)) {
@@ -613,8 +614,9 @@ int truncate_table(session_t *session, uint64_t oid) {
     }
   }
   // The old store goes at commit, taking the rows and index
-  // entries with it (../DESIGN.md §5).
-  return sm1::rmstore(session->sm1, old_store);
+  // entries with it (../DESIGN.md §5): the table's X keeps every
+  // reader out until then.
+  return sm1::rmstore(session->sm1, old_store, true);
 }
 
 /* Rename a table; see sm3.h. */

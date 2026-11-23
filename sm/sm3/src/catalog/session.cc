@@ -663,6 +663,13 @@ int commit(session_t *s) {
   if (commit_txn(s) != 0) {
     return -1;
   }
+  // The stores its DDL dropped go now, outside the catalog's mutex:
+  // the table-oid lock kept every reader out until the commit, and
+  // one after it finds no table (../../GC.md §6). The commit stands
+  // if a drop fails; the store goes at the next open.
+  if (sm1::finish_drops(s->sm1) != 0) {
+    sm0::log_msg(sm1::loglevel_t::warn, "drop after commit: {}", sm1::errmsg());
+  }
   // The rows are committed: they count toward each table's seal.
   for (const auto &[oid, n] : inserts) {
     sealer_count(s->cat, oid, n);
