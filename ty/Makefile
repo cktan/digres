@@ -27,6 +27,8 @@ endif
 CXX      ?= g++
 CXXFLAGS ?= $(OPTFLAGS)
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc -MMD -MP
+# doctest, for the tests (../ext/doctest).
+CXXFLAGS += -I../ext/doctest
 LDLIBS   += -lpthread
 
 BUILD := build
@@ -79,7 +81,7 @@ $(BUILD)/test/%.o: test/%.cc $(FLAGS_FILE)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 test: all
-	$(TEST_BIN)
+	$(TEST_BIN) -E
 
 # The library again, optimized, its objects apart in build/rel: what
 # digres's release build links, as it links sq's.
@@ -103,11 +105,12 @@ $(BUILD)/rel/src/ryu/%.o: src/ryu/%.c
 # sanitizer. setarch -R stops the kernel's randomisation from moving
 # the sanitizer's shadow memory.
 $(BUILD)/test_ty_tsan: $(LIB_SRCS) $(RYU_SRCS) $(TEST_SRCS)
-	$(CXX) -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc -O1 -g -w \
+	$(CXX) -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc \
+	    -I../ext/doctest -O1 -g -w \
 	    $(RYU_FLAGS) -x c++ -fsanitize=thread -o $@ $^ $(LDLIBS)
 
 tsan: $(BUILD)/test_ty_tsan
-	setarch $$(uname -m) -R $(BUILD)/test_ty_tsan
+	setarch $$(uname -m) -R $(BUILD)/test_ty_tsan -E
 
 clean:
 	$(RM) -r $(BUILD)

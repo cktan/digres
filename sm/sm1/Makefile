@@ -45,7 +45,8 @@ include ../../ty/ty.mk
 ROCKSDB_LIB ?= $(ROCKSDB_REL)
 
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -I../include \
-            -I$(SM0)/include -I$(ROCKSDB_INC) -I$(TY_INC) -Isrc -MMD -MP
+            -I$(SM0)/include -I$(ROCKSDB_INC) -I$(TY_INC) -I$(DOCTEST_INC) \
+            -Isrc -MMD -MP
 LDLIBS   += $(SM0_LIB) $(ROCKSDB_LIB) $(ROCKSDB_DEPS) $(TY_LIB) -lpthread
 
 # The compiler and flags every object is built with. Rewriting
@@ -155,8 +156,8 @@ $(BUILD)/test/%.o: test/%.cc $(FLAGS_FILE)
 # Each example runs on a home directory of its own, made fresh
 # so that a run never inherits an older format version.
 test: all scenarios
-	$(TEST_BIN)
-	$(MVCC_BIN)
+	$(TEST_BIN) -E
+	$(MVCC_BIN) -E
 	@mkdir -p $(EX_HOME)
 	@for ex in $(EX_BINS); do \
 	  home=$(EX_HOME)/$$(basename $$ex); \
@@ -217,4 +218,4 @@ TSAN_TESTS := the row reaper reaps beside writers*
 tsan:
 	$(MAKE) BUILD=$(BUILD)/tsan OPTFLAGS="-O1 -g -fsanitize=thread" \
 	    ROCKSDB_LIB="$(ROCKSDB_TSAN)" $(BUILD)/tsan/test_sm1
-	setarch $$(uname -m) -R $(BUILD)/tsan/test_sm1 -tc="$(TSAN_TESTS)"
+	setarch $$(uname -m) -R $(BUILD)/tsan/test_sm1 -E -tc="$(TSAN_TESTS)"

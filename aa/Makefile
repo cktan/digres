@@ -32,6 +32,7 @@ CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -I../sm/include \
             -I../sm/sm0/include -Isrc -MMD -MP
 # RocksDB, the release build ../ext makes.
 include ../ext/ext.mk
+CXXFLAGS += -I$(DOCTEST_INC)
 # ty, which sm calls; the tests link it.
 include ../ty/ty.mk
 LDLIBS   += $(ROCKSDB_REL) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata \
@@ -94,7 +95,7 @@ $(BUILD)/test/%.o: test/%.cc $(FLAGS_FILE)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 test: all
-	$(RUN) $(TEST_BIN)
+	$(RUN) $(TEST_BIN) -E
 
 # The tests again, built apart under a sanitizer, sm with them. The
 # thread sanitizer cannot run with the address space randomised, hence

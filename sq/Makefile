@@ -20,6 +20,8 @@ CXX ?= g++
 OPT ?= -O0 -g
 LIB_CXXFLAGS := -std=c++20 -Wall -Wextra $(OPT) -Iinclude -Isrc -Ibuild/gen \
                 -Ispec -MMD -MP
+# doctest, for the tests (../ext/doctest).
+TEST_CXXFLAGS := $(LIB_CXXFLAGS) -I../ext/doctest
 # What flex and bison write is not held to -Wall.
 GEN_CXXFLAGS := $(filter-out -Wall -Wextra,$(LIB_CXXFLAGS)) -w
 
@@ -101,7 +103,7 @@ build/src/%.o: src/%.cc | build/gen/gram.hh
 
 build/test/%.o: test/%.cc | build/gen/gram.hh
 	@mkdir -p $(dir $@)
-	$(CXX) $(LIB_CXXFLAGS) -c -o $@ $<
+	$(CXX) $(TEST_CXXFLAGS) -c -o $@ $<
 
 # The library again, optimized, its objects apart in build/rel: what
 # digres's release build links (../bench.old/DESIGN.md section 2).
@@ -136,7 +138,8 @@ build/rel/gen/scan.o build/rel/gen/gram.o: \
 # sanitizer: slow to build, so it is a target of its own. What it is
 # for is the test that parses on eight threads at once.
 build/test_sq_tsan: $(LIB_SRCS) $(TEST_SRCS) $(LIB) | build/gen/gram.hh
-	$(CXX) $(GEN_CXXFLAGS) -MF build/test_sq_tsan.d -O1 -fsanitize=thread \
+	$(CXX) $(GEN_CXXFLAGS) -I../ext/doctest -MF build/test_sq_tsan.d -O1 \
+	    -fsanitize=thread \
 	    -o $@ $(LIB_SRCS) $(TEST_SRCS) build/gen/print_nodes.cc \
 	    build/gen/node_funcs.cc build/gen/scan.cc build/gen/gram.cc -lpthread
 
@@ -144,14 +147,14 @@ build/test_sq_tsan: $(LIB_SRCS) $(TEST_SRCS) $(LIB) | build/gen/gram.hh
 # place its shadow memory under the kernel's randomisation, and stops
 # with "unexpected memory mapping" before a test has run.
 tsan: build/test_sq_tsan
-	setarch $$(uname -m) -R build/test_sq_tsan
+	setarch $$(uname -m) -R build/test_sq_tsan -E
 
 # Programs the shell tests run, each one source file over the library.
 build/%: test/tool/%.cc $(LIB) | build/gen/gram.hh
 	$(CXX) $(LIB_CXXFLAGS) -o $@ $< $(LIB)
 
 test: all
-	$(TEST_BIN)
+	$(TEST_BIN) -E
 	test/alone.sh
 	test/nodes.sh
 	test/run.sh

@@ -195,7 +195,7 @@ Each file's notices identify the terms that apply to it.
 | Ryu files in `dg/src/common/`, `dg/src/include/common/shortest_dec.h` and `sm/sm2/src/ryu/` | PostgreSQL License for PostgreSQL portions; Boost Software License 1.0 for Ryu; MIT for this project's original additions where marked | [`dg/COPYRIGHT`](dg/COPYRIGHT), [`LICENSES/BSL-1.0.txt`](LICENSES/BSL-1.0.txt), and file headers |
 | `dg/src/timezone/localtime.c`, `private.h` and `tzfile.h` | Upstream code is public domain; this project's original additions are MIT where marked | File headers and [`LICENSE`](LICENSE) |
 | `dg/src/timezone/strftime.c` | BSD-3-Clause for upstream code; MIT for this project's original additions where marked | [File notice](dg/src/timezone/strftime.c) and [`LICENSE`](LICENSE) |
-| `sm/sm0/include/doctest.h`, by Viktor Kirilov | MIT | the header of the file |
+| `ext/doctest/doctest.h`, by Viktor Kirilov, with an option of this project's added | MIT | the header of the file |
 | `dg/test/slt/sqlite/`, SQLite's sqllogictest | public domain, or a license of the user's choice | [`dg/test/slt/sqlite/COPYRIGHT.md`](dg/test/slt/sqlite/COPYRIGHT.md) |
 
 RocksDB, ICU, OpenSSL and Janet are linked, not copied into the

@@ -10,6 +10,15 @@
 // See accompanying file LICENSE.txt or copy at
 // https://opensource.org/licenses/MIT
 //
+// Modified for digres (2026), from doctest 2.4.11, in two places; search
+// for "digres" and "echo" to find them:
+//   - One option added, --echo (-E). The console reporter then prints
+//     each test case's number and name as it starts, flushed, and its time
+//     when it took 5 seconds or more, so a run whose output goes to a log
+//     shows where it is.
+//   - A case is timed by the monotonic clock, not the wall clock, which
+//     can step back.
+//
 // The documentation can be found at the library's page:
 // https://github.com/doctest/doctest/blob/master/doc/markdown/readme.md
 //
@@ -912,6 +921,7 @@ struct ContextOptions //!OCLINT too many fields
     bool case_sensitive;       // if filtering should be case sensitive
     bool exit;                 // if the program should be exited after the tests are ran/whatever
     bool duration;             // print the time duration of each test case
+    bool echo;                 // print each test case as it starts (digres)
     bool minimal;              // minimal console output (only test failures)
     bool quiet;                // no console output
     bool no_throw;             // to skip exceptions-related assertion macros
@@ -3391,10 +3401,13 @@ using ticks_t = timer_large_integer::type;
         return ((t.QuadPart - hzo.QuadPart) * LONGLONG(1000000)) / hz.QuadPart;
     }
 #else  // DOCTEST_PLATFORM_WINDOWS
+    // digres: the monotonic clock, as the wall clock can step back (WSL2
+    // does), and a case's time would then wrap around.
     ticks_t getCurrentTicks() {
-        timeval t;
-        gettimeofday(&t, nullptr);
-        return static_cast<ticks_t>(t.tv_sec) * 1000000 + static_cast<ticks_t>(t.tv_usec);
+        timespec t;
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        return static_cast<ticks_t>(t.tv_sec) * 1000000 +
+               static_cast<ticks_t>(t.tv_nsec / 1000);
     }
 #endif // DOCTEST_PLATFORM_WINDOWS
 
@@ -5966,6 +5979,7 @@ namespace {
         // caching pointers/references to objects of these types - safe to do
         const ContextOptions& opt;
         const TestCaseData*   tc;
+        unsigned              echoed = 0; // test cases started, for --echo
 
         ConsoleReporter(const ContextOptions& co)
                 : s(*co.cout)
@@ -6155,6 +6169,8 @@ namespace {
               << Whitespace(sizePrefixDisplay*1) << "exits after the tests finish\n";
             s << " -" DOCTEST_OPTIONS_PREFIX_DISPLAY "d,   --" DOCTEST_OPTIONS_PREFIX_DISPLAY "duration=<bool>               "
               << Whitespace(sizePrefixDisplay*1) << "prints the time duration of each test\n";
+            s << " -" DOCTEST_OPTIONS_PREFIX_DISPLAY "E,   --" DOCTEST_OPTIONS_PREFIX_DISPLAY "echo=<bool>                   "
+              << Whitespace(sizePrefixDisplay*1) << "prints each test case as it starts\n";
             s << " -" DOCTEST_OPTIONS_PREFIX_DISPLAY "m,   --" DOCTEST_OPTIONS_PREFIX_DISPLAY "minimal=<bool>                "
               << Whitespace(sizePrefixDisplay*1) << "minimal console output (only failures)\n";
             s << " -" DOCTEST_OPTIONS_PREFIX_DISPLAY "q,   --" DOCTEST_OPTIONS_PREFIX_DISPLAY "quiet=<bool>                  "
@@ -6294,6 +6310,14 @@ namespace {
             tc                        = &in;
             subcasesStack.clear();
             currentSubcaseLevel = 0;
+            // --echo: the case's number and name, flushed, so a log that is
+            // a pipe shows it while the case runs.
+            if(opt.echo) {
+                ++echoed;
+                std::ostringstream line;
+                line << "[" << std::setw(4) << echoed << "] " << in.m_name << "\n";
+                s << line.str() << std::flush;
+            }
         }
 
         void test_case_reenter(const TestCaseData&) override {
@@ -6301,6 +6325,13 @@ namespace {
         }
 
         void test_case_end(const CurrentTestCaseStats& st) override {
+            // --echo: a case of 5 seconds or more says how long it took.
+            if(opt.echo && st.seconds >= 5.0) {
+                std::ostringstream line;
+                line << "[" << std::setw(4) << echoed << "] took " << std::fixed
+                     << std::setprecision(1) << st.seconds << " s\n";
+                s << line.str() << std::flush;
+            }
             if(tc->m_no_output)
                 return;
 
@@ -6672,6 +6703,7 @@ void Context::parseArgs(int argc, const char* const* argv, bool withDefaults) {
     DOCTEST_PARSE_AS_BOOL_OR_FLAG("case-sensitive", "cs", case_sensitive, false);
     DOCTEST_PARSE_AS_BOOL_OR_FLAG("exit", "e", exit, false);
     DOCTEST_PARSE_AS_BOOL_OR_FLAG("duration", "d", duration, false);
+    DOCTEST_PARSE_AS_BOOL_OR_FLAG("echo", "E", echo, false);
     DOCTEST_PARSE_AS_BOOL_OR_FLAG("minimal", "m", minimal, false);
     DOCTEST_PARSE_AS_BOOL_OR_FLAG("quiet", "q", quiet, false);
     DOCTEST_PARSE_AS_BOOL_OR_FLAG("no-throw", "nt", no_throw, false);

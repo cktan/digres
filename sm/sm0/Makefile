@@ -33,6 +33,8 @@ CXX      ?= g++
 CXXFLAGS ?= $(OPTFLAGS)
 CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -I../include -Isrc \
             -MMD -MP
+# doctest, for the tests (../../ext/doctest).
+CXXFLAGS += -I../../ext/doctest
 LDLIBS   += -lpthread
 
 BUILD := build
@@ -80,7 +82,7 @@ $(BUILD)/test/%.o: test/%.cc $(FLAGS_FILE)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 test: all
-	$(RUN) $(TEST_BIN)
+	$(RUN) $(TEST_BIN) -E
 
 # The tests again, built apart under a sanitizer. The thread
 # sanitizer cannot run with the address space randomised, hence

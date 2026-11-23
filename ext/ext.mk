@@ -25,6 +25,10 @@ ROCKSDB_TSAN := $(ROCKSDB_DIR)/tsan/librocksdb.a
 # The compression libraries a static RocksDB needs, the system's.
 ROCKSDB_DEPS := -lsnappy -llz4 -lzstd -lz -lbz2
 
+# doctest, the unit tests' framework: one header, with digres's --echo
+# (-E), and the listener every test binary links (doctest/doctest.h).
+DOCTEST_INC := $(EXT)/doctest
+
 # PostgreSQL 18.6, the version digres forked: its source tree, built
 # in place, and installed into its install/.
 PG18 := $(EXT)/pg18.6

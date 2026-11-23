@@ -161,8 +161,8 @@ two differ, [`CLAUDE.md`](../CLAUDE.md) wins.
   sm0's error and log calls into `namespace sm1`, so the stack
   calls them `sm1::errnum()` and so on.
 - **sm0's headers are named `sm0_*.h`**, but for `sm0.h`
-  itself, the vendored `doctest.h`, and `sm_sys.h`, which is
-  public.
+  itself, and `sm_sys.h`, which is public. The vendored
+  `doctest.h` is in `../ext/doctest/`.
 
 ## 7. Threads, waits and logging
 

@@ -23,12 +23,15 @@ One part's alone is `make -j4 test-ty`, `test-sm`, `test-sq`,
 `test-aa` or `test-dg`, on the debug build too. The output is
 long: save it to a file and read that.
 
-**Which test is running**: while a doctest binary runs, a file
-beside it, `BINARY.active` (`sm/sm2/build/test_sm2.active`, for
-one), holds the test case it is in, its name, then its file and
-line. It goes when the run ends; a run that crashed or hangs
-leaves it naming its test
-(`sm/sm0/include/sm0_doctest_active.h`).
+**Which test is running**: `make test` runs each doctest binary
+with `-E` (`--echo`), which prints each test case's number and
+name as it starts, and its time if it took 5 seconds or more. A
+file beside the binary, `BINARY.active`
+(`sm/sm2/build/test_sm2.active`, for one), holds the test case
+it is in, its name, then its file and line. It goes when the run
+ends; a run that crashed or hangs leaves it naming its test
+(`ext/doctest/doctest_active.h`). Both live in `ext/doctest/`,
+with the one copy of doctest.h.
 
 ```
 cat sm/*/build/*.active aa/build/*.active sq/build/*.active 2>/dev/null

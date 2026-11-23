@@ -37,6 +37,7 @@ CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc/catalog \
 # RocksDB, built in ../../ext: the release build's, or with make tsan
 # the instrumented one.
 include ../../ext/ext.mk
+CXXFLAGS += -I$(DOCTEST_INC)
 # ty, which sm1's threads call; this level's tests link it.
 include ../../ty/ty.mk
 # The threads of sm3 give ty_set_alloc their arena: ty.h.
@@ -106,7 +107,7 @@ $(BUILD)/test/%.o: test/%.cc $(FLAGS_FILE)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 test: all
-	$(RUN) $(TEST_BIN) $(TEST_ARGS)
+	$(RUN) $(TEST_BIN) -E $(TEST_ARGS)
 
 # The reapers' tests under the thread sanitizer, the btree reaper's and the
 # pool's row pass, on a RocksDB built with it, as sm2's tree tests are.

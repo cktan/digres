@@ -3,6 +3,7 @@ build/
 /ext/*
 !/ext/Makefile
 !/ext/ext.mk
+!/ext/doctest/
 books-home/
 sm/sm1/mvcc/out/
 .*.swp

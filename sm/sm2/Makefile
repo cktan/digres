@@ -44,6 +44,7 @@ CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc/type -Isrc/ryu \
 # RocksDB, built in ../../ext: the release build's, or with make tsan
 # the instrumented one.
 include ../../ext/ext.mk
+CXXFLAGS += -I$(DOCTEST_INC)
 # ty, which sm1's threads call; this level's tests link it.
 include ../../ty/ty.mk
 ROCKSDB_LIB ?= $(ROCKSDB_REL)
@@ -115,7 +116,7 @@ $(BUILD)/test/%.o: test/%.cc $(FLAGS_FILE)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 test: all
-	$(RUN) $(TEST_BIN) $(TEST_ARGS)
+	$(RUN) $(TEST_BIN) -E $(TEST_ARGS)
 
 # The B+tree's tests, whose threads share pages and the buffer
 # pool's frames, built apart under the thread sanitizer, against the
