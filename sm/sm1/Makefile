@@ -171,25 +171,12 @@ test: all scenarios
 # claim, mvcc/out is what the engine did. Each runs twice, on
 # versioned stores and on chained ones (DRIVER.md §7), against the
 # one expected transcript.
+# The scenarios run MVCC_JOBS at a time (mvcc/scenarios.sh): each run of
+# the driver has a home directory of its own.
+MVCC_JOBS ?= 8
 scenarios: $(DRIVER)
-	@mkdir -p $(SCRIPT_OUT)
-	@fail=0; \
-	for f in $(SCRIPTS); do \
-	  b=$$(basename $$f .t); \
-	  $(DRIVER) $$f > $(SCRIPT_OUT)/$$b.out || fail=1; \
-	  if ! diff -u $(SCRIPT_GOOD)/$$b.out $(SCRIPT_OUT)/$$b.out; then \
-	    fail=1; \
-	  fi; \
-	  $(DRIVER) --chained $$f > $(SCRIPT_OUT)/$$b.chained.out || fail=1; \
-	  if ! diff -u $(SCRIPT_GOOD)/$$b.out $(SCRIPT_OUT)/$$b.chained.out; then \
-	    fail=1; \
-	  fi; \
-	done; \
-	if [ $$fail -ne 0 ]; then \
-	  echo "scenario transcripts differ; see the diffs above"; \
-	  exit 1; \
-	fi; \
-	echo "scenarios: $(words $(SCRIPTS)) scripts match, versioned and chained"
+	@mvcc/scenarios.sh $(DRIVER) $(SCRIPT_OUT) $(SCRIPT_GOOD) $(MVCC_JOBS) \
+	    $(SCRIPTS)
 
 # Take the current transcripts as expected. Never run by
 # "make test": accepting a transcript is a deliberate act.
