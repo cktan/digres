@@ -242,18 +242,27 @@ are the catalog tables psql reads
        the C collation, with varchar, bpchar and name
        (`ty_text.h`), and the arithmetic of interval
        (`ty_interval.h`), and the arithmetic of date, time and
-       timestamp (`ty_datetime.h`). The text out of date, time, timestamp and
-       interval is in ty, and the text in of interval. So are
-       the typmod of interval, timestamp and time,
-       `make_interval`, `date_trunc` of timestamp and interval,
-       `age`, `date_bin`, `extract` and `date_part` of
-       timestamp, date, time and interval, OVERLAPS, and the
-       order, hash and RANGE offsets of timetz. **Left: the text
-       in of date, time, timestamp and timetz, anything with a
-       time zone, and the rest.**
-    3. **Types that read a setting**: date and time, interval,
-       float text, text. Hold until the hooks below are
-       settled.
+       timestamp (`ty_datetime.h`). The text out of date, time,
+       timestamp and interval is in ty, and the text in of
+       interval. So are the typmod of interval, timestamp and
+       time, `make_interval`, `date_trunc` of timestamp and
+       interval, `age`, `date_bin`, `extract` and `date_part`
+       of timestamp, date, time and interval, OVERLAPS, and the
+       order, hash and RANGE offsets of timetz. So are, since
+       2026-11-22, the text in of date, time, timestamp,
+       timestamptz and timetz (`ty/src/dtparse.cc`), the time
+       zone rules with their data (`ty_timezone.h`), and the
+       casts, arithmetic, trunc, parts and age of timestamptz.
+       **Left: the conversions of timetz that read the
+       transaction's clock, `make_timestamptz` with a zone
+       name, `to_char`, the case functions, the regular
+       expressions and `format` of text, and the aggregate
+       states and sort support above**
+       ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
+    3. **Types that read a setting**: what is left of them
+       waits for its hooks. The text in takes the date order
+       as an argument, and a zone through the host's hooks
+       (`ty_dtzone_t`).
 
     **The group of integers, bool, uuid and bytea: done
     (2026-11-21).** What was in `utils/adt` (grep, before the
@@ -302,8 +311,11 @@ are the catalog tables psql reads
       frees only what it keeps. The design is in
       [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §3 and
       [`../ty/DESIGN.md`](../ty/DESIGN.md) §3;
-    - the hooks for what a session sets: `DateStyle`,
-      `TimeZone`, `extra_float_digits`, collation and locale;
+    - the hooks for what a session sets: settled for the date
+      order and the zone, which the text in takes as an
+      argument and through `ty_dtzone_t`. Open for a collation
+      that is not C, which keeps digres's path, and the
+      locale;
     - the errors: settled. ty keeps its own error state and
       codes; a host maps them to its own codes and text;
     - the interface of an operation in `sm.h`. digres calls it
@@ -333,7 +345,7 @@ Low priority:
    §4), and what it no longer needs is deleted as it is found.
    Nothing is moved out of it just so the file goes
    ([`../dg/WORKNOTE.md`](../dg/WORKNOTE.md) steps 232 to 236).
-   It is 2,893 lines.
+   It is 2,887 lines.
 
 ### Feature gaps against PostgreSQL
 
@@ -450,11 +462,12 @@ Owed, and blocking nothing above:
 - **digres's OID is 32 bits; sm's is 64.** sm gives every
   table, index, view, sequence and namespace a `uint64_t` oid,
   and digres narrows each to PostgreSQL's 32-bit `Oid`
-  (`(Oid)oid` in `../dg/src/backend/access/sm/smstore.c`, 57
-  places), so a database past 2^32 oids would see two objects
-  as one. Extend `Oid` in digres to 64 bits, matching sm:
-  `Oid`, its `Datum` macros, the `oid` type and `regclass` and
-  its kin, and what lays an oid out in 4 bytes.
+  (a cast to `Oid`, 73 of them in
+  `../dg/src/backend/access/sm/smstore.c`), so a database past
+  2^32 oids would see two objects as one. Extend `Oid` in
+  digres to 64 bits, matching sm: `Oid`, its `Datum` macros,
+  the `oid` type and `regclass` and its kin, and what lays an
+  oid out in 4 bytes.
 
 - **A bulk load's duplicate at its close is sm's.** A unique
   build and every write say PostgreSQL's key now
@@ -615,7 +628,7 @@ Owed, and blocking nothing above:
   `../dg/src/include/utils/elog.h`, are a `try` and a
   `catch (const pg_error_t &)` already, and they save and
   restore `PG_exception_handled` and `error_context_stack`.
-  There are 45 `PG_TRY` blocks in 28 files of `../dg/src`. Each
+  There are 40 `PG_TRY` blocks in 23 files of `../dg/src`. Each
   becomes:
   - a `try`, and a `catch (const pg_error_t &)` for `PG_CATCH`;
   - a guard object whose destructor restores the two globals,
