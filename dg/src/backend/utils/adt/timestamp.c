@@ -421,59 +421,14 @@ static pg_tz *lookup_timezone(text *zone) {
  */
 static Timestamp make_timestamp_internal(int year, int month, int day, int hour,
                                          int min, double sec) {
-  struct pg_tm tm;
-  TimeOffset date;
-  TimeOffset time;
-  int dterr;
-  bool bc = false;
-  Timestamp result;
+  int64 result;
 
-  tm.tm_year = year;
-  tm.tm_mon = month;
-  tm.tm_mday = day;
-
-  /* Handle negative years as BC */
-  if (tm.tm_year < 0) {
-    bc = true;
-    tm.tm_year = -tm.tm_year;
-  }
-
-  dterr = ValidateDate(DTK_DATE_M, false, false, bc, &tm);
-
-  if (dterr != 0)
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_FIELD_OVERFLOW),
-                    errmsg("date field value out of range: %d-%02d-%02d", year,
-                           month, day)));
-
-  if (!IS_VALID_JULIAN(tm.tm_year, tm.tm_mon, tm.tm_mday))
-    ereport(ERROR,
-            (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-             errmsg("date out of range: %d-%02d-%02d", year, month, day)));
-
-  date = date2j(tm.tm_year, tm.tm_mon, tm.tm_mday) - POSTGRES_EPOCH_JDATE;
-
-  /* Check for time overflow */
-  if (float_time_overflows(hour, min, sec))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_FIELD_OVERFLOW),
-                    errmsg("time field value out of range: %d:%02d:%02g", hour,
-                           min, sec)));
-
-  /* This should match tm2time */
-  time = (((hour * MINS_PER_HOUR + min) * SECS_PER_MINUTE) * USECS_PER_SEC) +
-         (int64)rint(sec * USECS_PER_SEC);
-
-  if (unlikely(pg_mul_s64_overflow(date, USECS_PER_DAY, &result) ||
-               pg_add_s64_overflow(result, time, &result)))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("timestamp out of range: %d-%02d-%02d %d:%02d:%02g",
-                           year, month, day, hour, min, sec)));
-
-  /* final range check catches just-out-of-range timestamps */
-  if (!IS_VALID_TIMESTAMP(result))
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("timestamp out of range: %d-%02d-%02d %d:%02d:%02g",
-                           year, month, day, hour, min, sec)));
-
+  /* ty checks the fields and the range, with PostgreSQL's messages */
+  if (ty_timestamp_make(year, month, day, hour, min, sec, &result))
+    ereport(ERROR, (errcode(ty_errnum() == TY_ERR_INVALID
+                                ? ERRCODE_DATETIME_FIELD_OVERFLOW
+                                : ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
   return result;
 }
 

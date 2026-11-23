@@ -84,6 +84,17 @@ int ty_days_in_month(int year, int mon);
 int ty_date_make(int32_t year, int32_t mon, int32_t mday, int32_t *out);
 
 /*
+ * timestamp: from the fields, as make_timestamp does: the date as make_date
+ * reads it, and the time as make_time (the seconds a float, rounded to a
+ * microsecond). The errors are those of make_timestamp, which words the year
+ * as given: TY_ERR_INVALID for a field out of its range, TY_ERR_RANGE for a
+ * date or a timestamp that does not fit ("timestamp out of range: Y-M-D
+ * H:M:S").
+ */
+int ty_timestamp_make(int32_t year, int32_t mon, int32_t mday, int32_t hour,
+                      int32_t min, double sec, int64_t *out);
+
+/*
  * date + days and date - days; infinity stays. TY_ERR_RANGE ("date out of
  * range") otherwise. In line, as a date is used in hot loops; the errors are
  * recorded out of line.
