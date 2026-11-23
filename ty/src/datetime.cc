@@ -182,14 +182,14 @@ int ty_timestamp_make(int32_t year, int32_t mon, int32_t mday, int32_t hour,
       !ty_timestamp_valid(result)) {
     char msg[128];
 
-    snprintf(msg, sizeof msg, "timestamp out of range: %d-%02d-%02d %d:%02d:%02g",
-             year, mon, mday, hour, min, sec);
+    snprintf(msg, sizeof msg,
+             "timestamp out of range: %d-%02d-%02d %d:%02d:%02g", year, mon,
+             mday, hour, min, sec);
     return ty_internal::set_error(TY_ERR_RANGE, msg);
   }
   *out = result;
   return 0;
 }
-
 
 /* The error of a date that does not fit. */
 int ty_date_range_error(void) {

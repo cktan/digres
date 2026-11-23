@@ -2517,9 +2517,9 @@ int ty_timestamptz_to_timetz(const ty_tz_t *tz, int64_t ts, ty_timetz_t *out) {
       0) {
     return -1;
   }
-  out->time = (((int64_t)tm.hour * 60 + tm.min) * 60 + tm.sec) *
-                  TY_USECS_PER_SEC +
-              fsec;
+  out->time =
+      (((int64_t)tm.hour * 60 + tm.min) * 60 + tm.sec) * TY_USECS_PER_SEC +
+      fsec;
   out->zone = west;
   return 0;
 }

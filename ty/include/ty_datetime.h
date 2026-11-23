@@ -277,9 +277,8 @@ static inline int ty_date_to_timestamp(int32_t d, int64_t *out, int *overflow) {
  * is -1 with TY_ERR_RANGE and "date out of range for timestamp". In line, as
  * a row of a scan asks for it.
  */
-static inline int ty_datetimetz_to_timestamptz(int32_t date,
-                                               const ty_timetz_t *t,
-                                               int64_t *out) {
+static inline int
+ty_datetimetz_to_timestamptz(int32_t date, const ty_timetz_t *t, int64_t *out) {
   int64_t result;
 
   if (!ty_date_finite(date)) {
