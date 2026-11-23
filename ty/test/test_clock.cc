@@ -297,3 +297,60 @@ TEST_CASE("timestamptz to timetz and date and timetz to timestamptz") {
                   &ts));
   CHECK(TY_ERR_RANGE == ty_errnum());
 }
+
+// Verify timetz AT TIME ZONE: a fixed offset, a zone at the start of the
+// transaction, and a dynamic abbreviation.
+// 1. The same instant at another offset: 04:05:06+02 at 5 hours west is
+//    21:05:06, and the time wraps round the day both ways.
+// 2. At a zone: New York in July is 4 hours west, in January 5.
+// 3. At a dynamic abbreviation: "EST" in New York is 5 hours west even in
+//    July, "EDT" 4 hours in January, and one the zone never used takes the
+//    zone's own offset then.
+// 4. With no clock, the zone and the abbreviation fail; the offset does not.
+TEST_CASE("timetz AT TIME ZONE moves the time by the offsets") {
+  std::thread t([] {
+    ty_timetz_t in, out;
+    int64_t clock = 773411696789012; /* 2024-07-04 12:34:56.789012 UTC */
+    auto at = [](int h, int m, int s) {
+      return (((int64_t)h * 60 + m) * 60 + s) * INT64_C(1000000);
+    };
+    const ty_tz_t *ny = ty_tz_find("America/New_York");
+    ty_set_xact_clock(&clock);
+    // 1. A fixed offset.
+    in = {at(4, 5, 6), -7200};
+    REQUIRE(0 == ty_timetz_at_offset(&in, 18000, &out));
+    CHECK(at(21, 5, 6) == out.time);
+    CHECK(18000 == out.zone);
+    in = {at(23, 0, 0), 18000};
+    REQUIRE(0 == ty_timetz_at_offset(&in, -3600, &out));
+    CHECK(at(5, 0, 0) == out.time);
+    CHECK(-3600 == out.zone);
+    // 2. A zone, at the start of the transaction.
+    in = {at(12, 0, 0), 0};
+    REQUIRE(0 == ty_timetz_at_zone(&in, ny, &out));
+    CHECK(at(8, 0, 0) == out.time);
+    CHECK(14400 == out.zone);
+    clock = 758603106000005; /* 2024-01-15 03:05:06 UTC */
+    REQUIRE(0 == ty_timetz_at_zone(&in, ny, &out));
+    CHECK(at(7, 0, 0) == out.time);
+    CHECK(18000 == out.zone);
+    // 3. A dynamic abbreviation.
+    clock = 773411696789012;
+    REQUIRE(0 == ty_timetz_at_abbrev(&in, ny, "EST", &out));
+    CHECK(at(7, 0, 0) == out.time);
+    CHECK(18000 == out.zone);
+    clock = 758603106000005;
+    REQUIRE(0 == ty_timetz_at_abbrev(&in, ny, "EDT", &out));
+    CHECK(at(8, 0, 0) == out.time);
+    CHECK(14400 == out.zone);
+    clock = 773411696789012;
+    REQUIRE(0 == ty_timetz_at_abbrev(&in, ny, "XYZ", &out));
+    CHECK(14400 == out.zone);
+    // 4. With no clock.
+    ty_set_xact_clock(nullptr);
+    CHECK(-1 == ty_timetz_at_zone(&in, ny, &out));
+    CHECK(-1 == ty_timetz_at_abbrev(&in, ny, "EST", &out));
+    CHECK(0 == ty_timetz_at_offset(&in, 3600, &out));
+  });
+  t.join();
+}

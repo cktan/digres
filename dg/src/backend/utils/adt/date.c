@@ -1912,14 +1912,15 @@ Datum extract_timetz(PG_FUNCTION_ARGS) {
 Datum timetz_zone(PG_FUNCTION_ARGS) {
   text *zone = PG_GETARG_TEXT_PP(0);
   TimeTzADT *t = PG_GETARG_TIMETZADT_P(1);
-  TimeTzADT *result;
-  int tz;
+  TimeTzADT *result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
   char tzname[TZ_STRLEN_MAX + 1];
   int type, val;
   pg_tz *tzp;
+  int rc;
 
   /*
-   * Look up the requested timezone.
+   * Look up the requested timezone: its abbreviations are a setting, so the
+   * lookup stays here.  ty has the offsets, at the start of the transaction.
    */
   text_to_cstring_buffer(zone, tzname, sizeof(tzname));
 
@@ -1927,34 +1928,19 @@ Datum timetz_zone(PG_FUNCTION_ARGS) {
 
   if (type == TZNAME_FIXED_OFFSET) {
     /* fixed-offset abbreviation */
-    tz = -val;
+    rc = ty_timetz_at_offset((const ty_timetz_t *)t, -val,
+                             (ty_timetz_t *)result);
   } else if (type == TZNAME_DYNTZ) {
     /* dynamic-offset abbreviation, resolve using transaction start time */
-    TimestampTz now = GetCurrentTransactionStartTimestamp();
-    int isdst;
-
-    tz = DetermineTimeZoneAbbrevOffsetTS(now, tzname, tzp, &isdst);
+    rc = ty_timetz_at_abbrev((const ty_timetz_t *)t, tzp, tzname,
+                             (ty_timetz_t *)result);
   } else {
-    /* Get the offset-from-GMT that is valid now for the zone name */
-    TimestampTz now = GetCurrentTransactionStartTimestamp();
-    struct pg_tm tm;
-    fsec_t fsec;
-
-    if (timestamp2tm(now, &tz, &tm, &fsec, NULL, tzp) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
+    /* the offset-from-GMT that is valid now for the zone name */
+    rc = ty_timetz_at_zone((const ty_timetz_t *)t, tzp, (ty_timetz_t *)result);
   }
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-
-  result->time = t->time + (t->zone - tz) * USECS_PER_SEC;
-  /* C99 modulo has the wrong sign convention for negative input */
-  while (result->time < INT64CONST(0))
-    result->time += USECS_PER_DAY;
-  if (result->time >= USECS_PER_DAY)
-    result->time %= USECS_PER_DAY;
-
-  result->zone = tz;
+  if (rc != 0)
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("timestamp out of range")));
 
   PG_RETURN_TIMETZADT_P(result);
 }
@@ -1985,14 +1971,8 @@ Datum timetz_izone(PG_FUNCTION_ARGS) {
 
   result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
 
-  result->time = time->time + (time->zone - tz) * USECS_PER_SEC;
-  /* C99 modulo has the wrong sign convention for negative input */
-  while (result->time < INT64CONST(0))
-    result->time += USECS_PER_DAY;
-  if (result->time >= USECS_PER_DAY)
-    result->time %= USECS_PER_DAY;
-
-  result->zone = tz;
+  (void)ty_timetz_at_offset((const ty_timetz_t *)time, tz,
+                            (ty_timetz_t *)result);
 
   PG_RETURN_TIMETZADT_P(result);
 }

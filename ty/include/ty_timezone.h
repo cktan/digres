@@ -279,4 +279,25 @@ int ty_timestamptz_to_timetz(const ty_tz_t *tz, int64_t ts, ty_timetz_t *out);
 int ty_datetimetz_to_timestamptz(int32_t date, const ty_timetz_t *t,
                                  int64_t *out);
 
+/*
+ * timetz AT TIME ZONE: the same instant of the day at another offset, west of
+ * Greenwich: the time of day moves by the difference of the offsets, round the
+ * day, and the zone is the new offset. A fixed offset, as a zone name that is
+ * one or an interval, uses ty_timetz_at_offset. The host reads the zone's name
+ * (its abbreviations are a setting) and passes what it found:
+ *   - ty_timetz_at_zone: a zone; its offset is the one it has at the start of
+ *     the transaction (ty_xact_start).
+ *   - ty_timetz_at_abbrev: a dynamic abbreviation, as "EST" in a zone that
+ *     used it: the offset the zone gave it at the start of the transaction
+ *     (DetermineTimeZoneAbbrevOffsetTS); the zone's own offset if it never
+ *     did.
+ * The two fail as ty_xact_start does, and with TY_ERR_RANGE and "timestamp out
+ * of range" for an instant out of range.
+ */
+int ty_timetz_at_offset(const ty_timetz_t *t, int west, ty_timetz_t *out);
+int ty_timetz_at_zone(const ty_timetz_t *t, const ty_tz_t *tz,
+                      ty_timetz_t *out);
+int ty_timetz_at_abbrev(const ty_timetz_t *t, const ty_tz_t *tz,
+                        const char *abbrev, ty_timetz_t *out);
+
 #endif

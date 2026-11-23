@@ -9,6 +9,8 @@
 -- 4. A time cast to timetz has the offset of the session's zone at that time
 --    today, as a timestamp of today and that time has.
 -- 5. A date and a timetz make the timestamptz that their offset says.
+-- 6. A timetz AT TIME ZONE a zone has the offset the zone has now; an
+--    abbreviation or an offset is fixed; an interval is its own offset.
 SET datestyle = 'ISO, MDY';
 SET timezone = 'UTC';
 SELECT current_date = now()::date AS d, current_time = now()::timetz AS t, localtime = now()::time AS lt, localtimestamp = now()::timestamp AS lts, extract(timezone FROM current_time) AS tz;
@@ -39,4 +41,11 @@ SET timezone = 'UTC';
 -- A date and a timetz make the timestamptz that their offset says.
 SELECT d + tz AS ts, (d + tz)::text AS txt FROM (VALUES (date '2024-07-04'), (date '1999-12-31'), (date '2100-02-28')) ds(d), (VALUES (timetz '12:34:56.789012+02'), (timetz '00:00:00-05:30'), (timetz '23:59:59+14')) tzs(tz) ORDER BY d, tz;
 SELECT date 'infinity' + timetz '12:00:00+00' AS inf, date '-infinity' + timetz '12:00:00+00' AS ninf;
+-- A timetz AT TIME ZONE a zone takes the offset the zone has now.
+SELECT z, extract(timezone FROM (timetz '12:00:00+00' AT TIME ZONE z)) = extract(timezone FROM now()) AS off, (timetz '12:00:00+00' AT TIME ZONE z)::time = time '12:00' + extract(timezone FROM now()) * interval '1 second' AS tm FROM (VALUES ('America/New_York'), ('Europe/London'), ('Australia/Lord_Howe'), ('Asia/Kolkata'), ('Pacific/Chatham')) zs(z) WHERE set_config('timezone', z, false) = z ORDER BY z;
+SET timezone = 'UTC';
+-- Abbreviations and offsets, which do not change with the day.
+SELECT x, timetz '12:00:00+00' AT TIME ZONE x AS r FROM (VALUES ('UTC'), ('EST'), ('EDT'), ('MSK'), ('Asia/Kolkata'), ('Europe/Moscow'), ('UTC+3'), ('+03:30')) xs(x) ORDER BY x;
+SELECT i, timetz '12:00:00+00' AT TIME ZONE i AS r, timetz '23:30:00-05' AT TIME ZONE i AS wrap FROM (VALUES (interval '5:30'), (interval '-2 hours'), (interval '0'), (interval '14 hours')) is_(i) ORDER BY i;
+SELECT timetz '04:05:06+02' AT LOCAL AS loc;
 SELECT date '294277-01-01' + timetz '00:00:00+00';
