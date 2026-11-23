@@ -131,6 +131,25 @@ Why per thread, and not per process:
 - The functions have no argument, so an arena-backed `alloc`
   reads its arena from a `thread_local` of its own.
 
+### 3.2.1 The clock of the transaction
+
+The start time of a transaction belongs to sm, not to ty and not
+to digres.
+
+- sm1 reads the wall clock when `sm1::begin` takes the first
+  snapshot of a transaction, and keeps the time in the session as
+  a `timestamptz` (`int64_t`, microseconds since 2000-01-01 UTC).
+  It is `INT64_MIN` with no transaction.
+- `ty_set_xact_clock` gives ty a pointer to that value, for the
+  calling thread. sm1 calls it at each begin, and with NULL when
+  the session closes. ty reads through the pointer at each call,
+  so a new transaction needs no call to ty.
+- `ty_xact_start` gives the time. It fails with `TY_ERR_INVALID`
+  when the thread has no clock, or has no transaction.
+- digres reads the same time through `sm_xact_time` of `sm.h`.
+  It begins its sm transaction at its first call that needs one,
+  so `now()` is the time of that begin.
+
 ### 3.3 Who frees what
 
 - **A result that ty returns is the caller's.** ty has no call

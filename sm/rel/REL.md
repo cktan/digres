@@ -179,6 +179,16 @@ active. `(stmt-begin)` is supported as an alias.
 (snapshot)
 ```
 
+### `(xact-time)`
+Gives the start time of the transaction as a `timestamptz`:
+microseconds since 2000-01-01 00:00:00 UTC. sm reads the wall
+clock when the transaction takes its first snapshot. The time
+is the same in every statement of the transaction.
+
+```janet
+(def t (xact-time))
+```
+
 ### `(stmt-inner)` and `(stmt-end)`
 `(stmt-inner)` begins a statement inside the running one, as a
 trigger's commands run inside the statement that fired them:

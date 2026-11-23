@@ -32,6 +32,7 @@
 #include "session.h"
 #include "sm0_codec.h"
 #include "sm0_defer.h"
+#include "ty.h"
 #include "version.h"
 
 #include <stdlib.h>
@@ -215,6 +216,7 @@ void reset(sm1::session_t *s) {
   }
   // No active transaction, and none of its state.
   s->active = false;
+  s->xact_start = INT64_MIN;
   s->xid = 0;
   s->seq = 0;
   s->seq_hwm = 0;
@@ -659,6 +661,17 @@ int rollback(sm1::session_t *s, int depth) {
   return 0;
 }
 
+/* The wall clock now, as a timestamptz: microseconds since 2000-01-01 UTC. */
+static int64_t wall_clock_timestamptz() {
+  // Seconds from 1970-01-01 to 2000-01-01.
+  const int64_t unix_to_pg_epoch = 946684800;
+  struct timespec ts;
+
+  // The transaction's time is a calendar time, not the monotonic clock.
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return ((int64_t)ts.tv_sec - unix_to_pg_epoch) * 1000000 + ts.tv_nsec / 1000;
+}
+
 /* sm1::begin, minus the out-of-memory guard. */
 int begin(sm1::session_t *s, sm1::xctlevel_t level, bool read_only) {
   // Reject a NULL session.
@@ -698,6 +711,10 @@ int begin(sm1::session_t *s, sm1::xctlevel_t level, bool read_only) {
   // committed also counts in the watermark at this one, for
   // its whole life (../GC.md §1).
   s->snapshot_ts = db_take_snapshot(s->db);
+  // The first snapshot of the transaction gives it its start time.
+  s->xact_start = wall_clock_timestamptz();
+  // Let ty on this thread read the start time through the session.
+  ty_set_xact_clock(&s->xact_start);
   // The snapshot now counts in the watermark.
   s->snapshot_registered = true;
   // Give a SERIALIZABLE transaction its SSI node.
@@ -1828,6 +1845,16 @@ void xct_free_scans(sm1::session_t *s) {
 /* Begin a transaction at level, declared read-only or not. */
 int sm1::begin(sm1::session_t *session, sm1::xctlevel_t level, bool read_only) {
   return ::begin(session, level, read_only);
+}
+
+/* The start time of the active transaction. */
+int sm1::xact_start(sm1::session_t *session, int64_t *out) {
+  // Require an active transaction: it has the start time.
+  if (xct_check_active(session) != 0) {
+    return -1;
+  }
+  *out = session->xact_start;
+  return 0;
 }
 
 /* Commit the active transaction, then run its on_commit functions. */

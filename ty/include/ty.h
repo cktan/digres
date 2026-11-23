@@ -29,6 +29,7 @@
 #define TY_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 
 #include "ty_error.h"
@@ -117,5 +118,32 @@ static inline void ty_free(void *ptr) {
     free(ptr);
   }
 }
+
+/* ---- the clock of the transaction ---- */
+
+/*
+ * The start time of the calling thread's transaction belongs to the host
+ * that owns the transaction: sm. ty only reads it, for the operations whose
+ * result depends on it ("now", CURRENT_TIME, the conversion of a time to a
+ * time with a zone). The host keeps the time in one int64_t, a timestamptz
+ * (microseconds since 2000-01-01 00:00:00 UTC), and gives ty a pointer to
+ * it. ty reads through the pointer at each call, so a new transaction needs
+ * no call: the host changes the value.
+ */
+
+/*
+ * Set the calling thread's pointer to the host's clock; other threads are
+ * not changed. NULL means no clock. The value must stay valid, and change
+ * only on this thread, while the pointer is set. Call it before the
+ * thread's first call that reads the clock.
+ */
+void ty_set_xact_clock(const int64_t *start);
+
+/*
+ * The start time of the calling thread's transaction, in *out. Fails with
+ * TY_ERR_INVALID when the thread has no clock, or its clock is not set (a
+ * value of INT64_MIN means a transaction has not started).
+ */
+int ty_xact_start(int64_t *out);
 
 #endif /* TY_H */

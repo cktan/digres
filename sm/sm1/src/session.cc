@@ -9,6 +9,7 @@
  */
 
 #include "session.h"
+#include "ty.h"
 
 #include "env.h"
 #include "error.h"
@@ -222,6 +223,8 @@ int sm1::closedb(sm1::session_t *session) {
       }
     }
   }
+  // ty on this thread must not read a clock that dies with the session.
+  ty_set_xact_clock(nullptr);
   // Free the session.
   delete session;
   return 0;

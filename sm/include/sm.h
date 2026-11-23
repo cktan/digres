@@ -234,6 +234,20 @@ int sm_commit(sm_session_t* session);
 int sm_abort(sm_session_t* session);
 
 /*
+ * The start time of the active transaction, in *out, as a
+ * timestamptz: microseconds since 2000-01-01 00:00:00 UTC. sm
+ * reads the wall clock when the transaction takes its first
+ * snapshot, and the time does not change until the transaction
+ * ends. ty reads the same time for the calling thread
+ * (ty_xact_start), for the operations that depend on it, such as
+ * "now". A host that begins the sm transaction late, as at its
+ * first read, gets the time of that begin.
+ *
+ * Errors: SM_ERR_NOTRANS.
+ */
+int sm_xact_time(sm_session_t* session, int64_t* out);
+
+/*
  * Begin a statement, a SQL command. Its reads see the
  * transaction's own writes made before it began, not those it
  * makes itself, as PostgreSQL's command id does; under READ

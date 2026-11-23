@@ -148,13 +148,13 @@ static thread_local /*LOCAL*/ TransactionState CurrentTransactionState =
 static thread_local /*LOCAL*/ SubTransactionId currentSubTransactionId;
 
 /*
- * xactStartTimestamp is the value of transaction_timestamp().
  * stmtStartTimestamp is the value of statement_timestamp().
+ * transaction_timestamp() is sm's: it keeps the start time of the
+ * transaction (smstore_xact_start()).
  *
  * These do not change as we enter and exit subtransactions, so we don't
  * keep them inside the TransactionState stack.
  */
-static thread_local /*LOCAL*/ TimestampTz xactStartTimestamp;
 static thread_local /*LOCAL*/ TimestampTz stmtStartTimestamp;
 
 /* Flag for logging statements in a transaction. */
@@ -256,7 +256,7 @@ SubTransactionId GetCurrentSubTransactionId(void) {
  *	GetCurrentTransactionStartTimestamp
  */
 TimestampTz GetCurrentTransactionStartTimestamp(void) {
-  return xactStartTimestamp;
+  return smstore_xact_start();
 }
 
 /*
@@ -741,18 +741,6 @@ static void StartTransaction(void) {
   tcb->lxid = vxid.localTransactionId;
 
   TRACE_POSTGRESQL_TRANSACTION_START(vxid.localTransactionId);
-
-  /*
-   * set transaction_timestamp() (a/k/a now()).  Normally, we want this to
-   * be the same as the first command's statement_timestamp(), so don't do a
-   * fresh GetCurrentTimestamp() call (which'd be expensive anyway).  But
-   * for transactions started inside procedures (i.e., nonatomic SPI
-   * contexts), we do need to advance the timestamp.
-   */
-  if (!SPI_inside_nonatomic_context())
-    xactStartTimestamp = stmtStartTimestamp;
-  else
-    xactStartTimestamp = GetCurrentTimestamp();
 
   /*
    * initialize other subsystems for new transaction

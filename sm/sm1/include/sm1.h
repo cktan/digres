@@ -454,6 +454,16 @@ int closedb(session_t* session);
 int begin(session_t* session, xctlevel_t level, bool read_only = false);
 
 /*
+ * The start time of the active transaction, as a timestamptz: the
+ * wall clock when sm1::begin took the transaction's first snapshot.
+ * It does not change until the transaction ends. ty reads it too,
+ * through the pointer sm1::begin gives it (ty_set_xact_clock).
+ *
+ * Errors: SM_ERR_NOTRANS.
+ */
+int xact_start(session_t* session, int64_t* out);
+
+/*
  * Commit the active transaction, making its writes durable and
  * visible. Releases all locks, discards the savepoint, and
  * closes the session's open cursors. For a prepared

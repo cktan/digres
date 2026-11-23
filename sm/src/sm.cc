@@ -828,6 +828,11 @@ int sm_abort(sm_session_t *session) {
   });
 }
 
+/* The start time of the active transaction, a timestamptz. */
+int sm_xact_time(sm_session_t *session, int64_t *out) {
+  return guard(session, [&] { return sm1::xact_start(session->sm1, out); });
+}
+
 /* Begin a statement. */
 int sm_stmt_begin(sm_session_t *session) {
   return guard(session, [&] { return sm3::stmt_begin(session->sm3); });

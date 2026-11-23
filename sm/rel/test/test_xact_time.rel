@@ -1,0 +1,45 @@
+# test_xact_time.rel -- the start time of a transaction (sm_xact_time):
+# sm reads the wall clock when the transaction takes its first
+# snapshot, and the time is the same until the transaction ends.
+#
+# 1. With no transaction, (xact-time) fails with ERR_NOTRANS.
+# 2. In a transaction the time is a timestamptz near the wall clock.
+# 3. A statement, and a wait, do not change it.
+# 4. A later transaction has a later time.
+
+(def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_xact_time"))
+(rm-rf test-dir)
+(env-init test-dir)
+(env-attach test-dir)
+(db-create "xtdb")
+(db-open "xtdb")
+
+# 1. With no transaction, (xact-time) fails with ERR_NOTRANS.
+(assert-err :err-notrans (xact-time))
+
+# 2. In a transaction the time is a timestamptz near the wall clock:
+# microseconds since 2000-01-01, which is 946684800 seconds after the
+# Unix epoch; the test allows ten seconds.
+(def before (* 1000000 (- (os/time) 946684800)))
+(begin :rc)
+    (def t1 (xact-time))
+    (assert (>= (+ t1 1000000) before) "the time is not before the begin")
+    (assert (<= t1 (+ before 10000000)) "the time is within ten seconds")
+
+    # 3. A statement, and a wait, do not change it.
+    (os/sleep 0.01)
+    (snapshot)
+    (assert-eq (xact-time) t1)
+(commit)
+
+# 4. A later transaction has a later time.
+(assert-err :err-notrans (xact-time))
+(begin :rr)
+    (def t2 (xact-time))
+    (assert (> t2 t1) "the second transaction starts later")
+(commit)
+
+(db-close)
+(env-detach :force true)
+(rm-rf test-dir)
+(print "test_xact_time.rel: PASSED")

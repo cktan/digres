@@ -680,6 +680,20 @@ static sm_session_t *xact_session(void) {
 }
 
 /*
+ * The start time of the transaction, a TimestampTz, that sm keeps: it reads
+ * the wall clock when the transaction takes its first snapshot.  sm's
+ * transaction is begun here if no call has needed it yet, as for any call.
+ */
+int64_t smstore_xact_start(void) {
+  sm_session_t *s = xact_session();
+  int64_t ts;
+
+  if (sm_xact_time(s, &ts) != 0)
+    sm_error("read the start time of the transaction");
+  return ts;
+}
+
+/*
  * A statement has begun: the next call in the sm transaction begins one in
  * sm, so that the statement reads at one snapshot under READ COMMITTED, and
  * does not see the rows it writes itself (sm_stmt_begin).
