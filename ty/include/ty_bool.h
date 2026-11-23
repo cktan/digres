@@ -60,6 +60,50 @@ static inline bool ty_bool_from_int32(int32_t a) { return a != 0; }
 static inline int32_t ty_bool_to_int32(bool a) { return a ? 1 : 0; }
 
 /*
+ * The state of the aggregates EVERY (bool_and) and ANY (bool_or) over a
+ * window, and of bool_and and bool_or in a moving frame: the number of values
+ * that are not NULL, and how many are true. A caller keeps the state, zeroed,
+ * and passes only the values that are not NULL.
+ */
+typedef struct ty_bool_agg_t {
+  int64_t count; /* the values aggregated, which are not NULL */
+  int64_t ntrue; /* of them, the true ones */
+} ty_bool_agg_t;
+
+/* A value enters the state, and leaves it (the moving frame). */
+static inline void ty_bool_agg_accum(ty_bool_agg_t *st, bool v) {
+  st->count++;
+  if (v) {
+    st->ntrue++;
+  }
+}
+static inline void ty_bool_agg_accum_inv(ty_bool_agg_t *st, bool v) {
+  st->count--;
+  if (v) {
+    st->ntrue--;
+  }
+}
+
+/*
+ * The result of EVERY and of ANY over the state: 1 and *out set, or 0 for
+ * NULL, when no value that is not NULL was aggregated.
+ */
+static inline int ty_bool_agg_every(const ty_bool_agg_t *st, bool *out) {
+  if (st->count == 0) {
+    return 0;
+  }
+  *out = st->ntrue == st->count;
+  return 1;
+}
+static inline int ty_bool_agg_any(const ty_bool_agg_t *st, bool *out) {
+  if (st->count == 0) {
+    return 0;
+  }
+  *out = st->ntrue > 0;
+  return 1;
+}
+
+/*
  * A 64-bit hash of a bool by a seed: that of the int64 0 or 1 (ty_int.h).
  * The low 32 bits with seed 0 are the standard 32-bit hash.
  */

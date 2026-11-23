@@ -106,3 +106,50 @@ TEST_CASE("the boolean input skips space, and a bool has text, order, logic") {
   CHECK(ty_bool_to_int32(true) == 1);
   CHECK(ty_bool_to_int32(false) == 0);
 }
+
+// Verify the state of the aggregates EVERY and ANY: values enter and leave it,
+// and the result is NULL while no value is in it.
+// 1. An empty state gives NULL for both.
+// 2. With true, true: every is true and any is true.
+// 3. Add false: every is false, any is true.
+// 4. Remove the false: every is true again (the moving frame).
+// 5. Remove the two true: the state is empty again, and NULL.
+// 6. A state of false alone: every is false, and any is false.
+TEST_CASE("the bool aggregate state accumulates and takes values out") {
+  ty_bool_agg_t st = {};
+  bool r = true;
+
+  // 1. An empty state gives NULL for both.
+  CHECK(0 == ty_bool_agg_every(&st, &r));
+  CHECK(0 == ty_bool_agg_any(&st, &r));
+  // 2. With true, true.
+  ty_bool_agg_accum(&st, true);
+  ty_bool_agg_accum(&st, true);
+  CHECK(1 == ty_bool_agg_every(&st, &r));
+  CHECK(r);
+  CHECK(1 == ty_bool_agg_any(&st, &r));
+  CHECK(r);
+  // 3. Add false.
+  ty_bool_agg_accum(&st, false);
+  CHECK(1 == ty_bool_agg_every(&st, &r));
+  CHECK(!r);
+  CHECK(1 == ty_bool_agg_any(&st, &r));
+  CHECK(r);
+  CHECK(3 == st.count);
+  CHECK(2 == st.ntrue);
+  // 4. Remove the false.
+  ty_bool_agg_accum_inv(&st, false);
+  CHECK(1 == ty_bool_agg_every(&st, &r));
+  CHECK(r);
+  // 5. Remove the two true.
+  ty_bool_agg_accum_inv(&st, true);
+  ty_bool_agg_accum_inv(&st, true);
+  CHECK(0 == ty_bool_agg_every(&st, &r));
+  CHECK(0 == ty_bool_agg_any(&st, &r));
+  // 6. A state of false alone.
+  ty_bool_agg_accum(&st, false);
+  CHECK(1 == ty_bool_agg_every(&st, &r));
+  CHECK(!r);
+  CHECK(1 == ty_bool_agg_any(&st, &r));
+  CHECK(!r);
+}

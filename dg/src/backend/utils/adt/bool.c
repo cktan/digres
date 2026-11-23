@@ -176,10 +176,8 @@ Datum boolor_statefunc(PG_FUNCTION_ARGS) {
   PG_RETURN_BOOL(ty_bool_or(PG_GETARG_BOOL(0), PG_GETARG_BOOL(1)));
 }
 
-typedef struct BoolAggState {
-  int64 aggcount; /* number of non-null values aggregated */
-  int64 aggtrue;  /* number of values aggregated that are true */
-} BoolAggState;
+/* the state is ty's: the values that are not NULL, and how many are true */
+typedef ty_bool_agg_t BoolAggState;
 
 static BoolAggState *makeBoolAggState(FunctionCallInfo fcinfo) {
   BoolAggState *state;
@@ -189,8 +187,8 @@ static BoolAggState *makeBoolAggState(FunctionCallInfo fcinfo) {
     elog(ERROR, "aggregate function called in non-aggregate context");
 
   state = (BoolAggState *)MemoryContextAlloc(agg_context, sizeof(BoolAggState));
-  state->aggcount = 0;
-  state->aggtrue = 0;
+  state->count = 0;
+  state->ntrue = 0;
 
   return state;
 }
@@ -204,11 +202,8 @@ Datum bool_accum(PG_FUNCTION_ARGS) {
   if (state == NULL)
     state = makeBoolAggState(fcinfo);
 
-  if (!PG_ARGISNULL(1)) {
-    state->aggcount++;
-    if (PG_GETARG_BOOL(1))
-      state->aggtrue++;
-  }
+  if (!PG_ARGISNULL(1))
+    ty_bool_agg_accum(state, PG_GETARG_BOOL(1));
 
   PG_RETURN_POINTER(state);
 }
@@ -222,37 +217,34 @@ Datum bool_accum_inv(PG_FUNCTION_ARGS) {
   if (state == NULL)
     elog(ERROR, "bool_accum_inv called with NULL state");
 
-  if (!PG_ARGISNULL(1)) {
-    state->aggcount--;
-    if (PG_GETARG_BOOL(1))
-      state->aggtrue--;
-  }
+  if (!PG_ARGISNULL(1))
+    ty_bool_agg_accum_inv(state, PG_GETARG_BOOL(1));
 
   PG_RETURN_POINTER(state);
 }
 
 Datum bool_alltrue(PG_FUNCTION_ARGS) {
   BoolAggState *state;
+  bool r;
 
   state = PG_ARGISNULL(0) ? NULL : (BoolAggState *)PG_GETARG_POINTER(0);
 
-  /* if there were no non-null values, return NULL */
-  if (state == NULL || state->aggcount == 0)
+  /* NULL if there were no non-null values; else true if all are true */
+  if (state == NULL || !ty_bool_agg_every(state, &r))
     PG_RETURN_NULL();
 
-  /* true if all non-null values are true */
-  PG_RETURN_BOOL(state->aggtrue == state->aggcount);
+  PG_RETURN_BOOL(r);
 }
 
 Datum bool_anytrue(PG_FUNCTION_ARGS) {
   BoolAggState *state;
+  bool r;
 
   state = PG_ARGISNULL(0) ? NULL : (BoolAggState *)PG_GETARG_POINTER(0);
 
-  /* if there were no non-null values, return NULL */
-  if (state == NULL || state->aggcount == 0)
+  /* NULL if there were no non-null values; else true if any is true */
+  if (state == NULL || !ty_bool_agg_any(state, &r))
     PG_RETURN_NULL();
 
-  /* true if any non-null value is true */
-  PG_RETURN_BOOL(state->aggtrue > 0);
+  PG_RETURN_BOOL(r);
 }
