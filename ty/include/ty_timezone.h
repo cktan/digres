@@ -271,15 +271,6 @@ int ty_time_to_timetz(int64_t time, ty_timetz_t *out);
 int ty_timestamptz_to_timetz(const ty_tz_t *tz, int64_t ts, ty_timetz_t *out);
 
 /*
- * date and timetz to timestamptz (datetimetz_timestamptz): the instant of the
- * date and the time of day in the timetz's own zone. An infinite date is the
- * matching infinity. A result out of range, or a date from 294277-01-01 on,
- * is -1 with TY_ERR_RANGE and "date out of range for timestamp".
- */
-int ty_datetimetz_to_timestamptz(int32_t date, const ty_timetz_t *t,
-                                 int64_t *out);
-
-/*
  * timetz AT TIME ZONE: the same instant of the day at another offset, west of
  * Greenwich: the time of day moves by the difference of the offsets, round the
  * day, and the zone is the new offset. A fixed offset, as a zone name that is

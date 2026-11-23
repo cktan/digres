@@ -260,6 +260,36 @@ static inline int ty_date_to_timestamp(int32_t d, int64_t *out, int *overflow) {
 }
 
 /*
+ * date and timetz to timestamptz (datetimetz_timestamptz): the instant of the
+ * date and the time of day in the timetz's own zone. An infinite date is the
+ * matching infinity. A result out of range, or a date from 294277-01-01 on,
+ * is -1 with TY_ERR_RANGE and "date out of range for timestamp". In line, as
+ * a row of a scan asks for it.
+ */
+static inline int ty_datetimetz_to_timestamptz(int32_t date,
+                                               const ty_timetz_t *t,
+                                               int64_t *out) {
+  int64_t result;
+
+  if (!ty_date_finite(date)) {
+    *out = date == TY_DATE_NOBEGIN ? TY_TIMESTAMP_NOBEGIN : TY_TIMESTAMP_NOEND;
+    return 0;
+  }
+  /* the date's range is wider than the timestamp's: only the top is checked */
+  if (TY_UNLIKELY(date >= TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE)) {
+    return ty_date_to_ts_error();
+  }
+  result = (int64_t)date * (TY_USECS_PER_HOUR * 24) + t->time +
+           (int64_t)t->zone * TY_USECS_PER_SEC;
+  /* the zone can take the result out of the timestamp's range */
+  if (TY_UNLIKELY(!ty_timestamp_valid(result))) {
+    return ty_date_to_ts_error();
+  }
+  *out = result;
+  return 0;
+}
+
+/*
  * timestamp to date and to time of day, and a date and a time to a timestamp.
  * The infinities of a timestamp are the infinities of a date (a time has
  * none: the caller makes it null). TY_ERR_RANGE if a timestamp is out of

@@ -2524,33 +2524,6 @@ int ty_timestamptz_to_timetz(const ty_tz_t *tz, int64_t ts, ty_timetz_t *out) {
   return 0;
 }
 
-/* datetimetz_timestamptz: see ty_timezone.h. */
-int ty_datetimetz_to_timestamptz(int32_t date, const ty_timetz_t *t,
-                                 int64_t *out) {
-  int64_t result;
-
-  if (date == TY_DATE_NOBEGIN) {
-    *out = TY_TIMESTAMP_NOBEGIN;
-    return 0;
-  }
-  if (date == TY_DATE_NOEND) {
-    *out = TY_TIMESTAMP_NOEND;
-    return 0;
-  }
-  /* the date's range is wider than the timestamp's: only the top is checked */
-  if (date >= TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE) {
-    return ty_date_to_ts_error();
-  }
-  result = (int64_t)date * (TY_USECS_PER_HOUR * 24) + t->time +
-           (int64_t)t->zone * TY_USECS_PER_SEC;
-  /* the zone can take the result out of the timestamp's range */
-  if (!ty_timestamp_valid(result)) {
-    return ty_date_to_ts_error();
-  }
-  *out = result;
-  return 0;
-}
-
 /* timetz AT TIME ZONE a fixed offset: see ty_timezone.h. */
 int ty_timetz_at_offset(const ty_timetz_t *t, int west, ty_timetz_t *out) {
   const int64_t day = TY_USECS_PER_HOUR * 24;
