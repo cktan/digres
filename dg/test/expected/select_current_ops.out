@@ -6,6 +6,9 @@
 -- 2. A typmod rounds the time to that many digits, and not below 0.
 -- 3. The values do not change in a transaction, however long it lasts, and
 --    follow the zone when it is set inside the transaction.
+-- 4. A time cast to timetz has the offset of the session's zone at that time
+--    today, as a timestamp of today and that time has.
+-- 5. A date and a timetz make the timestamptz that their offset says.
 SET datestyle = 'ISO, MDY';
 SET timezone = 'UTC';
 SELECT current_date = now()::date AS d, current_time = now()::timetz AS t, localtime = now()::time AS lt, localtimestamp = now()::timestamp AS lts, extract(timezone FROM current_time) AS tz;
@@ -85,3 +88,75 @@ SELECT extract(timezone FROM current_time) = extract(timezone FROM now()) AS tz,
 (1 row)
 
 COMMIT;
+-- A time cast to timetz takes the offset of the zone at that time today.
+SELECT z, t, extract(timezone FROM t::timetz) = extract(timezone FROM (current_date + t)::timestamptz) AS ok FROM (VALUES ('UTC'), ('America/New_York'), ('Europe/London'), ('Australia/Lord_Howe'), ('Australia/Sydney'), ('Asia/Kolkata')) zs(z), (VALUES (time '00:30'), (time '01:30'), (time '02:30'), (time '03:30'), (time '12:00'), (time '23:59:59'), (time '24:00')) ts(t) WHERE set_config('timezone', z, false) = z ORDER BY z, t;
+          z          |    t     | ok 
+---------------------+----------+----
+ America/New_York    | 00:30:00 | t
+ America/New_York    | 01:30:00 | t
+ America/New_York    | 02:30:00 | t
+ America/New_York    | 03:30:00 | t
+ America/New_York    | 12:00:00 | t
+ America/New_York    | 23:59:59 | t
+ America/New_York    | 24:00:00 | t
+ Asia/Kolkata        | 00:30:00 | t
+ Asia/Kolkata        | 01:30:00 | t
+ Asia/Kolkata        | 02:30:00 | t
+ Asia/Kolkata        | 03:30:00 | t
+ Asia/Kolkata        | 12:00:00 | t
+ Asia/Kolkata        | 23:59:59 | t
+ Asia/Kolkata        | 24:00:00 | t
+ Australia/Lord_Howe | 00:30:00 | t
+ Australia/Lord_Howe | 01:30:00 | t
+ Australia/Lord_Howe | 02:30:00 | t
+ Australia/Lord_Howe | 03:30:00 | t
+ Australia/Lord_Howe | 12:00:00 | t
+ Australia/Lord_Howe | 23:59:59 | t
+ Australia/Lord_Howe | 24:00:00 | t
+ Australia/Sydney    | 00:30:00 | t
+ Australia/Sydney    | 01:30:00 | t
+ Australia/Sydney    | 02:30:00 | t
+ Australia/Sydney    | 03:30:00 | t
+ Australia/Sydney    | 12:00:00 | t
+ Australia/Sydney    | 23:59:59 | t
+ Australia/Sydney    | 24:00:00 | t
+ Europe/London       | 00:30:00 | t
+ Europe/London       | 01:30:00 | t
+ Europe/London       | 02:30:00 | t
+ Europe/London       | 03:30:00 | t
+ Europe/London       | 12:00:00 | t
+ Europe/London       | 23:59:59 | t
+ Europe/London       | 24:00:00 | t
+ UTC                 | 00:30:00 | t
+ UTC                 | 01:30:00 | t
+ UTC                 | 02:30:00 | t
+ UTC                 | 03:30:00 | t
+ UTC                 | 12:00:00 | t
+ UTC                 | 23:59:59 | t
+ UTC                 | 24:00:00 | t
+(42 rows)
+
+SET timezone = 'UTC';
+-- A date and a timetz make the timestamptz that their offset says.
+SELECT d + tz AS ts, (d + tz)::text AS txt FROM (VALUES (date '2024-07-04'), (date '1999-12-31'), (date '2100-02-28')) ds(d), (VALUES (timetz '12:34:56.789012+02'), (timetz '00:00:00-05:30'), (timetz '23:59:59+14')) tzs(tz) ORDER BY d, tz;
+              ts               |              txt              
+-------------------------------+-------------------------------
+ 1999-12-31 05:30:00+00        | 1999-12-31 05:30:00+00
+ 1999-12-31 09:59:59+00        | 1999-12-31 09:59:59+00
+ 1999-12-31 10:34:56.789012+00 | 1999-12-31 10:34:56.789012+00
+ 2024-07-04 05:30:00+00        | 2024-07-04 05:30:00+00
+ 2024-07-04 09:59:59+00        | 2024-07-04 09:59:59+00
+ 2024-07-04 10:34:56.789012+00 | 2024-07-04 10:34:56.789012+00
+ 2100-02-28 05:30:00+00        | 2100-02-28 05:30:00+00
+ 2100-02-28 09:59:59+00        | 2100-02-28 09:59:59+00
+ 2100-02-28 10:34:56.789012+00 | 2100-02-28 10:34:56.789012+00
+(9 rows)
+
+SELECT date 'infinity' + timetz '12:00:00+00' AS inf, date '-infinity' + timetz '12:00:00+00' AS ninf;
+   inf    |   ninf    
+----------+-----------
+ infinity | -infinity
+(1 row)
+
+SELECT date '294277-01-01' + timetz '00:00:00+00';
+psql:test/select_current_ops.sql:42: ERROR:  date out of range for timestamp

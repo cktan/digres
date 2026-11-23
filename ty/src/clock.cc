@@ -147,3 +147,21 @@ int ty_local_time(int32_t typmod, int64_t *out) {
   }
   return 0;
 }
+
+/* time to timetz: the offset of the session's zone at the time, today. */
+int ty_time_to_timetz(int64_t time, ty_timetz_t *out) {
+  ty_tm_t tm;
+  int isdst;
+
+  if (now_get() != 0) {
+    return -1;
+  }
+  /* today's date in the session's zone, with the fields of the time */
+  tm = t_now.tm;
+  tm.hour = (int32_t)(time / TY_USECS_PER_HOUR);
+  tm.min = (int32_t)((time % TY_USECS_PER_HOUR) / TY_USECS_PER_MINUTE);
+  tm.sec = (int32_t)((time % TY_USECS_PER_MINUTE) / TY_USECS_PER_SEC);
+  out->time = time;
+  out->zone = ty_tz_offset_for_local(t_session_zone, &tm, &isdst, nullptr);
+  return 0;
+}

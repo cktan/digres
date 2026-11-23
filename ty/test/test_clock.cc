@@ -9,6 +9,7 @@
  */
 #include <stdint.h>
 
+#include <string>
 #include <thread>
 
 #include "doctest.h"
@@ -196,4 +197,103 @@ TEST_CASE("CURRENT_DATE, CURRENT_TIME and LOCALTIME read the transaction time") 
     ty_set_session_zone(nullptr);
   });
   t.join();
+}
+
+// Verify time to timetz: the offset of the session's zone at the time of day,
+// on today's date in that zone, across a daylight change.
+// 1. In UTC, the offset is 0, also for 24:00:00.
+// 2. In New York on 2024-07-04, 08:00 is 14400 west.
+// 3. On 2024-01-14 (local), 08:00 is 18000 west.
+// 4. On the day of the spring change (2024-03-10), 01:30 is 18000, 02:30 (a
+//    time the change skips) is the offset before it, 18000, and 03:30 is 14400.
+// 5. On the day of the autumn change (2024-11-03), 00:30 is 14400, 01:30 (a
+//    time it repeats) is the offset after it, 18000, and 02:30 is 18000.
+// 6. With no clock, it fails.
+TEST_CASE("ty_time_to_timetz gives the offset of the zone at the time, today") {
+  std::thread t([] {
+    int64_t clock = 773411696789012;
+    ty_timetz_t tt;
+    auto at = [](int h, int m) {
+      return ((int64_t)h * 60 + m) * INT64_C(60000000);
+    };
+    ty_set_xact_clock(&clock);
+    // 1. UTC.
+    ty_set_session_zone(ty_tz_find("UTC"));
+    REQUIRE(0 == ty_time_to_timetz(at(12, 0), &tt));
+    CHECK(at(12, 0) == tt.time);
+    CHECK(0 == tt.zone);
+    REQUIRE(0 == ty_time_to_timetz(at(24, 0), &tt));
+    CHECK(at(24, 0) == tt.time);
+    CHECK(0 == tt.zone);
+    // 2. New York in July.
+    ty_set_session_zone(ty_tz_find("America/New_York"));
+    REQUIRE(0 == ty_time_to_timetz(at(8, 0), &tt));
+    CHECK(14400 == tt.zone);
+    // 3. New York in January.
+    clock = 758603106000005;
+    REQUIRE(0 == ty_time_to_timetz(at(8, 0), &tt));
+    CHECK(18000 == tt.zone);
+    // 4. The spring change.
+    clock = INT64_C(763398000000000);
+    REQUIRE(0 == ty_time_to_timetz(at(1, 30), &tt));
+    CHECK(18000 == tt.zone);
+    REQUIRE(0 == ty_time_to_timetz(at(2, 30), &tt));
+    CHECK(18000 == tt.zone);
+    REQUIRE(0 == ty_time_to_timetz(at(3, 30), &tt));
+    CHECK(14400 == tt.zone);
+    // 5. The autumn change.
+    clock = INT64_C(783961200000000);
+    REQUIRE(0 == ty_time_to_timetz(at(0, 30), &tt));
+    CHECK(14400 == tt.zone);
+    REQUIRE(0 == ty_time_to_timetz(at(1, 30), &tt));
+    CHECK(18000 == tt.zone);
+    REQUIRE(0 == ty_time_to_timetz(at(2, 30), &tt));
+    CHECK(18000 == tt.zone);
+    // 6. With no clock, it fails.
+    ty_set_xact_clock(nullptr);
+    CHECK(-1 == ty_time_to_timetz(at(8, 0), &tt));
+    ty_set_session_zone(nullptr);
+  });
+  t.join();
+}
+
+// Verify timestamptz to timetz, and date and timetz to timestamptz.
+// 1. The local time of an instant in New York and in UTC, with the offset.
+// 2. A date and a timetz make the instant back.
+// 3. An infinite date is the matching infinity.
+// 4. The date 294277-01-01 and a zone that takes the result past the end fail
+//    with "date out of range for timestamp".
+TEST_CASE("timestamptz to timetz and date and timetz to timestamptz") {
+  ty_timetz_t tt;
+  int64_t ts = 0;
+  int32_t d;
+  const int64_t instant = 773411696789012; /* 2024-07-04 12:34:56.789012 UTC */
+
+  // 1. The local time of an instant.
+  REQUIRE(0 == ty_timestamptz_to_timetz(ty_tz_find("UTC"), instant, &tt));
+  CHECK(((12 * 60 + 34) * 60 + 56) * INT64_C(1000000) + 789012 == tt.time);
+  CHECK(0 == tt.zone);
+  REQUIRE(0 ==
+          ty_timestamptz_to_timetz(ty_tz_find("America/New_York"), instant, &tt));
+  CHECK(((8 * 60 + 34) * 60 + 56) * INT64_C(1000000) + 789012 == tt.time);
+  CHECK(14400 == tt.zone);
+  // 2. A date and a timetz make the instant back.
+  REQUIRE(0 == ty_date_make(2024, 7, 4, &d));
+  REQUIRE(0 == ty_datetimetz_to_timestamptz(d, &tt, &ts));
+  CHECK(instant == ts);
+  // 3. An infinite date is the matching infinity.
+  REQUIRE(0 == ty_datetimetz_to_timestamptz(TY_DATE_NOBEGIN, &tt, &ts));
+  CHECK(TY_TIMESTAMP_NOBEGIN == ts);
+  REQUIRE(0 == ty_datetimetz_to_timestamptz(TY_DATE_NOEND, &tt, &ts));
+  CHECK(TY_TIMESTAMP_NOEND == ts);
+  // 4. Out of range.
+  CHECK(-1 == ty_datetimetz_to_timestamptz(
+                  TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE, &tt, &ts));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(std::string("date out of range for timestamp") == ty_errmsg());
+  ty_timetz_t late = { INT64_C(86399999999), 43200 };
+  CHECK(-1 == ty_datetimetz_to_timestamptz(
+                  TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE - 1, &late,
+                  &ts));
+  CHECK(TY_ERR_RANGE == ty_errnum());
 }

@@ -255,4 +255,28 @@ int ty_current_date(int32_t *out);
 int ty_current_time(int32_t typmod, ty_timetz_t *out);
 int ty_local_time(int32_t typmod, int64_t *out);
 
+/*
+ * time to timetz (time_timetz): the time of day with the offset of the
+ * session's zone at that time of day on today's date, today being that of the
+ * transaction in the zone (ty_xact_now). It fails as ty_xact_now does.
+ */
+int ty_time_to_timetz(int64_t time, ty_timetz_t *out);
+
+/*
+ * timestamptz to timetz (timestamptz_timetz): the local time of day of the
+ * instant in the zone, with the zone's offset then. The caller, which has the
+ * infinities, answers NULL for them. A failure is -1 with TY_ERR_RANGE and
+ * "timestamp out of range".
+ */
+int ty_timestamptz_to_timetz(const ty_tz_t *tz, int64_t ts, ty_timetz_t *out);
+
+/*
+ * date and timetz to timestamptz (datetimetz_timestamptz): the instant of the
+ * date and the time of day in the timetz's own zone. An infinite date is the
+ * matching infinity. A result out of range, or a date from 294277-01-01 on,
+ * is -1 with TY_ERR_RANGE and "date out of range for timestamp".
+ */
+int ty_datetimetz_to_timestamptz(int32_t date, const ty_timetz_t *t,
+                                 int64_t *out);
+
 #endif

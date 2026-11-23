@@ -6,6 +6,9 @@
 -- 2. A typmod rounds the time to that many digits, and not below 0.
 -- 3. The values do not change in a transaction, however long it lasts, and
 --    follow the zone when it is set inside the transaction.
+-- 4. A time cast to timetz has the offset of the session's zone at that time
+--    today, as a timestamp of today and that time has.
+-- 5. A date and a timetz make the timestamptz that their offset says.
 SET datestyle = 'ISO, MDY';
 SET timezone = 'UTC';
 SELECT current_date = now()::date AS d, current_time = now()::timetz AS t, localtime = now()::time AS lt, localtimestamp = now()::timestamp AS lts, extract(timezone FROM current_time) AS tz;
@@ -30,3 +33,10 @@ SELECT extract(timezone FROM current_time) AS tz, current_time = now()::timetz A
 SET LOCAL timezone = 'America/Los_Angeles';
 SELECT extract(timezone FROM current_time) = extract(timezone FROM now()) AS tz, current_time = now()::timetz AS t, (SELECT d FROM cur) = (SELECT d FROM cur) AS same;
 COMMIT;
+-- A time cast to timetz takes the offset of the zone at that time today.
+SELECT z, t, extract(timezone FROM t::timetz) = extract(timezone FROM (current_date + t)::timestamptz) AS ok FROM (VALUES ('UTC'), ('America/New_York'), ('Europe/London'), ('Australia/Lord_Howe'), ('Australia/Sydney'), ('Asia/Kolkata')) zs(z), (VALUES (time '00:30'), (time '01:30'), (time '02:30'), (time '03:30'), (time '12:00'), (time '23:59:59'), (time '24:00')) ts(t) WHERE set_config('timezone', z, false) = z ORDER BY z, t;
+SET timezone = 'UTC';
+-- A date and a timetz make the timestamptz that their offset says.
+SELECT d + tz AS ts, (d + tz)::text AS txt FROM (VALUES (date '2024-07-04'), (date '1999-12-31'), (date '2100-02-28')) ds(d), (VALUES (timetz '12:34:56.789012+02'), (timetz '00:00:00-05:30'), (timetz '23:59:59+14')) tzs(tz) ORDER BY d, tz;
+SELECT date 'infinity' + timetz '12:00:00+00' AS inf, date '-infinity' + timetz '12:00:00+00' AS ninf;
+SELECT date '294277-01-01' + timetz '00:00:00+00';

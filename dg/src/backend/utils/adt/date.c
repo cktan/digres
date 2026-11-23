@@ -1741,19 +1741,11 @@ Datum timetz_time(PG_FUNCTION_ARGS) {
 
 Datum time_timetz(PG_FUNCTION_ARGS) {
   TimeADT time = PG_GETARG_TIMEADT(0);
-  TimeTzADT *result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
-  int tz;
+  TimeTzADT *result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
 
-  GetCurrentDateTime(tm);
-  time2tm(time, tm, &fsec);
-  tz = DetermineTimeZoneOffset(tm, session_timezone);
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-
-  result->time = time;
-  result->zone = tz;
+  /* the offset of the session's zone at the time, today: ty reads the clock */
+  if (ty_time_to_timetz(time, (ty_timetz_t *)result))
+    datetime_ty_error();
 
   PG_RETURN_TIMETZADT_P(result);
 }
@@ -1764,20 +1756,15 @@ Datum time_timetz(PG_FUNCTION_ARGS) {
 Datum timestamptz_timetz(PG_FUNCTION_ARGS) {
   TimestampTz timestamp = PG_GETARG_TIMESTAMP(0);
   TimeTzADT *result;
-  struct pg_tm tt, *tm = &tt;
-  int tz;
-  fsec_t fsec;
 
   if (TIMESTAMP_NOT_FINITE(timestamp))
     PG_RETURN_NULL();
 
-  if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
+  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
+  if (ty_timestamptz_to_timetz(session_timezone, timestamp,
+                               (ty_timetz_t *)result))
     ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
                     errmsg("timestamp out of range")));
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-
-  tm2timetz(tm, fsec, tz, result);
 
   PG_RETURN_TIMETZADT_P(result);
 }
@@ -1793,29 +1780,10 @@ Datum datetimetz_timestamptz(PG_FUNCTION_ARGS) {
   TimeTzADT *time = PG_GETARG_TIMETZADT_P(1);
   TimestampTz result;
 
-  if (DATE_IS_NOBEGIN(date))
-    TIMESTAMP_NOBEGIN(result);
-  else if (DATE_IS_NOEND(date))
-    TIMESTAMP_NOEND(result);
-  else {
-    /*
-     * Date's range is wider than timestamp's, so check for boundaries.
-     * Since dates have the same minimum values as timestamps, only upper
-     * boundary need be checked for overflow.
-     */
-    if (date >= (TIMESTAMP_END_JULIAN - POSTGRES_EPOCH_JDATE))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("date out of range for timestamp")));
-    result = date * USECS_PER_DAY + time->time + time->zone * USECS_PER_SEC;
-
-    /*
-     * Since it is possible to go beyond allowed timestamptz range because
-     * of time zone, check for allowed timestamp range after adding tz.
-     */
-    if (!IS_VALID_TIMESTAMP(result))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("date out of range for timestamp")));
-  }
+  /* ty checks the date's range and the result's, with PostgreSQL's message */
+  if (ty_datetimetz_to_timestamptz(date, (const ty_timetz_t *)time, &result))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("date out of range for timestamp")));
 
   PG_RETURN_TIMESTAMP(result);
 }
