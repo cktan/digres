@@ -680,11 +680,14 @@ static sm_session_t *xact_session(void) {
 }
 
 /*
- * The start time of the transaction of a session that has no sm session, as
- * the first transaction of a connection has until it opens one, and a process
- * with no database has always: a time of the wall clock, taken once.
+ * The start time of the transaction, a TimestampTz: what sm gave when
+ * smstore_xact_clock_start() started its clock, or, for a session with no sm
+ * session yet (the first transaction of a connection, a process with no
+ * database), a time of the wall clock taken once.  sm's time does not change
+ * until the next clock start, so the call keeps it: now() and the like read
+ * it for every row.
  */
-static thread_local /*LOCAL*/ int64_t nostorage_xact_start = 0;
+static thread_local /*LOCAL*/ int64_t xact_start_cache = 0;
 
 /*
  * The PostgreSQL transaction begins: sm starts the clock of the transaction,
@@ -697,26 +700,17 @@ void smstore_xact_clock_start(void) {
   sm_session_t *s = datadir_sm_session();
 
   if (s == NULL) {
-    nostorage_xact_start = GetCurrentTimestamp();
+    xact_start_cache = GetCurrentTimestamp();
     return;
   }
   if (sm_xact_clock_start(s) != 0)
     sm_error("start the clock of the transaction");
-}
-
-/*
- * The start time of the transaction, a TimestampTz, that sm keeps: the time
- * of smstore_xact_clock_start().
- */
-int64_t smstore_xact_start(void) {
-  int64_t ts;
-
-  if (datadir_sm_session() == NULL)
-    return nostorage_xact_start;
-  if (sm_xact_time(session(), &ts) != 0)
+  if (sm_xact_time(s, &xact_start_cache) != 0)
     sm_error("read the start time of the transaction");
-  return ts;
 }
+
+/* The start time of the transaction (smstore_xact_clock_start()). */
+int64_t smstore_xact_start(void) { return xact_start_cache; }
 
 /*
  * A statement has begun: the next call in the sm transaction begins one in

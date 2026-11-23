@@ -857,6 +857,39 @@ copied from PostgreSQL keeps its copyright notice
      and `get_byte` and the substring range were calls. They
      now work 8 bytes at a time, use a table of digit pairs,
      and are in line.
+   - **The clock of the transaction is sm's, and ty reads it
+     (2026-11-23).** sm1 keeps the start time of a transaction in
+     its session, as a `timestamptz`. `ty_set_xact_clock` gives
+     ty a pointer to it, and `ty_xact_start` reads through it.
+     `ty_set_session_zone` and `ty_xact_now` give the time as the
+     fields of the session's zone. The `now` hook of
+     `ty_dtzone_t` is gone: "now", "today", "tomorrow" and
+     "yesterday" read the clock of the thread.
+     - digres begins its sm transaction at the first call that
+       needs one, which can be after the text in of 'today'. So
+       `sm_xact_clock_start` starts the clock when the
+       PostgreSQL transaction begins, with no sm transaction and
+       no snapshot. `sm_begin` and the transactions that sm makes
+       for its own work on the session keep that time.
+     - A thread may have more than one sm session, as sm opens
+       one for its own work. A session clears the pointer of ty
+       only if it is its own. A session whose host never starts
+       the clock takes the pointer only when ty has none, or the
+       one it has holds no transaction.
+     - digres keeps the time sm gave at the start of the
+       transaction, so `now()` and the like read a variable.
+       The first version asked sm for each call, and cost 2.4%
+       more instructions a statement. Measured by callgrind,
+       2,000 rows, instructions a statement (old, new): `ts <
+       now()` 4,260,461 and 4,257,898 (-0.06%); `d =
+       current_date` 4,212,892 and 4,215,680 (+0.07%); `ts <
+       current_timestamp` 4,356,184 and 4,358,714 (+0.06%).
+     - `now()` is the time of BEGIN. In PostgreSQL it is the
+       time of the first statement, so `now() =
+       statement_timestamp()` is true there in the first
+       statement, and false here.
+     - Not moved yet: `time_timetz`, `timetz_zone`, and
+       CURRENT_TIME and LOCALTIME. They can call `ty_xact_now`.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

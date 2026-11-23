@@ -253,6 +253,8 @@ are the catalog tables psql reads
        timestamptz and timetz (`ty/src/dtparse.cc`), the time
        zone rules with their data (`ty_timezone.h`), and the
        casts, arithmetic, trunc, parts and age of timestamptz.
+       The transaction's clock is sm's, and ty reads it
+       (2026-11-23).
        **Left: the conversions of timetz that read the
        transaction's clock, `make_timestamptz` with a zone
        name, `to_char`, the case functions, the regular
