@@ -2569,7 +2569,7 @@ Datum int2_sum(PG_FUNCTION_ARGS) {
 
     /* Leave the running sum unchanged in the new input is null */
     if (!PG_ARGISNULL(1))
-      *oldsum = *oldsum + (int64)PG_GETARG_INT16(1);
+      *oldsum = ty_int_sum_add(*oldsum, PG_GETARG_INT16(1));
 
     PG_RETURN_POINTER(oldsum);
   } else
@@ -2582,7 +2582,7 @@ Datum int2_sum(PG_FUNCTION_ARGS) {
       PG_RETURN_INT64(oldsum);
 
     /* OK to do the addition. */
-    newval = oldsum + (int64)PG_GETARG_INT16(1);
+    newval = ty_int_sum_add(oldsum, PG_GETARG_INT16(1));
 
     PG_RETURN_INT64(newval);
   }
@@ -2614,7 +2614,7 @@ Datum int4_sum(PG_FUNCTION_ARGS) {
 
     /* Leave the running sum unchanged in the new input is null */
     if (!PG_ARGISNULL(1))
-      *oldsum = *oldsum + (int64)PG_GETARG_INT32(1);
+      *oldsum = ty_int_sum_add(*oldsum, PG_GETARG_INT32(1));
 
     PG_RETURN_POINTER(oldsum);
   } else
@@ -2627,7 +2627,7 @@ Datum int4_sum(PG_FUNCTION_ARGS) {
       PG_RETURN_INT64(oldsum);
 
     /* OK to do the addition. */
-    newval = oldsum + (int64)PG_GETARG_INT32(1);
+    newval = ty_int_sum_add(oldsum, PG_GETARG_INT32(1));
 
     PG_RETURN_INT64(newval);
   }
@@ -2674,10 +2674,8 @@ Datum int8_sum(PG_FUNCTION_ARGS) {
  * we need to count the inputs.
  */
 
-typedef struct Int8TransTypeData {
-  int64 count;
-  int64 sum;
-} Int8TransTypeData;
+/* the state is ty's: the count of the values, and their sum in an int64 */
+typedef ty_int_avg_t Int8TransTypeData;
 
 /* Accumulate an int2 into an avg state: an int8 array of count and sum. */
 Datum int2_avg_accum(PG_FUNCTION_ARGS) {
@@ -2701,8 +2699,7 @@ Datum int2_avg_accum(PG_FUNCTION_ARGS) {
     elog(ERROR, "expected 2-element int8 array");
 
   transdata = (Int8TransTypeData *)ARR_DATA_PTR(transarray);
-  transdata->count++;
-  transdata->sum += newval;
+  ty_int_avg_accum(transdata, newval);
 
   PG_RETURN_ARRAYTYPE_P(transarray);
 }
@@ -2729,8 +2726,7 @@ Datum int4_avg_accum(PG_FUNCTION_ARGS) {
     elog(ERROR, "expected 2-element int8 array");
 
   transdata = (Int8TransTypeData *)ARR_DATA_PTR(transarray);
-  transdata->count++;
-  transdata->sum += newval;
+  ty_int_avg_accum(transdata, newval);
 
   PG_RETURN_ARRAYTYPE_P(transarray);
 }
@@ -2761,8 +2757,7 @@ Datum int4_avg_combine(PG_FUNCTION_ARGS) {
   state1 = (Int8TransTypeData *)ARR_DATA_PTR(transarray1);
   state2 = (Int8TransTypeData *)ARR_DATA_PTR(transarray2);
 
-  state1->count += state2->count;
-  state1->sum += state2->sum;
+  ty_int_avg_combine(state1, state2);
 
   PG_RETURN_ARRAYTYPE_P(transarray1);
 }
@@ -2789,8 +2784,7 @@ Datum int2_avg_accum_inv(PG_FUNCTION_ARGS) {
     elog(ERROR, "expected 2-element int8 array");
 
   transdata = (Int8TransTypeData *)ARR_DATA_PTR(transarray);
-  transdata->count--;
-  transdata->sum -= newval;
+  ty_int_avg_accum_inv(transdata, newval);
 
   PG_RETURN_ARRAYTYPE_P(transarray);
 }
@@ -2817,8 +2811,7 @@ Datum int4_avg_accum_inv(PG_FUNCTION_ARGS) {
     elog(ERROR, "expected 2-element int8 array");
 
   transdata = (Int8TransTypeData *)ARR_DATA_PTR(transarray);
-  transdata->count--;
-  transdata->sum -= newval;
+  ty_int_avg_accum_inv(transdata, newval);
 
   PG_RETURN_ARRAYTYPE_P(transarray);
 }
@@ -2836,7 +2829,7 @@ Datum int8_avg(PG_FUNCTION_ARGS) {
   transdata = (Int8TransTypeData *)ARR_DATA_PTR(transarray);
 
   /* SQL defines AVG of no values to be NULL */
-  if (transdata->count == 0)
+  if (ty_int_avg_empty(transdata))
     PG_RETURN_NULL();
 
   countd = NumericGetDatum(int64_to_numeric(transdata->count));
@@ -2860,7 +2853,7 @@ Datum int2int4_sum(PG_FUNCTION_ARGS) {
   transdata = (Int8TransTypeData *)ARR_DATA_PTR(transarray);
 
   /* SQL defines SUM of no values to be NULL */
-  if (transdata->count == 0)
+  if (ty_int_avg_empty(transdata))
     PG_RETURN_NULL();
 
   PG_RETURN_DATUM(Int64GetDatumFast(transdata->sum));

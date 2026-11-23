@@ -1,0 +1,60 @@
+-- Verify sum and avg of int2 and int4, which ty's state serves (ty_int_avg_t,
+-- ty_int_sum_add): with nulls, with no row, at the edges of the width, and over
+-- a moving frame, which takes a value out of the state (intX_avg_accum_inv).
+SELECT g, sum(a) AS s2, avg(a) AS a2, sum(b) AS s4, avg(b) AS a4, count(b) AS n FROM (VALUES (1, 1::int2, 1::int4), (1, 2::int2, 2::int4), (1, 4::int2, 4::int4), (2, 32767::int2, 2147483647::int4), (2, 32767::int2, 2147483647::int4), (2, 32767::int2, 2147483647::int4), (3, (-32768)::int2, (-2147483648)::int4), (3, (-32768)::int2, (-2147483648)::int4), (4, NULL::int2, NULL::int4), (4, 7::int2, 7::int4), (5, NULL::int2, NULL::int4)) v(g, a, b) GROUP BY g ORDER BY g;
+ g |   s2   |         a2          |     s4      |          a4          | n 
+---+--------+---------------------+-------------+----------------------+---
+ 1 |      7 |  2.3333333333333333 |           7 |   2.3333333333333333 | 3
+ 2 |  98301 |  32767.000000000000 |  6442450941 |  2147483647.00000000 | 3
+ 3 | -65536 | -32768.000000000000 | -4294967296 | -2147483648.00000000 | 2
+ 4 |      7 |  7.0000000000000000 |           7 |   7.0000000000000000 | 1
+ 5 |        |                     |             |                      | 0
+(5 rows)
+
+SELECT sum(a) AS s2, avg(a) AS a2, sum(b) AS s4, avg(b) AS a4, sum(c) AS s8, avg(c) AS a8 FROM (VALUES (1::int2, 1::int4, 1::int8)) v(a, b, c) WHERE false;
+ s2 | a2 | s4 | a4 | s8 | a8 
+----+----+----+----+----+----
+    |    |    |    |    |   
+(1 row)
+
+SELECT i, a, sum(a) OVER w AS s2, avg(a) OVER w AS a2, sum(b) OVER w AS s4, avg(b) OVER w AS a4 FROM (VALUES (1, 10::int2, 100::int4), (2, 20::int2, 200::int4), (3, NULL::int2, NULL::int4), (4, 40::int2, 400::int4), (5, 50::int2, 500::int4), (6, (-60)::int2, (-600)::int4)) v(i, a, b) WINDOW w AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) ORDER BY i;
+ i |  a  | s2  |         a2          |  s4  |          a4          
+---+-----+-----+---------------------+------+----------------------
+ 1 |  10 |  10 | 10.0000000000000000 |  100 | 100.0000000000000000
+ 2 |  20 |  30 | 15.0000000000000000 |  300 | 150.0000000000000000
+ 3 |     |  20 | 20.0000000000000000 |  200 | 200.0000000000000000
+ 4 |  40 |  40 | 40.0000000000000000 |  400 | 400.0000000000000000
+ 5 |  50 |  90 | 45.0000000000000000 |  900 | 450.0000000000000000
+ 6 | -60 | -10 | -5.0000000000000000 | -100 | -50.0000000000000000
+(6 rows)
+
+SELECT i, sum(b) OVER w AS s4, avg(b) OVER w AS a4, sum(a) OVER w AS s2 FROM (VALUES (1, 1::int2, 2147483647::int4), (2, 2::int2, 2147483647::int4), (3, 3::int2, 2147483647::int4), (4, 4::int2, (-2147483648)::int4), (5, 5::int2, (-2147483648)::int4)) v(i, a, b) WINDOW w AS (ORDER BY i ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING) ORDER BY i;
+ i |     s4      |          a4          | s2 
+---+-------------+----------------------+----
+ 1 |  6442450941 |  2147483647.00000000 |  6
+ 2 |  2147483646 |   715827882.00000000 |  9
+ 3 | -2147483649 |  -715827883.00000000 | 12
+ 4 | -4294967296 | -2147483648.00000000 |  9
+ 5 | -2147483648 | -2147483648.00000000 |  5
+(5 rows)
+
+SELECT i, sum(b) OVER (ORDER BY i) AS run_s, avg(b) OVER (ORDER BY i) AS run_a FROM (VALUES (1, 1::int4), (2, 2::int4), (3, 3::int4)) v(i, b) ORDER BY i;
+ i | run_s |         run_a          
+---+-------+------------------------
+ 1 |     1 | 1.00000000000000000000
+ 2 |     3 |     1.5000000000000000
+ 3 |     6 |     2.0000000000000000
+(3 rows)
+
+SELECT sum(b) FILTER (WHERE i > 1) AS f_s, avg(b) FILTER (WHERE i > 1) AS f_a, sum(b) FILTER (WHERE i > 9) AS f_empty, avg(b) FILTER (WHERE i > 9) AS f_aempty FROM (VALUES (1, 10::int4), (2, 20::int4), (3, 40::int4)) v(i, b);
+ f_s |         f_a         | f_empty | f_aempty 
+-----+---------------------+---------+----------
+  60 | 30.0000000000000000 |         |         
+(1 row)
+
+SELECT sum(c) AS s8, avg(c) AS a8 FROM (VALUES (9223372036854775807::int8), (9223372036854775807::int8), (1::int8)) v(c);
+          s8          |         a8          
+----------------------+---------------------
+ 18446744073709551615 | 6148914691236517205
+(1 row)
+

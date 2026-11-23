@@ -188,3 +188,46 @@ TEST_CASE("the integer hash is one for a value at every width") {
   std::sort(seen.begin(), seen.end());
   CHECK(std::adjacent_find(seen.begin(), seen.end()) == seen.end());
 }
+
+// Verify the state of avg and sum over int2 and int4: values enter and leave
+// it, two states combine, and the sum wraps without undefined behavior.
+// 1. A new state is empty, and has no value.
+// 2. Three values give the count and the sum.
+// 3. Take the first out: the count and the sum drop by it.
+// 4. Combine with a second state: the counts and the sums add.
+// 5. The sum wraps at the end of the int64, up and down.
+// 6. The running sum of sum(int4) in plain mode adds a value.
+TEST_CASE("the integer avg state accumulates, takes out and combines") {
+  ty_int_avg_t st = {};
+  ty_int_avg_t other = {};
+
+  // 1. A new state is empty.
+  CHECK(ty_int_avg_empty(&st));
+  // 2. Three values.
+  ty_int_avg_accum(&st, 10);
+  ty_int_avg_accum(&st, -3);
+  ty_int_avg_accum(&st, INT32_MAX);
+  CHECK(!ty_int_avg_empty(&st));
+  CHECK(3 == st.count);
+  CHECK(INT64_C(7) + INT32_MAX == st.sum);
+  // 3. Take the first out.
+  ty_int_avg_accum_inv(&st, 10);
+  CHECK(2 == st.count);
+  CHECK(INT64_C(-3) + INT32_MAX == st.sum);
+  // 4. Combine with a second state.
+  ty_int_avg_accum(&other, 100);
+  ty_int_avg_accum(&other, 200);
+  ty_int_avg_combine(&st, &other);
+  CHECK(4 == st.count);
+  CHECK(INT64_C(297) + INT32_MAX == st.sum);
+  // 5. The sum wraps.
+  ty_int_avg_t big = {1, INT64_MAX};
+  ty_int_avg_accum(&big, 1);
+  CHECK(INT64_MIN == big.sum);
+  ty_int_avg_accum_inv(&big, 1);
+  CHECK(INT64_MAX == big.sum);
+  CHECK(INT64_MIN == ty_int_sum_add(INT64_MAX, 1));
+  // 6. The running sum in plain mode.
+  CHECK(INT64_C(5000000001) == ty_int_sum_add(INT64_C(5000000000), 1));
+  CHECK(INT64_C(-2147483648) == ty_int_sum_add(0, INT32_MIN));
+}
