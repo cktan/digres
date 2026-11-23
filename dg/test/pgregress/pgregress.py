@@ -103,6 +103,11 @@ class server_t:
         self.sock = tempfile.mkdtemp(prefix='dgp.')
         self.proc = None
         os.makedirs(dir, exist_ok=True)
+        # The log is this run's: the last run's goes to log.old, so a grep
+        # finds only what this run did. A restart in the run appends to it.
+        log = os.path.join(dir, 'log')
+        if os.path.exists(log):
+            os.replace(log, log + '.old')
 
     def initdb(self):
         """Make the data directory."""
