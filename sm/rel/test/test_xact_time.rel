@@ -2,10 +2,13 @@
 # sm reads the wall clock when the transaction takes its first
 # snapshot, and the time is the same until the transaction ends.
 #
-# 1. With no transaction, (xact-time) fails with ERR_NOTRANS.
+# 1. With no clock and no transaction, (xact-time) fails with ERR_NOTRANS.
 # 2. In a transaction the time is a timestamptz near the wall clock.
 # 3. A statement, and a wait, do not change it.
 # 4. A later transaction has a later time.
+# 5. A clock started before the begin gives the time of the start; the
+#    begin, a statement and the commit keep it.
+# 6. A clock started while a transaction is active is refused.
 
 (def test-dir (string (or (os/getenv "REL_TMP") "/tmp") "/sm_rel_test_xact_time"))
 (rm-rf test-dir)
@@ -14,7 +17,7 @@
 (db-create "xtdb")
 (db-open "xtdb")
 
-# 1. With no transaction, (xact-time) fails with ERR_NOTRANS.
+# 1. With no clock and no transaction, (xact-time) fails with ERR_NOTRANS.
 (assert-err :err-notrans (xact-time))
 
 # 2. In a transaction the time is a timestamptz near the wall clock:
@@ -37,6 +40,25 @@
 (begin :rr)
     (def t2 (xact-time))
     (assert (> t2 t1) "the second transaction starts later")
+(commit)
+
+# 5. A clock started before the begin gives the time of the start: it is
+# there before the begin, and the begin and a statement keep it.
+(os/sleep 0.01)
+(xact-clock-start)
+(def t3 (xact-time))
+(assert (> t3 t2) "the started clock is later than the last transaction")
+(os/sleep 0.01)
+(begin :rc)
+    (assert-eq (xact-time) t3)
+    (snapshot)
+    (assert-eq (xact-time) t3)
+(commit)
+(assert-eq (xact-time) t3)
+
+# 6. A clock started while a transaction is active is refused.
+(begin :rc)
+    (assert-err :err-intrans (xact-clock-start))
 (commit)
 
 (db-close)

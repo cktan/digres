@@ -91,15 +91,20 @@ struct sm1::session_t {
   uint64_t snapshot_ts = 0;
   /*
    * The start time of the transaction, a timestamptz (microseconds
-   * since 2000-01-01 UTC), read from the wall clock when sm1::begin
-   * takes the first snapshot. INT64_MIN with no transaction. ty reads
+   * since 2000-01-01 UTC). Of a session whose host never starts the
+   * clock: read from the wall clock when sm1::begin takes the first
+   * snapshot, and INT64_MIN after the transaction ends. Of a session
+   * whose host has (clock_hosted): the time of the last
+   * sm1::xact_clock_start, whatever sm's own transactions on the
+   * session begin and end meanwhile (sm1::store_work_begin). ty reads
    * it through a pointer (ty_set_xact_clock).
    */
   int64_t xact_start = INT64_MIN;
-  uint64_t xid = 0;     /* 0 until the first write (../XCTMGR.md §2.1) */
-  uint32_t seq = 0;     /* last write's seq; the next is seq + 1 */
-  uint32_t seq_hwm = 0; /* own versions above this are invisible */
-  uint64_t wts_hi = 0;  /* largest wts written; bounds own seeks */
+  bool clock_hosted = false; /* the host starts the clock */
+  uint64_t xid = 0;          /* 0 until the first write (../XCTMGR.md §2.1) */
+  uint32_t seq = 0;          /* last write's seq; the next is seq + 1 */
+  uint32_t seq_hwm = 0;      /* own versions above this are invisible */
+  uint64_t wts_hi = 0;       /* largest wts written; bounds own seeks */
   /*
    * Raised by every write the session makes, by each bulk load
    * as it closes, and at a rollback to a savepoint, in any

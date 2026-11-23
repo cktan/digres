@@ -2487,23 +2487,8 @@ static int ty_hook_zone_fixed(void *ctx, const void *tz, long *gmtoff) {
   return pg_get_timezone_offset((const pg_tz *)tz, gmtoff);
 }
 
-/* ty's hook for the time of the transaction, in the session's zone. */
-static void ty_hook_now(void *ctx, ty_tm_t *t, int32_t *fsec, int *tz) {
-  struct pg_tm tm;
-  fsec_t f;
-
-  GetCurrentTimeUsec(&tm, &f, tz);
-  t->year = tm.tm_year;
-  t->mon = tm.tm_mon;
-  t->mday = tm.tm_mday;
-  t->hour = tm.tm_hour;
-  t->min = tm.tm_min;
-  t->sec = tm.tm_sec;
-  *fsec = f;
-}
-
 const ty_dtzone_t ty_dtzone_hooks = {NULL, ty_hook_abbrev, ty_hook_zone,
-                                     ty_hook_zone_fixed, ty_hook_now};
+                                     ty_hook_zone_fixed};
 
 /*
  * A pg_tm of the broken-down time ty gives a hook: only what the zone code
@@ -2540,8 +2525,8 @@ static int ty_hook_abbrev_offset(void *ctx, const ty_tm_t *t,
 }
 
 const ty_dtzone_t ty_dtzone_hooks_tz = {
-    NULL,         ty_hook_abbrev, ty_hook_zone,         ty_hook_zone_fixed,
-    ty_hook_now, ty_hook_offset, ty_hook_abbrev_offset};
+    NULL,          ty_hook_abbrev, ty_hook_zone, ty_hook_zone_fixed,
+    ty_hook_offset, ty_hook_abbrev_offset};
 
 /* Report a code of ty's text in: the code is PostgreSQL's DTERR. */
 void TyDateTimeParseError(int dterr, const ty_dtin_extra_t *x, const char *str,

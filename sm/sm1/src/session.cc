@@ -223,8 +223,11 @@ int sm1::closedb(sm1::session_t *session) {
       }
     }
   }
-  // ty on this thread must not read a clock that dies with the session.
-  ty_set_xact_clock(nullptr);
+  // ty on this thread must not read a clock that dies with the session; the
+  // clock of another session on the thread is not this one's to clear.
+  if (ty_xact_clock() == &session->xact_start) {
+    ty_set_xact_clock(nullptr);
+  }
   // Free the session.
   delete session;
   return 0;

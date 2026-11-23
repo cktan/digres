@@ -28,6 +28,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "postmaster/postmaster.h"
+#include "ty_timezone.h"
 #include "utils/acl.h"
 #include "utils/control_block.h"
 #include "utils/datetime.h"
@@ -326,6 +327,8 @@ bool check_timezone(std::string &newval, void **extra, GucSource source) {
  */
 void assign_timezone(const std::string &newval, void *extra) {
   session_timezone = *((pg_tz **)extra);
+  /* ty reads the session's zone for the time of the transaction. */
+  ty_set_session_zone(session_timezone);
   /* datetime.c's cache of timezone abbrevs may now be obsolete */
   ClearTimeZoneAbbrevCache();
 }

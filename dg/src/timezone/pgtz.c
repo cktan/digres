@@ -67,6 +67,8 @@ void pg_timezone_initialize(void) {
    * guc_tables.c, although in principle it could be different.
    */
   session_timezone = pg_tzset("GMT");
+  /* ty reads the session's zone for the time of the transaction. */
+  ty_set_session_zone(session_timezone);
   if (postmaster_tcb != NULL)
     pcb_main()->log_timezone = session_timezone;
 }

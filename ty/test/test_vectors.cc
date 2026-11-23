@@ -23,6 +23,7 @@
 #include "ty_float.h"
 #include "ty_hash.h"
 #include "ty_datetime.h"
+#include "ty_timezone.h"
 #include "ty_interval.h"
 #include "text_raw.h"
 #include "ty_text.h"
@@ -1529,11 +1530,23 @@ int fake_abbrev(void *, int, const char *w, int *type, int *offset,
   return 0;
 }
 
-void fake_now(void *, ty_tm_t *tm, int32_t *fsec, int *tz) {
-  *tm = {2030, 6, 15, 12, 34, 56};
-  *fsec = 789000;
-  *tz = 0;
-}
+/*
+ * The clock of the transaction the vectors read: 2030-06-15 12:34:56.789 UTC,
+ * in the zone UTC, the session's. A run makes one; the destructor gives the
+ * thread no clock.
+ */
+struct fake_clock_t {
+  int64_t value = INT64_C(961072496789000);
+
+  fake_clock_t() {
+    ty_set_xact_clock(&value);
+    ty_set_session_zone(ty_tz_find("UTC"));
+  }
+  ~fake_clock_t() {
+    ty_set_xact_clock(nullptr);
+    ty_set_session_zone(nullptr);
+  }
+};
 
 /* The offset of a zone, west of Greenwich; the session's if tz is NULL. */
 int fake_offset(void *ctx, const ty_tm_t *, const void *tz) {
@@ -1549,14 +1562,13 @@ int fake_abbrev_offset(void *, const ty_tm_t *, const char *, const void *) {
 }
 
 const ty_dtzone_t kFakeHost = {nullptr,         fake_abbrev, fake_zone,
-                               fake_zone_fixed, fake_now,    nullptr,
-                               nullptr};
+                               fake_zone_fixed, nullptr,     nullptr};
 
 /* The same with the offsets, for the types that have a zone; ctx is the
  * offset of the session's zone, west of Greenwich. */
 ty_dtzone_t fake_host_tz(int *session_west) {
-  return {session_west, fake_abbrev, fake_zone,         fake_zone_fixed,
-          fake_now,     fake_offset, fake_abbrev_offset};
+  return {session_west,    fake_abbrev, fake_zone,
+          fake_zone_fixed, fake_offset, fake_abbrev_offset};
 }
 
 /* Run a text in of date, time or timestamp (known.txt): the text is hex. */
@@ -1568,6 +1580,7 @@ bool run_dtin_known(const vec_t &v) {
   ty_dtin_extra_t extra;
   int32_t d = 0;
   int64_t t = 0;
+  fake_clock_t clock;
 
   INFO(v.line);
   if (z.find('\0') != std::string::npos) {
@@ -1636,6 +1649,7 @@ bool run_dtzin_known(const vec_t &v) {
   int order = std::stoi(v.args[1]), dterr = 0, rc;
   int session_west = std::stoi(v.args[2]) == 0 ? 0 : -18000;
   ty_dtzone_t host = fake_host_tz(&session_west);
+  fake_clock_t clock;
   ty_dtin_extra_t extra;
   int64_t t = 0;
   ty_timetz_t tz = {};

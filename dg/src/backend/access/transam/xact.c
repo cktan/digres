@@ -743,6 +743,13 @@ static void StartTransaction(void) {
   TRACE_POSTGRESQL_TRANSACTION_START(vxid.localTransactionId);
 
   /*
+   * transaction_timestamp() (a/k/a now()) is sm's: sm starts the clock now,
+   * as the transaction begins.  A transaction started inside a procedure
+   * (a nonatomic SPI context) has a new time, as it must.
+   */
+  smstore_xact_clock_start();
+
+  /*
    * initialize other subsystems for new transaction
    */
   AtStart_GUC();

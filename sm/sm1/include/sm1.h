@@ -454,12 +454,28 @@ int closedb(session_t* session);
 int begin(session_t* session, xctlevel_t level, bool read_only = false);
 
 /*
- * The start time of the active transaction, as a timestamptz: the
- * wall clock when sm1::begin took the transaction's first snapshot.
- * It does not change until the transaction ends. ty reads it too,
- * through the pointer sm1::begin gives it (ty_set_xact_clock).
+ * Start the clock of the transaction that the host begins next:
+ * read the wall clock now, and keep it as the start time. A host
+ * that begins its sm transaction late, as at its first read, calls
+ * this when its own transaction begins, so that a function that
+ * reads the time before sm1::begin has one. The session keeps that
+ * time for its transactions, those of sm1::begin and those sm makes
+ * for its own work, until the next call. A session whose host never
+ * calls this reads the clock at the first snapshot of each
+ * transaction. ty on this thread reads the time too, through a
+ * pointer to it (ty_set_xact_clock).
  *
- * Errors: SM_ERR_NOTRANS.
+ * Errors: SM_ERR_INTRANS (a transaction is active).
+ */
+int xact_clock_start(session_t* session);
+
+/*
+ * The start time of the transaction, as a timestamptz: the time
+ * of the last sm1::xact_clock_start, or else the wall clock when
+ * sm1::begin took the first snapshot. It does not change until the
+ * transaction ends, or until the next sm1::xact_clock_start.
+ *
+ * Errors: SM_ERR_NOTRANS (no clock started and no transaction).
  */
 int xact_start(session_t* session, int64_t* out);
 

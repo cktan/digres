@@ -710,23 +710,41 @@ the coordinator's abort decision. With no active transaction, as
 after a retryable error or `SM_ERR_NOMEM`, the call returns 0.
 The error state then holds `SM_ERR_NOTRANS`.
 
+### `sm_xact_clock_start`
+
+```cpp
+int sm_xact_clock_start(sm_session_t* session);
+```
+
+Starts the clock of the transaction that the host begins next.
+sm reads the wall clock and keeps it as the start time.
+
+- A host whose transaction begins before its first call into
+  sm, as digres's does, calls it when its own transaction
+  begins. A function that reads the time before `sm_begin` then
+  has one.
+- It starts no sm transaction and takes no snapshot.
+  `sm_begin` keeps the time, and so does each transaction sm
+  makes for its own work on the session, until the next call.
+- With a transaction active, it fails with `SM_ERR_INTRANS`.
+
 ### `sm_xact_time`
 
 ```cpp
 int sm_xact_time(sm_session_t* session, int64_t* out);
 ```
 
-Gives the start time of the active transaction in `*out`, as a
+Gives the start time of the transaction in `*out`, as a
 `timestamptz`: microseconds since 2000-01-01 00:00:00 UTC.
 
-- sm reads the wall clock when the transaction takes its first
-  snapshot. The time does not change until the transaction ends.
+- It is the time of `sm_xact_clock_start`. With no such call, it
+  is the wall clock when the transaction took its first
+  snapshot. It does not change until the transaction ends.
 - ty reads the same time on the calling thread, with
   `ty_xact_start`, for the operations that depend on it: "now",
   `CURRENT_TIME` and the like.
-- A host that begins the sm transaction late, as at its first
-  read, gets the time of that begin.
-- With no active transaction, it fails with `SM_ERR_NOTRANS`.
+- With no clock started and no transaction, it fails with
+  `SM_ERR_NOTRANS`.
 
 ### `sm_stmt_begin`
 

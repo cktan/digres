@@ -413,6 +413,18 @@ static Janet cfun_snapshot(int32_t argc, Janet *argv) {
   return janet_wrap_nil();
 }
 
+/* (xact-clock-start) -- start the clock of the transaction begun next. */
+static Janet cfun_xact_clock_start(int32_t argc, Janet *argv) {
+  (void)argc;
+  (void)argv;
+  session_ctx_t *s = require_session();
+
+  if (sm_xact_clock_start(s->session) != 0) {
+    panic_sm_error("xact-clock-start");
+  }
+  return janet_wrap_nil();
+}
+
 /* (xact-time) -- the start time of the transaction: a timestamptz. */
 static Janet cfun_xact_time(int32_t argc, Janet *argv) {
   (void)argc;
@@ -3840,6 +3852,8 @@ static const JanetReg s_rel_cfuns[] = {
     {"abort", cfun_abort, "(abort) -- abort transaction"},
     {"snapshot", cfun_snapshot, "(snapshot) -- pin/advance statement snapshot"},
     {"stmt-begin", cfun_snapshot, "(stmt-begin) -- alias for (snapshot)"},
+    {"xact-clock-start", cfun_xact_clock_start,
+     "(xact-clock-start) -- start the clock of the transaction begun next"},
     {"xact-time", cfun_xact_time,
      "(xact-time) -- the start time of the transaction, a timestamptz"},
     {"cat-epoch", cfun_cat_epoch,

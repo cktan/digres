@@ -18,6 +18,7 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include "ty_datetime.h"
+#include "ty_timezone.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -1732,17 +1733,18 @@ static void dt_set_extra_timezone(ty_dtin_extra_t *extra, const char *name) {
   extra->timezone = extra->buf;
 }
 
-/* The transaction's time in the session's zone: false if the host has no clock.
+/*
+ * The transaction's time in the session's zone: false if the thread has no
+ * transaction time or no session zone (ty_xact_now).
  */
 static bool dt_now(struct pg_tm *tm, fsec_t *fsec, int *tzp) {
   ty_tm_t t;
   int32_t f;
   int tz;
 
-  if (g_zone == nullptr || g_zone->now == nullptr) {
+  if (ty_xact_now(&t, &f, &tz) != 0) {
     return false;
   }
-  g_zone->now(g_zone->ctx, &t, &f, &tz);
   tm->tm_year = t.year;
   tm->tm_mon = t.mon;
   tm->tm_mday = t.mday;

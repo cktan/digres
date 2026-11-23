@@ -140,6 +140,13 @@ static inline void ty_free(void *ptr) {
 void ty_set_xact_clock(const int64_t *start);
 
 /*
+ * The calling thread's pointer to the host's clock, as it was set; NULL for
+ * none. A host with more than one clock on a thread reads it to see whose
+ * clock ty reads, as sm does with its own sessions.
+ */
+const int64_t *ty_xact_clock(void);
+
+/*
  * The start time of the calling thread's transaction, in *out. Fails with
  * TY_ERR_INVALID when the thread has no clock, or its clock is not set (a
  * value of INT64_MIN means a transaction has not started).

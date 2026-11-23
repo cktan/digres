@@ -9,10 +9,12 @@
  */
 #include <string.h>
 
+#include <memory>
 #include <string>
 
 #include "doctest.h"
 #include "ty_datetime.h"
+#include "ty_timezone.h"
 
 // Verify the calendar at the epochs.
 // 1. 2000-01-01 is Julian day 2451545, a Saturday (6).
@@ -163,14 +165,27 @@ const void *hook_zone(void *, const char *name) {
 
 int hook_zone_fixed(void *, const void *, long *) { return 0; }
 
-void hook_now(void *, ty_tm_t *tm, int32_t *fsec, int *tz) {
-  *tm = {2030, 12, 31, 23, 59, 58};
-  *fsec = 500000;
-  *tz = 18000;
-}
+const ty_dtzone_t kHost = {nullptr,         hook_abbrev, hook_zone,
+                           hook_zone_fixed, nullptr,     nullptr};
 
-const ty_dtzone_t kHost = {nullptr,  hook_abbrev, hook_zone, hook_zone_fixed,
-                           hook_now, nullptr,     nullptr};
+/*
+ * The clock of the transaction these tests read: 2031-01-01 04:59:58.5 UTC,
+ * which is 2030-12-31 23:59:58.5 in a zone 18000 seconds west of Greenwich,
+ * the session's zone. Each test that reads it makes one, and the destructor
+ * gives the thread no clock.
+ */
+struct txn_clock_t {
+  int64_t value = INT64_C(978325198500000);
+
+  txn_clock_t() {
+    ty_set_xact_clock(&value);
+    ty_set_session_zone(ty_tz_from_offset(18000));
+  }
+  ~txn_clock_t() {
+    ty_set_xact_clock(nullptr);
+    ty_set_session_zone(nullptr);
+  }
+};
 
 } // namespace
 
@@ -186,6 +201,7 @@ TEST_CASE("the text in of date and time asks the host for zones and clock") {
   int32_t d;
   int64_t t;
   int32_t today;
+  std::unique_ptr<txn_clock_t> clock(new txn_clock_t());
 
   // 1. With a clock, today, tomorrow, yesterday and now read it.
   CHECK(0 == ty_date_make(2030, 12, 31, &today));
@@ -228,7 +244,8 @@ TEST_CASE("the text in of date and time asks the host for zones and clock") {
   CHECK(std::string("Nowhere/Land") == x.timezone);
   CHECK(std::string("bad") == x.abbrev);
 
-  // 5. Without hooks, no zone word and no clock word is known.
+  // 5. Without hooks, no zone word is known; without a clock, no clock word.
+  clock.reset();
   CHECK(0 == ty_timestamp_parse("2000-01-31 04:05", TY_DATEORDER_MDY, nullptr,
                                 &t, &dterr, &x));
   CHECK(-1 == ty_timestamp_parse("2000-01-31 04:05 pst", TY_DATEORDER_MDY,
@@ -289,8 +306,8 @@ int off_zone_fixed(void *, const void *, long *) { return 0; }
 // 6. With no offset hook, the zone of the text only, and UTC otherwise.
 TEST_CASE("the text in of timestamptz and timetz asks the host for offsets") {
   offset_log_t log;
-  ty_dtzone_t host = {&log,     hook_abbrev, hook_zone,        off_zone_fixed,
-                      hook_now, off_offset,  off_abbrev_offset};
+  ty_dtzone_t host = {&log,           hook_abbrev, hook_zone,
+                      off_zone_fixed, off_offset,  off_abbrev_offset};
   int dterr;
   ty_dtin_extra_t x;
   int64_t t, local;

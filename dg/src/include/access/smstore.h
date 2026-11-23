@@ -208,6 +208,7 @@ extern void *smstore_view_save(void);
 extern void *smstore_view_resume(void *view);
 extern void smstore_view_end(void *outer);
 extern void smstore_view_free(void *view);
+extern void smstore_xact_clock_start(void);
 extern int64_t smstore_xact_start(void);
 extern void smstore_commit(void);
 extern void smstore_abort(void);

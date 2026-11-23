@@ -232,7 +232,10 @@ void reset(sm1::session_t *s) {
   }
   // No active transaction, and none of its state.
   s->active = false;
-  s->xact_start = INT64_MIN;
+  // A time the host started stays: sm's own transactions end here too.
+  if (!s->clock_hosted) {
+    s->xact_start = INT64_MIN;
+  }
   s->xid = 0;
   s->seq = 0;
   s->seq_hwm = 0;
@@ -736,10 +739,20 @@ int begin(sm1::session_t *s, sm1::xctlevel_t level, bool read_only) {
   // committed also counts in the watermark at this one, for
   // its whole life (../GC.md §1).
   s->snapshot_ts = db_take_snapshot(s->db);
-  // The first snapshot of the transaction gives it its start time.
-  s->xact_start = wall_clock_timestamptz();
-  // Let ty on this thread read the start time through the session.
-  ty_set_xact_clock(&s->xact_start);
+  // The start time is the time the host started the clock, or else the time
+  // of the first snapshot of the transaction.
+  if (!s->clock_hosted) {
+    s->xact_start = wall_clock_timestamptz();
+  }
+  // Let ty on this thread read the start time through the session, unless
+  // ty reads the clock of a session that has a transaction or a host.
+  if (!s->clock_hosted) {
+    const int64_t *held = ty_xact_clock();
+
+    if (nullptr == held || INT64_MIN == *held) {
+      ty_set_xact_clock(&s->xact_start);
+    }
+  }
   // The snapshot now counts in the watermark.
   s->snapshot_registered = true;
   // Give a SERIALIZABLE transaction its SSI node.
@@ -1881,11 +1894,33 @@ int sm1::begin(sm1::session_t *session, sm1::xctlevel_t level, bool read_only) {
   return ::begin(session, level, read_only);
 }
 
-/* The start time of the active transaction. */
+/* Start the clock of the transaction that the host begins next. */
+int sm1::xact_clock_start(sm1::session_t *session) {
+  // Reject a NULL session.
+  if (!session) {
+    return set_error(sm1::SM_ERR_INVALID, "xact_clock_start: session is NULL");
+  }
+  // The clock of a running transaction does not change.
+  if (session->active) {
+    return set_error(sm1::SM_ERR_INTRANS, "a transaction is already active");
+  }
+  session->xact_start = wall_clock_timestamptz();
+  // From now on the host owns the time: sm's own transactions keep it.
+  session->clock_hosted = true;
+  // Let ty on this thread read the start time through the session.
+  ty_set_xact_clock(&session->xact_start);
+  return 0;
+}
+
+/* The start time of the transaction, started by the host or by begin. */
 int sm1::xact_start(sm1::session_t *session, int64_t *out) {
-  // Require an active transaction: it has the start time.
-  if (xct_check_active(session) != 0) {
-    return -1;
+  // Reject a NULL session.
+  if (!session) {
+    return set_error(sm1::SM_ERR_INVALID, "xact_start: session is NULL");
+  }
+  // Require a start time: from the clock, or from a transaction.
+  if (INT64_MIN == session->xact_start) {
+    return set_error(sm1::SM_ERR_NOTRANS, "no transaction has a start time");
   }
   *out = session->xact_start;
   return 0;

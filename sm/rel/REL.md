@@ -179,13 +179,20 @@ active. `(stmt-begin)` is supported as an alias.
 (snapshot)
 ```
 
-### `(xact-time)`
-Gives the start time of the transaction as a `timestamptz`:
-microseconds since 2000-01-01 00:00:00 UTC. sm reads the wall
-clock when the transaction takes its first snapshot. The time
-is the same in every statement of the transaction.
+### `(xact-clock-start)` and `(xact-time)`
+`(xact-clock-start)` starts the clock of the transaction begun
+next: sm reads the wall clock and keeps it, with no transaction
+and no snapshot. `(xact-time)` gives the start time of the
+transaction as a `timestamptz`: microseconds since 2000-01-01
+00:00:00 UTC. It is the time of `(xact-clock-start)`; with no
+such call, it is the wall clock when the transaction took its
+first snapshot. It is the same in every statement of the
+transaction, and after `(xact-clock-start)` it stays until the
+next `(xact-clock-start)`.
 
 ```janet
+(xact-clock-start)
+(begin :rc)
 (def t (xact-time))
 ```
 

@@ -234,16 +234,29 @@ int sm_commit(sm_session_t* session);
 int sm_abort(sm_session_t* session);
 
 /*
- * The start time of the active transaction, in *out, as a
- * timestamptz: microseconds since 2000-01-01 00:00:00 UTC. sm
- * reads the wall clock when the transaction takes its first
- * snapshot, and the time does not change until the transaction
- * ends. ty reads the same time for the calling thread
- * (ty_xact_start), for the operations that depend on it, such as
- * "now". A host that begins the sm transaction late, as at its
- * first read, gets the time of that begin.
+ * Start the clock of the transaction the host begins next: sm reads
+ * the wall clock now and keeps it as the start time. A host whose
+ * transaction begins before its first call into sm, as digres's
+ * does, calls this when its own transaction begins; a function that
+ * reads the time before sm_begin then has one. sm_begin keeps that
+ * time, and so does each transaction sm makes for its own work on
+ * the session, until the next call. It starts no sm transaction and
+ * takes no snapshot.
  *
- * Errors: SM_ERR_NOTRANS.
+ * Errors: SM_ERR_INTRANS (a transaction is active).
+ */
+int sm_xact_clock_start(sm_session_t* session);
+
+/*
+ * The start time of the transaction, in *out, as a timestamptz:
+ * microseconds since 2000-01-01 00:00:00 UTC. It is the time of
+ * sm_xact_clock_start, or, with no such call, the wall clock when
+ * the transaction took its first snapshot. It does not change until
+ * the transaction ends. ty reads the same time for the calling
+ * thread (ty_xact_start), for the operations that depend on it,
+ * such as "now".
+ *
+ * Errors: SM_ERR_NOTRANS (no clock started and no transaction).
  */
 int sm_xact_time(sm_session_t* session, int64_t* out);
 

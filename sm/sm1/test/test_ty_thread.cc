@@ -17,6 +17,7 @@
 #include <thread>
 
 #include "doctest.h"
+#include "session.h"
 #include "sm0_arena.h"
 #include "sm1.h"
 #include "ty.h"
@@ -193,4 +194,129 @@ TEST_CASE("sm1 owns the start time of a transaction, and ty reads it") {
   REQUIRE(0 == sm1::begin(s, sm1::xctlevel_t::read_committed));
   REQUIRE(0 == sm1::closedb(s));
   CHECK(-1 == ty_xact_start(&ts));
+}
+
+// Verify that a host may start the clock before it begins the transaction:
+// the time is there at once, for sm1 and for ty, and the session keeps it
+// through its own transactions, such as the work of a reaper.
+// 1. Start the clock: sm1::xact_start and ty_xact_start give a time between
+//    two readings of the wall clock, with no transaction.
+// 2. Wait, then begin a transaction: the time is the one of the start.
+// 3. Starting the clock inside the transaction fails with SM_ERR_INTRANS.
+// 4. Commit: the time stays; a transaction of sm's own work on the session
+//    (store_work_begin and store_work_end) does not change it either.
+// 5. Start the clock again: the time is later.
+// 6. Close the session: ty has no clock.
+TEST_CASE("a host starts the clock of a transaction before sm1::begin") {
+  home_t home;
+  REQUIRE(sm1::mkdb(home.env(), "db", nullptr) == 0);
+  sm1::session_t *s = opendb(home.env(), "db", nullptr);
+  REQUIRE(s);
+  int64_t ts = 0, tt = 0, started = 0;
+
+  // A store for the work of 4, made before the clock starts.
+  REQUIRE(0 == sm1::begin(s, sm1::xctlevel_t::read_committed));
+  uint64_t store = mkstore(s);
+  REQUIRE(0 == sm1::commit(s));
+
+  // 1. Start the clock: both give a time between two readings.
+  int64_t before = now_timestamptz();
+  REQUIRE(0 == sm1::xact_clock_start(s));
+  int64_t after = now_timestamptz();
+  REQUIRE(0 == sm1::xact_start(s, &started));
+  CHECK(started >= before);
+  CHECK(started <= after);
+  REQUIRE(0 == ty_xact_start(&tt));
+  CHECK(tt == started);
+
+  // 2. Wait, then begin a transaction: the time is the one of the start.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  REQUIRE(0 == sm1::begin(s, sm1::xctlevel_t::read_committed));
+  REQUIRE(0 == sm1::xact_start(s, &ts));
+  CHECK(ts == started);
+  REQUIRE(0 == ty_xact_start(&tt));
+  CHECK(tt == started);
+
+  // 3. Starting the clock inside the transaction fails with SM_ERR_INTRANS.
+  CHECK(-1 == sm1::xact_clock_start(s));
+  CHECK(sm1::errnum() == sm1::SM_ERR_INTRANS);
+
+  // 4. Commit: the time stays; sm's own work on the session keeps it too.
+  REQUIRE(0 == sm1::commit(s));
+  REQUIRE(0 == sm1::xact_start(s, &ts));
+  CHECK(ts == started);
+  REQUIRE(0 == sm1::store_work_begin(s, store));
+  sm1::store_work_end(s);
+  REQUIRE(0 == sm1::xact_start(s, &ts));
+  CHECK(ts == started);
+  REQUIRE(0 == ty_xact_start(&tt));
+  CHECK(tt == started);
+
+  // 5. Start the clock again: the time is later.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  REQUIRE(0 == sm1::xact_clock_start(s));
+  REQUIRE(0 == sm1::xact_start(s, &ts));
+  CHECK(ts > started);
+
+  // 6. Close the session: ty has no clock.
+  REQUIRE(0 == sm1::closedb(s));
+  CHECK(-1 == ty_xact_start(&tt));
+}
+
+// Verify that a second session on a thread does not take or clear the clock
+// that ty reads for a session whose host started it, as the sessions sm opens
+// on its caller's thread for its own work do not.
+// 1. Open two sessions, and start the clock of the first.
+// 2. Begin and commit a transaction on the second: ty still reads the first's.
+// 3. Close the second: ty still reads the first's.
+// 4. With no host clock, a second session that begins takes ty's clock only
+//    when the one ty reads has no transaction.
+// 5. Close the first: ty has no clock.
+TEST_CASE("a second session on a thread does not disturb the host's clock") {
+  home_t home;
+  REQUIRE(sm1::mkdb(home.env(), "db", nullptr) == 0);
+  sm1::session_t *host = opendb(home.env(), "db", nullptr);
+  sm1::session_t *other = opendb(home.env(), "db", nullptr);
+  REQUIRE(host);
+  REQUIRE(other);
+  int64_t started = 0, tt = 0, t_other = 0;
+
+  // 1. Open two sessions, and start the clock of the first.
+  REQUIRE(0 == sm1::xact_clock_start(host));
+  REQUIRE(0 == sm1::xact_start(host, &started));
+
+  // 2. Begin and commit a transaction on the second: ty still reads the
+  // first's.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  REQUIRE(0 == sm1::begin(other, sm1::xctlevel_t::read_committed));
+  REQUIRE(0 == sm1::xact_start(other, &t_other));
+  CHECK(t_other > started);
+  REQUIRE(0 == ty_xact_start(&tt));
+  CHECK(tt == started);
+  REQUIRE(0 == sm1::commit(other));
+  REQUIRE(0 == ty_xact_start(&tt));
+  CHECK(tt == started);
+
+  // 3. Close the second: ty still reads the first's.
+  REQUIRE(0 == sm1::closedb(other));
+  REQUIRE(0 == ty_xact_start(&tt));
+  CHECK(tt == started);
+
+  // 4. A session of a host that never starts a clock is the only one that
+  //    takes ty's clock, and only when ty has none to read.
+  ty_set_xact_clock(nullptr);
+  sm1::session_t *plain = opendb(home.env(), "db", nullptr);
+  REQUIRE(plain);
+  REQUIRE(0 == sm1::begin(plain, sm1::xctlevel_t::read_committed));
+  REQUIRE(0 == ty_xact_start(&tt));
+  REQUIRE(0 == sm1::xact_start(plain, &t_other));
+  CHECK(tt == t_other);
+  REQUIRE(0 == sm1::commit(plain));
+  CHECK(-1 == ty_xact_start(&tt));
+  REQUIRE(0 == sm1::closedb(plain));
+
+  // 5. Close the first: ty has no clock.
+  ty_set_xact_clock(&host->xact_start);
+  REQUIRE(0 == sm1::closedb(host));
+  CHECK(-1 == ty_xact_start(&tt));
 }

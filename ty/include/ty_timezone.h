@@ -225,4 +225,22 @@ int ty_tz_file(const char *name, char *canonname, const unsigned char **data,
  */
 int ty_tz_use_data(const void *pack, size_t size);
 
+/*
+ * The session's zone, a setting of the calling thread, as the alloc and free
+ * functions are (ty_set_alloc). The host sets it where its time zone setting
+ * changes, and ty reads it for the operations of "the session's zone": the
+ * time of the transaction as local fields, CURRENT_TIME and the like. NULL
+ * means none. The zone must stay valid while it is set.
+ */
+void ty_set_session_zone(const ty_tz_t *tz);
+const ty_tz_t *ty_session_zone(void);
+
+/*
+ * The start time of the transaction (ty_xact_start) in the session's zone
+ * (GetCurrentTimeUsec): the fields, the microseconds, and the offset west of
+ * Greenwich. west may be NULL. It fails with TY_ERR_INVALID if the thread has
+ * no transaction time, or no session zone.
+ */
+int ty_xact_now(ty_tm_t *tm, int32_t *fsec, int *west);
+
 #endif

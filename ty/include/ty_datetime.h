@@ -557,10 +557,11 @@ size_t ty_interval_format(const ty_itm_t *itm, int style, char *out);
  * The text in of date, time and timestamp, as date_in, time_in and
  * timestamp_in read it, up to the typmod (ty_time_adjust_typmod and
  * ty_timestamp_adjust_typmod do that). dateorder is the session's
- * (TY_DATEORDER_*). The words of time zones and the clock are the host's:
- * zone gives its hooks, and may be NULL, for a host that has none. Then no
- * abbreviation and no zone name is known, and "now", "today", "tomorrow" and
- * "yesterday" are bad.
+ * (TY_DATEORDER_*). The words of time zones are the host's: zone gives its
+ * hooks, and may be NULL, for a host that has none. Then no abbreviation and
+ * no zone name is known. The clock is not the host's hook: "now", "today",
+ * "tomorrow" and "yesterday" read the thread's transaction time in its
+ * session zone (ty_xact_now), and are bad if the thread has none.
  *
  * On an error the result is -1. If the text is bad, the error is
  * TY_ERR_INVALID, and *dterr is PostgreSQL's code for it (TY_DTERR_*), with
@@ -614,8 +615,6 @@ typedef struct ty_dtin_extra_t {
  *   opaque pointer, or NULL.
  * zone_fixed: Does the zone have one offset at all times? If so, set
  *   *gmtoff to it in seconds east of Greenwich, and return 1.
- * now: The time of the transaction in the session's zone: the fields, the
- *   microseconds, and the offset in seconds west of Greenwich.
  * offset: The offset in seconds west of Greenwich of a zone at a local time
  *   (what PostgreSQL's DetermineTimeZoneOffset gives); tz is the zone from
  *   the hook zone, or NULL for the session's zone. A time of day with no
@@ -631,7 +630,6 @@ typedef struct ty_dtzone_t {
                 int *offset, const void **tz, ty_dtin_extra_t *extra);
   const void *(*zone)(void *ctx, const char *name);
   int (*zone_fixed)(void *ctx, const void *tz, long *gmtoff);
-  void (*now)(void *ctx, ty_tm_t *tm, int32_t *fsec, int *tz);
   int (*offset)(void *ctx, const ty_tm_t *tm, const void *tz);
   int (*abbrev_offset)(void *ctx, const ty_tm_t *tm, const char *abbrev,
                        const void *tz);
