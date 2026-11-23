@@ -243,4 +243,16 @@ const ty_tz_t *ty_session_zone(void);
  */
 int ty_xact_now(ty_tm_t *tm, int32_t *fsec, int *west);
 
+/*
+ * CURRENT_DATE, CURRENT_TIME(n) and LOCALTIME(n): the time of the transaction
+ * (ty_xact_start) in the session's zone, as the date, as a timetz with the
+ * zone's offset, and as a time. A typmod of 0 or more rounds the time to that
+ * many digits (ty_time_adjust_typmod); below 0 leaves it. They fail as
+ * ty_xact_now does. The fields are kept for the instant and the zone, so a
+ * call for each row costs a compare.
+ */
+int ty_current_date(int32_t *out);
+int ty_current_time(int32_t typmod, ty_timetz_t *out);
+int ty_local_time(int32_t typmod, int64_t *out);
+
 #endif

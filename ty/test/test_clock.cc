@@ -137,3 +137,63 @@ TEST_CASE("ty_xact_now gives the transaction time in the session's zone") {
   });
   t.join();
 }
+
+// Verify CURRENT_DATE, CURRENT_TIME and LOCALTIME in the session's zone, the
+// typmod, and that the cache follows the instant and the zone.
+// 1. With a clock of 2024-07-04 12:34:56.789012 UTC and the zone UTC, the date
+//    is 2024-07-04, the time of day is 12:34:56.789012, and the offset is 0.
+// 2. A typmod of 2 rounds the time to 12:34:56.79; a typmod below 0 does not.
+// 3. In America/New_York, the date and the time are those of 08:34:56 in
+//    daylight time, and the offset is 14400.
+// 4. A later instant gives a later time; the date moves at local midnight.
+// 5. With no clock, each call fails.
+TEST_CASE("CURRENT_DATE, CURRENT_TIME and LOCALTIME read the transaction time") {
+  std::thread t([] {
+    int64_t clock = 773411696789012;
+    int32_t d, want;
+    ty_timetz_t tt;
+    int64_t lt;
+    ty_set_xact_clock(&clock);
+    ty_set_session_zone(ty_tz_find("UTC"));
+    // 1. UTC.
+    REQUIRE(0 == ty_current_date(&d));
+    REQUIRE(0 == ty_date_make(2024, 7, 4, &want));
+    CHECK(want == d);
+    REQUIRE(0 == ty_current_time(-1, &tt));
+    CHECK(((12 * 60 + 34) * 60 + 56) * INT64_C(1000000) + 789012 == tt.time);
+    CHECK(0 == tt.zone);
+    REQUIRE(0 == ty_local_time(-1, &lt));
+    CHECK(tt.time == lt);
+    // 2. The typmod.
+    REQUIRE(0 == ty_current_time(2, &tt));
+    CHECK(((12 * 60 + 34) * 60 + 56) * INT64_C(1000000) + 790000 == tt.time);
+    REQUIRE(0 == ty_local_time(0, &lt));
+    CHECK(((12 * 60 + 34) * 60 + 57) * INT64_C(1000000) == lt);
+    // 3. America/New_York.
+    ty_set_session_zone(ty_tz_find("America/New_York"));
+    REQUIRE(0 == ty_current_time(-1, &tt));
+    CHECK(((8 * 60 + 34) * 60 + 56) * INT64_C(1000000) + 789012 == tt.time);
+    CHECK(14400 == tt.zone);
+    REQUIRE(0 == ty_current_date(&d));
+    CHECK(want == d);
+    // 4. 2024-07-05 03:30:00 UTC is 2024-07-04 23:30 in New York, the same
+    //    date; 2024-07-05 04:30:00 UTC is 2024-07-05 00:30, the next date.
+    clock = INT64_C(773465400000000);
+    REQUIRE(0 == ty_current_date(&d));
+    CHECK(want == d);
+    REQUIRE(0 == ty_current_time(-1, &tt));
+    CHECK((23 * 60 + 30) * INT64_C(60000000) == tt.time);
+    clock = INT64_C(773469000000000);
+    REQUIRE(0 == ty_current_date(&d));
+    CHECK(want + 1 == d);
+    REQUIRE(0 == ty_current_time(-1, &tt));
+    CHECK(30 * INT64_C(60000000) == tt.time);
+    // 5. With no clock, each call fails.
+    ty_set_xact_clock(nullptr);
+    CHECK(-1 == ty_current_date(&d));
+    CHECK(-1 == ty_current_time(-1, &tt));
+    CHECK(-1 == ty_local_time(-1, &lt));
+    ty_set_session_zone(nullptr);
+  });
+  t.join();
+}

@@ -219,46 +219,22 @@ void EncodeSpecialDate(DateADT dt, char *str) {
  * GetSQLCurrentDate -- implements CURRENT_DATE
  */
 DateADT GetSQLCurrentDate(void) {
-  struct pg_tm tm;
+  int32 date;
 
-  static thread_local /*LOCAL*/ int cache_year = 0;
-  static thread_local /*LOCAL*/ int cache_mon = 0;
-  static thread_local /*LOCAL*/ int cache_mday = 0;
-  static thread_local /*LOCAL*/ DateADT cache_date;
-
-  GetCurrentDateTime(&tm);
-
-  /*
-   * date2j involves several integer divisions; moreover, unless our session
-   * lives across local midnight, we don't really have to do it more than
-   * once.  So it seems worth having a separate cache here.
-   */
-  if (tm.tm_year != cache_year || tm.tm_mon != cache_mon ||
-      tm.tm_mday != cache_mday) {
-    cache_date =
-        date2j(tm.tm_year, tm.tm_mon, tm.tm_mday) - POSTGRES_EPOCH_JDATE;
-    cache_year = tm.tm_year;
-    cache_mon = tm.tm_mon;
-    cache_mday = tm.tm_mday;
-  }
-
-  return cache_date;
+  /* ty has the time of the transaction in the session's zone, kept per row */
+  if (ty_current_date(&date))
+    datetime_ty_error();
+  return date;
 }
 
 /*
  * GetSQLCurrentTime -- implements CURRENT_TIME, CURRENT_TIME(n)
  */
 TimeTzADT *GetSQLCurrentTime(int32 typmod) {
-  TimeTzADT *result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
-  int tz;
+  TimeTzADT *result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
 
-  GetCurrentTimeUsec(tm, &fsec, &tz);
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-  tm2timetz(tm, fsec, tz, result);
-  AdjustTimeForTypmod(&(result->time), typmod);
+  if (ty_current_time(typmod, (ty_timetz_t *)result))
+    datetime_ty_error();
   return result;
 }
 
@@ -266,15 +242,10 @@ TimeTzADT *GetSQLCurrentTime(int32 typmod) {
  * GetSQLLocalTime -- implements LOCALTIME, LOCALTIME(n)
  */
 TimeADT GetSQLLocalTime(int32 typmod) {
-  TimeADT result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
-  int tz;
+  int64 result;
 
-  GetCurrentTimeUsec(tm, &fsec, &tz);
-
-  tm2time(tm, fsec, &result);
-  AdjustTimeForTypmod(&result, typmod);
+  if (ty_local_time(typmod, &result))
+    datetime_ty_error();
   return result;
 }
 
