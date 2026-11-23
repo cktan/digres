@@ -192,10 +192,14 @@ Each file's notices identify the terms that apply to it.
 | Original code in `dg/` | MIT | [`LICENSE`](LICENSE) and file headers |
 | `dg/src/backend/regex/` | Henry Spencer's and Tcl's licenses | [`dg/src/backend/regex/COPYRIGHT`](dg/src/backend/regex/COPYRIGHT) |
 | PostgreSQL-derived grammar, scanner, nodes and helpers in `sq/` | PostgreSQL License for upstream portions; MIT for this project's original additions | [`sq/COPYRIGHT`](sq/COPYRIGHT), [`LICENSE`](LICENSE), and file headers |
-| Ryu files in `dg/src/common/`, `dg/src/include/common/shortest_dec.h` and `sm/sm2/src/ryu/` | PostgreSQL License for PostgreSQL portions; Boost Software License 1.0 for Ryu; MIT for this project's original additions where marked | [`dg/COPYRIGHT`](dg/COPYRIGHT), [`LICENSES/BSL-1.0.txt`](LICENSES/BSL-1.0.txt), and file headers |
-| `dg/src/timezone/localtime.c`, `private.h` and `tzfile.h` | Upstream code is public domain; this project's original additions are MIT where marked | File headers and [`LICENSE`](LICENSE) |
+| Ryu files in `dg/src/common/`, `dg/src/include/common/shortest_dec.h`, `sm/sm2/src/ryu/` and `ty/src/ryu/` | PostgreSQL License for PostgreSQL portions; Boost Software License 1.0 for Ryu; MIT for this project's original additions where marked | [`dg/COPYRIGHT`](dg/COPYRIGHT), [`LICENSES/BSL-1.0.txt`](LICENSES/BSL-1.0.txt), and file headers |
+| `dg/src/timezone/private.h` | Upstream code is public domain; this project's original additions are MIT where marked | File header and [`LICENSE`](LICENSE) |
 | `dg/src/timezone/strftime.c` | BSD-3-Clause for upstream code; MIT for this project's original additions where marked | [File notice](dg/src/timezone/strftime.c) and [`LICENSE`](LICENSE) |
-| `ext/doctest/doctest.h`, by Viktor Kirilov, with an option of this project's added | MIT | the header of the file |
+| PostgreSQL-derived code in `ty/`: `src/dtparse.cc`, `src/hash.cc` and `include/ty_hash.h` | PostgreSQL License for upstream portions; MIT for this project's original additions | [`ty/COPYRIGHT`](ty/COPYRIGHT), [`LICENSE`](LICENSE), and file headers |
+| `ty/src/timezone.cc`, from PostgreSQL's copy of the IANA tz library | Public domain for the IANA code; PostgreSQL License for PostgreSQL's changes; MIT for this project's original additions | [`ty/COPYRIGHT`](ty/COPYRIGHT) and the file header |
+| `ty/src/tzdata.cc`, the IANA time zone data that PostgreSQL's `zic` compiled | Public domain | The file header and [`ty/TZDATA.md`](ty/TZDATA.md) |
+| `ext/doctest/doctest.h`, by Viktor Kirilov, with an option of this project's added | MIT | [`ext/doctest/LICENSE.txt`](ext/doctest/LICENSE.txt) and the header of the file |
+| RocksDB, downloaded into `ext/` at build time and linked into the digres binary; not in the repository | Apache License 2.0, of RocksDB's choice of Apache 2.0 or GPLv2; BSD-3-Clause for its code from LevelDB | A binary release carries RocksDB's `LICENSE.Apache` and `LICENSE.leveldb` |
 | `dg/test/slt/sqlite/`, SQLite's sqllogictest | public domain, or a license of the user's choice | [`dg/test/slt/sqlite/COPYRIGHT.md`](dg/test/slt/sqlite/COPYRIGHT.md) |
 
 RocksDB, ICU, OpenSSL and Janet are linked, not copied into the
