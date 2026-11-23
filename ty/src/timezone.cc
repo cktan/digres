@@ -2507,6 +2507,86 @@ int ty_date_to_timestamptz(const ty_tz_t *tz, int32_t d, int64_t *out,
   return 0;
 }
 
+/* timestamptz_timetz: see ty_timezone.h. */
+int ty_timestamptz_to_timetz(const ty_tz_t *tz, int64_t ts, ty_timetz_t *out) {
+  ty_tm_t tm;
+  int32_t fsec;
+  int west;
+
+  if (ty_timestamptz_to_local(tz, ts, &tm, &fsec, &west, nullptr, nullptr) !=
+      0) {
+    return -1;
+  }
+  out->time = (((int64_t)tm.hour * 60 + tm.min) * 60 + tm.sec) *
+                  TY_USECS_PER_SEC +
+              fsec;
+  out->zone = west;
+  return 0;
+}
+
+/* timetz AT TIME ZONE a fixed offset: see ty_timezone.h. */
+int ty_timetz_at_offset(const ty_timetz_t *t, int west, ty_timetz_t *out) {
+  const int64_t day = TY_USECS_PER_HOUR * 24;
+  int64_t time = t->time + (int64_t)(t->zone - west) * TY_USECS_PER_SEC;
+
+  /* C99 modulo has the wrong sign convention for negative input */
+  while (time < 0) {
+    time += day;
+  }
+  if (time >= day) {
+    time %= day;
+  }
+  out->time = time;
+  out->zone = west;
+  return 0;
+}
+
+/* timetz AT TIME ZONE a zone: see ty_timezone.h. */
+int ty_timetz_at_zone(const ty_timetz_t *t, const ty_tz_t *tz,
+                      ty_timetz_t *out) {
+  ty_tm_t tm;
+  int32_t fsec;
+  int64_t now;
+  int west;
+
+  if (ty_xact_start(&now) != 0) {
+    return -1;
+  }
+  /* the offset the zone has now */
+  if (ty_timestamptz_to_local(tz, now, &tm, &fsec, &west, nullptr, nullptr) !=
+      0) {
+    return -1;
+  }
+  return ty_timetz_at_offset(t, west, out);
+}
+
+/* timetz AT TIME ZONE a dynamic abbreviation: see ty_timezone.h. */
+int ty_timetz_at_abbrev(const ty_timetz_t *t, const ty_tz_t *tz,
+                        const char *abbrev, ty_timetz_t *out) {
+  ty_tm_t tm;
+  int32_t fsec;
+  int64_t now;
+  int west, isdst, local_west;
+  pg_time_t utime;
+
+  if (ty_xact_start(&now) != 0) {
+    return -1;
+  }
+  utime = now / 1000000 +
+          (int64_t)(TY_POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY;
+  /* if the abbreviation is in the zone's data, its offset then */
+  if (ty_tz_abbrev_at(tz, utime, abbrev, &west, &isdst)) {
+    return ty_timetz_at_offset(t, west, out);
+  }
+  /* else the zone's own offset now, from the local time */
+  if (ty_timestamptz_to_local(tz, now, &tm, &fsec, &local_west, nullptr,
+                              nullptr) != 0) {
+    return -1;
+  }
+  west = ty_tz_offset_for_local(tz, &tm, &isdst, nullptr);
+  return ty_timetz_at_offset(t, west, out);
+}
+
 /* timestamptz_date: see ty_timezone.h. */
 int ty_timestamptz_to_date(const ty_tz_t *tz, int64_t ts, int32_t *out) {
   ty_tm_t tm;

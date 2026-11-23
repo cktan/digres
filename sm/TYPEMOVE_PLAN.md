@@ -888,8 +888,35 @@ copied from PostgreSQL keeps its copyright notice
        time of the first statement, so `now() =
        statement_timestamp()` is true there in the first
        statement, and false here.
-     - Not moved yet: `time_timetz`, `timetz_zone`, and
-       CURRENT_TIME and LOCALTIME. They can call `ty_xact_now`.
+     - Moved after it (2026-11-23): CURRENT_DATE, CURRENT_TIME
+       and LOCALTIME (`ty_current_date`, `ty_current_time`,
+       `ty_local_time`); `time_timetz`, `timestamptz_timetz` and
+       `datetimetz_timestamptz` (`ty_time_to_timetz`,
+       `ty_timestamptz_to_timetz`, `ty_datetimetz_to_timestamptz`);
+       and timetz AT TIME ZONE (`ty_timetz_at_offset`,
+       `ty_timetz_at_zone`, `ty_timetz_at_abbrev`). ty keeps the
+       fields of the transaction's time for the instant and the
+       zone, so CURRENT_DATE for a row costs a compare.
+     - What stays in digres: the lookup of a zone's name, as its
+       abbreviations are a setting, the text of the errors, and
+       `timetz_at_local`, which goes through the zone's name as
+       PostgreSQL's does.
+     - Tests: the ty cases of the zones, the gap and the fold of a
+       daylight change, and the range; and
+       `dg/test/select_current_ops.sql`, which holds each answer
+       to `now()` in the same zone, so that it does not depend on
+       the day, and which the digres before the move passes.
+     - Measured by callgrind, 2,000 rows, instructions a statement
+       (old, new): `d = current_date` 4,218,216 and 4,156,512
+       (-1.46%); `localtime > time '00:00:00'` 3,837,673 and
+       3,838,062 (+0.01%); `current_time > timetz
+       '00:00:00+00'` 3,838,029 and 3,838,459 (+0.01%);
+       `ts::timetz` 5,440,196 and 5,352,395 (-1.61%);
+       `ts::time::timetz` 6,112,307 and 6,034,524 (-1.27%); `ts::timetz
+       at time zone 'America/New_York'` 9,002,068 and 8,890,448
+       (-1.24%); `d + timetz` 4,035,802 and 4,026,753 (-0.22%). The
+       first version of `d + timetz` called a function of ty, and
+       read 1.04% more; it is in line now.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

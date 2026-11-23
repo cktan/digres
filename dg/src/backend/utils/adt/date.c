@@ -219,46 +219,22 @@ void EncodeSpecialDate(DateADT dt, char *str) {
  * GetSQLCurrentDate -- implements CURRENT_DATE
  */
 DateADT GetSQLCurrentDate(void) {
-  struct pg_tm tm;
+  int32 date;
 
-  static thread_local /*LOCAL*/ int cache_year = 0;
-  static thread_local /*LOCAL*/ int cache_mon = 0;
-  static thread_local /*LOCAL*/ int cache_mday = 0;
-  static thread_local /*LOCAL*/ DateADT cache_date;
-
-  GetCurrentDateTime(&tm);
-
-  /*
-   * date2j involves several integer divisions; moreover, unless our session
-   * lives across local midnight, we don't really have to do it more than
-   * once.  So it seems worth having a separate cache here.
-   */
-  if (tm.tm_year != cache_year || tm.tm_mon != cache_mon ||
-      tm.tm_mday != cache_mday) {
-    cache_date =
-        date2j(tm.tm_year, tm.tm_mon, tm.tm_mday) - POSTGRES_EPOCH_JDATE;
-    cache_year = tm.tm_year;
-    cache_mon = tm.tm_mon;
-    cache_mday = tm.tm_mday;
-  }
-
-  return cache_date;
+  /* ty has the time of the transaction in the session's zone, kept per row */
+  if (ty_current_date(&date))
+    datetime_ty_error();
+  return date;
 }
 
 /*
  * GetSQLCurrentTime -- implements CURRENT_TIME, CURRENT_TIME(n)
  */
 TimeTzADT *GetSQLCurrentTime(int32 typmod) {
-  TimeTzADT *result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
-  int tz;
+  TimeTzADT *result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
 
-  GetCurrentTimeUsec(tm, &fsec, &tz);
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-  tm2timetz(tm, fsec, tz, result);
-  AdjustTimeForTypmod(&(result->time), typmod);
+  if (ty_current_time(typmod, (ty_timetz_t *)result))
+    datetime_ty_error();
   return result;
 }
 
@@ -266,15 +242,10 @@ TimeTzADT *GetSQLCurrentTime(int32 typmod) {
  * GetSQLLocalTime -- implements LOCALTIME, LOCALTIME(n)
  */
 TimeADT GetSQLLocalTime(int32 typmod) {
-  TimeADT result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
-  int tz;
+  int64 result;
 
-  GetCurrentTimeUsec(tm, &fsec, &tz);
-
-  tm2time(tm, fsec, &result);
-  AdjustTimeForTypmod(&result, typmod);
+  if (ty_local_time(typmod, &result))
+    datetime_ty_error();
   return result;
 }
 
@@ -1770,19 +1741,11 @@ Datum timetz_time(PG_FUNCTION_ARGS) {
 
 Datum time_timetz(PG_FUNCTION_ARGS) {
   TimeADT time = PG_GETARG_TIMEADT(0);
-  TimeTzADT *result;
-  struct pg_tm tt, *tm = &tt;
-  fsec_t fsec;
-  int tz;
+  TimeTzADT *result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
 
-  GetCurrentDateTime(tm);
-  time2tm(time, tm, &fsec);
-  tz = DetermineTimeZoneOffset(tm, session_timezone);
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-
-  result->time = time;
-  result->zone = tz;
+  /* the offset of the session's zone at the time, today: ty reads the clock */
+  if (ty_time_to_timetz(time, (ty_timetz_t *)result))
+    datetime_ty_error();
 
   PG_RETURN_TIMETZADT_P(result);
 }
@@ -1793,20 +1756,15 @@ Datum time_timetz(PG_FUNCTION_ARGS) {
 Datum timestamptz_timetz(PG_FUNCTION_ARGS) {
   TimestampTz timestamp = PG_GETARG_TIMESTAMP(0);
   TimeTzADT *result;
-  struct pg_tm tt, *tm = &tt;
-  int tz;
-  fsec_t fsec;
 
   if (TIMESTAMP_NOT_FINITE(timestamp))
     PG_RETURN_NULL();
 
-  if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
+  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
+  if (ty_timestamptz_to_timetz(session_timezone, timestamp,
+                               (ty_timetz_t *)result))
     ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
                     errmsg("timestamp out of range")));
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-
-  tm2timetz(tm, fsec, tz, result);
 
   PG_RETURN_TIMETZADT_P(result);
 }
@@ -1822,29 +1780,10 @@ Datum datetimetz_timestamptz(PG_FUNCTION_ARGS) {
   TimeTzADT *time = PG_GETARG_TIMETZADT_P(1);
   TimestampTz result;
 
-  if (DATE_IS_NOBEGIN(date))
-    TIMESTAMP_NOBEGIN(result);
-  else if (DATE_IS_NOEND(date))
-    TIMESTAMP_NOEND(result);
-  else {
-    /*
-     * Date's range is wider than timestamp's, so check for boundaries.
-     * Since dates have the same minimum values as timestamps, only upper
-     * boundary need be checked for overflow.
-     */
-    if (date >= (TIMESTAMP_END_JULIAN - POSTGRES_EPOCH_JDATE))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("date out of range for timestamp")));
-    result = date * USECS_PER_DAY + time->time + time->zone * USECS_PER_SEC;
-
-    /*
-     * Since it is possible to go beyond allowed timestamptz range because
-     * of time zone, check for allowed timestamp range after adding tz.
-     */
-    if (!IS_VALID_TIMESTAMP(result))
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("date out of range for timestamp")));
-  }
+  /* ty checks the date's range and the result's, with PostgreSQL's message */
+  if (ty_datetimetz_to_timestamptz(date, (const ty_timetz_t *)time, &result))
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("date out of range for timestamp")));
 
   PG_RETURN_TIMESTAMP(result);
 }
@@ -1973,14 +1912,15 @@ Datum extract_timetz(PG_FUNCTION_ARGS) {
 Datum timetz_zone(PG_FUNCTION_ARGS) {
   text *zone = PG_GETARG_TEXT_PP(0);
   TimeTzADT *t = PG_GETARG_TIMETZADT_P(1);
-  TimeTzADT *result;
-  int tz;
+  TimeTzADT *result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
   char tzname[TZ_STRLEN_MAX + 1];
   int type, val;
   pg_tz *tzp;
+  int rc;
 
   /*
-   * Look up the requested timezone.
+   * Look up the requested timezone: its abbreviations are a setting, so the
+   * lookup stays here.  ty has the offsets, at the start of the transaction.
    */
   text_to_cstring_buffer(zone, tzname, sizeof(tzname));
 
@@ -1988,34 +1928,19 @@ Datum timetz_zone(PG_FUNCTION_ARGS) {
 
   if (type == TZNAME_FIXED_OFFSET) {
     /* fixed-offset abbreviation */
-    tz = -val;
+    rc = ty_timetz_at_offset((const ty_timetz_t *)t, -val,
+                             (ty_timetz_t *)result);
   } else if (type == TZNAME_DYNTZ) {
     /* dynamic-offset abbreviation, resolve using transaction start time */
-    TimestampTz now = GetCurrentTransactionStartTimestamp();
-    int isdst;
-
-    tz = DetermineTimeZoneAbbrevOffsetTS(now, tzname, tzp, &isdst);
+    rc = ty_timetz_at_abbrev((const ty_timetz_t *)t, tzp, tzname,
+                             (ty_timetz_t *)result);
   } else {
-    /* Get the offset-from-GMT that is valid now for the zone name */
-    TimestampTz now = GetCurrentTransactionStartTimestamp();
-    struct pg_tm tm;
-    fsec_t fsec;
-
-    if (timestamp2tm(now, &tz, &tm, &fsec, NULL, tzp) != 0)
-      ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                      errmsg("timestamp out of range")));
+    /* the offset-from-GMT that is valid now for the zone name */
+    rc = ty_timetz_at_zone((const ty_timetz_t *)t, tzp, (ty_timetz_t *)result);
   }
-
-  result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
-
-  result->time = t->time + (t->zone - tz) * USECS_PER_SEC;
-  /* C99 modulo has the wrong sign convention for negative input */
-  while (result->time < INT64CONST(0))
-    result->time += USECS_PER_DAY;
-  if (result->time >= USECS_PER_DAY)
-    result->time %= USECS_PER_DAY;
-
-  result->zone = tz;
+  if (rc != 0)
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("timestamp out of range")));
 
   PG_RETURN_TIMETZADT_P(result);
 }
@@ -2046,14 +1971,8 @@ Datum timetz_izone(PG_FUNCTION_ARGS) {
 
   result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
 
-  result->time = time->time + (time->zone - tz) * USECS_PER_SEC;
-  /* C99 modulo has the wrong sign convention for negative input */
-  while (result->time < INT64CONST(0))
-    result->time += USECS_PER_DAY;
-  if (result->time >= USECS_PER_DAY)
-    result->time %= USECS_PER_DAY;
-
-  result->zone = tz;
+  (void)ty_timetz_at_offset((const ty_timetz_t *)time, tz,
+                            (ty_timetz_t *)result);
 
   PG_RETURN_TIMETZADT_P(result);
 }

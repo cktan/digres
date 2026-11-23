@@ -134,21 +134,40 @@ Why per thread, and not per process:
 ### 3.2.1 The clock of the transaction
 
 The start time of a transaction belongs to sm, not to ty and not
-to digres.
+to digres. ty reads it for the operations that depend on it:
+"now", CURRENT_DATE and the like, and the conversions that need
+today's date or the offset a zone has now.
 
-- sm1 reads the wall clock when `sm1::begin` takes the first
-  snapshot of a transaction, and keeps the time in the session as
-  a `timestamptz` (`int64_t`, microseconds since 2000-01-01 UTC).
-  It is `INT64_MIN` with no transaction.
+- sm1 keeps the time in the session, as a `timestamptz`
+  (`int64_t`, microseconds since 2000-01-01 UTC). A host starts
+  the clock with `sm_xact_clock_start` when its own transaction
+  begins: sm reads the wall clock, with no sm transaction and no
+  snapshot. Without that call, sm1 reads the clock when
+  `sm1::begin` takes the first snapshot.
 - `ty_set_xact_clock` gives ty a pointer to that value, for the
-  calling thread. sm1 calls it at each begin, and with NULL when
-  the session closes. ty reads through the pointer at each call,
-  so a new transaction needs no call to ty.
-- `ty_xact_start` gives the time. It fails with `TY_ERR_INVALID`
-  when the thread has no clock, or has no transaction.
-- digres reads the same time through `sm_xact_time` of `sm.h`.
-  It begins its sm transaction at its first call that needs one,
-  so `now()` is the time of that begin.
+  calling thread. ty reads through the pointer at each call, so a
+  new transaction needs no call to ty. `ty_xact_start` gives the
+  time. It fails with `TY_ERR_INVALID` when the thread has no
+  clock, or no transaction.
+- A thread can have more than one sm session. sm opens one for
+  its own work on the thread of its caller. `ty_xact_clock` says
+  whose clock ty reads. A session clears the pointer only if it
+  is its own. A session whose host never starts the clock takes
+  the pointer only when ty has none, or the clock ty has holds no
+  transaction.
+- digres starts the clock in `StartTransaction`, so a call that
+  reads the time, as the text in of 'today' does, has one before
+  any call that needs an sm transaction. It keeps the time sm
+  gave, so `now()` for a row reads a variable.
+- `now()` is the time of BEGIN. In PostgreSQL it is the time of
+  the first statement.
+- `ty_set_session_zone` gives ty the session's zone, for the
+  calling thread, as a setting of that thread. `ty_xact_now` gives
+  the time of the transaction as the fields of that zone, kept for
+  the instant and the zone. CURRENT_DATE, CURRENT_TIME and
+  LOCALTIME, `time_timetz` and the offset of a zone at the start
+  of the transaction (`ty_timetz_at_zone`, `ty_timetz_at_abbrev`)
+  read it.
 
 ### 3.3 Who frees what
 

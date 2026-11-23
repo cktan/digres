@@ -243,4 +243,52 @@ const ty_tz_t *ty_session_zone(void);
  */
 int ty_xact_now(ty_tm_t *tm, int32_t *fsec, int *west);
 
+/*
+ * CURRENT_DATE, CURRENT_TIME(n) and LOCALTIME(n): the time of the transaction
+ * (ty_xact_start) in the session's zone, as the date, as a timetz with the
+ * zone's offset, and as a time. A typmod of 0 or more rounds the time to that
+ * many digits (ty_time_adjust_typmod); below 0 leaves it. They fail as
+ * ty_xact_now does. The fields are kept for the instant and the zone, so a
+ * call for each row costs a compare.
+ */
+int ty_current_date(int32_t *out);
+int ty_current_time(int32_t typmod, ty_timetz_t *out);
+int ty_local_time(int32_t typmod, int64_t *out);
+
+/*
+ * time to timetz (time_timetz): the time of day with the offset of the
+ * session's zone at that time of day on today's date, today being that of the
+ * transaction in the zone (ty_xact_now). It fails as ty_xact_now does.
+ */
+int ty_time_to_timetz(int64_t time, ty_timetz_t *out);
+
+/*
+ * timestamptz to timetz (timestamptz_timetz): the local time of day of the
+ * instant in the zone, with the zone's offset then. The caller, which has the
+ * infinities, answers NULL for them. A failure is -1 with TY_ERR_RANGE and
+ * "timestamp out of range".
+ */
+int ty_timestamptz_to_timetz(const ty_tz_t *tz, int64_t ts, ty_timetz_t *out);
+
+/*
+ * timetz AT TIME ZONE: the same instant of the day at another offset, west of
+ * Greenwich: the time of day moves by the difference of the offsets, round the
+ * day, and the zone is the new offset. A fixed offset, as a zone name that is
+ * one or an interval, uses ty_timetz_at_offset. The host reads the zone's name
+ * (its abbreviations are a setting) and passes what it found:
+ *   - ty_timetz_at_zone: a zone; its offset is the one it has at the start of
+ *     the transaction (ty_xact_start).
+ *   - ty_timetz_at_abbrev: a dynamic abbreviation, as "EST" in a zone that
+ *     used it: the offset the zone gave it at the start of the transaction
+ *     (DetermineTimeZoneAbbrevOffsetTS); the zone's own offset if it never
+ *     did.
+ * The two fail as ty_xact_start does, and with TY_ERR_RANGE and "timestamp out
+ * of range" for an instant out of range.
+ */
+int ty_timetz_at_offset(const ty_timetz_t *t, int west, ty_timetz_t *out);
+int ty_timetz_at_zone(const ty_timetz_t *t, const ty_tz_t *tz,
+                      ty_timetz_t *out);
+int ty_timetz_at_abbrev(const ty_timetz_t *t, const ty_tz_t *tz,
+                        const char *abbrev, ty_timetz_t *out);
+
 #endif
