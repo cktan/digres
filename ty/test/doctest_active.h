@@ -4,11 +4,16 @@
  */
 
 /*
- * doctest_active.h -- a doctest listener that names the test case
- * running now in a file beside the test binary, BINARY.active, so a
- * run whose output goes to a log can be asked which test it is in:
- * the case's name, then its file and line. The file goes when the run
- * ends; a run that crashes or hangs leaves it naming its test.
+ * doctest_active.h -- a doctest listener that tells which test case runs now.
+ *
+ *   - It prints one line to stdout when a case starts, with its number
+ *     in the run, so a person or a CI log sees the run move.
+ *   - It prints a second line when a case ends after slow_seconds or
+ *     more, so the slow cases show.
+ *   - It names the case in a file beside the test binary, BINARY.active:
+ *     the case's name, then its file and line. A tool, or a run whose
+ *     output goes to a log, can read it. The file goes when the run
+ *     ends; a run that crashes or hangs leaves it naming its test.
  *
  * A test binary's main.cc includes it once, after doctest.h with its
  * implementation.
@@ -35,9 +40,13 @@ struct active_t : public doctest::IReporter {
     }
   }
 
-  /* Write the case's name, file and line, whole: a reader sees the
-   * last case or this one, never half of one. */
+  /* Print the case's number and name, then write the file: a reader sees
+   * the last case or this one, never half of one. */
   void test_case_start(const doctest::TestCaseData &tc) override {
+    m_number++;
+    // Flush at once: a log that is a pipe shows the line while the case runs.
+    std::printf("[%4u] %s\n", m_number, tc.m_name);
+    std::fflush(stdout);
     if (m_path.empty()) {
       return;
     }
@@ -61,7 +70,13 @@ struct active_t : public doctest::IReporter {
   void report_query(const doctest::QueryData &) override {}
   void test_run_start() override {}
   void test_case_reenter(const doctest::TestCaseData &) override {}
-  void test_case_end(const doctest::CurrentTestCaseStats &) override {}
+  /* A case that took slow_seconds or more: say how long. */
+  void test_case_end(const doctest::CurrentTestCaseStats &st) override {
+    if (st.seconds >= slow_seconds) {
+      std::printf("[%4u] took %.1f s\n", m_number, st.seconds);
+      std::fflush(stdout);
+    }
+  }
   void test_case_exception(const doctest::TestCaseException &) override {}
   void subcase_start(const doctest::SubcaseSignature &) override {}
   void subcase_end() override {}
@@ -70,7 +85,9 @@ struct active_t : public doctest::IReporter {
   void test_case_skipped(const doctest::TestCaseData &) override {}
 
 private:
-  std::string m_path; /* BINARY.active, or empty if unknown */
+  static constexpr double slow_seconds = 5.0;
+  unsigned m_number = 0; /* cases started so far */
+  std::string m_path;    /* BINARY.active, or empty if unknown */
 };
 
 REGISTER_LISTENER("active", 1, active_t);

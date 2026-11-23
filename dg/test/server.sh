@@ -13,6 +13,8 @@
 # check's output are left in build/test/server/. DIGRES names the server
 # to run, build/digres if it is not set: "make tsan" sets it to the build
 # under the thread sanitizer, and then a report in the log fails.
+# This script, by a path that holds after the cd below: check_titles reads it.
+self=$(realpath "$0")
 cd "$(dirname "$0")/.." || exit 1
 # PostgreSQL 18.6's psql, built in ../ext, before any other: an older one
 # fails on \d+.
@@ -30,6 +32,41 @@ digres=${DIGRES:-build/digres}
 rm -rf "$work"
 mkdir -p "$work"
 failed=0
+
+# Name each check on stdout as it starts, and in $work.active, so a run in
+# a log shows which check it is in, and a run that hangs leaves the file
+# naming it. A check starts with a "# Verify" comment; the first command
+# after the comment is where it starts, and the DEBUG trap sees that line.
+# The trap runs only for the commands of this shell, not for those inside
+# a function or a subshell, so a check that starts there is not named.
+#   1. Map each line of a first command to the "# Verify" sentence above it,
+#      its wrapped lines joined.
+#   2. At each command, if its line is in the map, and is not the last
+#      one named, print the sentence with its number and the total.
+declare -A check_title
+check_total=0
+check_count=0
+check_last=0
+while IFS=$'\t' read -r line title; do
+  check_title[$line]=$title
+  check_total=$((check_total + 1))
+done < <(awk '
+  /^# Verify/ { title = substr($0, 3); joining = 1; pending = 1; next }
+  joining && /^# / && !/^# [0-9]+\./ { title = title " " substr($0, 3); next }
+  { joining = 0 }
+  pending && !/^#/ && !/^[ \t]*$/ { print NR "\t" title; pending = 0 }
+' "$self")
+# Print the check that starts at LINE, unless it is the one just named.
+check_start() {
+  [ "$1" = "$check_last" ] && return
+  check_last=$1
+  check_count=$((check_count + 1))
+  printf '[%3d/%d] %s\n' "$check_count" "$check_total" "${check_title[$1]}"
+  printf '%s\n' "${check_title[$1]}" > "$work.active"
+}
+# The run has ended: no check is active.
+trap 'rm -f "$work.active"' EXIT
+trap '[ -n "${check_title[$LINENO]-}" ] && check_start "$LINENO"' DEBUG
 
 # Report the check NAME as failed.
 fail() {
@@ -6036,7 +6073,7 @@ local_psql -c "set session_authorization = ''" > /dev/null 2>&1 &&
 local_psql -c "set timezone_abbreviations = ''" > /dev/null 2>&1 &&
   fail "timezone_abbreviations: '' is refused"
 [ "$(local_psql -c "set session_authorization = current_user" \
-  -c "reset session_authorization" -c "select 1" | tail -1)" = 1 ] ||
+  -c "reset session_authorization" -c "select 1" 2> /dev/null | tail -1)" = 1 ] ||
   fail "session_authorization: RESET"
 [ "$(local_psql -c "show timezone_abbreviations")" = Default ] ||
   fail "timezone_abbreviations: the default"

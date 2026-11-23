@@ -89,6 +89,13 @@ struct sm1::session_t {
   sm1::xctlevel_t level = sm1::xctlevel_t::read_committed;
   bool read_only = false; /* declared at sm1::begin (../XCTMGR.md §7.5) */
   uint64_t snapshot_ts = 0;
+  /*
+   * The start time of the transaction, a timestamptz (microseconds
+   * since 2000-01-01 UTC), read from the wall clock when sm1::begin
+   * takes the first snapshot. INT64_MIN with no transaction. ty reads
+   * it through a pointer (ty_set_xact_clock).
+   */
+  int64_t xact_start = INT64_MIN;
   uint64_t xid = 0;     /* 0 until the first write (../XCTMGR.md §2.1) */
   uint32_t seq = 0;     /* last write's seq; the next is seq + 1 */
   uint32_t seq_hwm = 0; /* own versions above this are invisible */

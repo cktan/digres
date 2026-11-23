@@ -10,14 +10,18 @@
  */
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
+#include <chrono>
 #include <string>
 #include <thread>
 
 #include "doctest.h"
 #include "sm0_arena.h"
+#include "sm1.h"
 #include "ty.h"
 #include "ty_text.h"
+#include "util.h"
 
 namespace {
 
@@ -116,4 +120,77 @@ TEST_CASE("each thread of sm has an arena of its own") {
   void *p = ty_alloc(32);
   CHECK(nullptr != p);
   ty_free(p);
+}
+
+namespace {
+
+/* The wall clock now, as a timestamptz (microseconds since 2000-01-01). */
+int64_t now_timestamptz() {
+  struct timespec ts;
+
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return ((int64_t)ts.tv_sec - 946684800) * 1000000 + ts.tv_nsec / 1000;
+}
+
+} // namespace
+
+// Verify that sm1 saves the wall clock when a transaction takes its first
+// snapshot, that sm1 and ty give the same time until the transaction ends,
+// and that a later transaction has a later time.
+// 1. With no transaction, sm1::xact_start fails with SM_ERR_NOTRANS.
+// 2. Begin a transaction between two readings of the clock.
+// 3. Read the start time from sm1 and from ty: both are in the two readings.
+// 4. Wait, begin a statement, and read again: the time did not change.
+// 5. Commit: sm1 fails with SM_ERR_NOTRANS, and ty has no start time.
+// 6. Begin a second transaction: its time is later than the first.
+// 7. Close the session: ty has no clock.
+TEST_CASE("sm1 owns the start time of a transaction, and ty reads it") {
+  home_t home;
+  REQUIRE(sm1::mkdb(home.env(), "db", nullptr) == 0);
+  sm1::session_t *s = opendb(home.env(), "db", nullptr);
+  REQUIRE(s);
+  int64_t t1 = 0, t2 = 0, ts = 0;
+
+  // 1. With no transaction, sm1::xact_start fails with SM_ERR_NOTRANS.
+  CHECK(-1 == sm1::xact_start(s, &ts));
+  CHECK(sm1::errnum() == sm1::SM_ERR_NOTRANS);
+
+  // 2. Begin a transaction between two readings of the clock.
+  int64_t before = now_timestamptz();
+  REQUIRE(0 == sm1::begin(s, sm1::xctlevel_t::read_committed));
+  int64_t after = now_timestamptz();
+
+  // 3. Read the start time from sm1 and from ty: both are in the readings.
+  REQUIRE(0 == sm1::xact_start(s, &t1));
+  CHECK(t1 >= before);
+  CHECK(t1 <= after);
+  REQUIRE(0 == ty_xact_start(&ts));
+  CHECK(ts == t1);
+
+  // 4. Wait, begin a statement, and read again: the time did not change.
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  REQUIRE(0 == sm1::stmt_begin(s));
+  REQUIRE(0 == sm1::xact_start(s, &ts));
+  CHECK(ts == t1);
+  REQUIRE(0 == ty_xact_start(&ts));
+  CHECK(ts == t1);
+
+  // 5. Commit: sm1 fails with SM_ERR_NOTRANS, and ty has no start time.
+  REQUIRE(0 == sm1::commit(s));
+  CHECK(-1 == sm1::xact_start(s, &ts));
+  CHECK(sm1::errnum() == sm1::SM_ERR_NOTRANS);
+  CHECK(-1 == ty_xact_start(&ts));
+
+  // 6. Begin a second transaction: its time is later than the first.
+  REQUIRE(0 == sm1::begin(s, sm1::xctlevel_t::repeatable_read));
+  REQUIRE(0 == sm1::xact_start(s, &t2));
+  CHECK(t2 > t1);
+  REQUIRE(0 == ty_xact_start(&ts));
+  CHECK(ts == t2);
+  REQUIRE(0 == sm1::commit(s));
+
+  // 7. Close the session: ty has no clock.
+  REQUIRE(0 == sm1::begin(s, sm1::xctlevel_t::read_committed));
+  REQUIRE(0 == sm1::closedb(s));
+  CHECK(-1 == ty_xact_start(&ts));
 }
