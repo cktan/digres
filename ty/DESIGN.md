@@ -797,3 +797,41 @@ transitions of the zone, with the rule of PostgreSQL for a skipped
 and a repeated time; and hand tests of the lookup, the POSIX
 specs, the abbreviations, the bad packs, and a process that is
 given a pack of the host.
+
+## 21. Vectors
+
+`ty_vec.h` holds the operations on vectors: one call on the n
+values of a column at once, for a columnar executor
+([`../REPORT.md`](../REPORT.md) §9). Only the integers' add is
+built.
+
+- **A vector is an array of n values and an array of n flags**,
+  a byte a row. Bit 0, `TY_VEC_NOTVALID`, is 1 for a row that is
+  not valid, such as a row a filter dropped; bit 1,
+  `TY_VEC_NULL`, is 1 for a null. The other bits are 0 for now.
+  One flag array serves both inputs: a row is null if one of its
+  inputs is.
+- **The call**: `ty_intN_add_vec(n, inflag, a, b, out, outflag,
+  &bad)`. `inflag` is the flags of both inputs. `out` gets the
+  sums, and `outflag` the flags of the results, of the same
+  shape as `inflag`; for add, a copy of it, so a null input gives
+  a null sum.
+- **A row not valid, or null, is never computed into an error.**
+  Its result means nothing.
+- **An overflow fails the call at once**, with `TY_ERR_RANGE`
+  and `*bad` the index of the lowest row computed that overflows:
+  the row PostgreSQL, going row by row, would fail on.
+- **The additions run on vector instructions** (`src/vec.cc`):
+  GCC's vector types of 16 bytes, which the compiler turns into
+  NEON on aarch64 and SSE on x86-64. A loop adds with
+  wrap-around and gathers the overflow bits of the rows computed,
+  with no branch a row; it tests them once a block of 256 rows,
+  and only then looks for the row, one at a time.
+- **`out` may be an input, and `outflag` may be `inflag`.**
+
+The tests are `test/test_vec.cc`: each row against the scalar
+`ty_intN_add`, at sizes around the vector's lanes and the
+loop's blocks; the lowest failing row among several, one past
+the last whole vector, and one in a row not valid and one in a
+null row, which are no error; and the results written over the
+inputs.
