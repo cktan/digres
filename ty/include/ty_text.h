@@ -290,6 +290,79 @@ int ty_text_like_escape(const ty_varlena_t *pat, const ty_varlena_t *esc,
                         int utf8, ty_varlena_t **out);
 
 /*
+ * format(fmt, args...), as PostgreSQL's. Only the host has the arguments and
+ * their text, so the host drives the call:
+ * 1. ty_format_begin takes the format string.
+ * 2. ty_format_next adds the text up to the next conversion (%s, %I or %L)
+ *    to the result, a % for each %%, and gives the conversion: 1, or 0 at
+ *    the end of the format.
+ * 3. The host takes the width argument, if the conversion has one, and the
+ *    argument; makes its text; quotes it for %I and %L; and gives it to
+ *    ty_format_put, which pads it to the width and adds it.
+ * 4. ty_format_finish gives the result, a text.
+ *
+ * The errors of ty_format_next, all TY_ERR_INVALID but the last:
+ * "unterminated format() type specifier", "unrecognized format() type
+ * specifier "c"", "format specifies argument 0, but arguments are numbered
+ * from 1", "width argument position must be ended by "$"", and
+ * TY_ERR_RANGE "number is out of range" for a number past int32.
+ *
+ * On an error, ty frees the result it was making. A host that stops between
+ * the calls for an error of its own calls ty_format_abort, unless its memory
+ * goes all at once, as a memory context's or an arena's does.
+ */
+typedef struct ty_format_t {
+  const char *p;   /* the next byte of the format string */
+  const char *end; /* the end of the format string */
+  char *buf;       /* the result: 4 bytes for its header, then its text */
+  size_t len;      /* the bytes of text in buf */
+  size_t cap;      /* the bytes of text buf has room for */
+  /*
+   * On the error of the limit, PostgreSQL's StringInfo's "string buffer
+   * exceeds maximum allowed length": the bytes there were, and the bytes
+   * asked for, for the host's detail.
+   */
+  size_t had;
+  size_t need;
+} ty_format_t;
+
+/* A conversion: %[argpos$][-][width or *[widthpos$]]conv. */
+typedef struct ty_format_spec_t {
+  char conv;        /* 's', 'I' or 'L' */
+  int minus;        /* the '-' flag: justify to the left */
+  int32_t argpos;   /* the argument's place, from 1; 0 for the next */
+  int32_t widthpos; /* the width's: -1 for none, 0 for the next argument */
+  int32_t width;    /* the width written in the format; 0 for none */
+} ty_format_spec_t;
+
+void ty_format_begin(ty_format_t *f, const char *fmt, size_t len);
+int ty_format_next(ty_format_t *f, ty_format_spec_t *spec);
+
+/*
+ * Add s, of len bytes, padded with spaces to width characters: on the left,
+ * or on the right if minus is 1 or width is negative. A width of INT32_MIN
+ * is TY_ERR_RANGE ("number is out of range"); a result past 1073741822
+ * bytes is TY_ERR_RANGE ("string buffer exceeds maximum allowed length
+ * (1073741823 bytes)"), with f->had and f->need set; one past
+ * TY_VARLENA_MAX_LEN is TY_ERR_RANGE ("requested length too large").
+ * The case of no width and room for the text is in line; ty_format_put_full
+ * is the whole of it.
+ */
+int ty_format_put_full(ty_format_t *f, const char *s, size_t len, int minus,
+                       int32_t width);
+static inline int ty_format_put(ty_format_t *f, const char *s, size_t len,
+                                int minus, int32_t width) {
+  if (0 == width && f->buf != NULL && f->cap - f->len >= len) {
+    memcpy(f->buf + 4 + f->len, s, len);
+    f->len += len;
+    return 0;
+  }
+  return ty_format_put_full(f, s, len, minus, width);
+}
+int ty_format_finish(ty_format_t *f, ty_varlena_t **out);
+void ty_format_abort(ty_format_t *f);
+
+/*
  * The case of ASCII letters, for the C ctype: only A-Z and a-z change, any
  * other byte (a byte of a multibyte character included) stays. These work
  * on a C string, not a varlena. out may be s. initcap makes the first letter

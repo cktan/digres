@@ -256,10 +256,14 @@ are the catalog tables psql reads
        zone rules with their data (`ty_timezone.h`), and the
        casts, arithmetic, trunc, parts and age of timestamptz.
        The transaction's clock is sm's, and ty reads it
-       (2026-11-23).
-       **Left: `to_char`, the case functions, the regular
-       expressions and `format` of text, and the aggregate
-       states and sort support above**
+       (2026-11-23). So is `format`: ty reads the format
+       string and makes the result, and digres gives each
+       argument's text (`ty_format_next`, `ty_format_put`;
+       2026-11-23). The case functions of the C ctype are in
+       ty (`ty_ascii_lower` and the like); the other ctypes,
+       ICU and the builtin provider, stay in digres.
+       **Left: `to_char`, the regular expressions of text, and
+       the aggregate states and sort support above**
        ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
     3. **Types that read a setting**: what is left of them
        waits for its hooks. The text in takes the date order

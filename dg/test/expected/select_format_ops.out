@@ -1,0 +1,101 @@
+-- Verify format(), whose format string ty reads and whose result ty makes
+-- (ty_format_next, ty_format_put): text, %%, the arguments in order and by
+-- place, VARIADIC, the widths and the flag, %I and %L, and each message. A
+-- refusal is what is tested, so an error goes on to the next statement.
+\set ON_ERROR_STOP off
+SELECT format(NULL) AS n, format('Hello') AS h, format('Hello %s', 'World') AS w, format('Hello %%') AS p1, format('Hello %%%%') AS p2, format('') AS e, format('%%s', 1) AS ps;
+ n |   h   |      w      |   p1    |    p2    | e | ps 
+---+-------+-------------+---------+----------+---+----
+   | Hello | Hello World | Hello % | Hello %% |   | %s
+(1 row)
+
+SELECT format('INSERT INTO %I VALUES(%L,%L)', 'mytab', 10, 'Hello') AS ins, format('%s%s%s', 'Hello', NULL, 'World') AS nul, format('INSERT INTO %I VALUES(%L,%L)', 'my tab', NULL, 'it''s') AS q, format('%I', 'select') AS kw, format('%L', E'a\\b') AS bs;
+                  ins                   |    nul     |                     q                     |    kw    |   bs    
+----------------------------------------+------------+-------------------------------------------+----------+---------
+ INSERT INTO mytab VALUES('10','Hello') | HelloWorld | INSERT INTO "my tab" VALUES(NULL,'it''s') | "select" | E'a\\b'
+(1 row)
+
+SELECT format('%1$s %3$s', 1, 2, 3) AS a, format('%1$s %12$s', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12) AS b, format('Hello %s %1$s %s', 'World', 'Hello again') AS c, format('Hello %s %s, %2$s %2$s', 'World', 'Hello again') AS d;
+  a  |  b   |               c               |                        d                         
+-----+------+-------------------------------+--------------------------------------------------
+ 1 3 | 1 12 | Hello World World Hello again | Hello World Hello again, Hello again Hello again
+(1 row)
+
+SELECT format('%s, %s', VARIADIC array['Hello', 'World']) AS v1, format('%2$s, %1$s', VARIADIC array[1, 2]) AS v2, format('%s, %s', VARIADIC array[true, false]) AS v3, format('Hello', VARIADIC NULL::int[]) AS v4;
+      v1      |  v2  |  v3  |  v4   
+--------------+------+------+-------
+ Hello, World | 2, 1 | t, f | Hello
+(1 row)
+
+SELECT format('>>%10s<<', 'Hello') AS r, format('>>%-10s<<', 'Hello') AS l, format('>>%10s<<', NULL) AS rn, format('>>%-10s<<', '') AS le, format('>>%1$10s<<', 'Hello') AS rp, format('>>%1$-10I<<', 'Hello') AS li, format('>>%--10s<<', 'x') AS mm, format('>>%-s<<', 'Hello') AS lw, format('>>%2s<<', 'Hello') AS cut;
+       r        |       l        |       rn       |       le       |       rp       |       li       |       mm       |    lw     |    cut    
+----------------+----------------+----------------+----------------+----------------+----------------+----------------+-----------+-----------
+ >>     Hello<< | >>Hello     << | >>          << | >>          << | >>     Hello<< | >>"Hello"   << | >>x         << | >>Hello<< | >>Hello<<
+(1 row)
+
+SELECT format('>>%2$*1$L<<', 10, 'Hello') AS wl, format('>>%2$*1$L<<', 10, NULL) AS wn, format('>>%2$*1$L<<', -10, NULL) AS neg, format('>>%*s<<', 10, 'Hello') AS ws, format('>>%*1$s<<', 10, 'Hello') AS wp, format('>>%10L<<', NULL) AS ln, format('>>%2$*1$L<<', NULL, 'Hello') AS wnull, format('>>%2$*1$L<<', 0, 'Hello') AS w0, format('>>%*s<<', 3::int2, 'a') AS w2, format('>>%*s<<', '4'::text, 'a') AS wt, format('>>%*s<<', 5::int8, 'a') AS w8;
+       wl       |       wn       |      neg       |       ws       |       wp       |       ln       |    wnull    |     w0      |   w2    |    wt    |    w8     
+----------------+----------------+----------------+----------------+----------------+----------------+-------------+-------------+---------+----------+-----------
+ >>   'Hello'<< | >>      NULL<< | >>NULL      << | >>     Hello<< | >>     Hello<< | >>      NULL<< | >>'Hello'<< | >>'Hello'<< | >>  a<< | >>   a<< | >>    a<<
+(1 row)
+
+SELECT format('%5s|%-5s|', '日本', 'a😀') AS mb, format('%3$s %1$s', 'a', 'b', 'c', 'd') AS skip, format('%s %I %L', 1.5, 'Ab', 2::int8) AS num;
+       mb        | skip |     num      
+-----------------+------+--------------
+    日本|a😀   | | c a  | 1.5 "Ab" '2'
+(1 row)
+
+SELECT format('Hello %s %s', 'World');
+psql:test/select_format_ops.sql:13: ERROR:  too few arguments for format()
+SELECT format('Hello %s');
+psql:test/select_format_ops.sql:14: ERROR:  too few arguments for format()
+SELECT format('Hello %x', 20);
+psql:test/select_format_ops.sql:15: ERROR:  unrecognized format() type specifier "x"
+HINT:  For a single "%" use "%%".
+SELECT format('%é', 1);
+psql:test/select_format_ops.sql:16: ERROR:  unrecognized format() type specifier "é"
+HINT:  For a single "%" use "%%".
+SELECT format('INSERT INTO %I VALUES(%L,%L)', NULL, 10, 'Hello');
+psql:test/select_format_ops.sql:17: ERROR:  null values cannot be formatted as an SQL identifier
+SELECT format('%1$s %4$s', 1, 2, 3);
+psql:test/select_format_ops.sql:18: ERROR:  too few arguments for format()
+SELECT format('%1$s %13$s', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+psql:test/select_format_ops.sql:19: ERROR:  too few arguments for format()
+SELECT format('%0$s', 'Hello');
+psql:test/select_format_ops.sql:20: ERROR:  format specifies argument 0, but arguments are numbered from 1
+SELECT format('%*0$s', 'Hello');
+psql:test/select_format_ops.sql:21: ERROR:  format specifies argument 0, but arguments are numbered from 1
+SELECT format('%1$', 1);
+psql:test/select_format_ops.sql:22: ERROR:  unterminated format() type specifier
+HINT:  For a single "%" use "%%".
+SELECT format('%1$1', 1);
+psql:test/select_format_ops.sql:23: ERROR:  unterminated format() type specifier
+HINT:  For a single "%" use "%%".
+SELECT format('%', 1);
+psql:test/select_format_ops.sql:24: ERROR:  unterminated format() type specifier
+HINT:  For a single "%" use "%%".
+SELECT format('abc%-', 1);
+psql:test/select_format_ops.sql:25: ERROR:  unterminated format() type specifier
+HINT:  For a single "%" use "%%".
+SELECT format('%*', 1);
+psql:test/select_format_ops.sql:26: ERROR:  unterminated format() type specifier
+HINT:  For a single "%" use "%%".
+SELECT format('%*1$', 1);
+psql:test/select_format_ops.sql:27: ERROR:  unterminated format() type specifier
+HINT:  For a single "%" use "%%".
+SELECT format('%*1s', 1, 'x');
+psql:test/select_format_ops.sql:28: ERROR:  width argument position must be ended by "$"
+SELECT format('%2147483648s', 'x');
+psql:test/select_format_ops.sql:29: ERROR:  number is out of range
+SELECT format('%*s', -2147483648, 'x');
+psql:test/select_format_ops.sql:30: ERROR:  number is out of range
+SELECT format('%*s', 'ten'::text, 'x');
+psql:test/select_format_ops.sql:31: ERROR:  invalid input syntax for type integer: "ten"
+SELECT format('%*s', 3);
+psql:test/select_format_ops.sql:32: ERROR:  too few arguments for format()
+SELECT format('%1073741823s', 'x');
+psql:test/select_format_ops.sql:33: ERROR:  string buffer exceeds maximum allowed length (1073741823 bytes)
+DETAIL:  Cannot enlarge string buffer containing 1073741822 bytes by 1 more bytes.
+SELECT format('%s %', 'x');
+psql:test/select_format_ops.sql:34: ERROR:  unterminated format() type specifier
+HINT:  For a single "%" use "%%".
