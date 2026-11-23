@@ -929,6 +929,18 @@ copied from PostgreSQL keeps its copyright notice
        2,000 rows, instructions a statement (old, new):
        `make_timestamp` 6,429,231 and 6,479,455 (+0.78%);
        `make_timestamptz` 6,396,136 and 6,406,394 (+0.16%).
+     - The states of the bool aggregates (`ty_bool_agg_t`: EVERY,
+       bool_and and bool_or, with the moving frame), and of avg and
+       sum over int2 and int4 (`ty_int_avg_t`, `ty_int_sum_add`),
+       moved too (2026-11-23). The array of the state, and the
+       division of avg into a numeric, stay in digres. The tests: a
+       ty case for each state, and `dg/test/select_bool_agg.sql` and
+       `select_int_agg.sql`, with moving frames, which the digres
+       before the move passes. Measured by callgrind, 2,000 rows,
+       instructions a statement (old, new): `sum(int4), sum(int2)`
+       1,996,317 and 1,996,620 (+0.02%); `avg(int4), avg(int2)`
+       2,205,838 and 2,208,122 (+0.10%); a moving `avg(int4)`
+       2,022,691 and 2,023,136 (+0.02%).
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and
