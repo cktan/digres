@@ -12,7 +12,9 @@ A table is a row store or a column store. A row store table,
 the default, is a RocksDB column family. A row's key is its
 primary key in an order-preserving encoding, and its value is
 the tuple. A column store table keeps its rows column by column,
-in immutable files.
+in immutable files. PostgreSQL has no column store. The column
+store's full benefit needs a vector-aware executor, which is
+still to be built.
 
 **digres is a work in progress, and much remains to be done.**
 It is not ready for production. It has no PL/pgSQL, no
@@ -60,9 +62,9 @@ of what is above them, and everything under them, is new.
 - **A database is one directory**, `base/X`: one RocksDB
   instance holds its rows, its catalog and RocksDB's WAL.
   PostgreSQL's WAL and checkpointer are removed.
-- **A column store, for analytics**: `CREATE TABLE ... WITH
-  (storage = columnar)` keeps a table column by column
-  ([`sm/COLSTORE.md`](sm/COLSTORE.md)).
+- **A column store, for analytics**: PostgreSQL has none.
+  `CREATE TABLE ... WITH (storage = columnar)` keeps a table
+  column by column ([`sm/COLSTORE.md`](sm/COLSTORE.md)).
   - New rows go to a row store first. A worker thread seals
     them in groups of 10k rows: one compressed, immutable file
     for each column.
@@ -81,13 +83,13 @@ of what is above them, and everything under them, is new.
     ignores `PRIMARY KEY`, `UNIQUE`, foreign keys and `CREATE
     INDEX` on it, with a warning. It refuses `SERIALIZABLE`
     and `TABLESAMPLE` on it.
-- **The column store needs another executor for its full
-  benefit.** PostgreSQL's executor takes one row at a time.
-  So a scan of a column store table makes each row again from
-  its columns, and the executor evaluates it row by row. The
-  scan reads less data, but it does no work on a column as a
-  batch. A columnar executor, which works on batches of column
-  values, is still to be built.
+- **The column store needs a vector-aware executor for its
+  full benefit.** PostgreSQL's executor takes one row at a
+  time. So a scan of a column store table makes each row again
+  from its columns, and the executor evaluates it row by row.
+  The scan reads less data, but it does no work on a column as
+  a batch. A vector-aware executor, which works on batches of
+  column values, is still to be built.
 
 ## Get started
 
