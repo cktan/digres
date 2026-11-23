@@ -476,11 +476,14 @@ cases and the errors are PostgreSQL's, from `float.c` and
   plan.
 
 The tests are `test/test_float.cc`, by hand; the vectors of a
-Python reference (`gen_vectors.py`), which use the same libm as
-ty, so a subnormal result of `exp` or `pow` is left out, as
-`glibc`'s `errno` for it is not a rule; and
+Python reference (`gen_vectors.py`), which use the libm of the
+machine that made them, so a subnormal result of `exp` or `pow`
+is left out, as `glibc`'s `errno` for it is not a rule; and
 `test/float_text.txt`, 1,230 texts that digres printed before the
-move (`test/gen_float_text.py`).
+move (`test/gen_float_text.py`). No libm rounds sinh, cosh, tanh,
+their inverses, erf, erfc, gamma or lgamma correctly, so another
+machine may give the next float: the test takes one float apart
+as the same for those, and needs the same bits for the rest.
 
 ## 16. text
 

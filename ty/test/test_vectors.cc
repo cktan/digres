@@ -267,23 +267,55 @@ bool run_hash(const vec_t &v) {
 /* A float from a token: a number, inf, -inf or nan. */
 double flt(const std::string &tok) { return std::strtod(tok.c_str(), nullptr); }
 
-/* True if two floats are the same: the same bits, or both NaN. */
-bool same_float(double want, double got) {
+/*
+ * True if two floats are the same: the same bits, or both NaN; or, with
+ * ulps, of the same sign and at most ulps floats apart.
+ */
+bool same_float(double want, double got, int ulps = 0) {
   if (want != want) {
     return got != got;
   }
-  return memcmp(&want, &got, sizeof want) == 0;
+  int64_t w, g;
+  memcpy(&w, &want, sizeof w);
+  memcpy(&g, &got, sizeof g);
+  if ((w < 0) != (g < 0)) {
+    return w == g;
+  }
+  return (w > g ? w - g : g - w) <= ulps;
 }
 
-/* Check a call that gives a float against the vector: a value or an error. */
-void check_float(const vec_t &v, int rc, double got) {
+/*
+ * Whether a float64 function's result is the libm's, unrounded: sinh,
+ * cosh, tanh, the inverses, erf, erfc, gamma and lgamma. No libm rounds
+ * them correctly, so a platform may give the float next to another's,
+ * and the vectors are one platform's (gen_vectors.py takes them from
+ * Python's math, its libm). PostgreSQL's float8 test prints them at
+ * fewer digits for that.
+ */
+bool libm_unrounded(const std::string &name) {
+  static const char *const names[] = {"sinh",  "cosh",  "tanh", "asinh",
+                                      "acosh", "atanh", "erf",  "erfc",
+                                      "gamma", "lgamma"};
+  for (const char *n : names) {
+    if (name == n) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/*
+ * Check a call that gives a float against the vector: a value or an
+ * error; a value within ulps of the vector's.
+ */
+void check_float(const vec_t &v, int rc, double got, int ulps = 0) {
   INFO(v.line);
   if (v.res[0] == "E") {
     CHECK(-1 == rc);
     CHECK(errnum_of(v.res[1]) == ty_errnum());
   } else {
     REQUIRE(0 == rc);
-    CHECK(same_float(flt(v.res[0]), got));
+    CHECK(same_float(flt(v.res[0]), got, ulps));
   }
 }
 
@@ -436,7 +468,8 @@ bool run_float(const vec_t &v) {
     check_float(v, rc, r);
   } else if (is_unary(name)) {
     rc = call_unary(name, a64(0), &r);
-    check_float(v, rc, r);
+    // libm's last bit is the platform's: one float apart is the same.
+    check_float(v, rc, r, libm_unrounded(name) ? 1 : 0);
   } else if (name == "vaccum") {
     ty_float_var_t st = {0, 0, 0};
     rc = 0;

@@ -1534,6 +1534,9 @@ def ref_unary(name, a):
         else:
             v = sg * (fdiv(fdiv(cq1(x), sq1(x)), cot45))
         return 0.0 if v == 0 else v
+    # These are Python's math, its platform's libm, which rounds none of them
+    # correctly: another platform may give the next float, and test_vectors.cc
+    # takes one float apart as the same.
     if name in ("sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "erf", "erfc"):
         if a != a:
             return NAN
