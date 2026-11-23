@@ -683,12 +683,36 @@ bool eliminate(sm3::session_t *ss, uint64_t c, uint64_t fsid) {
 
 /* Delete rows a = from .. to - 1 of c by their names. */
 void delete_rows(col_db_t &db, uint64_t c, int from, int to) {
-  std::vector<std::pair<sm3::place_t, uint64_t>> names;
-  for (int a = from; a < to; a++) {
-    names.push_back(where(db, c, a));
-  }
+  // One scan names every row of the range, in order of a: a scan a row
+  // would read the table to - from times.
+  std::map<int32_t, std::pair<sm3::place_t, uint64_t>> found;
   db.begin();
   sm3::table_t *t = nullptr;
+  REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IS, t) == 0);
+  sm3::scan_t *scan = nullptr;
+  REQUIRE(sm3::tbl_scan_rows(t, scan) == 0);
+  uint64_t id;
+  std::string_view tuple;
+  while (sm3::tbl_scannxt(scan, id, tuple) == 0) {
+    sm2::datum_t d[2];
+    bool null[2];
+    REQUIRE(sm2::tup_deform(sm3::tbl_def(t).desc, tuple, d, null) == 0);
+    int32_t a = null[0] ? INT32_MIN : sm2::datum_to_int32(d[0]);
+    if (!null[0] && a >= from && a < to) {
+      found[a] = {sm3::tbl_scan_place(scan), id};
+    }
+  }
+  sm3::tbl_scanend(scan);
+  sm3::tbl_close(t);
+  db.commit();
+  // Every row of the range is there.
+  REQUIRE(found.size() == static_cast<size_t>(to - from));
+  std::vector<std::pair<sm3::place_t, uint64_t>> names;
+  for (const auto &[a, name] : found) {
+    names.push_back(name);
+  }
+  // Delete them by name, in a transaction of their own.
+  db.begin();
   REQUIRE(sm3::tbl_open(db.ss, c, sm1::SM_LOCKMODE_IX, t) == 0);
   for (auto [rg, id] : names) {
     REQUIRE(sm3::tbl_delete_at(t, rg, id) == 0);
