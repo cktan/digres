@@ -5,17 +5,33 @@ make -j4 test
 ```
 
 It runs every part's tests on the debug build, whatever
-`DEBUG` is, in order: ty, sm, sq, aa, then digres, which runs on
-the other three, stopping at the first that fails. Every
-commit that touches source passes it. digres's part ends with
-these lines:
+`DEBUG` is (`test.sh`). It builds each part once, then runs the
+tests of ty, sm, sq, aa and digres side by side, each to a log of
+its own, `build/test-logs/PART.log`. A line says when each part
+ends, and how long the run had taken; a run on this repository's
+12-core machine, its build already made, took 17 minutes:
+
+```
+built in 24 s; testing: ty sm sq aa dg
+sq: PASSED (26 s)
+ty: PASSED (26 s)
+aa: PASSED (72 s)
+dg: PASSED (745 s)
+sm: PASSED (1031 s)
+test: PASSED (ty sm sq aa dg)
+```
+
+`./test.sh sm dg` runs those parts alone. A commit on a `wip-`
+branch runs the parts it changes and the parts that build on
+them; a merge into `main` runs them all
+([`CLAUDE.md`](CLAUDE.md)). digres's log ends with these lines:
 
 ```
 run: PASSED (124 files)
-run: PASSED (12 files, alone and in 8 sessions)
+run: PASSED (50 files, alone and in 8 sessions)
 initdb: PASSED
 server: PASSED
-slt: PASSED (49 files on digres, 10711 records, 11 skipped)
+slt: PASSED (65 files on digres, 11076 records, 19 skipped)
 all 231 ok
 ```
 

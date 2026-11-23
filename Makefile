@@ -12,8 +12,9 @@
 #   DEBUG=1 make -j4    the debug build, dg/build/digres: what tests run
 #   make -j4            the release build, dg/build/digres-release: what
 #                       the benchmark runs
-#   make -j4 test       every part's tests, on the debug build, in order:
-#                       ty, sm, sq, aa, then digres; make test-ty,
+#   make -j4 test       every part's tests, on the debug build: each part
+#                       built once, then their tests side by side, a log
+#                       each in build/test-logs (test.sh); make test-ty,
 #                       test-sm, test-sq, test-aa or test-dg, one part's
 #   make -j4 tsan       digres under the thread sanitizer, and its tests
 #   make -j4 bench      the release build, then bench/run.sh
@@ -41,9 +42,10 @@ else
 	$(MAKE) -C dg release
 endif
 
-# The tests run on the debug build, whatever DEBUG is: sm first, as aa's
-# tests link its library, and digres last, as it runs on all three.
-test: ext $(TESTDIRS)
+# The tests run on the debug build, whatever DEBUG is: test.sh builds each
+# part once, then runs their tests side by side.
+test: ext
+	./test.sh
 
 $(TESTDIRS): export DEBUG := 1
 $(TESTDIRS):
