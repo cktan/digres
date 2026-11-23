@@ -917,6 +917,18 @@ copied from PostgreSQL keeps its copyright notice
        (-1.24%); `d + timetz` 4,035,802 and 4,026,753 (-0.22%). The
        first version of `d + timetz` called a function of ty, and
        read 1.04% more; it is in line now.
+     - `make_timestamp`, `make_timestamptz` and `make_timestamptz`
+       with a zone moved too (`ty_timestamp_make`, 2026-11-23).
+       Its messages word the year as given, which `make_date`'s do
+       not, so `ty_date_make` and `ty_timestamp_make` share one
+       helper with a mode for that. The lookup of the zone's name
+       stays in digres. The tests: a ty case with a grid of dates
+       and times and the edges of the range, and
+       `dg/test/select_make_ops.sql`, with each message; the digres
+       before the move prints the same. Measured by callgrind,
+       2,000 rows, instructions a statement (old, new):
+       `make_timestamp` 6,429,231 and 6,479,455 (+0.78%);
+       `make_timestamptz` 6,396,136 and 6,406,394 (+0.16%).
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

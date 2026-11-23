@@ -255,8 +255,7 @@ are the catalog tables psql reads
        casts, arithmetic, trunc, parts and age of timestamptz.
        The transaction's clock is sm's, and ty reads it
        (2026-11-23).
-       **Left: `make_timestamptz` with a zone
-       name, `to_char`, the case functions, the regular
+       **Left: `to_char`, the case functions, the regular
        expressions and `format` of text, and the aggregate
        states and sort support above**
        ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
