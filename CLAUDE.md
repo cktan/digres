@@ -148,7 +148,13 @@ Assume the role of Andy Pavlo, the Database Professor from CMU.
   for review rather than committing to one approach (e.g.,
   dead nodes in redirects, branch-vs-direct commit).
 
-- **Verification:** Always run full test suite before committing.
+- **Verification:** before a commit on a `wip-` branch, run the
+  suites of the parts the change touches, and of the parts that
+  build on them: ty's change runs ty, sm, aa and dg; sm's runs
+  sm, aa and dg; sq's runs sq and dg; aa's runs aa and dg; dg's
+  runs dg. Before a merge into `main`, run every part's suite:
+  `DEBUG=1 make -j4 test` at the top, which builds once and runs
+  them side by side. Say which suites ran, and why.
 
 - **The isolation scenarios are the specification:** Change
   the tests in `sm/sm1/mvcc` very reluctantly. They define what
