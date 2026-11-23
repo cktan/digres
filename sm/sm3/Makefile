@@ -70,7 +70,9 @@ TEST_BIN := $(BUILD)/test_sm3
 
 FORMAT_FILES := $(wildcard src/*/*.cc src/*/*.h test/*.cc test/*.h)
 
-.PHONY: all test tsan format clean $(SM0_LIB) $(SM1_LIB) $(SM2_LIB)
+.PHONY: all test tsan format clean FORCE
+# A target that is never up to date, for the libraries of other parts.
+FORCE:
 
 all: $(LIB) $(TEST_BIN)
 
@@ -81,13 +83,16 @@ $(LIB): $(LIB_OBJS)
 
 # The lower levels' Makefiles decide whether their libraries are
 # up to date.
-$(SM0_LIB):
+# The lower levels' makes run every time (FORCE); make reads each
+# library's time again after, so what links it is relinked only if it is
+# newer (../../ty/ty.mk).
+$(SM0_LIB): FORCE
 	$(MAKE) -C $(SM0) BUILD=$(BUILD) OPTFLAGS='$(OPTFLAGS)' $(BUILD)/libsm0.a
 
-$(SM1_LIB):
+$(SM1_LIB): FORCE
 	$(MAKE) -C $(SM1) BUILD=$(BUILD) OPTFLAGS='$(OPTFLAGS)' $(BUILD)/libsm1.a
 
-$(SM2_LIB):
+$(SM2_LIB): FORCE
 	$(MAKE) -C $(SM2) BUILD=$(BUILD) OPTFLAGS='$(OPTFLAGS)' $(BUILD)/libsm2.a
 
 $(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM2_LIB) $(SM1_LIB) $(SM0_LIB) \

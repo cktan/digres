@@ -78,7 +78,9 @@ TEST_BIN := $(BUILD)/test_sm2
 FORMAT_FILES := $(filter-out test/pg_fixtures.h src/ryu/%, \
     $(wildcard src/*/*.cc src/*/*.h test/*.cc test/*.h))
 
-.PHONY: all test tsan format clean $(SM0_LIB) $(SM1_LIB)
+.PHONY: all test tsan format clean FORCE
+# A target that is never up to date, for the libraries of other parts.
+FORCE:
 
 all: $(LIB) $(TEST_BIN)
 
@@ -87,12 +89,15 @@ $(LIB): $(LIB_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
+# The lower levels' makes run every time (FORCE); make reads each
+# library's time again after, so what links it is relinked only if it is
+# newer (../../ty/ty.mk).
 # sm0's Makefile decides whether its library is up to date.
-$(SM0_LIB):
+$(SM0_LIB): FORCE
 	$(MAKE) -C $(SM0) BUILD=$(BUILD) OPTFLAGS='$(OPTFLAGS)' $(BUILD)/libsm0.a
 
 # sm1's Makefile decides whether its library is up to date.
-$(SM1_LIB):
+$(SM1_LIB): FORCE
 	$(MAKE) -C $(SM1) BUILD=$(BUILD) OPTFLAGS='$(OPTFLAGS)' $(BUILD)/libsm1.a
 
 $(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM1_LIB) $(SM0_LIB) $(ROCKSDB_LIB) \

@@ -16,10 +16,15 @@ TY_LIB := $(TY)/build/libty.a
 
 # The rule that hands the library to ty/Makefile, in every Makefile but
 # that one. It keeps the including Makefile's default goal.
+# ty's make runs every time (FORCE), but the library is a file: make
+# reads its time again after, and relinks what uses it only if it is
+# newer. A phony library would relink them every time, and a part's
+# binary could be relinked while its tests run it (../test.sh).
 ifneq ($(abspath $(CURDIR)),$(TY))
 ty_goal := $(.DEFAULT_GOAL)
-.PHONY: $(TY_LIB)
-$(TY_LIB):
+.PHONY: FORCE
+$(TY_LIB): FORCE
 	$(MAKE) -C $(TY) build/libty.a
+FORCE:
 .DEFAULT_GOAL := $(ty_goal)
 endif

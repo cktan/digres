@@ -91,7 +91,9 @@ FORMAT_FILES := $(wildcard src/*.cc src/*.h test/*.cc test/*.h mvcc/*.cc \
                           mvcc/*.h mvcc/driver/*.cc mvcc/driver/*.h \
                           example/*.cc bench/*.cc include/sm1_*.h)
 
-.PHONY: all test tsan scenarios accept format clean $(SM0_LIB)
+.PHONY: all test tsan scenarios accept format clean FORCE
+# A target that is never up to date, for the libraries of other parts.
+FORCE:
 
 # Keep the example objects: make deletes chained intermediates.
 .SECONDARY: $(EX_OBJS)
@@ -103,8 +105,10 @@ $(LIB): $(LIB_OBJS)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-# sm0's Makefile decides whether its library is up to date.
-$(SM0_LIB):
+# sm0's Makefile decides whether its library is up to date. It runs every
+# time (FORCE); make reads the library's time again after, so what links
+# it is relinked only if it is newer (../../ty/ty.mk).
+$(SM0_LIB): FORCE
 	$(MAKE) -C $(SM0) $(BUILD)/libsm0.a
 
 # Every object includes RocksDB's headers, which must be unpacked first.

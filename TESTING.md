@@ -6,22 +6,29 @@ make -j4 test
 
 It runs every part's tests on the debug build, whatever
 `DEBUG` is (`test.sh`). It builds each part once, then runs the
-tests of ty, sm, sq, aa and digres side by side, each to a log of
-its own, `build/test-logs/PART.log`. A line says when each part
-ends, and how long the run had taken; a run on this repository's
-12-core machine, its build already made, took 17 minutes:
+tests of ty, sm's levels and rel, sq, aa and digres side by side,
+each to a log of its own, `build/test-logs/PART.log` (a `/` of
+the part's name a `-`). A line says when each part ends, and how
+long the run had taken; a run on this repository's 12-core
+machine, its build already made, took 13 minutes. One run goes
+at a time: a second refuses while the first holds its lock.
 
 ```
-built in 24 s; testing: ty sm sq aa dg
-sq: PASSED (26 s)
-ty: PASSED (26 s)
-aa: PASSED (72 s)
-dg: PASSED (745 s)
-sm: PASSED (1031 s)
-test: PASSED (ty sm sq aa dg)
+built in 4 s; testing: ty sm/sm0 sm/sm1 sm/sm2 sm/sm3 sm/rel sq aa dg
+sq: PASSED (6 s)
+ty: PASSED (6 s)
+sm/sm0: PASSED (11 s)
+aa: PASSED (81 s)
+sm/rel: PASSED (118 s)
+sm/sm2: PASSED (171 s)
+sm/sm3: PASSED (497 s)
+sm/sm1: PASSED (629 s)
+dg: PASSED (761 s)
+test: PASSED (ty sm/sm0 sm/sm1 sm/sm2 sm/sm3 sm/rel sq aa dg)
 ```
 
-`./test.sh sm dg` runs those parts alone. A commit on a `wip-`
+`./test.sh sm dg` runs those parts alone, sm as its levels and
+rel; `./test.sh sm/sm1` one level. A commit on a `wip-`
 branch runs the parts it changes and the parts that build on
 them; a merge into `main` runs them all
 ([`CLAUDE.md`](CLAUDE.md)). digres's log ends with these lines:

@@ -65,7 +65,9 @@ TEST_BIN := $(BUILD)/test_aa
 
 FORMAT_FILES := $(wildcard src/*.cc src/*.h test/*.cc test/*.h include/*.h)
 
-.PHONY: all test tsan asan format clean $(SM_LIB)
+.PHONY: all test tsan asan format clean FORCE
+# A target that is never up to date, for the libraries of other parts.
+FORCE:
 
 all: $(LIB) $(TEST_BIN)
 
@@ -78,11 +80,13 @@ $(TEST_BIN): $(TEST_OBJS) $(LIB) $(SM_LIB) $(ROCKSDB_REL) $(TY_LIB)
 	$(CXX) $(CXXFLAGS) -Wl,--wrap=$(WRAP_SM_BEGIN) -o $@ $(TEST_OBJS) $(LIB) $(SM_LIB) $(LDLIBS)
 
 # sm builds its own library; whether it is up to date is sm's to say.
+# Its make runs every time (FORCE); make reads the library's time again
+# after, so the tests are relinked only if it is newer (../ty/ty.mk).
 ifeq ($(BUILD),build)
-$(SM_LIB):
+$(SM_LIB): FORCE
 	$(MAKE) -C $(SM)
 else
-$(SM_LIB):
+$(SM_LIB): FORCE
 	$(MAKE) -C $(SM) BUILD=$(BUILD) OPTFLAGS='$(OPTFLAGS)' $(BUILD)/libsm.a
 endif
 
