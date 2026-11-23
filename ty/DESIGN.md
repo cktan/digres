@@ -567,8 +567,33 @@ strings in digres, then calls ty.
 ASCII letters change. The other ctypes (the builtin Unicode
 tables, ICU) depend on the collation and stay in digres.
 
-The regular expressions, `format` and the functions on arrays of
-text.
+`format` is a loop the host drives, as only the host has the
+arguments and their text:
+
+1. `ty_format_begin` takes the format string.
+2. `ty_format_next` adds the text up to the next conversion to
+   the result, and gives the conversion: its letter (`s`, `I` or
+   `L`), the argument's place, the width or the width's place,
+   and the `-` flag.
+3. The host takes the arguments, makes their text and quotes it
+   (`quote_identifier` needs the keywords and a setting), then
+   calls `ty_format_put`, which pads the text to the width in
+   characters.
+4. `ty_format_finish` gives the result, a text.
+
+So the errors come in PostgreSQL's order: an error of the format
+string comes when the parse reaches it, after an error of an
+argument before it. ty keeps the result in one buffer of the
+thread's alloc function, made larger as it fills, and copies the
+text of the format a byte at a time, as its pieces are short; an
+argument with no width is added in line. It checks the
+limit of PostgreSQL's `StringInfo` as PostgreSQL's appends would,
+and gives the host the bytes for the detail, before it allocates
+anything. A width near 1 GB fails at once, where PostgreSQL first
+fills 1 GB with spaces.
+
+The regular expressions and the functions on arrays of text stay
+in digres.
 
 The tests: the vectors, from a reference of Python strings, whose
 characters are code points as UTF-8's are (about 51,000); the

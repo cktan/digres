@@ -941,6 +941,28 @@ copied from PostgreSQL keeps its copyright notice
        1,996,317 and 1,996,620 (+0.02%); `avg(int4), avg(int2)`
        2,205,838 and 2,208,122 (+0.10%); a moving `avg(int4)`
        2,022,691 and 2,023,136 (+0.02%).
+     - `format` moved too (2026-11-23): ty reads the format
+       string and makes the result (`ty_format_begin`, `_next`,
+       `_put`, `_finish`), and digres gives each argument's
+       text, as only digres has the arguments, their output
+       functions and `quote_identifier`. digres drives the loop,
+       so the errors come in PostgreSQL's order. The tests: a ty
+       case for each error and each width, and
+       `dg/test/select_format_ops.sql`, which the digres before
+       the move prints the same. A width near 1 GB now fails
+       before it allocates, with PostgreSQL's message and detail;
+       the old digres filled 1 GB with spaces first. Measured by
+       callgrind, 2,000 rows, instructions a statement (old,
+       new): `format('%s-%s', a, c)` 7,613,393 and 7,334,429
+       (-3.66%); `format('%I.%L', c, a)` 8,592,204 and 8,302,954
+       (-3.37%); `format('>>%10s|%-5s<<', c, a)` 8,928,255 and
+       8,195,289 (-8.21%); `format('%2$s %1$s %%', a, c)`
+       7,827,457 and 7,778,569 (-0.62%). The first version read
+       up to 4.5% more: it found each `%` by `memchr`, copied
+       each piece of text by `memcpy`, and read two numbers for a
+       plain `%s`. ty now copies the text in the loop that looks
+       for the `%`, takes `%s`, `%I` and `%L` with no parse, and
+       adds an argument with no width in line.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

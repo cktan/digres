@@ -148,7 +148,8 @@ TEST_CASE("ty_xact_now gives the transaction time in the session's zone") {
 //    daylight time, and the offset is 14400.
 // 4. A later instant gives a later time; the date moves at local midnight.
 // 5. With no clock, each call fails.
-TEST_CASE("CURRENT_DATE, CURRENT_TIME and LOCALTIME read the transaction time") {
+TEST_CASE(
+    "CURRENT_DATE, CURRENT_TIME and LOCALTIME read the transaction time") {
   std::thread t([] {
     int64_t clock = 773411696789012;
     int32_t d, want;
@@ -273,8 +274,8 @@ TEST_CASE("timestamptz to timetz and date and timetz to timestamptz") {
   REQUIRE(0 == ty_timestamptz_to_timetz(ty_tz_find("UTC"), instant, &tt));
   CHECK(((12 * 60 + 34) * 60 + 56) * INT64_C(1000000) + 789012 == tt.time);
   CHECK(0 == tt.zone);
-  REQUIRE(0 ==
-          ty_timestamptz_to_timetz(ty_tz_find("America/New_York"), instant, &tt));
+  REQUIRE(0 == ty_timestamptz_to_timetz(ty_tz_find("America/New_York"), instant,
+                                        &tt));
   CHECK(((8 * 60 + 34) * 60 + 56) * INT64_C(1000000) + 789012 == tt.time);
   CHECK(14400 == tt.zone);
   // 2. A date and a timetz make the instant back.
@@ -291,10 +292,10 @@ TEST_CASE("timestamptz to timetz and date and timetz to timestamptz") {
                   TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE, &tt, &ts));
   CHECK(TY_ERR_RANGE == ty_errnum());
   CHECK(std::string("date out of range for timestamp") == ty_errmsg());
-  ty_timetz_t late = { INT64_C(86399999999), 43200 };
-  CHECK(-1 == ty_datetimetz_to_timestamptz(
-                  TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE - 1, &late,
-                  &ts));
+  ty_timetz_t late = {INT64_C(86399999999), 43200};
+  CHECK(-1 ==
+        ty_datetimetz_to_timestamptz(
+            TY_TIMESTAMP_END_JULIAN - TY_POSTGRES_EPOCH_JDATE - 1, &late, &ts));
   CHECK(TY_ERR_RANGE == ty_errnum());
 }
 

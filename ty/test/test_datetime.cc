@@ -394,7 +394,8 @@ TEST_CASE("ty_timestamp_make puts the fields together, with its messages") {
 
   // 1. The date and the time put together.
   const int32_t years[] = {-4712, -100, -1, 1, 1999, 2000, 2024, 5000};
-  const int32_t times[][3] = {{0, 0, 0}, {12, 34, 56}, {23, 59, 59}, {24, 0, 0}};
+  const int32_t times[][3] = {
+      {0, 0, 0}, {12, 34, 56}, {23, 59, 59}, {24, 0, 0}};
   for (int32_t y : years) {
     for (int32_t m : {1, 2, 12}) {
       for (const auto &t : times) {
@@ -430,7 +431,8 @@ TEST_CASE("ty_timestamp_make puts the fields together, with its messages") {
   CHECK(-1 == ty_timestamp_make(-5, 13, 1, 0, 0, 0, &ts));
   CHECK(std::string("date field value out of range: -5-13-01") == ty_errmsg());
   CHECK(-1 == ty_timestamp_make(2023, 2, 29, 0, 0, 0, &ts));
-  CHECK(std::string("date field value out of range: 2023-02-29") == ty_errmsg());
+  CHECK(std::string("date field value out of range: 2023-02-29") ==
+        ty_errmsg());
   CHECK(-1 == ty_timestamp_make(2024, 1, 1, 25, 0, 0, &ts));
   CHECK(TY_ERR_INVALID == ty_errnum());
   CHECK(std::string("time field value out of range: 25:00:00") == ty_errmsg());
