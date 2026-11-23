@@ -236,8 +236,10 @@ are the catalog tables psql reads
        hash of every type, which is PostgreSQL's, in
        `ty_hash.h`; and the rest of their operations, text in
        and out and encode and decode included. Left over in
-       digres: aggregate states (`string_agg` of bytea, the bool
-       and integer averages), and sort support. Done after that:
+       digres: aggregate states (`string_agg` of bytea), and sort
+       support. The states of the bool aggregates, and of avg and
+       sum over int2 and int4, are in ty since 2026-11-23
+       (`ty_bool_agg_t`, `ty_int_avg_t`). Done after that:
        the floats, with their text (`ty_float.h`), and text for
        the C collation, with varchar, bpchar and name
        (`ty_text.h`), and the arithmetic of interval
@@ -255,8 +257,7 @@ are the catalog tables psql reads
        casts, arithmetic, trunc, parts and age of timestamptz.
        The transaction's clock is sm's, and ty reads it
        (2026-11-23).
-       **Left: `make_timestamptz` with a zone
-       name, `to_char`, the case functions, the regular
+       **Left: `to_char`, the case functions, the regular
        expressions and `format` of text, and the aggregate
        states and sort support above**
        ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
@@ -293,8 +294,8 @@ are the catalog tables psql reads
       1% ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
     - **The hash**: every type's is PostgreSQL's, in `ty_hash.h`,
       so no value and no partition changed.
-    - **Left over**: aggregate states (`string_agg` of bytea,
-      the bool and integer averages), sort support.
+    - **Left over**: aggregate states (`string_agg` of bytea),
+      sort support.
 
     This move is not easy. The code in `utils/adt` does not
     copy over. **Moved code cannot call `palloc()`**: it needs

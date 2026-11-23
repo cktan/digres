@@ -379,3 +379,82 @@ TEST_CASE("the text in of timestamptz and timetz asks the host for offsets") {
                                   &bare, &t, &dterr, &x));
   CHECK(local - 7200 * INT64_C(1000000) == t);
 }
+
+// Verify ty_timestamp_make: the value, the messages of make_timestamp (which
+// words the year as given, as make_date does not), and the edges of the range.
+// 1. A timestamp is the date and the time put together, over a grid of dates
+//    (BC included) and times.
+// 2. The edges of the range: the last microsecond is good, the next is not.
+// 3. A field out of its range is TY_ERR_INVALID, and the message has the year
+//    as given, for BC too.
+// 4. A date or a timestamp that does not fit is TY_ERR_RANGE.
+TEST_CASE("ty_timestamp_make puts the fields together, with its messages") {
+  int64_t ts, tm;
+  int32_t d;
+
+  // 1. The date and the time put together.
+  const int32_t years[] = {-4712, -100, -1, 1, 1999, 2000, 2024, 5000};
+  const int32_t times[][3] = {{0, 0, 0}, {12, 34, 56}, {23, 59, 59}, {24, 0, 0}};
+  for (int32_t y : years) {
+    for (int32_t m : {1, 2, 12}) {
+      for (const auto &t : times) {
+        if (0 != ty_date_make(y, m, 28, &d)) {
+          continue;
+        }
+        /* 24:00:00 is a time, and 24:00:00.789012 is not */
+        double sec = t[2] + (t[0] == 24 ? 0.0 : 0.789012);
+        REQUIRE(0 == ty_time_make(t[0], t[1], sec, &tm));
+        REQUIRE(0 == ty_timestamp_make(y, m, 28, t[0], t[1], sec, &ts));
+        CHECK(ts == (int64_t)d * INT64_C(86400000000) + tm);
+      }
+    }
+  }
+  REQUIRE(0 == ty_timestamp_make(2024, 7, 4, 12, 34, 56.789012, &ts));
+  CHECK(INT64_C(773411696789012) == ts);
+
+  // 2. The edges of the range.
+  REQUIRE(0 == ty_timestamp_make(294276, 12, 31, 23, 59, 59.999999, &ts));
+  CHECK(ty_timestamp_valid(ts));
+  CHECK(-1 == ty_timestamp_make(294276, 12, 31, 24, 0, 0, &ts));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(std::string("timestamp out of range: 294276-12-31 24:00:00") ==
+        ty_errmsg());
+  CHECK(-1 == ty_timestamp_make(294277, 1, 1, 0, 0, 0, &ts));
+  CHECK(std::string("timestamp out of range: 294277-01-01 0:00:00") ==
+        ty_errmsg());
+
+  // 3. A field out of its range.
+  CHECK(-1 == ty_timestamp_make(0, 1, 1, 0, 0, 0, &ts));
+  CHECK(TY_ERR_INVALID == ty_errnum());
+  CHECK(std::string("date field value out of range: 0-01-01") == ty_errmsg());
+  CHECK(-1 == ty_timestamp_make(-5, 13, 1, 0, 0, 0, &ts));
+  CHECK(std::string("date field value out of range: -5-13-01") == ty_errmsg());
+  CHECK(-1 == ty_timestamp_make(2023, 2, 29, 0, 0, 0, &ts));
+  CHECK(std::string("date field value out of range: 2023-02-29") == ty_errmsg());
+  CHECK(-1 == ty_timestamp_make(2024, 1, 1, 25, 0, 0, &ts));
+  CHECK(TY_ERR_INVALID == ty_errnum());
+  CHECK(std::string("time field value out of range: 25:00:00") == ty_errmsg());
+  CHECK(-1 == ty_timestamp_make(2024, 1, 1, 0, 0, 60.5, &ts));
+  CHECK(std::string("time field value out of range: 0:00:60.5") == ty_errmsg());
+
+  // 4. A date, or a timestamp, that does not fit, with the year as given: the
+  //    answers are those of make_timestamp before the move.
+  CHECK(0 == ty_timestamp_make(-4714, 11, 24, 0, 0, 0, &ts));
+  CHECK(-1 == ty_timestamp_make(-4714, 11, 23, 0, 0, 0, &ts));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(std::string("timestamp out of range: -4714-11-23 0:00:00") ==
+        ty_errmsg());
+  CHECK(-1 == ty_timestamp_make(-4714, 1, 1, 0, 0, 0, &ts));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(std::string("date out of range: -4714-01-01") == ty_errmsg());
+  CHECK(-1 == ty_timestamp_make(5874898, 1, 1, 0, 0, 0, &ts));
+  CHECK(std::string("timestamp out of range: 5874898-01-01 0:00:00") ==
+        ty_errmsg());
+  CHECK(-1 == ty_timestamp_make(5874899, 1, 1, 0, 0, 0, &ts));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(std::string("date out of range: 5874899-01-01") == ty_errmsg());
+  CHECK(-1 == ty_timestamp_make(INT32_MIN, 1, 1, 0, 0, 0, &ts));
+  CHECK(TY_ERR_INVALID == ty_errnum());
+  CHECK(std::string("date field value out of range: -2147483648-01-01") ==
+        ty_errmsg());
+}

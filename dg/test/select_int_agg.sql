@@ -1,0 +1,10 @@
+-- Verify sum and avg of int2 and int4, which ty's state serves (ty_int_avg_t,
+-- ty_int_sum_add): with nulls, with no row, at the edges of the width, and over
+-- a moving frame, which takes a value out of the state (intX_avg_accum_inv).
+SELECT g, sum(a) AS s2, avg(a) AS a2, sum(b) AS s4, avg(b) AS a4, count(b) AS n FROM (VALUES (1, 1::int2, 1::int4), (1, 2::int2, 2::int4), (1, 4::int2, 4::int4), (2, 32767::int2, 2147483647::int4), (2, 32767::int2, 2147483647::int4), (2, 32767::int2, 2147483647::int4), (3, (-32768)::int2, (-2147483648)::int4), (3, (-32768)::int2, (-2147483648)::int4), (4, NULL::int2, NULL::int4), (4, 7::int2, 7::int4), (5, NULL::int2, NULL::int4)) v(g, a, b) GROUP BY g ORDER BY g;
+SELECT sum(a) AS s2, avg(a) AS a2, sum(b) AS s4, avg(b) AS a4, sum(c) AS s8, avg(c) AS a8 FROM (VALUES (1::int2, 1::int4, 1::int8)) v(a, b, c) WHERE false;
+SELECT i, a, sum(a) OVER w AS s2, avg(a) OVER w AS a2, sum(b) OVER w AS s4, avg(b) OVER w AS a4 FROM (VALUES (1, 10::int2, 100::int4), (2, 20::int2, 200::int4), (3, NULL::int2, NULL::int4), (4, 40::int2, 400::int4), (5, 50::int2, 500::int4), (6, (-60)::int2, (-600)::int4)) v(i, a, b) WINDOW w AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) ORDER BY i;
+SELECT i, sum(b) OVER w AS s4, avg(b) OVER w AS a4, sum(a) OVER w AS s2 FROM (VALUES (1, 1::int2, 2147483647::int4), (2, 2::int2, 2147483647::int4), (3, 3::int2, 2147483647::int4), (4, 4::int2, (-2147483648)::int4), (5, 5::int2, (-2147483648)::int4)) v(i, a, b) WINDOW w AS (ORDER BY i ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING) ORDER BY i;
+SELECT i, sum(b) OVER (ORDER BY i) AS run_s, avg(b) OVER (ORDER BY i) AS run_a FROM (VALUES (1, 1::int4), (2, 2::int4), (3, 3::int4)) v(i, b) ORDER BY i;
+SELECT sum(b) FILTER (WHERE i > 1) AS f_s, avg(b) FILTER (WHERE i > 1) AS f_a, sum(b) FILTER (WHERE i > 9) AS f_empty, avg(b) FILTER (WHERE i > 9) AS f_aempty FROM (VALUES (1, 10::int4), (2, 20::int4), (3, 40::int4)) v(i, b);
+SELECT sum(c) AS s8, avg(c) AS a8 FROM (VALUES (9223372036854775807::int8), (9223372036854775807::int8), (1::int8)) v(c);

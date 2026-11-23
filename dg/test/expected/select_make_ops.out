@@ -1,0 +1,75 @@
+-- Verify make_timestamp, make_timestamptz and make_timestamptz with a time zone,
+-- which ty serves (ty_timestamp_make): the values, the edges of the range, and
+-- the messages, which word the year as it was given. A refusal is what is
+-- tested, so an error goes on to the next statement.
+\set ON_ERROR_STOP off
+SET datestyle = 'ISO, MDY';
+SET timezone = 'UTC';
+SELECT make_timestamp(2024, 7, 4, 12, 34, 56.789012) AS ts, make_timestamp(2000, 1, 1, 0, 0, 0) AS y2k, make_timestamp(-1, 1, 1, 0, 0, 0) AS bc1, make_timestamp(-4714, 11, 24, 0, 0, 0) AS first, make_timestamp(294276, 12, 31, 23, 59, 59.999999) AS last, make_timestamp(2024, 2, 29, 24, 0, 0) AS h24, make_timestamp(2024, 1, 1, 0, 0, 0.0000005) AS round_up, make_timestamp(2024, 1, 1, 0, 0, 0.0000015) AS round_even;
+             ts             |         y2k         |          bc1           |         first          |             last             |         h24         |      round_up       |         round_even         
+----------------------------+---------------------+------------------------+------------------------+------------------------------+---------------------+---------------------+----------------------------
+ 2024-07-04 12:34:56.789012 | 2000-01-01 00:00:00 | 0001-01-01 00:00:00 BC | 4714-11-24 00:00:00 BC | 294276-12-31 23:59:59.999999 | 2024-03-01 00:00:00 | 2024-01-01 00:00:00 | 2024-01-01 00:00:00.000002
+(1 row)
+
+SELECT make_timestamptz(2024, 7, 4, 12, 34, 56.789012) AS utc;
+              utc              
+-------------------------------
+ 2024-07-04 12:34:56.789012+00
+(1 row)
+
+SET timezone = 'America/New_York';
+SELECT make_timestamptz(2024, 7, 4, 12, 34, 56.789012) AS ny, make_timestamptz(2024, 3, 10, 2, 30, 0) AS gap, make_timestamptz(2024, 11, 3, 1, 30, 0) AS fold, make_timestamptz(-4714, 11, 24, 0, 0, 0) AS first;
+              ny               |          gap           |          fold          |              first              
+-------------------------------+------------------------+------------------------+---------------------------------
+ 2024-07-04 12:34:56.789012-04 | 2024-03-10 03:30:00-04 | 2024-11-03 01:30:00-05 | 4714-11-24 00:00:00-04:56:02 BC
+(1 row)
+
+SELECT make_timestamptz(2024, 7, 4, 12, 0, 0, 'UTC') AS utc, make_timestamptz(2024, 7, 4, 12, 0, 0, 'Europe/London') AS lon, make_timestamptz(2024, 1, 4, 12, 0, 0, 'Europe/London') AS lon_w, make_timestamptz(2024, 3, 31, 1, 30, 0, 'Europe/London') AS lon_gap, make_timestamptz(2024, 10, 27, 1, 30, 0, 'Europe/London') AS lon_fold, make_timestamptz(2024, 7, 4, 12, 0, 0, 'EST') AS est, make_timestamptz(2024, 7, 4, 12, 0, 0, 'EDT') AS edt, make_timestamptz(2024, 7, 4, 12, 0, 0, 'MSK') AS msk, make_timestamptz(2024, 7, 4, 12, 0, 0, '+05:30') AS num, make_timestamptz(2024, 7, 4, 12, 0, 0, '-03') AS neg, make_timestamptz(2024, 7, 4, 12, 0, 0, 'Asia/Kolkata') AS kol;
+          utc           |          lon           |         lon_w          |        lon_gap         |        lon_fold        |          est           |          edt           |          msk           |          num           |          neg           |          kol           
+------------------------+------------------------+------------------------+------------------------+------------------------+------------------------+------------------------+------------------------+------------------------+------------------------+------------------------
+ 2024-07-04 08:00:00-04 | 2024-07-04 07:00:00-04 | 2024-01-04 07:00:00-05 | 2024-03-30 21:30:00-04 | 2024-10-26 21:30:00-04 | 2024-07-04 13:00:00-04 | 2024-07-04 12:00:00-04 | 2024-07-04 05:00:00-04 | 2024-07-04 02:30:00-04 | 2024-07-04 11:00:00-04 | 2024-07-04 02:30:00-04
+(1 row)
+
+SELECT make_timestamp(0, 1, 1, 0, 0, 0);
+psql:test/select_make_ops.sql:13: ERROR:  date field value out of range: 0-01-01
+SELECT make_timestamp(-5, 13, 1, 0, 0, 0);
+psql:test/select_make_ops.sql:14: ERROR:  date field value out of range: -5-13-01
+SELECT make_timestamp(2023, 2, 29, 0, 0, 0);
+psql:test/select_make_ops.sql:15: ERROR:  date field value out of range: 2023-02-29
+SELECT make_timestamp(2024, 1, 1, 25, 0, 0);
+psql:test/select_make_ops.sql:16: ERROR:  time field value out of range: 25:00:00
+SELECT make_timestamp(2024, 1, 1, 0, 60, 0);
+psql:test/select_make_ops.sql:17: ERROR:  time field value out of range: 0:60:00
+SELECT make_timestamp(2024, 1, 1, 0, 0, 60.5);
+psql:test/select_make_ops.sql:18: ERROR:  time field value out of range: 0:00:60.5
+SELECT make_timestamp(2024, 1, 1, 0, 0, 'NaN');
+psql:test/select_make_ops.sql:19: ERROR:  time field value out of range: 0:00:NaN
+SELECT make_timestamp(2024, 1, 1, 0, 0, 'Infinity');
+psql:test/select_make_ops.sql:20: ERROR:  time field value out of range: 0:00:Infinity
+SELECT make_timestamp(-4714, 11, 23, 0, 0, 0);
+psql:test/select_make_ops.sql:21: ERROR:  timestamp out of range: -4714-11-23 0:00:00
+SELECT make_timestamp(-4714, 1, 1, 0, 0, 0);
+psql:test/select_make_ops.sql:22: ERROR:  date out of range: -4714-01-01
+SELECT make_timestamp(5874897, 12, 31, 0, 0, 0);
+psql:test/select_make_ops.sql:23: ERROR:  timestamp out of range: 5874897-12-31 0:00:00
+SELECT make_timestamp(5874898, 1, 1, 0, 0, 0);
+psql:test/select_make_ops.sql:24: ERROR:  timestamp out of range: 5874898-01-01 0:00:00
+SELECT make_timestamp(5874899, 1, 1, 0, 0, 0);
+psql:test/select_make_ops.sql:25: ERROR:  date out of range: 5874899-01-01
+SELECT make_timestamp(294276, 12, 31, 24, 0, 0);
+psql:test/select_make_ops.sql:26: ERROR:  timestamp out of range: 294276-12-31 24:00:00
+SELECT make_timestamp(294277, 1, 1, 0, 0, 0);
+psql:test/select_make_ops.sql:27: ERROR:  timestamp out of range: 294277-01-01 0:00:00
+SELECT make_timestamp(-2147483648, 1, 1, 0, 0, 0);
+psql:test/select_make_ops.sql:28: ERROR:  date field value out of range: -2147483648-01-01
+SELECT make_timestamptz(2024, 13, 1, 0, 0, 0);
+psql:test/select_make_ops.sql:29: ERROR:  date field value out of range: 2024-13-01
+SELECT make_timestamptz(294277, 1, 1, 0, 0, 0, 'UTC');
+psql:test/select_make_ops.sql:30: ERROR:  timestamp out of range: 294277-01-01 0:00:00
+SELECT make_timestamptz(2024, 7, 4, 12, 0, 0, 'Nowhere/Land');
+psql:test/select_make_ops.sql:31: ERROR:  time zone "Nowhere/Land" not recognized
+SELECT make_timestamptz(2024, 7, 4, 12, 0, 0, '5');
+psql:test/select_make_ops.sql:32: ERROR:  invalid input syntax for type numeric time zone: "5"
+HINT:  Numeric time zones must have "-" or "+" as first character.
+SELECT make_timestamptz(294276, 12, 31, 23, 59, 59.999999, '-01');
+psql:test/select_make_ops.sql:33: ERROR:  timestamp out of range

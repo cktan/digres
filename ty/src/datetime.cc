@@ -101,7 +101,8 @@ int ty_days_in_month(int year, int mon) {
  *    of range. The year of BC is then 1 - year, as the Julian routines want.
  * 3. A date outside the Julian range, or just outside the dates: out of range.
  */
-int ty_date_make(int32_t year, int32_t mon, int32_t mday, int32_t *out) {
+static int date_make_impl(int32_t year, int32_t mon, int32_t mday,
+                          bool as_timestamp, int32_t *out) {
   char msg[96];
   int32_t y = year;
   bool bc = false;
@@ -137,24 +138,58 @@ int ty_date_make(int32_t year, int32_t mon, int32_t mday, int32_t *out) {
     bad = true;
   }
   if (bad) {
-    /* PostgreSQL prints the year after the BC change */
+    /* make_date prints the year after the BC change, make_timestamp as given */
     snprintf(msg, sizeof msg, "date field value out of range: %d-%02d-%02d",
-             bc && ty != y ? ty : y, mon, mday);
+             as_timestamp ? year : (bc && ty != y ? ty : y), mon, mday);
     return ty_internal::set_error(TY_ERR_INVALID, msg);
   }
   if (!valid_julian(ty, mon)) {
-    snprintf(msg, sizeof msg, "date out of range: %d-%02d-%02d", ty, mon, mday);
+    snprintf(msg, sizeof msg, "date out of range: %d-%02d-%02d",
+             as_timestamp ? year : ty, mon, mday);
     return ty_internal::set_error(TY_ERR_RANGE, msg);
   }
   int32_t date = ty_date2j(ty, mon, mday) - TY_POSTGRES_EPOCH_JDATE;
 
-  if (!ty_date_valid(date)) {
+  /* a timestamp has no other check of the date: its range is the result's */
+  if (!as_timestamp && !ty_date_valid(date)) {
     snprintf(msg, sizeof msg, "date out of range: %d-%02d-%02d", ty, mon, mday);
     return ty_internal::set_error(TY_ERR_RANGE, msg);
   }
   *out = date;
   return 0;
 }
+
+/* make_date: see ty_datetime.h. */
+int ty_date_make(int32_t year, int32_t mon, int32_t mday, int32_t *out) {
+  return date_make_impl(year, mon, mday, false, out);
+}
+
+/* make_timestamp: see ty_datetime.h. */
+int ty_timestamp_make(int32_t year, int32_t mon, int32_t mday, int32_t hour,
+                      int32_t min, double sec, int64_t *out) {
+  int32_t date;
+  int64_t time, result;
+
+  if (date_make_impl(year, mon, mday, true, &date) != 0) {
+    return -1;
+  }
+  if (ty_time_make(hour, min, sec, &time) != 0) {
+    return -1;
+  }
+  /* the result must fit, and the final range check catches just-out-of-range */
+  if (__builtin_mul_overflow((int64_t)date, TY_USECS_PER_HOUR * 24, &result) ||
+      __builtin_add_overflow(result, time, &result) ||
+      !ty_timestamp_valid(result)) {
+    char msg[128];
+
+    snprintf(msg, sizeof msg, "timestamp out of range: %d-%02d-%02d %d:%02d:%02g",
+             year, mon, mday, hour, min, sec);
+    return ty_internal::set_error(TY_ERR_RANGE, msg);
+  }
+  *out = result;
+  return 0;
+}
+
 
 /* The error of a date that does not fit. */
 int ty_date_range_error(void) {

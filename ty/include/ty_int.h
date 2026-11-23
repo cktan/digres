@@ -314,4 +314,45 @@ static inline uint64_t ty_int32_hash(int32_t a, uint64_t seed) {
 /* An int64 as a double: the nearest, as C converts it. */
 static inline double ty_int64_to_double(int64_t a) { return (double)a; }
 
+/*
+ * The state of avg and sum over int2 and int4, and of their moving frames: the
+ * number of values, and the sum of them in an int64. The sum of values of 32
+ * bits needs 2^32 values to overflow an int64, and PostgreSQL does not check:
+ * the sum wraps, here without the undefined behavior of a signed overflow. A
+ * caller keeps the state, zeroed, and passes only values that are not NULL.
+ */
+typedef struct ty_int_avg_t {
+  int64_t count;
+  int64_t sum;
+} ty_int_avg_t;
+
+/* A value enters the state, and leaves it (the moving frame). */
+static inline void ty_int_avg_accum(ty_int_avg_t *st, int64_t v) {
+  st->count++;
+  st->sum = (int64_t)((uint64_t)st->sum + (uint64_t)v);
+}
+static inline void ty_int_avg_accum_inv(ty_int_avg_t *st, int64_t v) {
+  st->count--;
+  st->sum = (int64_t)((uint64_t)st->sum - (uint64_t)v);
+}
+
+/* Add the state b into the state a (the parts of a parallel aggregate). */
+static inline void ty_int_avg_combine(ty_int_avg_t *a, const ty_int_avg_t *b) {
+  a->count += b->count;
+  a->sum = (int64_t)((uint64_t)a->sum + (uint64_t)b->sum);
+}
+
+/* The state has no value: avg and sum are NULL. */
+static inline int ty_int_avg_empty(const ty_int_avg_t *st) {
+  return st->count == 0;
+}
+
+/*
+ * The running sum of sum(int2) and sum(int4) in plain mode: the sum so far
+ * and a new value, with the same wrap.
+ */
+static inline int64_t ty_int_sum_add(int64_t sum, int64_t v) {
+  return (int64_t)((uint64_t)sum + (uint64_t)v);
+}
+
 #endif /* TY_INT_H */
