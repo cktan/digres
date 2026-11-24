@@ -23,18 +23,15 @@
 #include "access/toast_compression.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
-#include "common/hashfn.h"
 #include "common/int.h"
 #include "common/unicode_category.h"
 #include "common/unicode_norm.h"
 #include "common/unicode_version.h"
 #include "funcapi.h"
-#include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "nodes/execnodes.h"
 #include "parser/scansup.h"
-#include "port/pg_bswap.h"
 #include "regex/regex.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
@@ -44,6 +41,7 @@
 #include "utils/pg_locale.h"
 #include "utils/sortsupport.h"
 #include "utils/varlena.h"
+#include "ty_abbrev.h"
 #include "ty_text.h"
 #include "ty_bytea.h"
 #include "utils/ty_glue.h"
@@ -100,9 +98,7 @@ typedef struct {
   bool cache_blob;   /* Does buf2 contain strxfrm() blob, etc? */
   bool collate_c;
   Oid typid;                  /* Actual datatype (text/bpchar/bytea/name) */
-  hyperLogLogState abbr_card; /* Abbreviated key cardinality state */
-  hyperLogLogState full_card; /* Full key cardinality state */
-  double prop_card;           /* Required cardinality proportion */
+  ty_abbrev_bytes_t abbrev;   /* ty's estimates of keys and values */
   pg_locale_t locale;
 } VarStringSortSupport;
 
@@ -162,7 +158,19 @@ static void split_text_accum_result(SplitTextOutputData *tstate,
 static text *array_to_text_internal(FunctionCallInfo fcinfo, ArrayType *v,
                                     const char *fldsep,
                                     const char *null_string);
-static StringInfo makeStringAggState(FunctionCallInfo fcinfo);
+/*
+ * The state of string_agg over text and bytea: ty's, and the aggregate's
+ * memory context, where ty allocates its bytes.
+ */
+typedef struct StringAggState {
+  ty_string_agg_t agg;
+  MemoryContext cxt;
+} StringAggState;
+
+static StringAggState *makeStringAggState(FunctionCallInfo fcinfo);
+static void string_agg_add(StringAggState *state, const struct varlena *delim,
+                           const struct varlena *value);
+static pg_noreturn void string_agg_raise(const ty_string_agg_t *st);
 static void text_format_string_conversion(ty_format_t *f, char conversion,
                                           FmgrInfo *typOutputInfo, Datum value,
                                           bool isNull, int minus, int width);
@@ -373,41 +381,18 @@ Datum byteasend(PG_FUNCTION_ARGS) {
 }
 
 Datum bytea_string_agg_transfn(PG_FUNCTION_ARGS) {
-  StringInfo state;
+  StringAggState *state;
 
-  state = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
+  state = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
 
   /* Append the value unless null, preceding it with the delimiter. */
   if (!PG_ARGISNULL(1)) {
     bytea *value = PG_GETARG_BYTEA_PP(1);
-    bool isfirst = false;
+    bytea *delim = PG_ARGISNULL(2) ? NULL : PG_GETARG_BYTEA_PP(2);
 
-    /*
-     * You might think we can just throw away the first delimiter, however
-     * we must keep it as we may be a parallel worker doing partial
-     * aggregation building a state to send to the main process.  We need
-     * to keep the delimiter of every aggregation so that the combine
-     * function can properly join up the strings of two separately
-     * partially aggregated results.  The first delimiter is only stripped
-     * off in the final function.  To know how much to strip off the front
-     * of the string, we store the length of the first delimiter in the
-     * StringInfo's cursor field, which we don't otherwise need here.
-     */
-    if (state == NULL) {
+    if (NULL == state)
       state = makeStringAggState(fcinfo);
-      isfirst = true;
-    }
-
-    if (!PG_ARGISNULL(2)) {
-      bytea *delim = PG_GETARG_BYTEA_PP(2);
-
-      appendBinaryStringInfo(state, VARDATA_ANY(delim),
-                             VARSIZE_ANY_EXHDR(delim));
-      if (isfirst)
-        state->cursor = VARSIZE_ANY_EXHDR(delim);
-    }
-
-    appendBinaryStringInfo(state, VARDATA_ANY(value), VARSIZE_ANY_EXHDR(value));
+    string_agg_add(state, delim, value);
   }
 
   /*
@@ -420,24 +405,19 @@ Datum bytea_string_agg_transfn(PG_FUNCTION_ARGS) {
 }
 
 Datum bytea_string_agg_finalfn(PG_FUNCTION_ARGS) {
-  StringInfo state;
+  StringAggState *state;
+  bytea *result;
 
   /* cannot be called directly because of internal-type argument */
   Assert(AggCheckCallContext(fcinfo, NULL));
 
-  state = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
-
-  if (state != NULL) {
-    /* As per comment in transfn, strip data before the cursor position */
-    bytea *result;
-    int strippedlen = state->len - state->cursor;
-
-    result = (bytea *)palloc(strippedlen + VARHDRSZ);
-    SET_VARSIZE(result, strippedlen + VARHDRSZ);
-    memcpy(VARDATA(result), &state->data[state->cursor], strippedlen);
-    PG_RETURN_BYTEA_P(result);
-  } else
+  state = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
+  if (NULL == state)
     PG_RETURN_NULL();
+  /* ty cuts the first delimiter */
+  if (ty_string_agg_finish(&state->agg, TYVO(&result)))
+    ty_raise_alloc();
+  PG_RETURN_BYTEA_P(result);
 }
 
 /*
@@ -1599,9 +1579,9 @@ void varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid) {
      * abbreviation be aborted.
      */
     if (abbreviate) {
-      sss->prop_card = 0.20;
-      initHyperLogLog(&sss->abbr_card, 10);
-      initHyperLogLog(&sss->full_card, 10);
+      /* ty's estimators, in the context the sort calls this in */
+      if (ty_abbrev_bytes_init(&sss->abbrev))
+        ty_raise_alloc();
       ssup->abbrev_full_comparator = ssup->comparator;
       ssup->comparator = ssup_datum_unsigned_cmp;
       ssup->abbrev_converter = varstr_abbrev_convert;
@@ -1812,7 +1792,6 @@ static Datum varstr_abbrev_convert(Datum original, SortSupport ssup) {
   Datum res;
   char *pres;
   int len;
-  uint32 hash;
 
   pres = (char *)&res;
   /* memset(), so any non-overwritten bytes are NUL */
@@ -1850,9 +1829,12 @@ static Datum varstr_abbrev_convert(Datum original, SortSupport ssup) {
    * -- then an authoritative tie-breaker will happen, and do the right
    * thing: explicitly consider string length.
    */
-  if (sss->collate_c)
-    memcpy(pres, authoritative_data, Min(len, max_prefix_bytes));
-  else {
+  if (sss->collate_c) {
+    /* ty makes the key, and counts it and the value */
+    res = (Datum)ty_abbrev_bytes(&sss->abbrev, authoritative_data, len);
+    sss->cache_blob = true;
+    goto out;
+  } else {
     Size bsize;
 
     /*
@@ -1929,52 +1911,22 @@ static Datum varstr_abbrev_convert(Datum original, SortSupport ssup) {
 
   /*
    * Maintain approximate cardinality of both abbreviated keys and original,
-   * authoritative keys using HyperLogLog.  Used as cheap insurance against
-   * the worst case, where we do many string transformations for no saving
-   * in full strcoll()-based comparisons.  These statistics are used by
-   * varstr_abbrev_abort().
-   *
-   * First, Hash key proper, or a significant fraction of it.  Mix in length
-   * in order to compensate for cases where differences are past
-   * PG_CACHE_LINE_SIZE bytes, so as to limit the overhead of hashing.
+   * authoritative keys using HyperLogLog, which varstr_abbrev_abort() judges
+   * by: ty counts the two, and gives the key in the order
+   * ssup_datum_unsigned_cmp() compares.
    */
-  hash = DatumGetUInt32(hash_any((unsigned char *)authoritative_data,
-                                 Min(len, PG_CACHE_LINE_SIZE)));
-
-  if (len > PG_CACHE_LINE_SIZE)
-    hash ^= DatumGetUInt32(hash_uint32((uint32)len));
-
-  addHyperLogLog(&sss->full_card, hash);
-
-  /* Hash abbreviated key */
-#if SIZEOF_DATUM == 8
-  {
-    uint32 lohalf, hihalf;
-
-    lohalf = (uint32)res;
-    hihalf = (uint32)(res >> 32);
-    hash = DatumGetUInt32(hash_uint32(lohalf ^ hihalf));
-  }
-#else /* SIZEOF_DATUM != 8 */
-  hash = DatumGetUInt32(hash_uint32((uint32)res));
-#endif
-
-  addHyperLogLog(&sss->abbr_card, hash);
+  res = (Datum)ty_abbrev_bytes_count(&sss->abbrev, authoritative_data, len,
+                                     (uint64)res);
 
   /* Cache result, perhaps saving an expensive strxfrm() call next time */
   sss->cache_blob = true;
+  goto out;
+
 done:
+  /* the cached blob's key, with no change to the counts */
+  res = (Datum)ty_abbrev_order((uint64)res);
 
-  /*
-   * Byteswap on little-endian machines.
-   *
-   * This is needed so that ssup_datum_unsigned_cmp() (an unsigned integer
-   * 3-way comparator) works correctly on all platforms.  If we didn't do
-   * this, the comparator would have to call memcmp() with a pair of
-   * pointers to the first byte of each abbreviated key, which is slower.
-   */
-  res = DatumBigEndianToNative(res);
-
+out:
   /* Don't leak memory here */
   if (PointerGetDatum(authoritative) != original)
     pfree(authoritative);
@@ -1989,33 +1941,17 @@ done:
  */
 static bool varstr_abbrev_abort(int memtupcount, SortSupport ssup) {
   VarStringSortSupport *sss = (VarStringSortSupport *)ssup->ssup_extra;
-  double abbrev_distinct, key_distinct;
+  double abbrev_distinct, key_distinct, prop_card;
+  int rc;
 
   Assert(ssup->abbreviate);
 
-  /* Have a little patience */
-  if (memtupcount < 100)
+  /* ty judges, by PostgreSQL's rule; the log is digres's */
+  rc = ty_abbrev_bytes_abort(&sss->abbrev, memtupcount, &abbrev_distinct,
+                             &key_distinct, &prop_card);
+  if (TY_ABBREV_WAIT == rc)
     return false;
 
-  abbrev_distinct = estimateHyperLogLog(&sss->abbr_card);
-  key_distinct = estimateHyperLogLog(&sss->full_card);
-
-  /*
-   * Clamp cardinality estimates to at least one distinct value.  While
-   * NULLs are generally disregarded, if only NULL values were seen so far,
-   * that might misrepresent costs if we failed to clamp.
-   */
-  if (abbrev_distinct <= 1.0)
-    abbrev_distinct = 1.0;
-
-  if (key_distinct <= 1.0)
-    key_distinct = 1.0;
-
-  /*
-   * In the worst case all abbreviated keys are identical, while at the same
-   * time there are differences within full key strings not captured in
-   * abbreviations.
-   */
   if (tcb->guc.trace_sort) {
     double norm_abbrev_card = abbrev_distinct / (double)memtupcount;
 
@@ -2023,73 +1959,16 @@ static bool varstr_abbrev_abort(int memtupcount, SortSupport ssup) {
          "varstr_abbrev: abbrev_distinct after %d: %f "
          "(key_distinct: %f, norm_abbrev_card: %f, prop_card: %f)",
          memtupcount, abbrev_distinct, key_distinct, norm_abbrev_card,
-         sss->prop_card);
+         prop_card);
   }
-
-  /*
-   * If the number of distinct abbreviated keys approximately matches the
-   * number of distinct authoritative original keys, that's reason enough to
-   * proceed.  We can win even with a very low cardinality set if most
-   * tie-breakers only memcmp().  This is by far the most important
-   * consideration.
-   *
-   * While comparisons that are resolved at the abbreviated key level are
-   * considerably cheaper than tie-breakers resolved with memcmp(), both of
-   * those two outcomes are so much cheaper than a full strcoll() once
-   * sorting is underway that it doesn't seem worth it to weigh abbreviated
-   * cardinality against the overall size of the set in order to more
-   * accurately model costs.  Assume that an abbreviated comparison, and an
-   * abbreviated comparison with a cheap memcmp()-based authoritative
-   * resolution are equivalent.
-   */
-  if (abbrev_distinct > key_distinct * sss->prop_card) {
-    /*
-     * When we have exceeded 10,000 tuples, decay required cardinality
-     * aggressively for next call.
-     *
-     * This is useful because the number of comparisons required on
-     * average increases at a linearithmic rate, and at roughly 10,000
-     * tuples that factor will start to dominate over the linear costs of
-     * string transformation (this is a conservative estimate).  The decay
-     * rate is chosen to be a little less aggressive than halving -- which
-     * (since we're called at points at which memtupcount has doubled)
-     * would never see the cost model actually abort past the first call
-     * following a decay.  This decay rate is mostly a precaution against
-     * a sudden, violent swing in how well abbreviated cardinality tracks
-     * full key cardinality.  The decay also serves to prevent a marginal
-     * case from being aborted too late, when too much has already been
-     * invested in string transformation.
-     *
-     * It's possible for sets of several million distinct strings with
-     * mere tens of thousands of distinct abbreviated keys to still
-     * benefit very significantly.  This will generally occur provided
-     * each abbreviated key is a proxy for a roughly uniform number of the
-     * set's full keys. If it isn't so, we hope to catch that early and
-     * abort.  If it isn't caught early, by the time the problem is
-     * apparent it's probably not worth aborting.
-     */
-    if (memtupcount > 10000)
-      sss->prop_card *= 0.65;
-
+  if (TY_ABBREV_GO_ON == rc)
     return false;
-  }
 
-  /*
-   * Abort abbreviation strategy.
-   *
-   * The worst case, where all abbreviated keys are identical while all
-   * original strings differ will typically only see a regression of about
-   * 10% in execution time for small to medium sized lists of strings.
-   * Whereas on modern CPUs where cache stalls are the dominant cost, we can
-   * often expect very large improvements, particularly with sets of strings
-   * of moderately high to high abbreviated cardinality.  There is little to
-   * lose but much to gain, which our strategy reflects.
-   */
   if (tcb->guc.trace_sort)
     elog(LOG,
          "varstr_abbrev: aborted abbreviation at %d "
          "(abbrev_distinct: %f, key_distinct: %f, prop_card: %f)",
-         memtupcount, abbrev_distinct, key_distinct, sss->prop_card);
+         memtupcount, abbrev_distinct, key_distinct, prop_card);
 
   return true;
 }
@@ -4320,10 +4199,9 @@ Datum pg_column_toast_chunk_id(PG_FUNCTION_ARGS) {
  */
 
 /* subroutine to initialize state */
-static StringInfo makeStringAggState(FunctionCallInfo fcinfo) {
-  StringInfo state;
+static StringAggState *makeStringAggState(FunctionCallInfo fcinfo) {
+  StringAggState *state;
   MemoryContext aggcontext;
-  MemoryContext oldcontext;
 
   if (!AggCheckCallContext(fcinfo, &aggcontext)) {
     /* cannot be called directly because of internal-type argument */
@@ -4334,48 +4212,60 @@ static StringInfo makeStringAggState(FunctionCallInfo fcinfo) {
    * Create state in aggregate context.  It'll stay there across subsequent
    * calls.
    */
-  oldcontext = MemoryContextSwitchTo(aggcontext);
-  state = makeStringInfo();
-  MemoryContextSwitchTo(oldcontext);
-
+  state = (StringAggState *)MemoryContextAllocZero(aggcontext,
+                                                   sizeof(StringAggState));
+  state->cxt = aggcontext;
   return state;
 }
 
-Datum string_agg_transfn(PG_FUNCTION_ARGS) {
-  StringInfo state;
+/*
+ * Add a value after its delimiter, NULL for none. ty's bytes are the
+ * aggregate's, so its context is current for the call.
+ */
+static void string_agg_add(StringAggState *state, const struct varlena *delim,
+                           const struct varlena *value) {
+  MemoryContext oldcontext = MemoryContextSwitchTo(state->cxt);
+  int rc;
 
-  state = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
+  /*
+   * ty keeps the first delimiter, for a parallel aggregate's combine, and
+   * cuts it in the final function.
+   */
+  rc = ty_string_agg_add(&state->agg, delim ? VARDATA_ANY(delim) : NULL,
+                         delim ? VARSIZE_ANY_EXHDR(delim) : 0,
+                         VARDATA_ANY(value), VARSIZE_ANY_EXHDR(value));
+  MemoryContextSwitchTo(oldcontext);
+  if (rc)
+    string_agg_raise(&state->agg);
+}
+
+/*
+ * Raise the error of a call that adds to a state: the detail of a
+ * StringInfo's limit, or an allocation's error.
+ */
+static void string_agg_raise(const ty_string_agg_t *st) {
+  if (0 != st->need)
+    ereport(ERROR,
+            (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED), errmsg("%s", ty_errmsg()),
+             errdetail("Cannot enlarge string buffer containing %d bytes by "
+                       "%d more bytes.",
+                       (int)st->had, (int)st->need)));
+  ty_raise_alloc();
+}
+
+Datum string_agg_transfn(PG_FUNCTION_ARGS) {
+  StringAggState *state;
+
+  state = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
 
   /* Append the value unless null, preceding it with the delimiter. */
   if (!PG_ARGISNULL(1)) {
     text *value = PG_GETARG_TEXT_PP(1);
-    bool isfirst = false;
+    text *delim = PG_ARGISNULL(2) ? NULL : PG_GETARG_TEXT_PP(2);
 
-    /*
-     * You might think we can just throw away the first delimiter, however
-     * we must keep it as we may be a parallel worker doing partial
-     * aggregation building a state to send to the main process.  We need
-     * to keep the delimiter of every aggregation so that the combine
-     * function can properly join up the strings of two separately
-     * partially aggregated results.  The first delimiter is only stripped
-     * off in the final function.  To know how much to strip off the front
-     * of the string, we store the length of the first delimiter in the
-     * StringInfo's cursor field, which we don't otherwise need here.
-     */
-    if (state == NULL) {
+    if (NULL == state)
       state = makeStringAggState(fcinfo);
-      isfirst = true;
-    }
-
-    if (!PG_ARGISNULL(2)) {
-      text *delim = PG_GETARG_TEXT_PP(2);
-
-      appendStringInfoText(state, delim);
-      if (isfirst)
-        state->cursor = VARSIZE_ANY_EXHDR(delim);
-    }
-
-    appendStringInfoText(state, value);
+    string_agg_add(state, delim, value);
   }
 
   /*
@@ -4393,15 +4283,16 @@ Datum string_agg_transfn(PG_FUNCTION_ARGS) {
  *string_agg(bytea)
  */
 Datum string_agg_combine(PG_FUNCTION_ARGS) {
-  StringInfo state1;
-  StringInfo state2;
-  MemoryContext agg_context;
+  StringAggState *state1;
+  StringAggState *state2;
+  MemoryContext old_context;
+  int rc;
 
-  if (!AggCheckCallContext(fcinfo, &agg_context))
+  if (!AggCheckCallContext(fcinfo, NULL))
     elog(ERROR, "aggregate function called in non-aggregate context");
 
-  state1 = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
-  state2 = PG_ARGISNULL(1) ? NULL : (StringInfo)PG_GETARG_POINTER(1);
+  state1 = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
+  state2 = PG_ARGISNULL(1) ? NULL : (StringAggState *)PG_GETARG_POINTER(1);
 
   if (state2 == NULL) {
     /*
@@ -4413,19 +4304,14 @@ Datum string_agg_combine(PG_FUNCTION_ARGS) {
     PG_RETURN_POINTER(state1);
   }
 
-  if (state1 == NULL) {
-    /* We must copy state2's data into the agg_context */
-    MemoryContext old_context;
-
-    old_context = MemoryContextSwitchTo(agg_context);
+  /* A new state1 takes state2's first delimiter from ty */
+  if (NULL == state1)
     state1 = makeStringAggState(fcinfo);
-    appendBinaryStringInfo(state1, state2->data, state2->len);
-    state1->cursor = state2->cursor;
-    MemoryContextSwitchTo(old_context);
-  } else if (state2->len > 0) {
-    /* Combine ... state1->cursor does not change in this case */
-    appendBinaryStringInfo(state1, state2->data, state2->len);
-  }
+  old_context = MemoryContextSwitchTo(state1->cxt);
+  rc = ty_string_agg_combine(&state1->agg, &state2->agg);
+  MemoryContextSwitchTo(old_context);
+  if (rc)
+    string_agg_raise(&state1->agg);
 
   PG_RETURN_POINTER(state1);
 }
@@ -4438,24 +4324,17 @@ Datum string_agg_combine(PG_FUNCTION_ARGS) {
  * This is strict, so we need not handle NULL input
  */
 Datum string_agg_serialize(PG_FUNCTION_ARGS) {
-  StringInfo state;
-  StringInfoData buf;
+  StringAggState *state;
   bytea *result;
 
   /* cannot be called directly because of internal-type argument */
   Assert(AggCheckCallContext(fcinfo, NULL));
 
-  state = (StringInfo)PG_GETARG_POINTER(0);
+  state = (StringAggState *)PG_GETARG_POINTER(0);
 
-  pq_begintypsend(&buf);
-
-  /* cursor */
-  pq_sendint(&buf, state->cursor, 4);
-
-  /* data */
-  pq_sendbytes(&buf, state->data, state->len);
-
-  result = pq_endtypsend(&buf);
+  /* the first delimiter's length, then the bytes */
+  if (ty_string_agg_serialize(&state->agg, TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_BYTEA_P(result);
 }
@@ -4469,51 +4348,43 @@ Datum string_agg_serialize(PG_FUNCTION_ARGS) {
  */
 Datum string_agg_deserialize(PG_FUNCTION_ARGS) {
   bytea *sstate;
-  StringInfo result;
-  StringInfoData buf;
-  char *data;
-  int datalen;
+  StringAggState *result;
+  MemoryContext old_context;
+  int rc;
 
   /* cannot be called directly because of internal-type argument */
   Assert(AggCheckCallContext(fcinfo, NULL));
 
   sstate = PG_GETARG_BYTEA_PP(0);
 
-  /*
-   * Initialize a StringInfo so that we can "receive" it using the standard
-   * recv-function infrastructure.
-   */
-  initReadOnlyStringInfo(&buf, VARDATA_ANY(sstate), VARSIZE_ANY_EXHDR(sstate));
-
   result = makeStringAggState(fcinfo);
-
-  /* cursor */
-  result->cursor = pq_getmsgint(&buf, 4);
-
-  /* data */
-  datalen = VARSIZE_ANY_EXHDR(sstate) - 4;
-  data = (char *)pq_getmsgbytes(&buf, datalen);
-  appendBinaryStringInfo(result, data, datalen);
-
-  pq_getmsgend(&buf);
+  old_context = MemoryContextSwitchTo(result->cxt);
+  rc = ty_string_agg_deserialize(&result->agg, VARDATA_ANY(sstate),
+                                 VARSIZE_ANY_EXHDR(sstate));
+  MemoryContextSwitchTo(old_context);
+  if (rc && TY_ERR_INVALID == ty_errnum())
+    ereport(ERROR, (errcode(ERRCODE_PROTOCOL_VIOLATION),
+                    errmsg("%s", ty_errmsg())));
+  if (rc)
+    string_agg_raise(&result->agg);
 
   PG_RETURN_POINTER(result);
 }
 
 Datum string_agg_finalfn(PG_FUNCTION_ARGS) {
-  StringInfo state;
+  StringAggState *state;
+  text *result;
 
   /* cannot be called directly because of internal-type argument */
   Assert(AggCheckCallContext(fcinfo, NULL));
 
-  state = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
-
-  if (state != NULL) {
-    /* As per comment in transfn, strip data before the cursor position */
-    PG_RETURN_TEXT_P(cstring_to_text_with_len(&state->data[state->cursor],
-                                              state->len - state->cursor));
-  } else
+  state = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
+  if (NULL == state)
     PG_RETURN_NULL();
+  /* ty cuts the first delimiter */
+  if (ty_string_agg_finish(&state->agg, TYVO(&result)))
+    ty_raise_alloc();
+  PG_RETURN_TEXT_P(result);
 }
 
 /*

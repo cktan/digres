@@ -18,17 +18,16 @@
 #include <limits.h>
 #include <time.h> /* for clock_gettime() */
 
-#include "common/hashfn.h"
-#include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
-#include "port/pg_bswap.h"
 #include "utils/fmgrprotos.h"
 #include "utils/guc.h"
 #include "utils/skipsupport.h"
 #include "utils/sortsupport.h"
 #include "utils/timestamp.h"
 #include "utils/uuid.h"
+#include "ty_abbrev.h"
 #include "ty_uuid.h"
+#include "utils/ty_glue.h"
 #include "utils/control_block.h"
 
 /* helper macros */
@@ -77,13 +76,6 @@
 #define SUBMS_BITS	12
 #define SUBMS_MINIMAL_STEP_NS ((NS_PER_MS / (1 << SUBMS_MINIMAL_STEP_BITS)) + 1)
 
-/* sortsupport for uuid */
-typedef struct {
-  int64 input_count; /* number of non-null values seen */
-  bool estimating;   /* true if estimating cardinality */
-
-  hyperLogLogState abbr_card; /* cardinality estimator */
-} uuid_sortsupport_state;
 
 static void string_to_uuid(const char *source, pg_uuid_t *uuid,
                            Node *escontext);
@@ -210,15 +202,15 @@ Datum uuid_sortsupport(PG_FUNCTION_ARGS) {
   ssup->ssup_extra = NULL;
 
   if (ssup->abbreviate) {
-    uuid_sortsupport_state *uss;
+    ty_abbrev_uuid_t *uss;
     MemoryContext oldcontext;
 
+    /* the state, and ty's estimator in it, live as long as the sort */
     oldcontext = MemoryContextSwitchTo(ssup->ssup_cxt);
 
-    uss = (uuid_sortsupport_state *)palloc(sizeof(uuid_sortsupport_state));
-    uss->input_count = 0;
-    uss->estimating = true;
-    initHyperLogLog(&uss->abbr_card, 10);
+    uss = (ty_abbrev_uuid_t *)palloc(sizeof(ty_abbrev_uuid_t));
+    if (ty_abbrev_uuid_init(uss))
+      ty_raise_alloc();
 
     ssup->ssup_extra = uss;
 
@@ -250,37 +242,21 @@ static int uuid_fast_cmp(Datum x, Datum y, SortSupport ssup) {
  * there is no equality fast-path within authoritative uuid comparator.
  */
 static bool uuid_abbrev_abort(int memtupcount, SortSupport ssup) {
-  uuid_sortsupport_state *uss = (uuid_sortsupport_state *)ssup->ssup_extra;
+  ty_abbrev_uuid_t *uss = (ty_abbrev_uuid_t *)ssup->ssup_extra;
   double abbr_card;
 
-  if (memtupcount < 10000 || uss->input_count < 10000 || !uss->estimating)
+  /* ty judges, by PostgreSQL's rule; the log is digres's */
+  switch (ty_abbrev_uuid_abort(uss, memtupcount, &abbr_card)) {
+  case TY_ABBREV_WAIT:
     return false;
-
-  abbr_card = estimateHyperLogLog(&uss->abbr_card);
-
-  /*
-   * If we have >100k distinct values, then even if we were sorting many
-   * billion rows we'd likely still break even, and the penalty of undoing
-   * that many rows of abbrevs would probably not be worth it.  Stop even
-   * counting at that point.
-   */
-  if (abbr_card > 100000.0) {
+  case TY_ABBREV_ENDS:
     if (tcb->guc.trace_sort)
       elog(LOG,
            "uuid_abbrev: estimation ends at cardinality %f"
            " after " INT64_FORMAT " values (%d rows)",
            abbr_card, uss->input_count, memtupcount);
-    uss->estimating = false;
     return false;
-  }
-
-  /*
-   * Target minimum cardinality is 1 per ~2k of non-null inputs.  0.5 row
-   * fudge factor allows us to abort earlier on genuinely pathological data
-   * where we've had exactly one abbreviated value in the first 2k
-   * (non-null) rows.
-   */
-  if (abbr_card < uss->input_count / 2000.0 + 0.5) {
+  case TY_ABBREV_ABORT:
     if (tcb->guc.trace_sort)
       elog(LOG,
            "uuid_abbrev: aborting abbreviation at cardinality %f"
@@ -288,54 +264,26 @@ static bool uuid_abbrev_abort(int memtupcount, SortSupport ssup) {
            abbr_card, uss->input_count / 2000.0 + 0.5, uss->input_count,
            memtupcount);
     return true;
+  default:
+    if (tcb->guc.trace_sort)
+      elog(LOG,
+           "uuid_abbrev: cardinality %f after " INT64_FORMAT
+           " values (%d rows)",
+           abbr_card, uss->input_count, memtupcount);
+    return false;
   }
-
-  if (tcb->guc.trace_sort)
-    elog(LOG,
-         "uuid_abbrev: cardinality %f after " INT64_FORMAT " values (%d rows)",
-         abbr_card, uss->input_count, memtupcount);
-
-  return false;
 }
 
 /*
- * Conversion routine for sortsupport.  Converts original uuid representation
- * to abbreviated key representation.  Our encoding strategy is simple -- pack
- * the first `sizeof(Datum)` bytes of uuid data into a Datum (on little-endian
- * machines, the bytes are stored in reverse order), and treat it as an
- * unsigned integer.
+ * Conversion routine for sortsupport: the first 8 bytes of the uuid as an
+ * unsigned integer, ty's key (ty_abbrev.h).
  */
 static Datum uuid_abbrev_convert(Datum original, SortSupport ssup) {
-  uuid_sortsupport_state *uss = (uuid_sortsupport_state *)ssup->ssup_extra;
+  ty_abbrev_uuid_t *uss = (ty_abbrev_uuid_t *)ssup->ssup_extra;
   pg_uuid_t *authoritative = DatumGetUUIDP(original);
-  Datum res;
 
-  memcpy(&res, authoritative->data, sizeof(Datum));
-  uss->input_count += 1;
-
-  if (uss->estimating) {
-    uint32 tmp;
-
-#if SIZEOF_DATUM == 8
-    tmp = (uint32)res ^ (uint32)((uint64)res >> 32);
-#else /* SIZEOF_DATUM != 8 */
-    tmp = (uint32)res;
-#endif
-
-    addHyperLogLog(&uss->abbr_card, DatumGetUInt32(hash_uint32(tmp)));
-  }
-
-  /*
-   * Byteswap on little-endian machines.
-   *
-   * This is needed so that ssup_datum_unsigned_cmp() (an unsigned integer
-   * 3-way comparator) works correctly on all platforms.  If we didn't do
-   * this, the comparator would have to call memcmp() with a pair of
-   * pointers to the first byte of each abbreviated key, which is slower.
-   */
-  res = DatumBigEndianToNative(res);
-
-  return res;
+  /* ty counts the key, in the order ssup_datum_unsigned_cmp compares */
+  return (Datum)ty_abbrev_uuid(uss, authoritative->data);
 }
 
 static Datum uuid_decrement(Relation rel, Datum existing, bool *underflow) {

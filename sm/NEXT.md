@@ -235,10 +235,15 @@ are the catalog tables psql reads
        [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7), with the
        hash of every type, which is PostgreSQL's, in
        `ty_hash.h`; and the rest of their operations, text in
-       and out and encode and decode included. Left over in
-       digres: aggregate states (`string_agg` of bytea), and sort
-       support. The states of the bool aggregates, and of avg and
-       sum over int2 and int4, are in ty since 2026-11-23
+       and out and encode and decode included. The state of
+       `string_agg`, over text and bytea, is in ty since
+       2026-11-23 (`ty_string_agg_t`); so are the abbreviated
+       keys of a sort, of uuid and of bytes in the C collation,
+       with their rules (`ty_abbrev.h`), and HyperLogLog, which
+       the rules judge by (`ty_hll.h`). digres keeps the
+       `SortSupport` wiring and the `strxfrm` keys of the other
+       collations. The states of the bool aggregates, and of avg
+       and sum over int2 and int4, are in ty since 2026-11-23
        (`ty_bool_agg_t`, `ty_int_avg_t`). Done after that:
        the floats, with their text (`ty_float.h`), and text for
        the C collation, with varchar, bpchar and name
@@ -262,8 +267,7 @@ are the catalog tables psql reads
        2026-11-23). The case functions of the C ctype are in
        ty (`ty_ascii_lower` and the like); the other ctypes,
        ICU and the builtin provider, stay in digres.
-       **Left: `to_char`, the regular expressions of text, and
-       the aggregate states and sort support above**
+       **Left: `to_char` and the regular expressions of text**
        ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
     3. **Types that read a setting**: what is left of them
        waits for its hooks. The text in takes the date order
@@ -298,8 +302,6 @@ are the catalog tables psql reads
       1% ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
     - **The hash**: every type's is PostgreSQL's, in `ty_hash.h`,
       so no value and no partition changed.
-    - **Left over**: aggregate states (`string_agg` of bytea),
-      sort support.
 
     This move is not easy. The code in `utils/adt` does not
     copy over. **Moved code cannot call `palloc()`**: it needs

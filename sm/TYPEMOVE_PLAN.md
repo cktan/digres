@@ -963,6 +963,54 @@ copied from PostgreSQL keeps its copyright notice
        plain `%s`. ty now copies the text in the loop that looks
        for the `%`, takes `%s`, `%I` and `%L` with no parse, and
        adds an argument with no width in line.
+     - The state of `string_agg`, over text and over bytea,
+       moved too (2026-11-23): `ty_string_agg_t`, with its
+       combine, serialize and deserialize. digres keeps the
+       aggregate's memory context beside it, and makes it
+       current around each call that adds. The tests: a ty case
+       for each NULL, the first delimiter, the parts of a
+       parallel aggregate, the limit and the growth; and
+       `dg/test/select_string_agg.sql`, which the digres before
+       the move prints the same. digres has no parallel query and
+       no partitioned table, so the combine functions are tested
+       in ty alone. Measured by callgrind, 2,000 rows,
+       instructions a statement (old, new): `string_agg(c, ',')`
+       4,758,179 and 4,715,173 (-0.90%); `string_agg(c, null)`
+       4,570,195 and 4,606,483 (+0.79%); over bytea 6,767,978 and
+       6,759,987 (-0.12%); in 200 groups 5,786,703 and 5,786,707
+       (+0.00%).
+     - HyperLogLog moved too (2026-11-23): `ty_hll.h`, new
+       code whose estimates are those of PostgreSQL's
+       `hyperloglog.c`, bit for bit. digres's file keeps
+       PostgreSQL's names and errors, and calls ty; the add is in
+       line. The tests: 45 estimates that PostgreSQL's file,
+       built alone, printed for the same hashes; and a check in
+       `server.sh` that a sort logs the estimates of the digres
+       before the move (`trace_sort`), which fails if either
+       correction changes. Measured by callgrind, a sort of 2,000
+       rows, instructions a statement (old, new): text 7,042,167
+       and 6,880,367 (-2.30%); uuid 10,426,348 and 10,359,120
+       (-0.64%); bytea 9,179,542 and 9,018,193 (-1.76%); text
+       descending 7,022,347 and 6,854,998 (-2.38%).
+     - The abbreviated keys of a sort moved too (2026-11-23):
+       `ty_abbrev.h`, the keys of uuid and of bytes in the C
+       collation, and the rules that end them, with
+       PostgreSQL's keys, hashes and rules. A rule gives what it
+       decided and its numbers, and digres logs them as
+       PostgreSQL does. digres keeps the `SortSupport` wiring and
+       the `strxfrm` keys of the ICU collations, which it gives
+       to ty to count. The tests: a ty case for the order of the
+       keys and for each rule, with numbers PostgreSQL logged for
+       the same values; `dg/test/select_sort_abbrev.sql`, sorts
+       in the C collation and in ICU's, aborted or not, which the
+       digres before the move orders the same; and the
+       `server.sh` check, which now has a uuid abort and the
+       falling share of a bytea sort. Measured by callgrind, a
+       sort of 2,000 rows, instructions a statement (old, new):
+       text 6,873,472 and 6,875,155 (+0.02%); uuid 10,401,418
+       and 10,393,400 (-0.08%); bytea 9,012,082 and 9,015,957
+       (+0.04%); text descending 6,854,693 and 6,854,848
+       (+0.00%). Two runs of one binary differ by up to 0.4%.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

@@ -375,8 +375,8 @@ feed after 76 characters) and escape. `encode` makes a text and
 `decode` a bytea, and a fault is `TY_ERR_INVALID` with
 PostgreSQL's message.
 
-Not here: the `string_agg` state, which is an aggregate's memory
-and stays in digres. The tests are in `test/test_bytea.cc` and
+The state of `string_agg` over bytea is text's, in section 16.
+The tests are in `test/test_bytea.cc` and
 3,522 vectors.
 
 ## 10. The hash
@@ -504,6 +504,64 @@ their inverses, erf, erfc, gamma or lgamma correctly, so another
 machine may give the next float: the test takes one float apart
 as the same for those, and needs the same bits for the rest.
 
+## 12. HyperLogLog and abbreviated keys
+
+`ty_hll.h` estimates the number of distinct values in a set from
+a 32-bit hash of each, in 2^4 to 2^16 registers of a byte. A sort
+uses it to decide when to stop its abbreviated keys, and a hash
+aggregate to size its spill partitions. ty's code is new. Its
+estimates are those of PostgreSQL's
+`src/backend/lib/hyperloglog.c`, bit for bit, so a sort ends its
+abbreviated keys at the row PostgreSQL's would:
+
+- the register is the first `width` bits of the hash, and its
+  value the most leading zeros of the rest, plus one;
+- the estimate sums 2^-r over the registers in their order, and
+  takes the paper's corrections for a small and a large number,
+  with PostgreSQL's constants and in PostgreSQL's order of
+  operations.
+
+`ty_hll_add` is in line, as a sort calls it for each row. The
+registers are the alloc function's. digres's `hyperloglog.c`
+keeps PostgreSQL's names and errors, and calls ty.
+
+`ty_abbrev.h` holds the abbreviated keys of a sort, which are
+built on it. A key is the first 8 bytes of a value as an unsigned
+integer in the machine's order, so a sort compares two integers
+and reads the values only on a tie. There are two kinds:
+
+- **uuid**: the first 8 of its 16 bytes. The state counts the
+  values and estimates their distinct keys, until there are more
+  than 100,000.
+- **bytes in the C collation**: text, varchar, bpchar without its
+  trailing spaces, and bytea. The key is the first 8 bytes, and 0
+  after a shorter value. The state estimates both the distinct
+  keys and the distinct values, the value by its first 128 bytes
+  and its length. A host whose keys come from `strxfrm`, as
+  digres's ICU collations do, makes the key and gives it to
+  `ty_abbrev_bytes_count`.
+
+Each kind has a rule, which the sort calls each time its rows
+double: `ty_abbrev_uuid_abort` and `ty_abbrev_bytes_abort`. A
+rule gives what it decided (wait, go on, end the count, abort)
+and the numbers it judged by, so the host logs them as
+PostgreSQL does (`trace_sort`). The keys, the hashes and the
+rules are PostgreSQL's, so a sort aborts at the row PostgreSQL's
+does. digres keeps the `SortSupport` wiring, the comparators of
+the keys, and the `strxfrm` path of the collations that are not
+C.
+
+The tests: `test/test_hll.cc` compares 45 estimates, of 5 widths
+and of 0 to 1,000,000 values, with those that PostgreSQL's file,
+built alone, printed for the same hashes, and checks the
+correction for a large number and the widths by error.
+`test/test_abbrev.cc` checks that keys order as their bytes, and
+each rule's decisions, with numbers PostgreSQL logged for the same
+values. digres's `server.sh` checks that a sort logs the
+estimates of the digres before the move (`trace_sort`), and
+`dg/test/select_sort_abbrev.sql` that sorts by the keys, aborted
+or not, in the C collation and in ICU's, give the same order.
+
 ## 16. text
 
 `ty_text.h` holds the operations of text: UTF-8 strings ordered
@@ -592,14 +650,27 @@ and gives the host the bytes for the detail, before it allocates
 anything. A width near 1 GB fails at once, where PostgreSQL first
 fills 1 GB with spaces.
 
+`string_agg`, over text and over bytea, keeps its state in ty
+(`ty_string_agg_t`): the bytes of the values, each after its
+delimiter. The first value's delimiter stays in the state, as in
+PostgreSQL, so that the parts of a parallel aggregate join up;
+`ty_string_agg_finish` cuts it off and copies the rest, and
+leaves the state as it was, for a window. The combine, serialize
+and deserialize functions are ty's too, with PostgreSQL's bytes
+for a serialized state. The state's bytes are the alloc
+function's, so digres makes the aggregate's memory context
+current around each call that adds. An add of a state that has
+room is in line.
+
 The regular expressions and the functions on arrays of text stay
 in digres.
 
 The tests: the vectors, from a reference of Python strings, whose
 characters are code points as UTF-8's are (about 51,000); the
-hand tests in `test/test_text.cc`; and
-`dg/test/select_text_ops.sql`, which prints the same as the
-digres before the move.
+hand tests in `test/test_text.cc`, `test/test_format.cc` and
+`test/test_string_agg.cc`; and `dg/test/select_text_ops.sql`,
+`select_format_ops.sql` and `select_string_agg.sql`, which print
+the same as the digres before the move.
 
 
 
