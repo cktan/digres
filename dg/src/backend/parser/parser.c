@@ -32,6 +32,7 @@
  * before postgres.h defines macros over names of its own. */
 #include "sq.h"
 
+#include <new>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,7 @@ struct pending_notice_t {
 struct parse_job_t {
   sq_tree_t tree;
   std::vector<pending_notice_t> notices;
+  bool notice_oom = false; /* a notice was lost for want of memory */
 };
 
 /*
@@ -72,12 +74,13 @@ struct parse_job_t {
 static void keep_notice(void *arg, const sq_notice_t *notice) {
   parse_job_t *job = (parse_job_t *)arg;
 
-  /* The hook may not throw; a notice that cannot be kept is dropped. */
+  /* The hook may not throw: raw_parser() raises the error after the parse. */
   try {
     job->notices.push_back({notice->level, notice->sqlstate, notice->message,
                             notice->hint ? notice->hint : "",
                             notice->hint != NULL, notice->pos});
-  } catch (...) {
+  } catch (const std::bad_alloc &) {
+    job->notice_oom = true;
   }
 }
 
@@ -171,6 +174,8 @@ List *raw_parser(const char *str, RawParseMode mode) {
   report_notices(&job);
   if (rc != 0)
     report_error();
+  if (job.notice_oom)
+    ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
 
   /* sq's nodes are digres's (sq_nodes.c): the analyzer reads them as
    * they are, but for what digres refuses. */
