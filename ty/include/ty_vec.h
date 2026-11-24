@@ -17,8 +17,8 @@
  * An operation computes each row with neither bit set, as the scalar
  * operation of ty_int.h would, and writes:
  *   - out, the n results. A row not valid, or null, gets a value that
- *     means nothing; it is never an error. (IS NULL has a result for a null
- *     row.) An operation that cannot fail may compute every row, as that
+ *     means nothing; it is never an error. (An IS test has a result for a
+ *     null row.) An operation that cannot fail may compute every row, as that
  *     is cheaper.
  *   - flag, the flags of the results, over those of the inputs. Add
  *     leaves each as it is: a null input gives a null sum.
@@ -35,11 +35,22 @@
  *       overflows.
  *
  *   ty_flag_isnull(n, flag, out)
- *       SQL's IS NULL: out[i] = 1 if row i is null, or else 0, so out is a
- *       vector of bool. No result is null: each TY_VEC_NULL becomes 0, and
+ *   ty_flag_isnotnull(n, flag, out)
+ *   ty_flag_istrue(n, flag, vec, out)
+ *   ty_flag_isfalse(n, flag, vec, out)
+ *       SQL's IS NULL, IS NOT NULL, and IS TRUE and IS FALSE of the bools
+ *       of vec, which are 0 or 1 in each row computed: out[i] = 1 if it is
+ *       so, or else 0, so out is a vector of bool. A null row is neither
+ *       true nor false. No result is null: each TY_VEC_NULL becomes 0, and
  *       the other bits stay. A caller that needs the input's nulls
- *       afterwards copies flag first. It cannot fail: it returns 0. flag
- *       and out may not overlap.
+ *       afterwards copies flag first.
+ *
+ *   ty_flag_not(n, flag, vec, out)
+ *       SQL's NOT: out[i] = 1 if vec[i] is 0, and 0 if it is 1. NOT of a
+ *       null is null: flag stays as it is.
+ *
+ * The flag operations cannot fail: they return 0. out may be vec; flag may
+ * not overlap either.
  */
 #ifndef TY_VEC_H
 #define TY_VEC_H
@@ -62,5 +73,10 @@ int ty_int32_add_vec(uint32_t n, uint8_t *flag, const int32_t *a,
 int ty_int64_add_vec(uint32_t n, uint8_t *flag, const int64_t *a,
                      const int64_t *b, int64_t *out);
 int ty_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out);
+int ty_flag_isnotnull(uint32_t n, uint8_t *flag, uint8_t *out);
+int ty_flag_istrue(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out);
+int ty_flag_isfalse(uint32_t n, uint8_t *flag, const uint8_t *vec,
+                    uint8_t *out);
+int ty_flag_not(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out);
 
 #endif

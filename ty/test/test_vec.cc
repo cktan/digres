@@ -234,6 +234,70 @@ TEST_CASE("IS NULL of a vector is each row's null bit") {
   }
 }
 
+// Verify that IS NOT NULL, IS TRUE, IS FALSE and NOT of a vector give SQL's
+// answer for each of true, false and null.
+// 1. For each size around the 16 bytes of a vector instruction, and one
+//    past all 256 values of a flag, rows of each flag with each bool. A row
+//    not computed holds a byte that is no bool.
+// 2. Each operation, into an array of its own, and into vec.
+// 3. out is SQL's answer for each valid row, and a bool; NOT has none for a
+//    null row.
+// 4. The null bit is 0 after, and as it was after NOT; each other bit is as
+//    it was.
+// 5. Nothing is written past the n rows.
+TEST_CASE("IS NOT NULL, IS TRUE, IS FALSE and NOT of a vector") {
+  enum { NOTNULL, ISTRUE, ISFALSE, NOT, NOPS };
+  for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 31u, 33u, 256u, 2003u}) {
+    for (int op = NOTNULL; op < NOPS; op++) {
+      for (bool in_place : {false, true}) {
+        // 1. Rows of each flag with each bool; one more row at the end.
+        std::vector<uint8_t> was(n + 1, 0xff), vec(n + 1, 0xaa);
+        for (uint32_t i = 0; i < n; i++) {
+          was[i] = uint8_t(i / 2);
+          vec[i] = was[i] & TY_VEC_SKIP ? uint8_t(0x54 + i) : uint8_t(i % 2);
+        }
+        std::vector<uint8_t> flag = was, b = vec, own(n + 1, 0xaa);
+        uint8_t *out = in_place && NOTNULL != op ? b.data() : own.data();
+        // 2. The operation.
+        int rc = -1;
+        switch (op) {
+        case NOTNULL:
+          rc = ty_flag_isnotnull(n, flag.data(), out);
+          break;
+        case ISTRUE:
+          rc = ty_flag_istrue(n, flag.data(), b.data(), out);
+          break;
+        case ISFALSE:
+          rc = ty_flag_isfalse(n, flag.data(), b.data(), out);
+          break;
+        case NOT:
+          rc = ty_flag_not(n, flag.data(), b.data(), out);
+          break;
+        }
+        REQUIRE(0 == rc);
+        for (uint32_t i = 0; i < n; i++) {
+          const bool null = was[i] & TY_VEC_NULL;
+          const bool valid = !(was[i] & TY_VEC_NOTVALID);
+          // 3. SQL's answer.
+          if (NOTNULL == op) {
+            CHECK(out[i] == !null);
+          } else if (NOT == op) {
+            CHECK((!valid || null || out[i] == !vec[i]));
+          } else if (valid) {
+            CHECK(out[i] == (!null && vec[i] == (ISTRUE == op)));
+          }
+          CHECK((NOT == op || out[i] <= 1));
+          // 4. The flags.
+          CHECK(flag[i] == (NOT == op ? was[i] : was[i] & 0xfd));
+        }
+        // 5. Nothing past the n rows.
+        CHECK(0xaa == out[n]);
+        CHECK(0xff == flag[n]);
+      }
+    }
+  }
+}
+
 TEST_CASE("a vector add agrees with the scalar add, row by row") {
   check_agrees<int16_t>();
   check_agrees<int32_t>();

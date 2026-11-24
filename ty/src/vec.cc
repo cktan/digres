@@ -102,6 +102,45 @@ int add_vec(uint32_t n, uint8_t *flag, const T *a, const T *b, T *out) {
   return 0;
 }
 
+/*
+ * An operation on flags and bools, a byte each: out = op(flag, vec), by the
+ * bits of a byte, in every row, valid or not. An operation that takes no
+ * bools passes flag as vec. With CLEAR, the result is never null. op is
+ * called with 16 rows in a vector, and with one row's two bytes.
+ * 1. 16 rows at a time: read both inputs, and then write out and, with
+ *    CLEAR, flag with its null bits 0.
+ * 2. The rows past the last 16, one at a time, by the same rule.
+ */
+template <bool CLEAR, typename OP>
+int flag_op(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out,
+            OP op) {
+  typedef uint8_t vec_t __attribute__((vector_size(16)));
+  static_assert(2 == TY_VEC_NULL, "an op takes the null bit by f >> 1");
+  constexpr uint8_t keep = uint8_t(~TY_VEC_NULL);
+  const uint32_t whole = n - n % 16;
+  uint32_t i = 0;
+  // 1. Whole vectors.
+  for (; i < whole; i += 16) {
+    vec_t f, v;
+    memcpy(&f, flag + i, 16);
+    memcpy(&v, vec + i, 16);
+    vec_t r = op(f, v);
+    memcpy(out + i, &r, 16);
+    if constexpr (CLEAR) {
+      f &= keep;
+      memcpy(flag + i, &f, 16);
+    }
+  }
+  // 2. The rest, one row at a time.
+  for (; i < n; i++) {
+    out[i] = uint8_t(op(flag[i], vec[i]));
+    if constexpr (CLEAR) {
+      flag[i] &= keep;
+    }
+  }
+  return 0;
+}
+
 } // namespace
 
 /* out = a + b of each row computed; see ty_vec.h. */
@@ -122,32 +161,33 @@ int ty_int64_add_vec(uint32_t n, uint8_t *flag, const int64_t *a,
   return add_vec<int64_t, uint64_t>(n, flag, a, b, out);
 }
 
-/*
- * out = 1 for each null row, and 0 for another; see ty_vec.h. It computes
- * every row, valid or not.
- * 1. 16 rows at a time: out is 1 where the null bit is set, and the null
- *    bit becomes 0.
- * 2. The rows past the last 16, one at a time, by the same rule.
- */
+/* out = 1 for each null row, and 0 for another; see ty_vec.h. */
 int ty_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out) {
-  typedef uint8_t vec_t __attribute__((vector_size(16)));
-  constexpr uint8_t keep = uint8_t(~TY_VEC_NULL);
-  const uint32_t whole = n - n % 16;
-  uint32_t i = 0;
-  // 1. Whole vectors.
-  for (; i < whole; i += 16) {
-    vec_t f;
-    memcpy(&f, flag + i, 16);
-    // All ones in the lane of a null row, zero in another; then 1 and 0.
-    vec_t r = (vec_t)((f & TY_VEC_NULL) != 0) & 1;
-    f &= keep;
-    memcpy(out + i, &r, 16);
-    memcpy(flag + i, &f, 16);
-  }
-  // 2. The rest, one row at a time.
-  for (; i < n; i++) {
-    out[i] = 0 != (flag[i] & TY_VEC_NULL);
-    flag[i] &= keep;
-  }
-  return 0;
+  return flag_op<true>(n, flag, flag, out,
+                       [](auto f, auto) { return (f >> 1) & 1; });
+}
+
+/* out = 0 for each null row, and 1 for another; see ty_vec.h. */
+int ty_flag_isnotnull(uint32_t n, uint8_t *flag, uint8_t *out) {
+  return flag_op<true>(n, flag, flag, out,
+                       [](auto f, auto) { return ~(f >> 1) & 1; });
+}
+
+/* out = 1 for each row true and not null, and 0 for another. */
+int ty_flag_istrue(uint32_t n, uint8_t *flag, const uint8_t *vec,
+                   uint8_t *out) {
+  return flag_op<true>(n, flag, vec, out,
+                       [](auto f, auto v) { return v & ~(f >> 1) & 1; });
+}
+
+/* out = 1 for each row false and not null, and 0 for another. */
+int ty_flag_isfalse(uint32_t n, uint8_t *flag, const uint8_t *vec,
+                    uint8_t *out) {
+  return flag_op<true>(n, flag, vec, out,
+                       [](auto f, auto v) { return ~(v | (f >> 1)) & 1; });
+}
+
+/* out = NOT vec; a null row stays null. See ty_vec.h. */
+int ty_flag_not(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out) {
+  return flag_op<false>(n, flag, vec, out, [](auto, auto v) { return v ^ 1; });
 }
