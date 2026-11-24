@@ -539,9 +539,10 @@ item points.
     their callgrind numbers are in
     [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7. digres keeps its
     glue, and what is out of sm's scope or a session's: the
-    binary forms, typmods, planner support, a collation that is
-    not C, the regular expressions' engine, which ty reaches by
-    a hook (`ty_regex.h`), and the lookup of a zone by name.
+    binary forms, planner support, the states of aggregates, a
+    collation that is not C, the regular expressions' engine,
+    which ty reaches by a hook (`ty_regex.h`), and the lookup of
+    a zone by name. The whole list ends the plan's §7.
 
 ---
 

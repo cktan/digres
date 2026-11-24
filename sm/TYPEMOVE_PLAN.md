@@ -1109,23 +1109,54 @@ notice ([`../CLAUDE.md`](../CLAUDE.md)).
        5,646,795 (-3.99%); `n::float8` 7,857,708 and 7,259,788
        (-7.61%); `f::numeric(30,6)` -0.14%; `min_scale` +0.02%.
        The text out divides in 64 bits when the value fits.
-     - **The last of the move (2026-11-24).** `to_bin`, `to_oct`
-       and `to_hex` (`ty_uint64_to_base`, in line), bytea's
-       `btrim`, `ltrim` and `rtrim` (`ty_bytea_trim_range`, whose
-       part digres copies), and the order of date, time and
-       timestamp (`ty_date_cmp`, `ty_time_cmp`,
-       `ty_timestamp_cmp`, in line), with `larger` and `smaller`.
-       Tested by 274 vectors of the digres before, by hand in ty,
-       and by `dg/test/select_trimbase_ops.sql`. Measured by
-       callgrind, 2,000 rows (old, new): the three bases of a row
-       6,696,427 and 6,739,739 (+0.65%); `btrim` of a bytea
-       5,116,901 and 5,088,180 (-0.56%); the order of date,
-       time and timestamp +0.13% to +0.28%. What stays in digres
-       for good: the binary forms, typmods, planner support,
-       aggregates' glue, a collation that is not C, the
-       regular expressions' engine, the lookup of a zone by
-       name, and the types out of sm's scope (`money`,
-       `"char"`, `name`'s catalog functions, arrays, `jsonb`).
+     - **Bases, trims and the order of dates (2026-11-24).**
+       `to_bin`, `to_oct` and `to_hex` (`ty_uint64_to_base`, in
+       line), bytea's `btrim`, `ltrim` and `rtrim`
+       (`ty_bytea_trim_range`, whose part digres copies), and the
+       order of date, time and timestamp (`ty_date_cmp`,
+       `ty_time_cmp`, `ty_timestamp_cmp`, in line), with `larger`
+       and `smaller`. Tested by 274 vectors of the digres before,
+       by hand in ty, and by `dg/test/select_trimbase_ops.sql`.
+       Measured by callgrind, 2,000 rows (old, new): the three
+       bases of a row 6,696,427 and 6,739,739 (+0.65%); `btrim`
+       of a bytea 5,116,901 and 5,088,180 (-0.56%); the order of
+       date, time and timestamp +0.13% to +0.28%.
+     - **What a scan then found (2026-11-24).** A scan of each
+       function's own arithmetic, whatever it calls, found these,
+       and they moved: `date_bin` of timestamptz, `in_range` of
+       the floats, `to_timestamp` of a number, the pattern
+       operators' compare, `quote_literal`, `extract` of a
+       timetz, a zone written as a number, `normalize`,
+       `IS NORMALIZED`, `unicode_assigned`, `unistr`, and
+       decimal's result scales, power, typmod and integer casts
+       (ty/DESIGN.md §16, §19, §25 and §26). Unicode's tables of
+       normal forms and of properties moved with them. The date
+       parser and other functions of digres that had no caller
+       since the earlier moves are deleted, about 2,700 lines.
+       Tested by vectors of the digres before (12,000 lines), by
+       hand in ty, by `dg/test/select_typerest_ops.sql`, and by a
+       check of SASLprep in `dg/test/server.sh`. Measured by
+       callgrind, 2,000 rows, old to new: `n / 7` +0.15%, a
+       decimal64's +0.22%; `avg` and `var_samp` -0.01%; `sqrt`
+       +0.25%, `ln` +0.08%, `n ^ 2` +0.75%, `n ^ 0.5` +0.31%;
+       `n::int8` +0.29%; `n::numeric(20,2)` +0.42%; `in_range`
+       -0.32%; `to_timestamp` -0.22%; `date_bin` +0.20%; `~<~`
+       -0.54%; `quote_literal` -3.33%; `normalize` -0.21%; `IS
+       NFC NORMALIZED` +0.88%; `unicode_assigned` -15.58%;
+       `unistr` -14.03%; `extract` of a timetz: the hour +0.57%,
+       the epoch -3.28%.
+     - **What stays in digres for good**: the binary forms,
+       typmods' text, planner support, the states of aggregates
+       and the ordered-set aggregates, sort support's glue, a
+       collation that is not C, with its tables of letter case,
+       the search of a collation that is not deterministic, the
+       regular expressions' engine, the lookup of a zone by name
+       and its abbreviations, a session's clock and random
+       numbers, `concat` and the functions of arrays, which call
+       the output functions of any type, `md5` and the SHA
+       functions, which are OpenSSL's, and the types out of sm's
+       scope (`money`, `"char"`, `oid`, `name`'s catalog
+       functions, arrays, `jsonb`).
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

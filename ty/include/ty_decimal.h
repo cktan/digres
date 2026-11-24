@@ -251,6 +251,70 @@ int ty_dec128_pow_real(const ty_dec128_t *base, const ty_dec128_t *exp,
                        int rscale, ty_dec128_t *result);
 
 /*
+ * The scale PostgreSQL's numeric gives a result that is not exact, from 0 to
+ * 36: at least 16 significant digits, and not below the arguments' scales.
+ * A caller passes it as the rscale of the functions above. They cannot fail.
+ *
+ *   - sqrt, ln and log are of arguments above zero; the scale of any other
+ *     is a scale, so a caller may look for the error after.
+ *   - var_scale is of a variance: num, at scale, over den.
+ */
+int ty_dec128_div_scale(const ty_dec128_t *a, const ty_dec128_t *b);
+static inline int ty_dec64_div_scale(const ty_dec64_t *a, const ty_dec64_t *b) {
+  ty_dec128_t x = {a->value, a->scale}, y = {b->value, b->scale};
+
+  return ty_dec128_div_scale(&x, &y);
+}
+int ty_dec128_var_scale(double num, int scale, ty_int128_t den);
+int ty_dec128_sqrt_scale(const ty_dec128_t *a);
+int ty_dec128_exp_scale(const ty_dec128_t *a);
+int ty_dec128_ln_scale(const ty_dec128_t *a);
+int ty_dec128_log_scale(const ty_dec128_t *base, const ty_dec128_t *a);
+
+/*
+ * *result = base ^ exp, at PostgreSQL's scale for it. TY_ERR_INVALID, with
+ * PostgreSQL's message, for zero to a negative power, and for a negative
+ * number to a power that is not whole; TY_ERR_RANGE and TY_ERR_UNDERFLOW as
+ * pow_int and pow_real.
+ */
+int ty_dec128_power(const ty_dec128_t *base, const ty_dec128_t *exp,
+                    ty_dec128_t *result);
+
+/*
+ * a rounded to a whole number, half away from zero, in *out: TY_ERR_RANGE if
+ * it is below lo or above hi.
+ */
+static inline int ty_dec128_to_int64(const ty_dec128_t *a, int64_t lo,
+                                     int64_t hi, int64_t *out) {
+  ty_dec128_t r = *a;
+
+  if (a->scale != 0 && ty_dec128_round(a, 0, &r) != 0) {
+    return -1;
+  }
+  if (TY_UNLIKELY(r.value < lo || r.value > hi)) {
+    return ty_err_range();
+  }
+  *out = (int64_t)r.value;
+  return 0;
+}
+
+/* The number of decimal digits of v; 0 has one. */
+int ty_dec128_digits(ty_int128_t v);
+
+/*
+ * *v, of scale from, put to scale to, which is not below it: TY_ERR_RANGE if
+ * it then has more than 36 digits.
+ */
+int ty_dec128_scale_up(ty_int128_t *v, int from, int to);
+
+/*
+ * *a rounded to scale, half away from zero, and checked against precision,
+ * as an assignment to numeric(precision, scale) does: TY_ERR_RANGE, and *a
+ * as it was, if it has more than precision - scale digits before the point.
+ */
+int ty_dec128_typmod(ty_dec128_t *a, int precision, int scale);
+
+/*
  * n! as a decimal128, scale 0: TY_ERR_RANGE past 36 digits (n above 32),
  * TY_ERR_INVALID if n is negative.
  */

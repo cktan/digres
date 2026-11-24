@@ -462,6 +462,24 @@ tcp_psql pwninth -U pw4 -c 'select 1' > /dev/null 2>&1 &&
 local_psql -c "drop role pw5" > /dev/null 2>&1 ||
   fail "renamed role: drop the role"
 
+# Verify that a password is put in Unicode's normal form NFKC before its
+# secret is made (SASLprep), as psql puts the one it logs in with.
+# 1. Over the local socket, make pw6 with a password of a ligature fi, and of
+#    an e and its accent in two characters.
+# 2. Over TCP, pw6 logs in with it, and with its NFKC form, f, i and e acute.
+# 3. Another accent is refused. Drop pw6.
+pw=$'x\xef\xac\x81e\xcc\x81'
+local_psql -c "create role pw6 login password '$pw'" > /dev/null 2>&1 ||
+  fail "normalized password: make the role"
+for pw in "$pw" $'xfi\xc3\xa9'; do
+  [ "$(tcp_psql "$pw" -U pw6 -c 'select 1' 2>&1)" = 1 ] ||
+    fail "normalized password: log in"
+done
+tcp_psql $'xfi\xc3\xa8' -U pw6 -c 'select 1' > /dev/null 2>&1 &&
+  fail "normalized password: another accent"
+local_psql -c "drop role pw6" > /dev/null 2>&1 ||
+  fail "normalized password: drop the role"
+
 # Verify that a change elsewhere replans a prepared statement only if it can
 # matter to one, and that the owners and ACLs other sessions cache still go.
 # 1. A held session prepares a generic plan, and logs each plan it makes.

@@ -1122,3 +1122,14 @@ int ty_interval_to_time_error(void) {
   return ty_internal::set_error(TY_ERR_RANGE,
                                 "cannot convert infinite interval to time");
 }
+
+/* The error of to_timestamp: a NaN, or a number out of range. */
+int ty_timestamptz_from_epoch_error(double seconds) {
+  char msg[64];
+
+  if (__builtin_isnan(seconds)) {
+    return ty_err_invalid("timestamp cannot be NaN");
+  }
+  snprintf(msg, sizeof msg, "timestamp out of range: \"%g\"", seconds);
+  return ty_internal::set_error(TY_ERR_RANGE, msg);
+}

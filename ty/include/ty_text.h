@@ -69,6 +69,16 @@ static inline int ty_text_eq(const ty_varlena_t *a, const ty_varlena_t *b) {
                           ty_vl_len(b));
 }
 
+/*
+ * s as a literal of SQL: in quotes, with each quote and backslash doubled,
+ * and an E before it if it has a backslash, so that it is read the same
+ * whatever standard_conforming_strings is. The bytes are written to out,
+ * which has room for 2 * len + 3, and their count is returned; the second
+ * form makes a text.
+ */
+size_t ty_quote_literal_bytes(const char *s, size_t len, char *out);
+int ty_quote_literal(const ty_varlena_t *s, ty_varlena_t **out);
+
 /* Whether the string begins with the prefix. */
 static inline int ty_text_starts_with(const ty_varlena_t *s,
                                       const ty_varlena_t *prefix) {

@@ -1736,107 +1736,27 @@ Datum datetimetz_timestamptz(PG_FUNCTION_ARGS) {
 static Datum timetz_part_common(PG_FUNCTION_ARGS, bool retnumeric) {
   text *units = PG_GETARG_TEXT_PP(0);
   TimeTzADT *time = PG_GETARG_TIMETZADT_P(1);
-  int64 intresult;
   int type, val;
   char *lowunits;
+  ty_part_t part;
 
   lowunits = downcase_truncate_identifier(VARDATA_ANY(units),
                                           VARSIZE_ANY_EXHDR(units), false);
 
-  type = DecodeUnits(0, lowunits, &val);
-  if (type == UNKNOWN_FIELD)
-    type = DecodeSpecial(0, lowunits, &val);
+  /* only epoch is a reserved word a time has a part for */
+  type = ty_datetime_part_unit(lowunits, 1, &val);
 
-  if (type == UNITS) {
-    int tz;
-    fsec_t fsec;
-    struct pg_tm tt, *tm = &tt;
-
-    timetz2tm(time, tm, &fsec, &tz);
-
-    switch (val) {
-    case DTK_TZ:
-      intresult = -tz;
-      break;
-
-    case DTK_TZ_MINUTE:
-      intresult = (-tz / SECS_PER_MINUTE) % MINS_PER_HOUR;
-      break;
-
-    case DTK_TZ_HOUR:
-      intresult = -tz / SECS_PER_HOUR;
-      break;
-
-    case DTK_MICROSEC:
-      intresult = tm->tm_sec * INT64CONST(1000000) + fsec;
-      break;
-
-    case DTK_MILLISEC:
-      if (retnumeric)
-        /*---
-         * tm->tm_sec * 1000 + fsec / 1000
-         * = (tm->tm_sec * 1'000'000 + fsec) / 1000
-         */
-        PG_RETURN_NUMERIC(int64_div_fast_to_numeric(
-            tm->tm_sec * INT64CONST(1000000) + fsec, 3));
-      else
-        PG_RETURN_FLOAT8(tm->tm_sec * 1000.0 + fsec / 1000.0);
-      break;
-
-    case DTK_SECOND:
-      if (retnumeric)
-        /*---
-         * tm->tm_sec + fsec / 1'000'000
-         * = (tm->tm_sec * 1'000'000 + fsec) / 1'000'000
-         */
-        PG_RETURN_NUMERIC(int64_div_fast_to_numeric(
-            tm->tm_sec * INT64CONST(1000000) + fsec, 6));
-      else
-        PG_RETURN_FLOAT8(tm->tm_sec + fsec / 1000000.0);
-      break;
-
-    case DTK_MINUTE:
-      intresult = tm->tm_min;
-      break;
-
-    case DTK_HOUR:
-      intresult = tm->tm_hour;
-      break;
-
-    case DTK_DAY:
-    case DTK_MONTH:
-    case DTK_QUARTER:
-    case DTK_YEAR:
-    case DTK_DECADE:
-    case DTK_CENTURY:
-    case DTK_MILLENNIUM:
-    default:
-      ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                      errmsg("unit \"%s\" not supported for type %s", lowunits,
-                             format_type_be(TIMETZOID))));
-      intresult = 0;
-    }
-  } else if (type == RESERV && val == DTK_EPOCH) {
-    if (retnumeric)
-      /*---
-       * time->time / 1'000'000 + time->zone
-       * = (time->time + time->zone * 1'000'000) / 1'000'000
-       */
-      PG_RETURN_NUMERIC(int64_div_fast_to_numeric(
-          time->time + time->zone * INT64CONST(1000000), 6));
-    else
-      PG_RETURN_FLOAT8(time->time / 1000000.0 + time->zone);
-  } else {
+  if (type == 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("unit \"%s\" not recognized for type %s", lowunits,
                            format_type_be(TIMETZOID))));
-    intresult = 0;
-  }
 
-  if (retnumeric)
-    PG_RETURN_NUMERIC(int64_to_numeric(intresult));
-  else
-    PG_RETURN_FLOAT8(intresult);
+  if (ty_timetz_part(type == 2, val, (ty_timetz_t *)time, &part))
+    ereport(ERROR, (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                    errmsg("unit \"%s\" not supported for type %s", lowunits,
+                           format_type_be(TIMETZOID))));
+
+  return ty_part_datum(&part, retnumeric);
 }
 
 Datum timetz_part(PG_FUNCTION_ARGS) {

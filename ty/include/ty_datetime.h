@@ -438,6 +438,38 @@ static inline int ty_timestamp_bin(const ty_interval_t *stride, int64_t ts,
 }
 
 /*
+ * to_timestamp(seconds): the instant that many seconds after 1970, rounded
+ * to a microsecond; an infinity is that of timestamptz. TY_ERR_INVALID if
+ * seconds is not a number, TY_ERR_RANGE if it is out of range.
+ */
+int ty_timestamptz_from_epoch_error(double seconds); /* cold: which error */
+static inline int ty_timestamptz_from_epoch(double seconds, int64_t *out) {
+  const double day = 86400.0;
+  const int unix_epoch_jdate = 2440588; /* the Julian day of 1970-01-01 */
+  int64_t t;
+
+  if (TY_UNLIKELY(__builtin_isinf(seconds))) {
+    *out = seconds < 0 ? TY_TIMESTAMP_NOBEGIN : TY_TIMESTAMP_NOEND;
+    return 0;
+  }
+  /* a NaN is not in the range either */
+  if (TY_UNLIKELY(
+          !(seconds >= day * -unix_epoch_jdate &&
+            seconds < day * (TY_TIMESTAMP_END_JULIAN - unix_epoch_jdate)))) {
+    return ty_timestamptz_from_epoch_error(seconds);
+  }
+  /* from 1970 to 2000, and to microseconds; the rounding may pass the end */
+  t = (int64_t)__builtin_rint(
+      (seconds - day * (TY_POSTGRES_EPOCH_JDATE - unix_epoch_jdate)) *
+      1000000.0);
+  if (TY_UNLIKELY(!ty_timestamp_valid(t))) {
+    return ty_timestamptz_from_epoch_error(seconds);
+  }
+  *out = t;
+  return 0;
+}
+
+/*
  * age(a, b) of two timestamps: the years, months, days and time from b to a,
  * the borrow of a month taking the days of the month of the earlier one.
  */
@@ -518,6 +550,8 @@ int ty_timestamp_part(int reserved, int code, int64_t ts, ty_part_t *out);
 int ty_tm_part(int code, const ty_tm_t *tm, int32_t fsec, ty_part_t *out);
 int ty_date_part(int reserved, int code, int32_t date, ty_part_t *out);
 int ty_time_part(int reserved, int code, int64_t t, ty_part_t *out);
+int ty_timetz_part(int reserved, int code, const ty_timetz_t *t,
+                   ty_part_t *out);
 int ty_interval_part(int reserved, int code, const ty_interval_t *iv,
                      ty_part_t *out);
 
@@ -634,6 +668,14 @@ size_t ty_interval_format(const ty_itm_t *itm, int style, char *out);
 #define TY_DTERR_TZDISP_OVERFLOW (-5)
 #define TY_DTERR_BAD_TIMEZONE (-6)
 #define TY_DTERR_BAD_ZONE_ABBREV (-7)
+
+/*
+ * A zone written as a number, with its sign: +hh, +hhmm, +hh:mm or
+ * +hh:mm:ss, in *tz as the seconds west of UTC. Returns 0, or a TY_DTERR_*
+ * code: BAD_FORMAT for a text that is not one, TZDISP_OVERFLOW for a number
+ * that is too large.
+ */
+int ty_zone_offset_parse(const char *str, int *tz);
 
 /*
  * What the zone hook says a word is. The values are PostgreSQL's, so that

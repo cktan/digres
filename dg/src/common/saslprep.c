@@ -30,7 +30,7 @@
 
 #include "common/saslprep.h"
 #include "common/string.h"
-#include "common/unicode_norm.h"
+#include "ty_unicode.h"
 #include "mb/pg_wchar.h"
 
 /*
@@ -500,7 +500,7 @@ pg_saslprep_rc pg_saslprep(const char *input, char **output) {
    * 2) Normalize -- Normalize the result of step 1 using Unicode
    * normalization.
    */
-  output_chars = unicode_normalize(UNICODE_NFKC, input_chars);
+  output_chars = ty_norm_chars(TY_NORM_NFKC, input_chars);
   if (!output_chars)
     goto oom;
 

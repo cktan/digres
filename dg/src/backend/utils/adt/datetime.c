@@ -56,175 +56,7 @@ const char *const days[] = {"Sunday",   "Monday", "Tuesday",  "Wednesday",
  **
  *****************************************************************************/
 
-/*
- * datetktbl holds date/time keywords.
- *
- * Note that this table must be strictly alphabetically ordered to allow an
- * O(ln(N)) search algorithm to be used.
- *
- * The token field must be NUL-terminated; we truncate entries to TOKMAXLEN
- * characters to fit.
- *
- * The static table contains no TZ, DTZ, or DYNTZ entries; rather those
- * are loaded from configuration files and stored in zoneabbrevtbl, whose
- * abbrevs[] field has the same format as the static datetktbl.
- */
-static const datetkn datetktbl[] = {
-    /* token, type, value */
-    {"+infinity", RESERV, DTK_LATE}, /* same as "infinity" */
-    {EARLY, RESERV, DTK_EARLY},      /* "-infinity" reserved for "early time" */
-    {DA_D, ADBC, AD},                /* "ad" for years > 0 */
-    {"allballs", RESERV, DTK_ZULU},  /* 00:00:00 */
-    {"am", AMPM, AM},
-    {"apr", MONTH, 4},
-    {"april", MONTH, 4},
-    {"at", IGNORE_DTF, 0}, /* "at" (throwaway) */
-    {"aug", MONTH, 8},
-    {"august", MONTH, 8},
-    {DB_C, ADBC, BC},      /* "bc" for years <= 0 */
-    {"d", UNITS, DTK_DAY}, /* "day of month" for ISO input */
-    {"dec", MONTH, 12},
-    {"december", MONTH, 12},
-    {"dow", UNITS, DTK_DOW}, /* day of week */
-    {"doy", UNITS, DTK_DOY}, /* day of year */
-    {"dst", DTZMOD, SECS_PER_HOUR},
-    {EPOCH, RESERV, DTK_EPOCH}, /* "epoch" reserved for system epoch time */
-    {"feb", MONTH, 2},
-    {"february", MONTH, 2},
-    {"fri", DOW, 5},
-    {"friday", DOW, 5},
-    {"h", UNITS, DTK_HOUR},          /* "hour" */
-    {LATE, RESERV, DTK_LATE},        /* "infinity" reserved for "late time" */
-    {"isodow", UNITS, DTK_ISODOW},   /* ISO day of week, Sunday == 7 */
-    {"isoyear", UNITS, DTK_ISOYEAR}, /* year in terms of the ISO week date */
-    {"j", UNITS, DTK_JULIAN},
-    {"jan", MONTH, 1},
-    {"january", MONTH, 1},
-    {"jd", UNITS, DTK_JULIAN},
-    {"jul", MONTH, 7},
-    {"julian", UNITS, DTK_JULIAN},
-    {"july", MONTH, 7},
-    {"jun", MONTH, 6},
-    {"june", MONTH, 6},
-    {"m", UNITS, DTK_MONTH}, /* "month" for ISO input */
-    {"mar", MONTH, 3},
-    {"march", MONTH, 3},
-    {"may", MONTH, 5},
-    {"mm", UNITS, DTK_MINUTE}, /* "minute" for ISO input */
-    {"mon", DOW, 1},
-    {"monday", DOW, 1},
-    {"nov", MONTH, 11},
-    {"november", MONTH, 11},
-    {NOW, RESERV, DTK_NOW}, /* current transaction time */
-    {"oct", MONTH, 10},
-    {"october", MONTH, 10},
-    {"on", IGNORE_DTF, 0}, /* "on" (throwaway) */
-    {"pm", AMPM, PM},
-    {"s", UNITS, DTK_SECOND}, /* "seconds" for ISO input */
-    {"sat", DOW, 6},
-    {"saturday", DOW, 6},
-    {"sep", MONTH, 9},
-    {"sept", MONTH, 9},
-    {"september", MONTH, 9},
-    {"sun", DOW, 0},
-    {"sunday", DOW, 0},
-    {"t", ISOTIME, DTK_TIME}, /* Filler for ISO time fields */
-    {"thu", DOW, 4},
-    {"thur", DOW, 4},
-    {"thurs", DOW, 4},
-    {"thursday", DOW, 4},
-    {TODAY, RESERV, DTK_TODAY},       /* midnight */
-    {TOMORROW, RESERV, DTK_TOMORROW}, /* tomorrow midnight */
-    {"tue", DOW, 2},
-    {"tues", DOW, 2},
-    {"tuesday", DOW, 2},
-    {"wed", DOW, 3},
-    {"wednesday", DOW, 3},
-    {"weds", DOW, 3},
-    {"y", UNITS, DTK_YEAR},            /* "year" for ISO input */
-    {YESTERDAY, RESERV, DTK_YESTERDAY} /* yesterday midnight */
-};
-
-static const int szdatetktbl = sizeof datetktbl / sizeof datetktbl[0];
-
-/*
- * deltatktbl: same format as datetktbl, but holds keywords used to represent
- * time units (eg, for intervals, and for EXTRACT).
- */
-static const datetkn deltatktbl[] = {
-    /* token, type, value */
-    {"@", IGNORE_DTF, 0},         /* postgres relative prefix */
-    {DAGO, AGO, 0},               /* "ago" indicates negative time offset */
-    {"c", UNITS, DTK_CENTURY},    /* "century" relative */
-    {"cent", UNITS, DTK_CENTURY}, /* "century" relative */
-    {"centuries", UNITS, DTK_CENTURY},    /* "centuries" relative */
-    {DCENTURY, UNITS, DTK_CENTURY},       /* "century" relative */
-    {"d", UNITS, DTK_DAY},                /* "day" relative */
-    {DDAY, UNITS, DTK_DAY},               /* "day" relative */
-    {"days", UNITS, DTK_DAY},             /* "days" relative */
-    {"dec", UNITS, DTK_DECADE},           /* "decade" relative */
-    {DDECADE, UNITS, DTK_DECADE},         /* "decade" relative */
-    {"decades", UNITS, DTK_DECADE},       /* "decades" relative */
-    {"decs", UNITS, DTK_DECADE},          /* "decades" relative */
-    {"h", UNITS, DTK_HOUR},               /* "hour" relative */
-    {DHOUR, UNITS, DTK_HOUR},             /* "hour" relative */
-    {"hours", UNITS, DTK_HOUR},           /* "hours" relative */
-    {"hr", UNITS, DTK_HOUR},              /* "hour" relative */
-    {"hrs", UNITS, DTK_HOUR},             /* "hours" relative */
-    {"m", UNITS, DTK_MINUTE},             /* "minute" relative */
-    {"microsecon", UNITS, DTK_MICROSEC},  /* "microsecond" relative */
-    {"mil", UNITS, DTK_MILLENNIUM},       /* "millennium" relative */
-    {"millennia", UNITS, DTK_MILLENNIUM}, /* "millennia" relative */
-    {DMILLENNIUM, UNITS, DTK_MILLENNIUM}, /* "millennium" relative */
-    {"millisecon", UNITS, DTK_MILLISEC},  /* relative */
-    {"mils", UNITS, DTK_MILLENNIUM},      /* "millennia" relative */
-    {"min", UNITS, DTK_MINUTE},           /* "minute" relative */
-    {"mins", UNITS, DTK_MINUTE},          /* "minutes" relative */
-    {DMINUTE, UNITS, DTK_MINUTE},         /* "minute" relative */
-    {"minutes", UNITS, DTK_MINUTE},       /* "minutes" relative */
-    {"mon", UNITS, DTK_MONTH},            /* "months" relative */
-    {"mons", UNITS, DTK_MONTH},           /* "months" relative */
-    {DMONTH, UNITS, DTK_MONTH},           /* "month" relative */
-    {"months", UNITS, DTK_MONTH},
-    {"ms", UNITS, DTK_MILLISEC},
-    {"msec", UNITS, DTK_MILLISEC},
-    {DMILLISEC, UNITS, DTK_MILLISEC},
-    {"mseconds", UNITS, DTK_MILLISEC},
-    {"msecs", UNITS, DTK_MILLISEC},
-    {"qtr", UNITS, DTK_QUARTER},    /* "quarter" relative */
-    {DQUARTER, UNITS, DTK_QUARTER}, /* "quarter" relative */
-    {"s", UNITS, DTK_SECOND},
-    {"sec", UNITS, DTK_SECOND},
-    {DSECOND, UNITS, DTK_SECOND},
-    {"seconds", UNITS, DTK_SECOND},
-    {"secs", UNITS, DTK_SECOND},
-    {DTIMEZONE, UNITS, DTK_TZ},           /* "timezone" time offset */
-    {"timezone_h", UNITS, DTK_TZ_HOUR},   /* timezone hour units */
-    {"timezone_m", UNITS, DTK_TZ_MINUTE}, /* timezone minutes units */
-    {"us", UNITS, DTK_MICROSEC},          /* "microsecond" relative */
-    {"usec", UNITS, DTK_MICROSEC},        /* "microsecond" relative */
-    {DMICROSEC, UNITS, DTK_MICROSEC},     /* "microsecond" relative */
-    {"useconds", UNITS, DTK_MICROSEC},    /* "microseconds" relative */
-    {"usecs", UNITS, DTK_MICROSEC},       /* "microseconds" relative */
-    {"w", UNITS, DTK_WEEK},               /* "week" relative */
-    {DWEEK, UNITS, DTK_WEEK},             /* "week" relative */
-    {"weeks", UNITS, DTK_WEEK},           /* "weeks" relative */
-    {"y", UNITS, DTK_YEAR},               /* "year" relative */
-    {DYEAR, UNITS, DTK_YEAR},             /* "year" relative */
-    {"years", UNITS, DTK_YEAR},           /* "years" relative */
-    {"yr", UNITS, DTK_YEAR},              /* "year" relative */
-    {"yrs", UNITS, DTK_YEAR}              /* "years" relative */
-};
-
-static const int szdeltatktbl = sizeof deltatktbl / sizeof deltatktbl[0];
-
 static thread_local /*LOCAL*/ TimeZoneAbbrevTable *zoneabbrevtbl = NULL;
-
-/* Caches of recent lookup results in the above tables */
-
-static thread_local /*LOCAL*/ const datetkn *datecache[MAXDATEFIELDS] = {NULL};
-
-static thread_local /*LOCAL*/ const datetkn *deltacache[MAXDATEFIELDS] = {NULL};
 
 /* Cache for results of timezone abbreviation lookups */
 
@@ -459,66 +291,6 @@ static bool TimeZoneAbbrevIsKnown(const char *abbr, pg_tz *tzp, bool *isfixed,
   return true;
 }
 
-/* DecodeTimezone()
- * Interpret string as a numeric timezone.
- *
- * Return 0 if okay (and set *tzp), a DTERR code if not okay.
- */
-int DecodeTimezone(const char *str, int *tzp) {
-  int tz;
-  int hr, min, sec = 0;
-  char *cp;
-
-  /* leading character must be "+" or "-" */
-  if (*str != '+' && *str != '-')
-    return DTERR_BAD_FORMAT;
-
-  errno = 0;
-  hr = strtoint(str + 1, &cp, 10);
-  if (errno == ERANGE)
-    return DTERR_TZDISP_OVERFLOW;
-
-  /* explicit delimiter? */
-  if (*cp == ':') {
-    errno = 0;
-    min = strtoint(cp + 1, &cp, 10);
-    if (errno == ERANGE)
-      return DTERR_TZDISP_OVERFLOW;
-    if (*cp == ':') {
-      errno = 0;
-      sec = strtoint(cp + 1, &cp, 10);
-      if (errno == ERANGE)
-        return DTERR_TZDISP_OVERFLOW;
-    }
-  }
-  /* otherwise, might have run things together... */
-  else if (*cp == '\0' && strlen(str) > 3) {
-    min = hr % 100;
-    hr = hr / 100;
-    /* we could, but don't, support a run-together hhmmss format */
-  } else
-    min = 0;
-
-  /* Range-check the values; see notes in datatype/timestamp.h */
-  if (hr < 0 || hr > MAX_TZDISP_HOUR)
-    return DTERR_TZDISP_OVERFLOW;
-  if (min < 0 || min >= MINS_PER_HOUR)
-    return DTERR_TZDISP_OVERFLOW;
-  if (sec < 0 || sec >= SECS_PER_MINUTE)
-    return DTERR_TZDISP_OVERFLOW;
-
-  tz = (hr * MINS_PER_HOUR + min) * SECS_PER_MINUTE + sec;
-  if (*str == '-')
-    tz = -tz;
-
-  *tzp = -tz;
-
-  if (*cp != '\0')
-    return DTERR_BAD_FORMAT;
-
-  return 0;
-}
-
 /* DecodeTimezoneAbbrev()
  * Interpret string as a timezone abbreviation, if possible.
  *
@@ -698,39 +470,6 @@ void TyDateTimeParseError(int dterr, const ty_dtin_extra_t *x, const char *str,
   DateTimeParseError(dterr, &extra, str, datatype, escontext);
 }
 
-/* DecodeSpecial()
- * Decode text string using lookup table.
- *
- * Recognizes the keywords listed in datetktbl.
- * Note: at one time this would also recognize timezone abbreviations,
- * but no more; use DecodeTimezoneAbbrev for that.
- *
- * Given string must be lowercased already.
- *
- * Implement a cache lookup since it is likely that dates
- *	will be related in format.
- */
-int DecodeSpecial(int field, const char *lowtoken, int *val) {
-  int type;
-  const datetkn *tp;
-
-  tp = datecache[field];
-  /* use strncmp so that we match truncated tokens */
-  if (tp == NULL || strncmp(lowtoken, tp->token, TOKMAXLEN) != 0) {
-    tp = datebsearch(lowtoken, datetktbl, szdatetktbl);
-  }
-  if (tp == NULL) {
-    type = UNKNOWN_FIELD;
-    *val = 0;
-  } else {
-    datecache[field] = tp;
-    type = tp->type;
-    *val = tp->value;
-  }
-
-  return type;
-}
-
 /* DecodeTimezoneName()
  * Interpret string as a timezone abbreviation or name.
  * Throw error if the name is not recognized.
@@ -884,42 +623,6 @@ int DecodeTimezoneAbbrevPrefix(const char *str, int *offset, pg_tz **tz) {
   /* Did not find a match */
   return -1;
 }
-
-
-
-
-
-
-/* DecodeUnits()
- * Decode text string using lookup table.
- *
- * This routine recognizes keywords associated with time interval units.
- *
- * Given string must be lowercased already.
- *
- * Implement a cache lookup since it is likely that dates
- *	will be related in format.
- */
-int DecodeUnits(int field, const char *lowtoken, int *val) {
-  int type;
-  const datetkn *tp;
-
-  tp = deltacache[field];
-  /* use strncmp so that we match truncated tokens */
-  if (tp == NULL || strncmp(lowtoken, tp->token, TOKMAXLEN) != 0) {
-    tp = datebsearch(lowtoken, deltatktbl, szdeltatktbl);
-  }
-  if (tp == NULL) {
-    type = UNKNOWN_FIELD;
-    *val = 0;
-  } else {
-    deltacache[field] = tp;
-    type = tp->type;
-    *val = tp->value;
-  }
-
-  return type;
-} /* DecodeUnits() */
 
 /*
  * Report an error detected by one of the datetime input processing routines.
@@ -1134,17 +837,6 @@ static bool CheckDateTokenTable(const char *tablename, const datetkn *base,
       ok = false;
     }
   }
-  return ok;
-}
-
-bool CheckDateTokenTables(void) {
-  bool ok = true;
-
-  Assert(UNIX_EPOCH_JDATE == date2j(1970, 1, 1));
-  Assert(POSTGRES_EPOCH_JDATE == date2j(2000, 1, 1));
-
-  ok &= CheckDateTokenTable("datetktbl", datetktbl, szdatetktbl);
-  ok &= CheckDateTokenTable("deltatktbl", deltatktbl, szdeltatktbl);
   return ok;
 }
 

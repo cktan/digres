@@ -6,6 +6,10 @@ The generated header files are copied to src/include/common/, and
 included in the source tree, so these tools are not normally required
 to build PostgreSQL.
 
+In digres the tables of normalization and of categories are ty's, in
+ty/src/unicode/. There they do not include a file of common/, and the
+categories' names start with TY_U_, not PG_U_.
+
 Update Unicode Version
 ----------------------
 

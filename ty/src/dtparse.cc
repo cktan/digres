@@ -3435,48 +3435,41 @@ static int common_unit(const char *w, int *code) {
     const char *word;
     int code, found;
   } common[] = {
-      {"year", DTK_YEAR, 1},
-      {"month", DTK_MONTH, 1},
-      {"day", DTK_DAY, 1},
-      {"hour", DTK_HOUR, 1},
-      {"minute", DTK_MINUTE, 1},
-      {"second", DTK_SECOND, 1},
-      {"quarter", DTK_QUARTER, 1},
-      {"week", DTK_WEEK, 1},
-      {"decade", DTK_DECADE, 1},
-      {"century", DTK_CENTURY, 1},
-      {"millennium", DTK_MILLENNIUM, 1},
-      {"milliseconds", DTK_MILLISEC, 1},
-      {"microseconds", DTK_MICROSEC, 1},
-      {"epoch", DTK_EPOCH, 2},
-      {"dow", DTK_DOW, 1},
-      {"doy", DTK_DOY, 1},
-      {"isodow", DTK_ISODOW, 1},
-      {"isoyear", DTK_ISOYEAR, 1},
-      {"julian", DTK_JULIAN, 1},
+      {"century", DTK_CENTURY, 1},       /* 0 */
+      {"day", DTK_DAY, 1},               /* 1 */
+      {"dow", DTK_DOW, 1},               /* 2 */
+      {"doy", DTK_DOY, 1},               /* 3 */
+      {"decade", DTK_DECADE, 1},         /* 4 */
+      {"epoch", DTK_EPOCH, 2},           /* 5 */
+      {"hour", DTK_HOUR, 1},             /* 6 */
+      {"isodow", DTK_ISODOW, 1},         /* 7 */
+      {"isoyear", DTK_ISOYEAR, 1},       /* 8 */
+      {"julian", DTK_JULIAN, 1},         /* 9 */
+      {"month", DTK_MONTH, 1},           /* 10 */
+      {"minute", DTK_MINUTE, 1},         /* 11 */
+      {"milliseconds", DTK_MILLISEC, 1}, /* 12 */
+      {"microseconds", DTK_MICROSEC, 1}, /* 13 */
+      {"millennium", DTK_MILLENNIUM, 1}, /* 14 */
+      {"quarter", DTK_QUARTER, 1},       /* 15 */
+      {"second", DTK_SECOND, 1},         /* 16 */
+      {"week", DTK_WEEK, 1},             /* 17 */
+      {"year", DTK_YEAR, 1},             /* 18 */
   };
-  /* the first letter picks the few words to compare */
-  switch (w[0]) {
-  case 'y':
-  case 'm':
-  case 'd':
-  case 'h':
-  case 'q':
-  case 'w':
-  case 'c':
-  case 'e':
-  case 'i':
-  case 'j':
-  case 's':
-    for (const auto &c : common) {
-      if (c.word[0] == w[0] && strcmp(c.word, w) == 0) {
-        *code = c.code;
-        return c.found;
+  /* the words of each letter, from a: the first, and how many */
+  static const signed char first[26] = {0,  0, 0, 1,  5,  0, 0,  6,  7,
+                                        9,  0, 0, 10, 0,  0, 0,  15, 0,
+                                        16, 0, 0, 0,  17, 0, 18, 0};
+  static const signed char count[26] = {0, 0, 1, 4, 1, 0, 0, 1, 2, 1, 0, 0, 5,
+                                        0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0};
+  unsigned letter = (unsigned char)w[0] - 'a';
+
+  if (letter < 26) {
+    for (int i = first[letter], n = i + count[letter]; i < n; i++) {
+      if (strcmp(common[i].word, w) == 0) {
+        *code = common[i].code;
+        return common[i].found;
       }
     }
-    break;
-  default:
-    break;
   }
   return 0;
 }
@@ -3757,4 +3750,9 @@ int ty_timetz_parse(const char *str, int dateorder, const ty_dtzone_t *zone,
       fsec;
   out->zone = tz;
   return 0;
+}
+
+/* The offset of a zone written as a number: PostgreSQL's DecodeTimezone. */
+int ty_zone_offset_parse(const char *str, int *tz) {
+  return DecodeTimezone(str, tz);
 }

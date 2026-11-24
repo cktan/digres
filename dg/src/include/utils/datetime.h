@@ -266,12 +266,11 @@ extern PGDLLIMPORT const int day_tab[2][13];
 #define isleap(y) (((y) % 4) == 0 && (((y) % 100) != 0 || ((y) % 400) == 0))
 
 /*
- * Datetime input parsing routines (ty_timestamp_parse, DecodeTimezone, etc)
- * return zero or a positive value on success.  On failure, they return
- * one of these negative code values.  DateTimeParseError may be used to
- * produce a suitable error report.  For some of these codes,
- * DateTimeParseError requires additional information, which is carried
- * in struct DateTimeErrorExtra.
+ * Datetime input parsing routines (ty_timestamp_parse, DecodeTimezoneAbbrev,
+ * etc) return zero or a positive value on success.  On failure, they return one
+ * of these negative code values.  DateTimeParseError may be used to produce a
+ * suitable error report.  For some of these codes, DateTimeParseError requires
+ * additional information, which is carried in struct DateTimeErrorExtra.
  */
 #define DTERR_BAD_FORMAT		(-1)
 #define DTERR_FIELD_OVERFLOW	(-2)
@@ -297,8 +296,6 @@ extern void GetCurrentDateTime(struct pg_tm *tm);
 extern void GetCurrentTimeUsec(struct pg_tm *tm, fsec_t *fsec, int *tzp);
 extern void j2date(int jd, int *year, int *month, int *day);
 extern int date2j(int year, int month, int day);
-
-extern int DecodeTimezone(const char *str, int *tzp);
 
 extern void DateTimeParseError(int dterr, DateTimeErrorExtra *extra,
                                const char *str, const char *datatype,
@@ -331,8 +328,6 @@ extern void EncodeSpecialTimestamp(Timestamp dt, char *str);
 extern int DecodeTimezoneAbbrev(int field, const char *lowtoken, int *ftype,
                                 int *offset, pg_tz **tz,
                                 DateTimeErrorExtra *extra);
-extern int DecodeSpecial(int field, const char *lowtoken, int *val);
-extern int DecodeUnits(int field, const char *lowtoken, int *val);
 
 extern int DecodeTimezoneName(const char *tzname, int *offset, pg_tz **tz);
 extern pg_tz *DecodeTimezoneNameToTz(const char *tzname);
@@ -342,8 +337,6 @@ extern int DecodeTimezoneAbbrevPrefix(const char *str, int *offset, pg_tz **tz);
 extern void ClearTimeZoneAbbrevCache(void);
 
 extern struct Node *TemporalSimplify(int32 max_precis, struct Node *node);
-
-extern bool CheckDateTokenTables(void);
 
 extern TimeZoneAbbrevTable *ConvertTimeZoneAbbrevs(struct tzEntry *abbrevs,
                                                    int n);

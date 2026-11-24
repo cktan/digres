@@ -99,24 +99,6 @@ static ty_dec128_t dec_ty(const decimal_t *num) {
   return {dec_value(num), dec_scale(num)};
 }
 
-/* 10^n as a value, for n up to 38. */
-static i128 dec_pow10(int n) {
-  i128 r = 1;
-
-  while (n-- > 0)
-    r *= 10;
-  return r;
-}
-
-/* The number of decimal digits of u; 0 has one. */
-static int u128_digits(u128 u) {
-  int n = 1;
-
-  for (; u >= 10; u /= 10)
-    n++;
-  return n;
-}
-
 /* The digits of u, at least one, into out; returns how many. */
 static int dec_digits_text(u128 u, char *out) {
   char tmp[48];
@@ -141,30 +123,6 @@ static char *dec_text(i128 v, int scale) {
   memcpy(r, out, n + 1);
   return r;
 }
-
-/*
- * *v, at scale from, put to scale to (not below it): false if it then has
- * more than 36 digits.
- */
-static bool dec_scale_up(i128 *v, int from, int to) {
-  for (; from < to; from++)
-    if (__builtin_mul_overflow(*v, (i128)10, v))
-      return false;
-  return (*v >= 0 ? *v : -*v) < dec_pow10(DEC_MAX_DIGITS);
-}
-
-/*
- * PostgreSQL's view of w in base 10,000, as its numeric held it: the
- * weight of its first nonzero base-10,000 digit, that digit, the next, and
- * whether there are more after the first.  Its scale rules are written in
- * these.  Zero has weight 0 and digit 0.
- */
-typedef struct nbase_t {
-  int weight;
-  int first;
-  int second;
-  int ndigits; /* 1 if nothing follows the first digit, else 2 */
-} nbase_t;
 
 /* ----------------------------------------------------------------------
  * Text
@@ -200,22 +158,14 @@ static int numeric_typmod_scale(int32 typmod) {
 static bool dec_apply_typmod(ty_dec128_t *v, int32 typmod,
                              Node *escontext) {
   int precision, scale, maxdigits;
-  ty_dec128_t r;
 
   if (!is_valid_numeric_typmod(typmod))
     return true;
   precision = numeric_typmod_precision(typmod);
   scale = numeric_typmod_scale(typmod);
   maxdigits = precision - scale;
-  /* If it cannot pass the zeros that scale needs, it has too many digits. */
-  if (ty_dec128_round(v, scale, &r) == 0) {
-    *v = r;
-    /* Digits before the point, of the rounded value. */
-    if (u128_digits(r.value < 0 ? -(u128)r.value : (u128)r.value) -
-            r.scale <=
-        maxdigits)
-      return true;
-  }
+  if (ty_dec128_typmod(v, precision, scale) == 0)
+    return true;
   ereturn(escontext, false,
           (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
            errmsg("numeric field overflow"),
@@ -937,94 +887,6 @@ Datum hash_numeric_extended(PG_FUNCTION_ARGS) {
  * ----------------------------------------------------------------------
  */
 
-/* The base-10000 shape of a value v at scale, as dec_nbase() gives it. */
-static nbase_t dec_nbase128(i128 v, int scale) {
-  nbase_t nb = {0, 0, 0, 1};
-  u128 m, head, rest = 0, p = 1;
-  int e, shift;
-
-  if (v == 0)
-    return nb;
-  m = v < 0 ? -(u128)v : (u128)v;
-  /* e is the decimal exponent of the leading digit. */
-  e = u128_digits(m) - 1 - scale;
-  nb.weight = e >= 0 ? e / 4 : -((-e + 3) / 4);
-  /* head is the value / 10000^weight, scaled to keep 8 more digits. */
-  shift = scale + 4 * nb.weight - 8;
-  for (int i = 0; i < (shift >= 0 ? shift : -shift); i++)
-    p *= 10;
-  if (shift >= 0) {
-    head = m / p;
-    rest = m % p;
-  } else {
-    head = m * p;
-  }
-  {
-    uint64 r1 = (uint64)(head % 100000000), r2 = r1 % 10000;
-
-    nb.first = (int)(head / 100000000);
-    nb.second = (int)(r1 / 10000);
-    nb.ndigits = (r1 != 0 || rest != 0 || r2 != 0) ? 2 : 1;
-  }
-  return nb;
-}
-
-/*
- * The base-10000 shape of a positive v, a double: its weight and its
- * first digit, as dec_nbase128() gives them.
- */
-static nbase_t dec_nbase_d(double v) {
-  nbase_t nb = {0, 0, 0, 1};
-  int e;
-  double scaled;
-
-  if (!(v > 0))
-    return nb;
-  e = (int)floor(log10(v));
-  while (pow(10.0, e + 1) <= v)
-    e++;
-  while (pow(10.0, e) > v)
-    e--;
-  nb.weight = e >= 0 ? e / 4 : -((-e + 3) / 4);
-  scaled = v / pow(10000.0, nb.weight);
-  nb.first = (int)scaled;
-  nb.second = (int)((scaled - nb.first) * 10000);
-  nb.ndigits = (scaled - nb.first) != 0 ? 2 : 1;
-  return nb;
-}
-
-/* PostgreSQL's scale for a quotient of two shapes: select_div_scale(). */
-static int select_div_scale_nb(const nbase_t &na, int sa, const nbase_t &nb,
-                               int sb) {
-  int qweight = na.weight - nb.weight;
-  int rscale;
-
-  if (na.first <= nb.first)
-    qweight--;
-  rscale = NUMERIC_MIN_SIG_DIGITS - qweight * 4;
-  rscale = Max(rscale, sa);
-  rscale = Max(rscale, sb);
-  rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-  rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  return rscale;
-}
-
-/* PostgreSQL's scale for a quotient of two values: select_div_scale(). */
-static int select_div_scale128(i128 va, int sa, i128 vb, int sb) {
-  nbase_t na = dec_nbase128(va, sa), nb = dec_nbase128(vb, sb);
-  int qweight = na.weight - nb.weight;
-  int rscale;
-
-  if (na.first <= nb.first)
-    qweight--;
-  rscale = NUMERIC_MIN_SIG_DIGITS - qweight * 4;
-  rscale = Max(rscale, sa);
-  rscale = Max(rscale, sb);
-  rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-  rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  return rscale;
-}
-
 /* The error of a division by zero, or false with *have_error set. */
 static bool division_by_zero(bool *have_error) {
   if (have_error == NULL)
@@ -1084,9 +946,7 @@ Numeric numeric_div_opt_error(Numeric num1, Numeric num2, bool *have_error) {
     return NULL;
   }
   /* The quotient is ty's, made in 128 bits, at PostgreSQL's scale. */
-  if (ty_dec128_div(&a, &b,
-                        select_div_scale128(a.value, a.scale, b.value, b.scale),
-                        false, &r) != 0)
+  if (ty_dec128_div(&a, &b, ty_dec128_div_scale(&a, &b), false, &r) != 0)
     return dec_range_error(have_error);
   return dec_make(r.value, r.scale);
 }
@@ -1228,55 +1088,14 @@ Datum numeric_fac(PG_FUNCTION_ARGS) {
 /* The square root of num, at PostgreSQL's scale for it, rounded. */
 Datum numeric_sqrt(PG_FUNCTION_ARGS) {
   ty_dec128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
-  nbase_t nb = dec_nbase128(arg.value, arg.scale);
-  int sweight, rscale;
 
   if (arg.value < 0)
     ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
                     errmsg("cannot take square root of a negative number")));
-  /* At least 16 significant digits, not below the argument's scale. */
-  sweight = nb.weight * 4 / 2 + 1;
-  rscale = NUMERIC_MIN_SIG_DIGITS - sweight;
-  rscale = Max(rscale, arg.scale);
-  rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-  rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
   /* The root is ty's, made a digit at a time in 128 bits. */
-  if (ty_dec128_sqrt(&arg, rscale, &r) != 0)
+  if (ty_dec128_sqrt(&arg, ty_dec128_sqrt_scale(&arg), &r) != 0)
     dec_range_error(NULL);
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
-}
-
-/*
- * The decimal weight of ln(w), as PostgreSQL estimates it to choose a
- * result scale; w is positive.
- */
-static int estimate_ln_dweight(const ty_dec128_t &w) {
-  ty_dec128_t lo = {9, 1}, hi = {11, 1};
-
-  if (w.value <= 0)
-    return 0;
-  if (ty_dec128_cmp(w, lo) >= 0 && ty_dec128_cmp(w, hi) <= 0) {
-    /* 0.9 <= w <= 1.1: ln(w) is about w - 1. */
-    ty_dec128_t one = {1, 0}, x;
-
-    ty_dec128_sub(&w, &one, &x);
-    if (x.value == 0)
-      return 0;
-    return u128_digits(x.value < 0 ? -(u128)x.value : (u128)x.value) - 1 -
-           x.scale;
-  } else {
-    nbase_t nb = dec_nbase128(w.value, w.scale);
-    int digits = nb.first;
-    int dweight = nb.weight * 4;
-    double ln_var;
-
-    if (nb.ndigits > 1) {
-      digits = digits * 10000 + nb.second;
-      dweight -= 4;
-    }
-    ln_var = log((double)digits) + dweight * 2.302585092994046;
-    return (int)log10(fabs(ln_var));
-  }
 }
 
 /* The error of a logarithm of zero or a negative number, if w is one. */
@@ -1292,17 +1111,8 @@ static void check_log_argument(const ty_dec128_t &w) {
 /* e raised to num, at PostgreSQL's scale for it. */
 Datum numeric_exp(PG_FUNCTION_ARGS) {
   ty_dec128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
-  double x = ty_dec128_to_double(&arg);
-  double val = (double)x * 0.434294481903252; /* the result's dweight */
-  int rscale;
 
-  val = Max(val, -NUMERIC_MAX_RESULT_SCALE);
-  val = Min(val, NUMERIC_MAX_RESULT_SCALE);
-  rscale = NUMERIC_MIN_SIG_DIGITS - (int)val;
-  rscale = Max(rscale, arg.scale);
-  rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-  rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  if (ty_dec128_exp(&arg, rscale, &r) != 0)
+  if (ty_dec128_exp(&arg, ty_dec128_exp_scale(&arg), &r) != 0)
     dec_math_error();
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -1310,14 +1120,9 @@ Datum numeric_exp(PG_FUNCTION_ARGS) {
 /* The natural logarithm of num, at PostgreSQL's scale for it. */
 Datum numeric_ln(PG_FUNCTION_ARGS) {
   ty_dec128_t arg = dec_ty(PG_GETARG_NUMERIC(0)), r;
-  int rscale;
 
   check_log_argument(arg);
-  rscale = NUMERIC_MIN_SIG_DIGITS - estimate_ln_dweight(arg);
-  rscale = Max(rscale, arg.scale);
-  rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-  rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  if (ty_dec128_ln(&arg, rscale, &r) != 0)
+  if (ty_dec128_ln(&arg, ty_dec128_ln_scale(&arg), &r) != 0)
     dec_math_error();
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -1326,111 +1131,26 @@ Datum numeric_ln(PG_FUNCTION_ARGS) {
 Datum numeric_log(PG_FUNCTION_ARGS) {
   ty_dec128_t base = dec_ty(PG_GETARG_NUMERIC(0));
   ty_dec128_t num = dec_ty(PG_GETARG_NUMERIC(1)), r;
-  int result_dweight, rscale;
 
   check_log_argument(base);
   check_log_argument(num);
-  result_dweight = estimate_ln_dweight(num) - estimate_ln_dweight(base);
-  rscale = NUMERIC_MIN_SIG_DIGITS - result_dweight;
-  rscale = Max(rscale, base.scale);
-  rscale = Max(rscale, num.scale);
-  rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-  rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  if (ty_dec128_log(&base, &num, rscale, &r) != 0)
+  if (ty_dec128_log(&base, &num, ty_dec128_log_scale(&base, &num), &r) != 0)
     dec_math_error();
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
-}
-
-/*
- * base ^ exp for an integer exp, exact where its value fits 128 bits, and
- * rounded to PostgreSQL's scale for it; past that, ty takes it in long
- * double.
- */
-static Numeric power_int(const ty_dec128_t &base, int64 exp,
-                         int exp_scale) {
-  nbase_t nb = dec_nbase128(base.value, base.scale);
-  double f;
-  int rscale;
-  ty_dec128_t r;
-
-  /* The approximate decimal weight of the result, PostgreSQL's way. */
-  if (base.value != 0) {
-    double d = nb.first;
-    int p = nb.weight * 4;
-
-    if (nb.ndigits > 1) {
-      d = d * 10000 + nb.second;
-      p -= 4;
-    }
-    f = (double)exp * (log10(d) + p);
-  } else
-    f = 0;
-  if (f > DEC_MAX_DIGITS)
-    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                    errmsg("value overflows numeric format")));
-  rscale = NUMERIC_MIN_SIG_DIGITS - (int)Max(f, -1000.0);
-  rscale = Max(rscale, base.scale);
-  rscale = Max(rscale, exp_scale);
-  rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-  rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-  if (base.value == 0) {
-    if (exp < 0)
-      ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
-                      errmsg("zero raised to a negative power is undefined")));
-    if (exp == 0 && rscale >= DEC_MAX_DIGITS)
-      return dec_range_error(NULL);
-    return dec_make(exp == 0 ? dec_pow10(rscale) : 0, rscale);
-  }
-  if (ty_dec128_pow_int(&base, exp, rscale, &r) != 0)
-    return dec_math_error();
-  return dec_make(r.value, r.scale);
 }
 
 /* num1 ^ num2, at PostgreSQL's scale for it. */
 Datum numeric_power(PG_FUNCTION_ARGS) {
   ty_dec128_t base = dec_ty(PG_GETARG_NUMERIC(0));
-  ty_dec128_t exp = dec_ty(PG_GETARG_NUMERIC(1)), exp_int, r;
-  bool exp_is_int;
-  double ln_num, val;
-  int rscale;
+  ty_dec128_t exp = dec_ty(PG_GETARG_NUMERIC(1)), r;
 
-  ty_dec128_trunc(&exp, 0, &exp_int);
-  exp_is_int = ty_dec128_cmp(exp_int, exp) == 0;
-  if (base.value == 0 && exp.value < 0)
-    ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
-                    errmsg("zero raised to a negative power is undefined")));
-  if (base.value < 0 && !exp_is_int)
-    ereport(ERROR,
-            (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
-             errmsg("a negative number raised to a non-integer power yields "
-                    "a complex result")));
-  if (exp_is_int && u128_digits(exp_int.value < 0 ? -(u128)exp_int.value
-                                                  : (u128)exp_int.value) <= 9)
-    PG_RETURN_NUMERIC(power_int(base, (int64)exp_int.value, exp.scale));
-  if (base.value == 0)
-    PG_RETURN_NUMERIC(dec_make(0, NUMERIC_MIN_SIG_DIGITS));
-  {
-    ty_dec128_t abs_base = ty_dec128_abs(base);
-
-    ln_num = log(ty_dec128_to_double(&abs_base)) * ty_dec128_to_double(&exp);
-    if (fabs(ln_num) > NUMERIC_MAX_RESULT_SCALE * 3.01) {
-      if (ln_num > 0)
-        ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                        errmsg("value overflows numeric format")));
-      ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-                      errmsg("value underflows numeric format")));
-    }
-    val = ln_num * 0.434294481903252; /* the result's dweight */
-    rscale = NUMERIC_MIN_SIG_DIGITS - (int)val;
-    rscale = Max(rscale, base.scale);
-    rscale = Max(rscale, exp.scale);
-    rscale = Max(rscale, NUMERIC_MIN_DISPLAY_SCALE);
-    rscale = Min(rscale, NUMERIC_MAX_DISPLAY_SCALE);
-    /* A negative base has an integer exponent: ty keeps its sign. */
-    if (ty_dec128_pow_real(&base, &exp, rscale, &r) != 0)
-      dec_math_error();
-    PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
+  if (ty_dec128_power(&base, &exp, &r) != 0) {
+    if (ty_errnum() == TY_ERR_INVALID)
+      ereport(ERROR, (errcode(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION),
+                      errmsg("%s", ty_errmsg())));
+    dec_math_error();
   }
+  PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
 
 /* ----------------------------------------------------------------------
@@ -1449,7 +1169,7 @@ Numeric int64_div_fast_to_numeric(int64 val1, int log10val2) {
   if (log10val2 < 0) {
     i128 v = val1;
 
-    if (!dec_scale_up(&v, 0, -log10val2))
+    if (ty_dec128_scale_up(&v, 0, -log10val2) != 0)
       return dec_range_error(NULL);
     return dec_make(v, 0);
   }
@@ -1471,23 +1191,16 @@ Datum int2_numeric(PG_FUNCTION_ARGS) {
   PG_RETURN_NUMERIC(int64_to_numeric(PG_GETARG_INT16(0)));
 }
 
-/*
- * num rounded to an integer, half away from zero, if it lies within lo and
- * hi; else false.
- */
-static bool dec_to_int(const decimal_t *num, i128 lo, i128 hi, i128 *out) {
-  ty_dec128_t a = dec_ty(num), r;
+/* num rounded to an integer, if it lies within lo and hi; else false. */
+static bool dec_to_int(const decimal_t *num, int64 lo, int64 hi, int64 *out) {
+  ty_dec128_t a = dec_ty(num);
 
-  ty_dec128_round(&a, 0, &r);
-  if (r.value < lo || r.value > hi)
-    return false;
-  *out = r.value;
-  return true;
+  return ty_dec128_to_int64(&a, lo, hi, out) == 0;
 }
 
 /* num as an int4, or false with *have_error set out of its range. */
 int32 numeric_int4_opt_error(Numeric num, bool *have_error) {
-  i128 v;
+  int64 v;
 
   if (!dec_to_int(num, PG_INT32_MIN, PG_INT32_MAX, &v)) {
     if (have_error) {
@@ -1502,7 +1215,7 @@ int32 numeric_int4_opt_error(Numeric num, bool *have_error) {
 
 /* num as an int8, or false with *have_error set out of its range. */
 int64 numeric_int8_opt_error(Numeric num, bool *have_error) {
-  i128 v;
+  int64 v;
 
   if (!dec_to_int(num, PG_INT64_MIN, PG_INT64_MAX, &v)) {
     if (have_error) {
@@ -1527,7 +1240,7 @@ Datum numeric_int8(PG_FUNCTION_ARGS) {
 
 /* numeric to int2, rounded. */
 Datum numeric_int2(PG_FUNCTION_ARGS) {
-  i128 v;
+  int64 v;
 
   if (!dec_to_int(PG_GETARG_NUMERIC(0), PG_INT16_MIN, PG_INT16_MAX, &v))
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
@@ -1613,8 +1326,8 @@ Numeric random_numeric(pg_prng_state *state, Numeric rmin, Numeric rmax) {
   u128 range, r;
   int bits = 0;
 
-  if (!dec_scale_up(&lo, dec_scale(rmin), s) ||
-      !dec_scale_up(&hi, dec_scale(rmax), s))
+  if (ty_dec128_scale_up(&lo, dec_scale(rmin), s) != 0 ||
+      ty_dec128_scale_up(&hi, dec_scale(rmax), s) != 0)
     return dec_range_error(NULL);
   if (lo > hi)
     ereport(ERROR,
@@ -2100,9 +1813,7 @@ static Datum agg_avg(FunctionCallInfo fcinfo) {
   sx = agg_sumX(state);
   n = {state->N, 0};
   /* The quotient is ty's, at PostgreSQL's scale for it. */
-  if (ty_dec128_div(&sx, &n,
-                        select_div_scale128(sx.value, sx.scale, n.value, 0),
-                        false, &r) != 0)
+  if (ty_dec128_div(&sx, &n, ty_dec128_div_scale(&sx, &n), false, &r) != 0)
     dec_range_error(NULL);
   PG_RETURN_NUMERIC(dec_make(r.value, r.scale));
 }
@@ -2134,8 +1845,7 @@ static Datum agg_stddev(FunctionCallInfo fcinfo, bool variance, bool sample) {
     PG_RETURN_NUMERIC(dec_make(0, 0));
   den = (i128)state->N * (sample ? state->N - 1 : state->N);
   /* num is at twice the sum's scale. */
-  rscale = select_div_scale_nb(dec_nbase_d(num), 2 * sx.scale,
-                               dec_nbase128(den, 0), 0);
+  rscale = ty_dec128_var_scale(num, 2 * sx.scale, den);
   if (ty_dec128_from_double(num / (double)den, rscale, &var) != 0)
     dec_range_error(NULL);
   if (!variance) {
@@ -2602,9 +2312,7 @@ static Datum d64_from_dec(const ty_dec128_t &a) {
 bool numeric_to_decimal64(Numeric num, Datum *out) {
   ty_dec128_t a = dec_ty(num);
 
-  if (a.scale > D64_MAX_DIGITS ||
-      u128_digits(a.value < 0 ? -(u128)a.value : (u128)a.value) >
-          D64_MAX_DIGITS)
+  if (a.scale > D64_MAX_DIGITS || ty_dec128_digits(a.value) > D64_MAX_DIGITS)
     return false;
   *out = d64_make((int64)a.value, a.scale);
   return true;
@@ -2922,9 +2630,7 @@ Datum decimal64_div(PG_FUNCTION_ARGS) {
   if (b.value == 0)
     division_by_zero(NULL);
   /* ty divides in 128 bits at PostgreSQL's scale, and fits 17 digits. */
-  if (ty_dec64_div(&a, &b,
-                       select_div_scale128(a.value, a.scale, b.value, b.scale),
-                       &r) != 0)
+  if (ty_dec64_div(&a, &b, ty_dec64_div_scale(&a, &b), &r) != 0)
     d64_format_overflow();
   return d64_make(r.value, r.scale);
 }

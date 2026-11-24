@@ -83,11 +83,13 @@ static inline int ty_vl_new(size_t len, ty_varlena_t **out, char **data) {
   uint32_t h;
 
   if (TY_UNLIKELY(len > TY_VARLENA_MAX_LEN)) {
-    return ty_vl_new_error(len);
+    ty_vl_new_error(len);
+    return -1; /* a compiler sees that *out is set on success only */
   }
   p = (unsigned char *)ty_alloc(len + 4);
   if (TY_UNLIKELY(p == NULL)) {
-    return ty_vl_new_error(len);
+    ty_vl_new_error(len);
+    return -1;
   }
   h = TY_VL_LONG_HEADER(len + 4);
   memcpy(p, &h, 4);

@@ -192,36 +192,61 @@ int ty_date_part(int reserved, int code, int32_t date, ty_part_t *out) {
   return set_int(out, v);
 }
 
+/* The part of a time of day, not its epoch. */
+static inline int time_part(int code, int64_t t, ty_part_t *out) {
+  int64_t usecs = t % INT64_C(60000000); /* of the minute */
+
+  switch (code) {
+  case TY_UNIT_MICROSEC:
+    return set_int(out, usecs);
+  case TY_UNIT_MILLISEC:
+    return set_scaled(out, usecs, 3,
+                      usecs / 1000000 * 1000.0 + usecs % 1000000 / 1000.0);
+  case TY_UNIT_SECOND:
+    return set_scaled(out, usecs, 6,
+                      usecs / 1000000 + usecs % 1000000 / 1000000.0);
+  case TY_UNIT_MINUTE:
+    return set_int(out, t / INT64_C(60000000) % 60);
+  case TY_UNIT_HOUR:
+    return set_int(out, t / INT64_C(3600000000));
+  default:
+    return unsupported();
+  }
+}
+
 /* The part of a time of day. */
 int ty_time_part(int reserved, int code, int64_t t, ty_part_t *out) {
-  int64_t hour = t / INT64_C(3600000000);
-  int64_t rem = t - hour * INT64_C(3600000000);
-  int min = (int)(rem / 60000000);
-  rem -= (int64_t)min * 60000000;
-  int sec = (int)(rem / 1000000);
-  int32_t fsec = (int32_t)(rem - (int64_t)sec * 1000000);
-
   if (reserved) {
     if (code != TY_UNIT_EPOCH) {
       return unsupported();
     }
     return set_scaled(out, t, 6, t / 1000000.0);
   }
+  return time_part(code, t, out);
+}
+
+/*
+ * The part of a time with a zone: the zone's own, its epoch, which is that of
+ * the same time in UTC, or the part of its time.
+ */
+int ty_timetz_part(int reserved, int code, const ty_timetz_t *t,
+                   ty_part_t *out) {
+  if (reserved) {
+    if (code != TY_UNIT_EPOCH) {
+      return unsupported();
+    }
+    return set_scaled(out, t->time + t->zone * INT64_C(1000000), 6,
+                      t->time / 1000000.0 + t->zone);
+  }
   switch (code) {
-  case TY_UNIT_MICROSEC:
-    return set_int(out, sec * INT64_C(1000000) + fsec);
-  case TY_UNIT_MILLISEC:
-    return set_scaled(out, sec * INT64_C(1000000) + fsec, 3,
-                      sec * 1000.0 + fsec / 1000.0);
-  case TY_UNIT_SECOND:
-    return set_scaled(out, sec * INT64_C(1000000) + fsec, 6,
-                      sec + fsec / 1000000.0);
-  case TY_UNIT_MINUTE:
-    return set_int(out, min);
-  case TY_UNIT_HOUR:
-    return set_int(out, hour);
+  case TY_UNIT_TZ:
+    return set_int(out, -t->zone);
+  case TY_UNIT_TZ_MINUTE:
+    return set_int(out, (-t->zone / 60) % 60);
+  case TY_UNIT_TZ_HOUR:
+    return set_int(out, -t->zone / 3600);
   default:
-    return unsupported();
+    return time_part(code, t->time, out);
   }
 }
 

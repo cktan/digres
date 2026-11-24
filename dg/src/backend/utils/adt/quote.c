@@ -15,7 +15,9 @@
  */
 #include "postgres.h"
 
+#include "ty_text.h"
 #include "utils/builtins.h"
+#include "utils/ty_glue.h"
 #include "varatt.h"
 
 /*
@@ -33,56 +35,15 @@ Datum quote_ident(PG_FUNCTION_ARGS) {
 }
 
 /*
- * quote_literal_internal -
- *	  helper function for quote_literal and quote_literal_cstr
- *
- * NOTE: think not to make this function's behavior change with
- * standard_conforming_strings.  We don't know where the result
- * literal will be used, and so we must generate a result that
- * will work with either setting.  Take a look at what dblink
- * uses this for before thinking you know better.
- */
-static size_t quote_literal_internal(char *dst, const char *src, size_t len) {
-  const char *s;
-  char *savedst = dst;
-
-  for (s = src; s < src + len; s++) {
-    if (*s == '\\') {
-      *dst++ = ESCAPE_STRING_SYNTAX;
-      break;
-    }
-  }
-
-  *dst++ = '\'';
-  while (len-- > 0) {
-    if (SQL_STR_DOUBLE(*src, true))
-      *dst++ = *src;
-    *dst++ = *src++;
-  }
-  *dst++ = '\'';
-
-  return dst - savedst;
-}
-
-/*
  * quote_literal -
  *	  returns a properly quoted literal
  */
 Datum quote_literal(PG_FUNCTION_ARGS) {
   text *t = PG_GETARG_TEXT_PP(0);
   text *result;
-  char *cp1;
-  char *cp2;
-  int len;
 
-  len = VARSIZE_ANY_EXHDR(t);
-  /* We make a worst-case result area; wasting a little space is OK */
-  result = (text *)palloc(len * 2 + 3 + VARHDRSZ);
-
-  cp1 = VARDATA_ANY(t);
-  cp2 = VARDATA(result);
-
-  SET_VARSIZE(result, VARHDRSZ + quote_literal_internal(cp2, cp1, len));
+  if (ty_quote_literal(TYV(t), TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_TEXT_P(result);
 }
@@ -104,7 +65,7 @@ char *quote_literal_cstr(const char *rawstr) {
                           + 1 /* null terminator */
   );
 
-  newlen = quote_literal_internal(result, rawstr, len);
+  newlen = ty_quote_literal_bytes(rawstr, len, result);
   result[newlen] = '\0';
 
   return result;

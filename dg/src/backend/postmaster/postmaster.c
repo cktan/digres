@@ -679,15 +679,6 @@ void PostmasterMain(int argc, char *argv[]) {
   }
 
   /*
-   * Other one-time internal sanity checks can go here, if they are fast.
-   * (Put any slow processing further down, after postmaster.pid creation.)
-   */
-  if (!CheckDateTokenTables()) {
-    write_stderr("%s: invalid datetoken tables, please fix\n", pcb->progname);
-    ExitPostmaster(1);
-  }
-
-  /*
    * Now that we are done processing the postmaster arguments, reset
    * getopt(3) library so that it will work correctly in subprocesses.
    */

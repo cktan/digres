@@ -224,9 +224,11 @@ takes ty's result with no copy.
 ## 5. Copyright
 
 Code copied from PostgreSQL keeps its copyright notice
-([`../CLAUDE.md`](../CLAUDE.md)). The one file ty copies is
-`src/hash.cc` and `include/ty_hash.h`, from PostgreSQL's
-`src/common/hashfn.c` (section 10); they carry the notice. The
+([`../CLAUDE.md`](../CLAUDE.md)). The files that hold it are
+`src/hash.cc` and `include/ty_hash.h` (section 10),
+`src/dtparse.cc` (section 19), `src/timezone.cc` (section 20),
+and `src/unicode.cc`, `src/unicode_category.cc` and
+`src/unicode/` (section 25). The
 decimal code and the integer code are new code, written for ty,
 and have none. The
 integer code takes the cases and the errors of PostgreSQL's
@@ -515,6 +517,10 @@ their inverses, erf, erfc, gamma or lgamma correctly, so another
 machine may give the next float: the test takes one float apart
 as the same for those, and needs the same bits for the rest.
 
+`ty_float64_in_range`, in line, is the test of a window frame of
+RANGE offsets, for float8, and for float4 widened. digres has no
+such frame yet, and reaches it by a call of `in_range` only.
+
 ## 12. HyperLogLog and abbreviated keys
 
 `ty_hll.h` estimates the number of distinct values in a set from
@@ -635,6 +641,12 @@ strings in digres, then calls ty.
 `ty_ascii_lower`, `ty_ascii_upper` and `ty_ascii_initcap`: only
 ASCII letters change. The other ctypes (the builtin Unicode
 tables, ICU) depend on the collation and stay in digres.
+
+`ty_text_cmp` is also the order of the pattern operators, `~<~`
+and the rest, which compare the bytes whatever the collation is.
+`ty_quote_literal` is `quote_literal`; `ty_quote_literal_bytes`
+is its form for a C string. `quote_ident` needs the keywords and
+a setting, and stays in digres.
 
 `format` is a loop the host drives, as only the host has the
 arguments and their text:
@@ -817,11 +829,11 @@ the time in UTC, then by the zone. `ty_timetz_hash` xors the hash
 of the time with the hash of the zone. `ty_time_in_range` and
 `ty_timetz_in_range` are the RANGE offsets of a window frame; the
 timetz one compares in 128 bits, because a sum may be far from a
-time of day. The text of timetz and its typmod are still in
-digres.
+time of day.
 
-`ty_timestamp_part`, `ty_date_part`, `ty_time_part` and
-`ty_interval_part` are `extract` and `date_part`. A `ty_part_t`
+`ty_timestamp_part`, `ty_date_part`, `ty_time_part`,
+`ty_timetz_part` and `ty_interval_part` are `extract` and
+`date_part`. A `ty_part_t`
 holds the exact value, as an integer, a scaled integer, or a sum,
 and the float8 that `date_part` gives. digres makes the numeric
 from it. `ty_datetime_part_unit` looks up a word: the words that
@@ -842,8 +854,11 @@ not null for some inputs with nulls.
 `ty_date_to_timestamp`, `ty_timestamp_to_date`,
 `ty_timestamp_to_time`, `ty_datetime_to_timestamp` and
 `ty_interval_to_time` are the conversions between date, time,
-timestamp and interval. The conversions that need a time zone are
-still in digres.
+timestamp and interval; section 20 has those that need a zone.
+`ty_timestamptz_from_epoch` is `to_timestamp` of a number, in
+line. `ty_timestamp_bin` serves `date_bin` of timestamptz too,
+whose arithmetic is the same. `ty_zone_offset_parse` reads a zone
+written as a number, such as `+05:30`.
 
 The tests: the vectors, from Python integers and a second
 formulation of the Julian day (the Wikipedia formula and
@@ -1109,3 +1124,59 @@ typmods or none, with its error's kind, the scale functions and
 the float casts both ways. In digres a bare `numeric` is a
 `decimal64`, so the vectors with no typmod refuse what a
 `decimal64` cannot hold.
+
+## 25. Unicode
+
+`ty_unicode.h` holds `normalize` (`ty_text_normalize`), the test
+`IS NORMALIZED` (`ty_text_is_normalized`), `unicode_assigned`
+(`ty_text_is_assigned`) and `unistr` (`ty_text_unistr`), and the
+properties of a character (`ty_u_category`, `ty_u_isalpha` and
+the rest). `ty_norm_chars` is the normal form of an array of code
+points: digres's SASLprep calls it for a password. The regular
+expressions' engine and the builtin collation provider of digres
+call the properties, through wrappers in line
+(`common/unicode_category.h`).
+
+The normal forms, the properties and their tables are
+PostgreSQL's, with its notices, in `src/unicode.cc`,
+`src/unicode_category.cc` and `src/unicode/`. There is one copy:
+digres has none. `dg/src/common/unicode/README` says how to make
+the tables for a new version of Unicode. The tables of letter
+case stay in digres: only its collation provider reads them.
+
+An array of code points is the thread's alloc function's, and is
+freed before the call returns, but for that of `ty_norm_chars`.
+`ty_text_unistr` gives the reason of a refusal in `*why`
+(`TY_UNISTR_*`), as the host's SQLSTATE depends on it.
+
+The tests: `test/test_unicode.cc`, by hand, and by
+`test/unicode_known.txt`, 3,592 lines that `test/gen_unicode.py`
+took from a digres built before the move: the four forms of every
+code point, by a hash of each 4,096, how many of them are
+normalized and assigned, 508 texts of marks and starters, and 200
+texts of escapes. A program of one use compared the properties of
+every code point with the old functions.
+
+## 26. The scale of a decimal's result
+
+A quotient, a root, a logarithm, an exponential and a power are
+not exact, so PostgreSQL's numeric gives each a scale by rules of
+its own, in base 10,000: at least 16 significant digits, and not
+below the arguments' scales. `src/decscale.cc` holds the rules.
+`ty_dec128_div_scale`, `_sqrt_scale`, `_exp_scale`, `_ln_scale`,
+`_log_scale` and `_var_scale` give the scale, and the caller
+passes it to the function that computes; sm may pass another.
+`ty_dec128_power` is the power whole, with its errors.
+`ty_dec128_typmod` is the assignment to `numeric(p, s)`,
+`ty_dec128_to_int64`, in line, the casts to the integers, and
+`ty_dec128_digits` and `ty_dec128_scale_up` the parts a host
+needs. The aggregates' states stay in digres.
+
+The tests: `test/test_decscale.cc`, by hand, and by
+`test/decscale_known.txt`, 5,333 lines that
+`test/gen_decscale.py` took from a digres built before the move.
+A variance is checked by its count of places: the sum of squares
+is the host's. `test/test_rest.cc` and `test/rest_known.txt`
+(`test/gen_rest.py`) do the same for `date_bin`, `in_range`,
+`to_timestamp`, the pattern operators, `quote_literal` and
+`extract` of a timetz.

@@ -563,6 +563,35 @@ int ty_float64_width_bucket(double operand, double bound1, double bound2,
                             int32_t count, int32_t *r);
 
 /*
+ * Whether val is within the offset of base, for a window frame of RANGE
+ * offsets, as ty_int_in_range (ty_int.h): 1 or 0 in *r. A NaN is above every
+ * other value, and equal to itself. Where base and offset are infinities
+ * whose sum or difference has no value, every val is within. A negative or
+ * NaN offset is TY_ERR_INVALID. The float32 values are widened to float64.
+ */
+static inline int ty_float64_in_range(double val, double base, double offset,
+                                      int sub, int less, int *r) {
+  double sum;
+
+  if (TY_UNLIKELY(!(offset >= 0))) {
+    return ty_err_invalid("invalid preceding or following size");
+  }
+  if (TY_UNLIKELY(__builtin_isnan(val) || __builtin_isnan(base))) {
+    *r = !__builtin_isnan(val) ? less : __builtin_isnan(base) || !less;
+    return 0;
+  }
+  if (TY_UNLIKELY(__builtin_isinf(offset) && __builtin_isinf(base) &&
+                  (sub ? base > 0 : base < 0))) {
+    *r = 1;
+    return 0;
+  }
+  /* past the largest double the sum is an infinity, which compares right */
+  sum = sub ? base - offset : base + offset;
+  *r = less ? val <= sum : val >= sum;
+  return 0;
+}
+
+/*
  * The hash of a float by a seed, as PostgreSQL's: 0 and -0 are one value, whose
  * hash is the seed, and every NaN is the same NaN; a float32 hashes as the
  * float64 of its value, so the two types hash alike. The low 32 bits with seed

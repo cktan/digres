@@ -24,8 +24,6 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "common/int.h"
-#include "common/unicode_category.h"
-#include "common/unicode_norm.h"
 #include "common/unicode_version.h"
 #include "funcapi.h"
 #include "libpq/pqformat.h"
@@ -45,6 +43,7 @@
 #include "ty_text.h"
 #include "ty_bytea.h"
 #include "ty_int.h"
+#include "ty_unicode.h"
 #include "utils/ty_glue.h"
 #include "utils/control_block.h"
 
@@ -2177,22 +2176,8 @@ Datum textgename(PG_FUNCTION_ARGS) {
  * compatible with these!
  */
 
-static int internal_text_pattern_compare(text *arg1, text *arg2) {
-  int result;
-  int len1, len2;
-
-  len1 = VARSIZE_ANY_EXHDR(arg1);
-  len2 = VARSIZE_ANY_EXHDR(arg2);
-
-  result = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
-  if (result != 0)
-    return result;
-  else if (len1 < len2)
-    return -1;
-  else if (len1 > len2)
-    return 1;
-  else
-    return 0;
+static inline int internal_text_pattern_compare(text *arg1, text *arg2) {
+  return ty_text_cmp(TYV(arg1), TYV(arg2));
 }
 
 Datum text_pattern_lt(PG_FUNCTION_ARGS) {
@@ -4958,9 +4943,8 @@ const char *getClosestMatch(ClosestMatchState *state) {
  * Unicode support
  */
 
-static UnicodeNormalizationForm
-unicode_norm_form_from_string(const char *formstr) {
-  UnicodeNormalizationForm form = (UnicodeNormalizationForm)-1;
+static int unicode_norm_form_from_string(const char *formstr) {
+  int form;
 
   /*
    * Might as well check this while we're here.
@@ -4970,15 +4954,7 @@ unicode_norm_form_from_string(const char *formstr) {
                     errmsg("Unicode normalization can only be performed if "
                            "server encoding is UTF8")));
 
-  if (pg_strcasecmp(formstr, "NFC") == 0)
-    form = UNICODE_NFC;
-  else if (pg_strcasecmp(formstr, "NFD") == 0)
-    form = UNICODE_NFD;
-  else if (pg_strcasecmp(formstr, "NFKC") == 0)
-    form = UNICODE_NFKC;
-  else if (pg_strcasecmp(formstr, "NFKD") == 0)
-    form = UNICODE_NFKD;
-  else
+  if (ty_norm_form(formstr, &form))
     ereport(ERROR, (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
                     errmsg("invalid normalization form: %s", formstr)));
 
@@ -5014,168 +4990,39 @@ Datum icu_unicode_version(PG_FUNCTION_ARGS) {
  */
 Datum unicode_assigned(PG_FUNCTION_ARGS) {
   text *input = PG_GETARG_TEXT_PP(0);
-  unsigned char *p;
-  int size;
 
   if (GetDatabaseEncoding() != PG_UTF8)
     ereport(ERROR, (errmsg("Unicode categorization can only be performed if "
                            "server encoding is UTF8")));
 
-  /* convert to pg_wchar */
-  size = pg_mbstrlen_with_len(VARDATA_ANY(input), VARSIZE_ANY_EXHDR(input));
-  p = (unsigned char *)VARDATA_ANY(input);
-  for (int i = 0; i < size; i++) {
-    pg_wchar uchar = utf8_to_unicode(p);
-    int category = unicode_category(uchar);
-
-    if (category == PG_U_UNASSIGNED)
-      PG_RETURN_BOOL(false);
-
-    p += pg_utf_mblen(p);
-  }
-
-  PG_RETURN_BOOL(true);
+  PG_RETURN_BOOL(ty_text_is_assigned(TYV(input)));
 }
 
 Datum unicode_normalize_func(PG_FUNCTION_ARGS) {
   text *input = PG_GETARG_TEXT_PP(0);
   char *formstr = text_to_cstring(PG_GETARG_TEXT_PP(1));
-  UnicodeNormalizationForm form;
-  size_t size;
-  pg_wchar *input_chars;
-  pg_wchar *output_chars;
-  unsigned char *p;
   text *result;
-  size_t i;
 
-  form = unicode_norm_form_from_string(formstr);
-
-  /* convert to pg_wchar */
-  size = pg_mbstrlen_with_len(VARDATA_ANY(input), VARSIZE_ANY_EXHDR(input));
-  input_chars = palloc_array(pg_wchar, size + 1);
-  p = (unsigned char *)VARDATA_ANY(input);
-  for (i = 0; i < size; i++) {
-    input_chars[i] = utf8_to_unicode(p);
-    p += pg_utf_mblen(p);
-  }
-  input_chars[i] = (pg_wchar)'\0';
-  Assert((char *)p == VARDATA_ANY(input) + VARSIZE_ANY_EXHDR(input));
-
-  /* action */
-  output_chars = unicode_normalize(form, input_chars);
-
-  /* convert back to UTF-8 string */
-  size = 0;
-  for (pg_wchar *wp = output_chars; *wp; wp++) {
-    unsigned char buf[4];
-
-    unicode_to_utf8(*wp, buf);
-    size += pg_utf_mblen(buf);
-  }
-
-  result = (text *)palloc(size + VARHDRSZ);
-  SET_VARSIZE(result, size + VARHDRSZ);
-
-  p = (unsigned char *)VARDATA_ANY(result);
-  for (pg_wchar *wp = output_chars; *wp; wp++) {
-    unicode_to_utf8(*wp, p);
-    p += pg_utf_mblen(p);
-  }
-  Assert((char *)p == (char *)result + size + VARHDRSZ);
+  if (ty_text_normalize(TYV(input), unicode_norm_form_from_string(formstr),
+                        TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_TEXT_P(result);
 }
 
 /*
  * Check whether the string is in the specified Unicode normalization form.
- *
- * This is done by converting the string to the specified normal form and then
- * comparing that to the original string.  To speed that up, we also apply the
- * "quick check" algorithm specified in UAX #15, which can give a yes or no
- * answer for many strings by just scanning the string once.
- *
- * This function should generally be optimized for the case where the string
- * is in fact normalized.  In that case, we'll end up looking at the entire
- * string, so it's probably not worth doing any incremental conversion etc.
  */
 Datum unicode_is_normalized(PG_FUNCTION_ARGS) {
   text *input = PG_GETARG_TEXT_PP(0);
   char *formstr = text_to_cstring(PG_GETARG_TEXT_PP(1));
-  UnicodeNormalizationForm form;
-  size_t size;
-  pg_wchar *input_chars;
-  pg_wchar *output_chars;
-  unsigned char *p;
-  size_t i;
-  UnicodeNormalizationQC quickcheck;
-  size_t output_size;
-  bool result;
+  int result;
 
-  form = unicode_norm_form_from_string(formstr);
-
-  /* convert to pg_wchar */
-  size = pg_mbstrlen_with_len(VARDATA_ANY(input), VARSIZE_ANY_EXHDR(input));
-  input_chars = palloc_array(pg_wchar, size + 1);
-  p = (unsigned char *)VARDATA_ANY(input);
-  for (i = 0; i < size; i++) {
-    input_chars[i] = utf8_to_unicode(p);
-    p += pg_utf_mblen(p);
-  }
-  input_chars[i] = (pg_wchar)'\0';
-  Assert((char *)p == VARDATA_ANY(input) + VARSIZE_ANY_EXHDR(input));
-
-  /* quick check (see UAX #15) */
-  quickcheck = unicode_is_normalized_quickcheck(form, input_chars);
-  if (quickcheck == UNICODE_NORM_QC_YES)
-    PG_RETURN_BOOL(true);
-  else if (quickcheck == UNICODE_NORM_QC_NO)
-    PG_RETURN_BOOL(false);
-
-  /* normalize and compare with original */
-  output_chars = unicode_normalize(form, input_chars);
-
-  output_size = 0;
-  for (pg_wchar *wp = output_chars; *wp; wp++)
-    output_size++;
-
-  result = (size == output_size) &&
-           (memcmp(input_chars, output_chars, size * sizeof(pg_wchar)) == 0);
+  if (ty_text_is_normalized(TYV(input), unicode_norm_form_from_string(formstr),
+                            &result))
+    ty_raise_alloc();
 
   PG_RETURN_BOOL(result);
-}
-
-/*
- * Check if first n chars are hexadecimal digits
- */
-static bool isxdigits_n(const char *instr, size_t n) {
-  for (size_t i = 0; i < n; i++)
-    if (!isxdigit((unsigned char)instr[i]))
-      return false;
-
-  return true;
-}
-
-static unsigned int hexval(unsigned char c) {
-  if (c >= '0' && c <= '9')
-    return c - '0';
-  if (c >= 'a' && c <= 'f')
-    return c - 'a' + 0xA;
-  if (c >= 'A' && c <= 'F')
-    return c - 'A' + 0xA;
-  elog(ERROR, "invalid hexadecimal digit");
-  return 0; /* not reached */
-}
-
-/*
- * Translate string with hexadecimal digits to number
- */
-static unsigned int hexval_n(const char *instr, size_t n) {
-  unsigned int result = 0;
-
-  for (size_t i = 0; i < n; i++)
-    result += hexval(instr[i]) << (4 * (n - i - 1));
-
-  return result;
 }
 
 /*
@@ -5183,134 +5030,21 @@ static unsigned int hexval_n(const char *instr, size_t n) {
  */
 Datum unistr(PG_FUNCTION_ARGS) {
   text *input_text = PG_GETARG_TEXT_PP(0);
-  char *instr;
-  int len;
-  StringInfoData str;
   text *result;
-  pg_wchar pair_first = 0;
-  char cbuf[MAX_UNICODE_EQUIVALENT_STRING + 1];
+  int why;
 
-  instr = VARDATA_ANY(input_text);
-  len = VARSIZE_ANY_EXHDR(input_text);
-
-  initStringInfo(&str);
-
-  while (len > 0) {
-    if (instr[0] == '\\') {
-      if (len >= 2 && instr[1] == '\\') {
-        if (pair_first)
-          goto invalid_pair;
-        appendStringInfoChar(&str, '\\');
-        instr += 2;
-        len -= 2;
-      } else if ((len >= 5 && isxdigits_n(instr + 1, 4)) ||
-                 (len >= 6 && instr[1] == 'u' && isxdigits_n(instr + 2, 4))) {
-        pg_wchar unicode;
-        int offset = instr[1] == 'u' ? 2 : 1;
-
-        unicode = hexval_n(instr + offset, 4);
-
-        if (!is_valid_unicode_codepoint(unicode))
-          ereport(ERROR, errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                  errmsg("invalid Unicode code point: %04X", unicode));
-
-        if (pair_first) {
-          if (is_utf16_surrogate_second(unicode)) {
-            unicode = surrogate_pair_to_codepoint(pair_first, unicode);
-            pair_first = 0;
-          } else
-            goto invalid_pair;
-        } else if (is_utf16_surrogate_second(unicode))
-          goto invalid_pair;
-
-        if (is_utf16_surrogate_first(unicode))
-          pair_first = unicode;
-        else {
-          pg_unicode_to_server(unicode, (unsigned char *)cbuf);
-          appendStringInfoString(&str, cbuf);
-        }
-
-        instr += 4 + offset;
-        len -= 4 + offset;
-      } else if (len >= 8 && instr[1] == '+' && isxdigits_n(instr + 2, 6)) {
-        pg_wchar unicode;
-
-        unicode = hexval_n(instr + 2, 6);
-
-        if (!is_valid_unicode_codepoint(unicode))
-          ereport(ERROR, errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                  errmsg("invalid Unicode code point: %04X", unicode));
-
-        if (pair_first) {
-          if (is_utf16_surrogate_second(unicode)) {
-            unicode = surrogate_pair_to_codepoint(pair_first, unicode);
-            pair_first = 0;
-          } else
-            goto invalid_pair;
-        } else if (is_utf16_surrogate_second(unicode))
-          goto invalid_pair;
-
-        if (is_utf16_surrogate_first(unicode))
-          pair_first = unicode;
-        else {
-          pg_unicode_to_server(unicode, (unsigned char *)cbuf);
-          appendStringInfoString(&str, cbuf);
-        }
-
-        instr += 8;
-        len -= 8;
-      } else if (len >= 10 && instr[1] == 'U' && isxdigits_n(instr + 2, 8)) {
-        pg_wchar unicode;
-
-        unicode = hexval_n(instr + 2, 8);
-
-        if (!is_valid_unicode_codepoint(unicode))
-          ereport(ERROR, errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                  errmsg("invalid Unicode code point: %04X", unicode));
-
-        if (pair_first) {
-          if (is_utf16_surrogate_second(unicode)) {
-            unicode = surrogate_pair_to_codepoint(pair_first, unicode);
-            pair_first = 0;
-          } else
-            goto invalid_pair;
-        } else if (is_utf16_surrogate_second(unicode))
-          goto invalid_pair;
-
-        if (is_utf16_surrogate_first(unicode))
-          pair_first = unicode;
-        else {
-          pg_unicode_to_server(unicode, (unsigned char *)cbuf);
-          appendStringInfoString(&str, cbuf);
-        }
-
-        instr += 10;
-        len -= 10;
-      } else
-        ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR),
-                        errmsg("invalid Unicode escape"),
-                        errhint("Unicode escapes must be \\XXXX, \\+XXXXXX, "
-                                "\\uXXXX, or \\UXXXXXXXX.")));
-    } else {
-      if (pair_first)
-        goto invalid_pair;
-
-      appendStringInfoChar(&str, *instr++);
-      len--;
-    }
+  if (ty_text_unistr(TYV(input_text), TYVO(&result), &why)) {
+    if (why == 0)
+      ty_raise_alloc();
+    ereport(ERROR,
+            (errcode(why == TY_UNISTR_POINT ? ERRCODE_INVALID_PARAMETER_VALUE
+                                            : ERRCODE_SYNTAX_ERROR),
+             errmsg("%s", ty_errmsg()),
+             why == TY_UNISTR_ESCAPE
+                 ? errhint("Unicode escapes must be \\XXXX, \\+XXXXXX, "
+                           "\\uXXXX, or \\UXXXXXXXX.")
+                 : 0));
   }
 
-  /* unfinished surrogate pair? */
-  if (pair_first)
-    goto invalid_pair;
-
-  result = cstring_to_text_with_len(str.data, str.len);
-  pfree(str.data);
-
   PG_RETURN_TEXT_P(result);
-
-invalid_pair:
-  ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR),
-                  errmsg("invalid Unicode surrogate pair")));
-  PG_RETURN_NULL(); /* keep compiler quiet */
 }

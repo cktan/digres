@@ -1259,3 +1259,40 @@ int ty_text_like_escape(const ty_varlena_t *pat, const ty_varlena_t *esc,
   *out = r;
   return 0;
 }
+
+/*
+ * The literal of SQL.
+ * 1. An E, if there is a backslash.
+ * 2. The bytes in quotes, each quote and backslash doubled.
+ */
+size_t ty_quote_literal_bytes(const char *s, size_t len, char *out) {
+  char *d = out;
+
+  // 1. An E, if there is a backslash.
+  if (memchr(s, '\\', len) != nullptr) {
+    *d++ = 'E';
+  }
+
+  // 2. The bytes in quotes, each quote and backslash doubled.
+  *d++ = '\'';
+  for (size_t i = 0; i < len; i++) {
+    if ('\'' == s[i] || '\\' == s[i]) {
+      *d++ = s[i];
+    }
+    *d++ = s[i];
+  }
+  *d++ = '\'';
+  return (size_t)(d - out);
+}
+
+/* quote_literal(s). */
+int ty_quote_literal(const ty_varlena_t *s, ty_varlena_t **out) {
+  size_t len = ty_vl_len(s);
+  char *d;
+
+  if (0 != ty_vl_new(len * 2 + 3, out, &d)) {
+    return -1;
+  }
+  ty_vl_set_len(*out, ty_quote_literal_bytes(ty_vl_data(s), len, d));
+  return 0;
+}
