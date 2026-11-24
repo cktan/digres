@@ -951,7 +951,7 @@ the last whole vector, and one in a row not valid and one in a
 null row, which are no error; and the results written over the
 inputs.
 
-## 22. to_char
+## 22. to_char and its reverse
 
 `ty_tochar.h` writes `to_char` of a timestamp, a timestamptz
 and an interval by a format: keywords (`YYYY`, `MM`, `HH24`,
@@ -1008,7 +1008,14 @@ with PostgreSQL's code, detail and hint (`ty_dch_error_t`), or
 as `DateTimeParseError`'s code, whose message the host writes
 from the text. digres keeps its cache of date formats, which
 now holds ty's compiled formats, as jsonpath calls the parse with
-no FmgrInfo to keep one in. `to_number` stays in digres for now.
+no FmgrInfo to keep one in.
+
+`to_number` is `ty_num_from_char`: the text read by a number
+format, as PostgreSQL's `NUM_processor` reads it, into the text
+`numeric_in` reads, with the precision and the scale of the
+result. digres makes the decimal of it, and divides by V's power
+of 10. `formatting.c` now holds only digres's glue: the caches of
+formats, the host's functions, and the decimal steps.
 
 The tests: `test/tochar_known.txt`, 18,484 lines that the digres
 before the move printed (`test/gen_tochar.py`), of timestamps,
@@ -1020,6 +1027,7 @@ number formats (`test/gen_tonum.py`); `test/fromchar_known.txt`,
 which 1,433 are errors, each with its message, detail and hint
 (`test/gen_fromchar.py`); `test/test_tochar.cc` for
 the errors, the host's names and symbols, and the edges; and
-`dg/test/select_tochar_ops.sql`, `select_tonum_ops.sql` and
-`select_fromchar_ops.sql`, with a German locale, zone
-abbreviations and jsonpath's standard mode.
+`dg/test/select_tochar_ops.sql`, `select_tonum_ops.sql`,
+`select_fromchar_ops.sql` and `select_tonumber_ops.sql`, with a
+German locale, zone abbreviations, jsonpath's standard mode, and
+PostgreSQL's own `to_number` cases.

@@ -1068,8 +1068,20 @@ copied from PostgreSQL keeps its copyright notice
        10,688,262 and 10,763,002 (+0.70%); `to_date(c,
        '"name"FMJ')` 7,380,431 and 7,221,680 (-2.15%). The first
        version read 26% more: it copied each number's text by
-       `snprintf`, and zeroed the whole error a call. `to_number`
-       is left.
+       `snprintf`, and zeroed the whole error a call.
+     - `to_number` moved too (2026-11-23): `ty_num_from_char`
+       reads the text by a number format into what `numeric_in`
+       reads, with the precision and the scale; digres makes the
+       decimal and applies V. PostgreSQL's number engine is gone
+       from `formatting.c`, which is down to digres's glue, 1,575
+       lines of 6,358. The tests: `dg/test/select_tonumber_ops.sql`,
+       PostgreSQL's own cases and round trips through `to_char`,
+       perturbed, which the digres before the move gives the
+       same; and ty cases for the digits, the signs and the
+       errors. Measured by callgrind, 2,000 rows (old, new):
+       `to_number(a::text, '99999')` 7,369,823 and 7,243,472
+       (-1.71%); by `'FM9,999.99'` 8,794,087 and 8,555,094
+       (-2.72%); by `'S99999'` 7,968,582 and 7,871,837 (-1.21%).
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

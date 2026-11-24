@@ -8,6 +8,7 @@
  * of a format, the digits of each type, and the writing of the digits by
  * the format, as PostgreSQL's NUM_processor does it.
  */
+#include <ctype.h>
 #include <float.h>
 #include <math.h>
 #include <stdio.h>
@@ -371,6 +372,7 @@ void ty_num_describe(const ty_num_format_t *f, ty_num_desc_t *d) {
   d->pre = f->desc.pre;
   d->post = f->desc.post;
   d->multi = f->desc.multi;
+  d->v = 0 != (f->desc.flag & F_MULTI);
   d->roman = 0 != (f->desc.flag & F_ROMAN);
   d->eeee = 0 != (f->desc.flag & F_EEEE);
 }
@@ -1267,4 +1269,387 @@ int ty_float4_to_char(float v, const ty_num_format_t *f,
     pre += d->multi;
   }
   return float_digits(val, FLT_DIG, f, loc, out, pre, d->post);
+}
+
+namespace {
+
+/* The state of a read, as PostgreSQL's NUMProc for to_number. */
+struct reader_t {
+  desc_t num;
+  const char *in, *end; /* the text */
+  const char *p;        /* the next byte of it */
+  char *number;         /* the sign, then the digits */
+  char *number_p;
+  int read_pre, read_post;
+  bool read_dec;
+  const char *negative_sign, *positive_sign, *decimal, *thousands_sep,
+      *currency;
+};
+
+/* PostgreSQL's OVERLOAD_TEST: the text is read. */
+inline bool at_end(const reader_t *r) { return r->p >= r->end; }
+
+/* PostgreSQL's AMOUNT_TEST: n bytes of the text remain. */
+inline bool remains(const reader_t *r, size_t n) {
+  return (size_t)(r->end - r->p) >= n;
+}
+
+/* Whether the text at the reader begins with the bytes of s. */
+inline bool reads(const reader_t *r, const char *s, size_t n) {
+  return 0 != n && remains(r, n) && 0 == memcmp(r->p, s, n);
+}
+
+/* Skip up to n characters that are not a number's: digits, . , + -. */
+void eat_non_data(reader_t *r, int n) {
+  while (n-- > 0 && !at_end(r) && nullptr == strchr("0123456789.,+-", *r->p)) {
+    size_t c = char_len((unsigned char)*r->p);
+
+    r->p += c <= (size_t)(r->end - r->p) ? c : (size_t)(r->end - r->p);
+  }
+}
+
+/* A Roman numeral's value, or 0 for a letter that is not one. */
+inline int roman_val(char c) {
+  return 'I' == c   ? 1
+         : 'V' == c ? 5
+         : 'X' == c ? 10
+         : 'L' == c ? 50
+         : 'C' == c ? 100
+         : 'D' == c ? 500
+         : 'M' == c ? 1000
+                    : 0;
+}
+
+/* PostgreSQL's IS_VALID_SUB_COMB: IV, IX, XL, XC, CD and CM. */
+inline bool valid_sub(char a, char b) {
+  return ('I' == a && ('V' == b || 'X' == b)) ||
+         ('X' == a && ('L' == b || 'C' == b)) ||
+         ('C' == a && ('D' == b || 'M' == b));
+}
+
+/*
+ * Read a Roman numeral of standard form, as PostgreSQL's roman_to_int:
+ * 1 to 3999, or -1.
+ * 1. Skip the spaces before it, and take up to 15 numerals, in any case.
+ * 2. No numeral after a subtraction may be as large as what it subtracted.
+ * 3. V, L and D come once, and before no larger numeral.
+ * 4. A subtraction is IV, IX, XL, XC, CD or CM, and not after a repeat.
+ * 5. A numeral repeats at most 3 times.
+ */
+int roman_to_int(reader_t *r) {
+  char chars[15];
+  int values[15], len, result = 0, repeat = 1, v = 0, l = 0, d = 0,
+                       last_sub = 0;
+  bool subtracted = false;
+
+  // 1. Skip the spaces, and take up to 15 numerals.
+  while (!at_end(r) && isspace((unsigned char)*r->p)) {
+    r->p++;
+  }
+  for (len = 0; len < 15 && !at_end(r); len++) {
+    char c = *r->p >= 'a' && *r->p <= 'z' ? (char)(*r->p - 'a' + 'A') : *r->p;
+    int value = roman_val(c);
+
+    if (0 == value) {
+      break;
+    }
+    chars[len] = c;
+    values[len] = value;
+    r->p++;
+  }
+  if (0 == len) {
+    return -1;
+  }
+  for (int i = 0; i < len; i++) {
+    char c = chars[i];
+    int value = values[i];
+
+    // 2. Nothing as large as a subtracted numeral after it.
+    if (subtracted && value >= last_sub) {
+      return -1;
+    }
+
+    // 3. V, L and D once, and before no larger numeral.
+    if ((v && value >= 5) || (l && value >= 50) || (d && value >= 500)) {
+      return -1;
+    }
+    v += 'V' == c;
+    l += 'L' == c;
+    d += 'D' == c;
+    if (i == len - 1) {
+      result += value;
+      continue;
+    }
+    char next = chars[i + 1];
+    int next_value = values[i + 1];
+
+    if (value < next_value) {
+      // 4. A subtraction, and not after a repeat.
+      if (!valid_sub(c, next) || repeat > 1) {
+        return -1;
+      }
+      if ((v && next_value >= 5) || (l && next_value >= 50) ||
+          (d && next_value >= 500)) {
+        return -1;
+      }
+      v += 'V' == next;
+      l += 'L' == next;
+      d += 'D' == next;
+      i++;
+      repeat = 1;
+      subtracted = true;
+      last_sub = value;
+      result += next_value - value;
+    } else {
+      // 5. A numeral repeats at most 3 times.
+      if (c == next) {
+        if (++repeat > 3) {
+          return -1;
+        }
+      } else {
+        repeat = 1;
+      }
+      result += value;
+    }
+  }
+  return result;
+}
+
+/*
+ * A digit, a 0 or a point of the format, read as PostgreSQL's
+ * NUM_numpart_from_char.
+ * 1. Skip one space.
+ * 2. Before the first digit, read a sign: the locale's for S before the
+ *    number, else -, + or PR's <.
+ * 3. Read a digit, up to the format's places after the point, or the point.
+ * 4. After a digit, read the locale's sign for S when no digit follows, or
+ *    MI's or PL's sign that FM left unplaced.
+ */
+void numpart_read(reader_t *r, uint8_t id) {
+  desc_t *num = &r->num;
+  bool isread = false;
+
+  // 1. Skip one space.
+  if (at_end(r)) {
+    return;
+  }
+  if (' ' == *r->p) {
+    r->p++;
+  }
+  if (at_end(r)) {
+    return;
+  }
+
+  // 2. Before the first digit, read a sign.
+  if (' ' == *r->number && (N_0 == id || N_9 == id) &&
+      0 == r->read_pre + r->read_post) {
+    if ((num->flag & F_LSIGN) && LSIGN_PRE == num->lsign) {
+      size_t n;
+
+      if (reads(r, r->negative_sign, n = strlen(r->negative_sign))) {
+        r->p += n;
+        *r->number = '-';
+      } else if (reads(r, r->positive_sign, n = strlen(r->positive_sign))) {
+        r->p += n;
+        *r->number = '+';
+      }
+    } else if ('-' == *r->p || ((num->flag & F_BRACKET) && '<' == *r->p)) {
+      *r->number = '-';
+      r->p++;
+    } else if ('+' == *r->p) {
+      *r->number = '+';
+      r->p++;
+    }
+  }
+  if (at_end(r)) {
+    return;
+  }
+
+  // 3. Read a digit, or the point.
+  if (isdigit((unsigned char)*r->p)) {
+    if (r->read_dec && r->read_post == num->post) {
+      return;
+    }
+    *r->number_p++ = *r->p;
+    if (r->read_dec) {
+      r->read_post++;
+    } else {
+      r->read_pre++;
+    }
+    isread = true;
+  } else if ((num->flag & F_DECIMAL) && !r->read_dec) {
+    /* decimal is "." without D */
+    size_t n = strlen(r->decimal);
+
+    if (reads(r, r->decimal, n)) {
+      r->p += n - 1;
+      *r->number_p++ = '.';
+      r->read_dec = true;
+      isread = true;
+    }
+  }
+  if (at_end(r)) {
+    return;
+  }
+
+  // 4. After a digit, a sign behind the number.
+  if (' ' == *r->number && r->read_pre + r->read_post > 0) {
+    if ((num->flag & F_LSIGN) && isread && r->p + 1 < r->end &&
+        !isdigit((unsigned char)r->p[1])) {
+      const char *tmp = r->p++;
+      size_t n;
+
+      /* each - 1: the caller steps past the last byte */
+      if (reads(r, r->negative_sign, n = strlen(r->negative_sign))) {
+        r->p += n - 1;
+        *r->number = '-';
+      } else if (reads(r, r->positive_sign, n = strlen(r->positive_sign))) {
+        r->p += n - 1;
+        *r->number = '+';
+      }
+      if (' ' == *r->number) {
+        r->p = tmp;
+      }
+    } else if (!isread && !(num->flag & F_LSIGN) &&
+               (num->flag & (F_PLUS | F_MINUS))) {
+      /* the caller steps past it */
+      if ('-' == *r->p || '+' == *r->p) {
+        *r->number = *r->p;
+      }
+    }
+  }
+}
+
+} // namespace
+
+/*
+ * to_number's read, as PostgreSQL's NUM_processor for input.
+ * 1. EEEE cannot be read.
+ * 2. Each node: a digit, a 0 or a point reads its part; the comma and G
+ *    skip the separator if it is there; L skips the symbol; RN reads a Roman
+ *    numeral; TH skips two letters; MI, PL and SG read a sign; a character
+ *    of the format skips one of the text.
+ * 3. End the digits, without a point at the end; the scale is the places
+ *    read after the point.
+ */
+int ty_num_from_char(const ty_num_format_t *f, const char *in, size_t len,
+                     const ty_num_locale_t *loc, char *out, int *precision,
+                     int *scale) {
+  reader_t r;
+  proc_t np;
+
+  memset(&r, 0, sizeof r);
+  r.num = f->desc;
+  if (r.num.zero_start) {
+    --r.num.zero_start;
+  }
+
+  // 1. EEEE cannot be read.
+  if (r.num.flag & F_EEEE) {
+    return ty_internal::set_error(TY_ERR_INVALID,
+                                  "\"EEEE\" not supported for input");
+  }
+  memset(&np, 0, sizeof np);
+  np.num = r.num;
+  prepare_locale(&np, loc);
+  r.negative_sign = np.negative_sign;
+  r.positive_sign = np.positive_sign;
+  r.decimal = np.decimal;
+  r.thousands_sep = np.thousands_sep;
+  r.currency = np.currency;
+  r.in = in;
+  r.end = in + len;
+  r.p = in;
+  r.number = out;
+  out[0] = ' ';
+  out[1] = '\0';
+  r.number_p = out + 1;
+
+  // 2. Each node.
+  for (size_t k = 0; k < f->n && !at_end(&r); k++) {
+    const node_t *n = &f->node[k];
+
+    if (!n->is_key) {
+      size_t c = char_len((unsigned char)*r.p);
+
+      r.p += c <= (size_t)(r.end - r.p) ? c : (size_t)(r.end - r.p);
+      continue;
+    }
+    switch (n->id) {
+    case N_9:
+    case N_0:
+    case N_DEC:
+    case N_D:
+      numpart_read(&r, n->id);
+      r.p++;
+      break;
+    case N_COMMA:
+      if ((r.num.flag & F_FILLMODE) || ',' != *r.p) {
+        break;
+      }
+      r.p++;
+      break;
+    case N_G: {
+      size_t plen = strlen(r.thousands_sep);
+
+      if (r.num.flag & F_FILLMODE) {
+        break;
+      }
+      if (reads(&r, r.thousands_sep, plen)) {
+        r.p += plen;
+      }
+      break;
+    }
+    case N_L:
+      eat_non_data(&r, (int)chars(r.currency, strlen(r.currency)));
+      break;
+    case N_RN:
+    case N_rn: {
+      int value = roman_to_int(&r);
+
+      if (value < 0) {
+        return ty_internal::set_error(TY_ERR_INVALID, "invalid Roman numeral");
+      }
+      int numlen = snprintf(r.number_p, 12, "%d", value);
+
+      r.number_p += numlen;
+      r.num.pre = numlen;
+      r.num.post = 0;
+      break;
+    }
+    case N_th:
+    case N_TH:
+      if ((r.num.flag & (F_ROMAN | F_DECIMAL)) || '#' == *r.number) {
+        break;
+      }
+      eat_non_data(&r, 2);
+      break;
+    case N_MI:
+    case N_PL:
+    case N_SG: {
+      bool minus = '-' == *r.p && N_PL != n->id;
+      bool plus = '+' == *r.p && N_MI != n->id;
+
+      if (minus || plus) {
+        *r.number = *r.p;
+        r.p++;
+      } else {
+        eat_non_data(&r, 1);
+      }
+      break;
+    }
+    default:
+      break;
+    }
+  }
+
+  // 3. End the digits, without a point at the end.
+  if ('.' == r.number_p[-1]) {
+    r.number_p[-1] = '\0';
+  } else {
+    *r.number_p = '\0';
+  }
+  *scale = r.read_post;
+  *precision = r.num.pre + r.num.multi + r.read_post;
+  return 0;
 }

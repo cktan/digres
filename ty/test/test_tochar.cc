@@ -548,3 +548,41 @@ TEST_CASE("the reverse parse's standard mode and flags") {
     ty_free(f);
   }
 }
+
+// Verify to_number's read: the digits, the sign, and the scale.
+// 1. Digits, the point, the comma and G; the scale is the places read.
+// 2. Signs: -, PR's <>, S before or after, MI; a Roman numeral.
+// 3. The errors: a numeral that is not Roman, and EEEE.
+TEST_CASE("to_number reads the digits and the scale") {
+  auto read = [](const char *in, const char *fmt) {
+    ty_num_format_t *f;
+    char out[256];
+    int precision, scale;
+
+    REQUIRE(0 == ty_num_compile(fmt, strlen(fmt), &f));
+    int rc =
+        ty_num_from_char(f, in, strlen(in), nullptr, out, &precision, &scale);
+
+    ty_free(f);
+    return 0 == rc ? std::string(out) + " " + std::to_string(precision) + "," +
+                         std::to_string(scale)
+                   : "ERR " + std::string(ty_errmsg());
+  };
+
+  // 1. Digits, the point, the comma and G; the scale is the places read.
+  CHECK(read("-34,338,492", "99G999G999") == "-34338492 8,0");
+  CHECK(read("123.456", "999.99") == " 123.45 5,2");
+  CHECK(read(".01", "FM9.99") == " .01 3,2");
+  CHECK(read("12.", "99.9") == " 12 2,0");
+
+  // 2. Signs: -, PR's <>, S before or after, MI; a Roman numeral.
+  CHECK(read("<564646.654564>", "999999.999999PR") == "-564646.654564 12,6");
+  CHECK(read("5.01-", "FM9.999999S") == "-5.01 3,2");
+  CHECK(read("-12", "S99") == "-12 2,0");
+  CHECK(read("12-", "99MI") == "-12 2,0");
+  CHECK(read("CvIiI", "rn") == " 108 3,0");
+
+  // 3. The errors: a numeral that is not Roman, and EEEE.
+  CHECK(read("IIII", "RN") == "ERR invalid Roman numeral");
+  CHECK(read("1234", "9.99EEEE") == "ERR \"EEEE\" not supported for input");
+}

@@ -168,6 +168,7 @@ typedef struct ty_num_desc_t {
   int pre;   /* digits before the point */
   int post;  /* digits after it */
   int multi; /* V's power of 10 */
+  int v;     /* V, even with no 9 after it */
   int roman; /* RN */
   int eeee;  /* EEEE */
 } ty_num_desc_t;
@@ -216,5 +217,18 @@ const char *ty_num_roman(int n, char buf[16]);
 int ty_num_to_char_digits(const ty_num_format_t *f, const char *numstr,
                           int out_pre_spaces, int sign, int pre, int post,
                           const ty_num_locale_t *loc, ty_varlena_t **out);
+
+/*
+ * to_number: read the len bytes at in by the number format f, as
+ * PostgreSQL's NUM_processor does for input, into out, the text
+ * numeric_in reads: a sign or a space, the digits, and a point. *precision
+ * and *scale are those of the result, before V's power of 10, which the host
+ * divides by (ty_num_describe). out has room for f's bytes times 8, plus 2.
+ * The errors, both TY_ERR_INVALID: "invalid Roman numeral", and ""EEEE" not
+ * supported for input".
+ */
+int ty_num_from_char(const ty_num_format_t *f, const char *in, size_t len,
+                     const ty_num_locale_t *loc, char *out, int *precision,
+                     int *scale);
 
 #endif /* TY_TOCHAR_H */
