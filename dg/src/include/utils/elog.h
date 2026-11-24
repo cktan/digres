@@ -327,8 +327,9 @@ struct pg_error_t {};
 
 /*
  * Whether an ERROR has a handler to go to: a try block with a
- * pg_try_scope_t, or the loop at the top of a session.  With none, an ERROR is promoted to FATAL, as it is in
- * PostgreSQL when its PG_exception_stack is NULL.
+ * pg_try_scope_t, or the loop at the top of a session.  With none, an ERROR is
+ * promoted to FATAL, as it is in PostgreSQL when its PG_exception_stack is
+ * NULL.
  */
 extern thread_local /*LOCAL*/ PGDLLIMPORT bool PG_exception_handled;
 

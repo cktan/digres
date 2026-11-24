@@ -46,7 +46,6 @@
 #include "utils/xml.h"
 #include "utils/control_block.h"
 
-
 static void xmldata_root_element_start(StringInfo result, const char *eltname,
                                        const char *xmlschema,
                                        const char *targetns, bool top_level);
@@ -109,7 +108,6 @@ const TableFuncRoutine XmlTableRoutine = {
 #define NAMESPACE_XSI "http://www.w3.org/2001/XMLSchema-instance"
 #define NAMESPACE_SQLXML "http://standards.iso.org/iso/9075/2003/sqlxml"
 
-
 /*
  * xml_in uses a plain C string to VARDATA conversion, so for the time being
  * we use the conversion function for the text datatype.
@@ -171,7 +169,6 @@ Datum xml_send(PG_FUNCTION_ARGS) {
   PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
 }
 
-
 static xmltype *stringinfo_to_xmltype(StringInfo buf) {
   return (xmltype *)cstring_to_text_with_len(buf->data, buf->len);
 }
@@ -179,7 +176,6 @@ static xmltype *stringinfo_to_xmltype(StringInfo buf) {
 static xmltype *cstring_to_xmltype(const char *string) {
   return (xmltype *)cstring_to_text(string);
 }
-
 
 Datum xmlcomment(PG_FUNCTION_ARGS) {
   NO_XML_SUPPORT();
@@ -286,7 +282,6 @@ bool xml_is_document(xmltype *arg) {
   NO_XML_SUPPORT();
   return false;
 }
-
 
 /*
  * Map SQL identifier to XML name; see SQL/XML:2008 section 9.1.
@@ -458,7 +453,6 @@ char *map_sql_value_to_xml_value(Datum value, Oid type,
 
       return pstrdup(buf);
     }
-
     }
 
     /*
@@ -1778,7 +1772,6 @@ static void SPI_sql_row_to_xmlelement(uint64 rownum, StringInfo result,
  * XPath related functions
  */
 
-
 /*
  * Evaluate XPath expression and return array of XML values.
  *
@@ -1813,7 +1806,6 @@ Datum xpath_exists(PG_FUNCTION_ARGS) {
 /*
  * Functions for checking well-formed-ness
  */
-
 
 Datum xml_is_well_formed(PG_FUNCTION_ARGS) {
   NO_XML_SUPPORT();

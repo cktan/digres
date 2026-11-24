@@ -251,10 +251,10 @@ static void dec_in_error(int why, const char *str, int32 typmod,
                         errmsg("value overflows numeric format")));
     return;
   case TY_DEC_IN_DIGITS:
-    errsave(escontext,
-            (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-             errmsg("value overflows numeric format"),
-             errdetail("A numeric value has at most %d digits.", DEC_MAX_DIGITS)));
+    errsave(escontext, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                        errmsg("value overflows numeric format"),
+                        errdetail("A numeric value has at most %d digits.",
+                                  DEC_MAX_DIGITS)));
     return;
   case TY_DEC_IN_FIELD:
     precision = numeric_typmod_precision(typmod);
@@ -270,9 +270,9 @@ static void dec_in_error(int why, const char *str, int32 typmod,
                        maxdigits ? "10^" : "", maxdigits ? maxdigits : 1)));
     return;
   default:
-    errsave(escontext,
-            (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-             errmsg("invalid input syntax for type %s: \"%s\"", "numeric", str)));
+    errsave(escontext, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                        errmsg("invalid input syntax for type %s: \"%s\"",
+                               "numeric", str)));
   }
 }
 
@@ -292,14 +292,13 @@ Datum numeric_in(PG_FUNCTION_ARGS) {
   int why;
 
   /* The text is ty's to read; a typmod is a precision and a scale. */
-  if (0 != ty_dec128_parse(str,
-                           is_valid_numeric_typmod(typmod)
-                               ? numeric_typmod_precision(typmod)
-                               : -1,
-                           is_valid_numeric_typmod(typmod)
-                               ? numeric_typmod_scale(typmod)
-                               : 0,
-                           &v, &why)) {
+  if (0 !=
+      ty_dec128_parse(
+          str,
+          is_valid_numeric_typmod(typmod) ? numeric_typmod_precision(typmod)
+                                          : -1,
+          is_valid_numeric_typmod(typmod) ? numeric_typmod_scale(typmod) : 0,
+          &v, &why)) {
     dec_in_error(why, str, typmod, escontext);
     PG_RETURN_NULL();
   }

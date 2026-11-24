@@ -3435,9 +3435,9 @@ void PostgresMain(const char *dbname, const char *username) {
         /*
          * For valgrind reporting purposes, the "current query" begins here.
          */
-    #ifdef USE_VALGRIND
+#ifdef USE_VALGRIND
         old_valgrind_error_count = VALGRIND_COUNT_ERRORS;
-    #endif
+#endif
 
         /*
          * Release storage left over from prior query cycle, and create a new
@@ -3523,16 +3523,17 @@ void PostgresMain(const char *dbname, const char *username) {
 
             total_duration = TimestampDifferenceMicroseconds(
                 conn_timing.socket_create, conn_timing.ready_for_use);
-            fork_duration = TimestampDifferenceMicroseconds(conn_timing.fork_start,
-                                                            conn_timing.fork_end);
-            auth_duration = TimestampDifferenceMicroseconds(conn_timing.auth_start,
-                                                            conn_timing.auth_end);
+            fork_duration = TimestampDifferenceMicroseconds(
+                conn_timing.fork_start, conn_timing.fork_end);
+            auth_duration = TimestampDifferenceMicroseconds(
+                conn_timing.auth_start, conn_timing.auth_end);
 
-            ereport(LOG, errmsg("connection ready: setup total=%.3f ms, fork=%.3f "
-                                "ms, authentication=%.3f ms",
-                                (double)total_duration / NS_PER_US,
-                                (double)fork_duration / NS_PER_US,
-                                (double)auth_duration / NS_PER_US));
+            ereport(LOG,
+                    errmsg("connection ready: setup total=%.3f ms, fork=%.3f "
+                           "ms, authentication=%.3f ms",
+                           (double)total_duration / NS_PER_US,
+                           (double)fork_duration / NS_PER_US,
+                           (double)auth_duration / NS_PER_US));
           }
 
           ReadyForQuery(whereToSendOutput);
@@ -3629,7 +3630,8 @@ void PostgresMain(const char *dbname, const char *username) {
           if (numParams > 0) {
             paramTypes = palloc_array(Oid, numParams);
             for (int i = 0; i < numParams; i++)
-              paramTypes[i] = numeric_oid_from_wire(pq_getmsgint(&input_message, 4));
+              paramTypes[i] =
+                  numeric_oid_from_wire(pq_getmsgint(&input_message, 4));
           }
           pq_getmsgend(&input_message);
 
@@ -3757,9 +3759,9 @@ void PostgresMain(const char *dbname, const char *username) {
             exec_describe_portal_message(describe_target);
             break;
           default:
-            ereport(ERROR,
-                    (errcode(ERRCODE_PROTOCOL_VIOLATION),
-                     errmsg("invalid DESCRIBE message subtype %d", describe_type)));
+            ereport(ERROR, (errcode(ERRCODE_PROTOCOL_VIOLATION),
+                            errmsg("invalid DESCRIBE message subtype %d",
+                                   describe_type)));
             break;
           }
 
@@ -3825,8 +3827,9 @@ void PostgresMain(const char *dbname, const char *username) {
           break;
 
         default:
-          ereport(FATAL, (errcode(ERRCODE_PROTOCOL_VIOLATION),
-                          errmsg("invalid frontend message type %d", firstchar)));
+          ereport(FATAL,
+                  (errcode(ERRCODE_PROTOCOL_VIOLATION),
+                   errmsg("invalid frontend message type %d", firstchar)));
         }
       } /* end of input-reading loop */
       break;
