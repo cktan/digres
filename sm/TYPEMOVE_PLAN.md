@@ -1089,8 +1089,26 @@ copied from PostgreSQL keeps its copyright notice
        process, set by the host, through which `ty_text_regex`
        matches `~` and `~*`. digres sets its own at startup, and
        catches its errors, so that no `ereport` exception crosses
-       ty or its caller, which report errors by their codes. Tested in ty with an engine of its own; nothing calls
-       it in digres yet. No statement's code changed.
+       ty or its caller, which report errors by their codes.
+       Tested in ty with an engine of its own; nothing calls it
+       in digres yet. No statement's code changed.
+     - **The text of a decimal moved (2026-11-24).** What was
+       left of decimal in digres was its text: `numeric_in`,
+       `numeric_out`, the digits of the binary form, `min_scale`,
+       `trim_scale`, and the float casts, which go by the text.
+       They are ty's now (`ty_dec128_parse`, `_format`,
+       `ty_dec_digits_t`, `_min_scale`, `_trim_scale`,
+       `_to_float64`, `_to_float32`, `_from_float`; ty/DESIGN.md
+       §24), digres's own code moved. digres words the errors
+       by ty's `*why`. Tested by 6,668 vectors of the digres
+       before the move, by hand in ty, and by
+       `dg/test/select_decin_ops.sql`. Measured by callgrind,
+       2,000 rows (old, new): `c::numeric(30,6)` of text
+       6,366,744 and 6,406,196 (+0.62%); `n::text` 6,302,237 and
+       5,857,978 (-7.05%); a decimal64's text 5,881,286 and
+       5,646,795 (-3.99%); `n::float8` 7,857,708 and 7,259,788
+       (-7.61%); `f::numeric(30,6)` -0.14%; `min_scale` +0.02%.
+       The text out divides in 64 bits when the value fits.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

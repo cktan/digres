@@ -1,0 +1,112 @@
+-- Verify numeric's text in and out, which ty reads and writes
+-- (ty_decimal.h): each form, a typmod's rounding, the limits of 36
+-- digits, each error with its detail, the binary form's typmod, and the
+-- casts with the floats. A refusal is what is tested, so an error goes on
+-- to the next statement.
+\set ON_ERROR_STOP off
+CREATE TEMP TABLE dec_in (i int primary key, x text);
+INSERT INTO dec_in VALUES (1, '  -12.50  '), (2, '.5'), (3, '5.'), (4, '1_000.5'), (5, '1.5e2'), (6, '1.5e-2'), (7, '0x1F'), (8, '-0o17'), (9, '0b101'), (11, '0.000000000000000000000000000000000001'), (12, '-0');
+SELECT i, x, numeric_in(x::cstring, 0, -1) AS n, numeric_in(x::cstring, 0, ((30 << 16) | 6) + 4) AS n30_6 FROM dec_in ORDER BY i;
+ i  |                   x                    |                   n                    |    n30_6    
+----+----------------------------------------+----------------------------------------+-------------
+  1 |   -12.50                               |                                 -12.50 |  -12.500000
+  2 | .5                                     |                                    0.5 |    0.500000
+  3 | 5.                                     |                                      5 |    5.000000
+  4 | 1_000.5                                |                                 1000.5 | 1000.500000
+  5 | 1.5e2                                  |                                    150 |  150.000000
+  6 | 1.5e-2                                 |                                  0.015 |    0.015000
+  7 | 0x1F                                   |                                     31 |   31.000000
+  8 | -0o17                                  |                                    -15 |  -15.000000
+  9 | 0b101                                  |                                      5 |    5.000000
+ 11 | 0.000000000000000000000000000000000001 | 0.000000000000000000000000000000000001 |    0.000000
+ 12 | -0                                     |                                      0 |    0.000000
+(11 rows)
+
+SELECT numeric_in('123456789012345678901234567890123456.0000', 0, -1) AS n36;
+                 n36                  
+--------------------------------------
+ 123456789012345678901234567890123456
+(1 row)
+
+SELECT '1.25'::numeric(3,1) AS a, '-1.25'::numeric(3,1) AS b, '99.94'::numeric(3,1) AS c, '0.5'::numeric(2,2) AS d, '9.995'::numeric(20,2) AS e;
+  a  |  b   |  c   |  d   |   e   
+-----+------+------+------+-------
+ 1.3 | -1.3 | 99.9 | 0.50 | 10.00
+(1 row)
+
+SELECT '99.95'::numeric(3,1);
+psql:test/select_decin_ops.sql:12: ERROR:  numeric field overflow
+DETAIL:  A field with precision 3, scale 1 must round to an absolute value less than 10^2.
+SELECT '1.5'::numeric(2,2);
+psql:test/select_decin_ops.sql:13: ERROR:  numeric field overflow
+DETAIL:  A field with precision 2, scale 2 must round to an absolute value less than 1.
+SELECT '1234567890123456789012345678901234567'::numeric(36,0);
+psql:test/select_decin_ops.sql:14: ERROR:  value overflows numeric format
+LINE 1: SELECT '1234567890123456789012345678901234567'::numeric(36,0...
+               ^
+DETAIL:  A numeric value has at most 36 digits.
+SELECT numeric_in('1.0000000000000000000000000000000000005', 0, -1);
+psql:test/select_decin_ops.sql:15: ERROR:  value overflows numeric format
+DETAIL:  A numeric value has at most 36 digits.
+SELECT 'abc'::numeric;
+psql:test/select_decin_ops.sql:16: ERROR:  invalid input syntax for type numeric: "abc"
+LINE 1: SELECT 'abc'::numeric;
+               ^
+SELECT '1 2'::numeric;
+psql:test/select_decin_ops.sql:17: ERROR:  invalid input syntax for type numeric: "1 2"
+LINE 1: SELECT '1 2'::numeric;
+               ^
+SELECT 'NaN'::numeric;
+psql:test/select_decin_ops.sql:18: ERROR:  invalid input syntax for type numeric: "NaN"
+LINE 1: SELECT 'NaN'::numeric;
+               ^
+DETAIL:  numeric has no NaN and no infinity.
+SELECT '-Infinity'::numeric;
+psql:test/select_decin_ops.sql:19: ERROR:  invalid input syntax for type numeric: "-Infinity"
+LINE 1: SELECT '-Infinity'::numeric;
+               ^
+DETAIL:  numeric has no NaN and no infinity.
+SELECT numeric_in('1e1001', 0, -1);
+psql:test/select_decin_ops.sql:20: ERROR:  value overflows numeric format
+SELECT numeric_in(('0x' || repeat('F', 31))::cstring, 0, -1);
+psql:test/select_decin_ops.sql:21: ERROR:  value overflows numeric format
+DETAIL:  A numeric value has at most 36 digits.
+SELECT '0x'::numeric;
+psql:test/select_decin_ops.sql:22: ERROR:  invalid input syntax for type numeric: "0x"
+LINE 1: SELECT '0x'::numeric;
+               ^
+SELECT x, pg_input_is_valid(x, 'numeric(5,2)') AS ok, (pg_input_error_info(x, 'numeric(5,2)')).message FROM (VALUES ('123.456'), ('1234.5'), ('nan'), ('1e1001')) v(x);
+    x    | ok |                   message                    
+---------+----+----------------------------------------------
+ 123.456 | t  | 
+ 1234.5  | f  | numeric field overflow
+ nan     | f  | invalid input syntax for type numeric: "nan"
+ 1e1001  | f  | value overflows numeric format
+(4 rows)
+
+SELECT min_scale(1.2500::numeric(10,4)) AS a, trim_scale(1.2500::numeric(10,4)) AS b, min_scale(0.000::numeric(10,3)) AS c, trim_scale(0.000::numeric(10,3)) AS d, trim_scale(123456789012345678901234.500000::numeric(30,6)) AS e;
+ a |  b   | c | d |             e              
+---+------+---+---+----------------------------
+ 2 | 1.25 | 0 | 0 | 123456789012345678901234.5
+(1 row)
+
+SELECT 123456789012345678901234.567891::numeric(30,6)::float8 AS f8, 123456789012345678901234.567891::numeric(30,6)::float4 AS f4, 1.2345::numeric(10,4)::float8 AS d64f8, 1.2345::numeric(10,4)::float4 AS d64f4;
+           f8           |      f4       | d64f8  | d64f4  
+------------------------+---------------+--------+--------
+ 1.2345678901234569e+23 | 1.2345679e+23 | 1.2345 | 1.2345
+(1 row)
+
+SELECT 0.1::float8::numeric(30,20) AS a, 1234567.891::float4::numeric(30,10) AS b, 1e30::float8::numeric(36,0) AS c, (-1e-30)::float8::numeric(36,36) AS d;
+           a            |         b          |                c                |                    d                    
+------------------------+--------------------+---------------------------------+-----------------------------------------
+ 0.10000000000000000000 | 1234570.0000000000 | 1000000000000000000000000000000 | -0.000000000000000000000000000001000000
+(1 row)
+
+SELECT 'NaN'::float8::numeric(30,6);
+psql:test/select_decin_ops.sql:27: ERROR:  cannot convert NaN to numeric
+SELECT 'Infinity'::float4::numeric(30,6);
+psql:test/select_decin_ops.sql:28: ERROR:  cannot convert infinity to numeric
+SELECT 1e40::float8::numeric(36,0);
+psql:test/select_decin_ops.sql:29: ERROR:  value overflows numeric format
+DETAIL:  A numeric value has at most 36 digits.
+DROP TABLE dec_in;

@@ -992,8 +992,8 @@ float8, and writes them by the format, as PostgreSQL's
 `snprintf`, whose NaN is `NaN` where libc's is `nan`. D, G, L and
 S take the host's `lconv` symbols, through a function in a
 `ty_num_locale_t` that is called only for a format that uses one.
-digres makes a decimal's digits itself, as ty has no decimal text
-yet, and gives them to `ty_num_to_char_digits`.
+digres makes a decimal's digits, and gives them to
+`ty_num_to_char_digits`.
 
 The reverse parse of a date format is `ty_dch_parse`: the text
 read field by field, as PostgreSQL's `DCH_from_char`, then the
@@ -1060,3 +1060,35 @@ the arguments passed, the answers, an engine's error and no
 engine. Nothing in digres calls `ty_text_regex` yet; when the
 hook went in, a build whose `~` and `~*` went through it passed
 all 231 pgregress files and printed digres's own errors.
+
+## 24. The text of a decimal
+
+`ty_decimal.h` holds a decimal's text, as digres's `numeric_in`
+and `numeric_out` had it; the code is digres's own, moved.
+`ty_dec128_parse` reads a number with a sign, spaces, a point, an
+exponent and single underscores between digits, or an integer in
+base 16, 8 or 2 after `0x`, `0o` or `0b`. A typmod rounds it half
+away from zero and checks the digits before the point. A value of
+more than 36 significant digits is refused, not rounded. The
+reason of a refusal is `*why`, one of `TY_DEC_IN_*`, so the host
+words PostgreSQL's message and detail: syntax, NaN or infinity,
+range, 36 digits, or the typmod's field. `ty_dec128_format`
+writes every place of the scale and no exponent.
+
+The binary form stays digres's, but its digits go through ty:
+`ty_dec_digits_t` holds up to 154 of them, and `_drop`, `_pad`,
+`_typmod` and `_pack` make the value, as the text does. A
+`decimal64` is read and written as the `decimal128` of its value.
+`ty_dec128_min_scale` and `ty_dec128_trim_scale` are inline. The
+float casts go by the text, as PostgreSQL's do:
+`ty_dec128_to_float64` and `_to_float32` read a decimal's text by
+`strtod` and `strtof`, and `ty_dec128_from_float` reads a float's
+`"%.*g"` text, 15 digits for a float8 and 6 for a float4.
+
+The tests: `test/test_decin.cc`, by hand, and by
+`test/decin_known.txt`, 6,668 lines that `test/gen_decin.py`
+took from a digres built before the move: each text under 10
+typmods or none, with its error's kind, the scale functions and
+the float casts both ways. In digres a bare `numeric` is a
+`decimal64`, so the vectors with no typmod refuse what a
+`decimal64` cannot hold.

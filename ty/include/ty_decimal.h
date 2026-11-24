@@ -396,4 +396,90 @@ static inline int ty_dec64_mul(const ty_dec64_t *a, const ty_dec64_t *b,
   return 0;
 }
 
+/*
+ * The text of a decimal128.
+ *
+ *   - format writes a's text as PostgreSQL prints a numeric, every place
+ *     of its scale and no exponent, NUL-ended into TY_DEC_TEXT_SIZE bytes;
+ *     it returns the length.
+ *   - parse reads the NUL-ended text s: a decimal number, which may have
+ *     an exponent and single underscores between digits, or an integer in
+ *     base 16, 8 or 2 after 0x, 0o or 0b, with a sign and spaces around.
+ *     precision and scale are a typmod's, precision -1 for none: the value
+ *     is rounded to scale, half away from zero, and may have at most
+ *     precision - scale digits before the point. Without one, places past
+ *     36 are rounded away and zeros past 36 digits dropped; more digits
+ *     are refused, not rounded. 0, or -1 with *why one of TY_DEC_IN_* and
+ *     TY_ERR_INVALID (syntax, NaN) or TY_ERR_RANGE (the rest).
+ *   - min_scale is the fewest places that hold a's value; trim_scale is a
+ *     with no zeros at the end of its places.
+ *   - to_float64 and to_float32 are the nearest float to a's text;
+ *     from_float is x by its first digits significant digits, as
+ *     PostgreSQL takes a float, "%.*g" read by parse: 15 for a float64, 6
+ *     for a float32. NaN and the infinities are TY_DEC_IN_NAN.
+ */
+#define TY_DEC_TEXT_SIZE 48
+
+enum {
+  TY_DEC_IN_SYNTAX = 1, /* not a number */
+  TY_DEC_IN_NAN,        /* NaN or an infinity, which a decimal has not */
+  TY_DEC_IN_RANGE,      /* an exponent, or digits, past what is read */
+  TY_DEC_IN_DIGITS,     /* more than 36 significant digits */
+  TY_DEC_IN_FIELD       /* more digits before the point than a typmod's */
+};
+
+int ty_dec128_format(const ty_dec128_t *a, char *out);
+int ty_dec128_parse(const char *s, int precision, int scale, ty_dec128_t *out,
+                    int *why);
+double ty_dec128_to_float64(const ty_dec128_t *a);
+float ty_dec128_to_float32(const ty_dec128_t *a);
+int ty_dec128_from_float(double x, int digits, ty_dec128_t *out, int *why);
+
+static inline int ty_dec128_min_scale(const ty_dec128_t *a) {
+  ty_int128_t v = a->value;
+  int s = a->scale;
+
+  while (s > 0 && 0 == v % 10) {
+    v /= 10;
+    s--;
+  }
+  return s;
+}
+
+static inline ty_dec128_t ty_dec128_trim_scale(ty_dec128_t a) {
+  while (a.scale > 0 && 0 == a.value % 10) {
+    a.value /= 10;
+    a.scale--;
+  }
+  return a;
+}
+
+/*
+ * A number as its decimal digits, before it is a value: what a binary form
+ * is read into. No leading zeros, nd digits in dig (0 for zero), scale of
+ * them places, and up to TY_DEC_DIGITS_MAX, so that a typmod can round the
+ * places of a long input away.
+ *
+ *   - drop takes the last drop places off, rounded half away from zero by
+ *     the first of them, or cut if cut is 1.
+ *   - pad adds zeros after the point up to scale; -1 if too long.
+ *   - typmod rounds d to a typmod's scale and refuses more than precision -
+ *     scale digits before the point, with TY_ERR_RANGE.
+ *   - pack makes the value: places past 36 rounded away, then digits past
+ *     36 pushed out of the places; TY_ERR_RANGE if the integer part has
+ *     more than 36 digits.
+ */
+#define TY_DEC_DIGITS_MAX 154
+
+typedef struct ty_dec_digits_t {
+  int nd;
+  int scale;
+  char dig[TY_DEC_DIGITS_MAX + 2];
+} ty_dec_digits_t;
+
+void ty_dec_digits_drop(ty_dec_digits_t *d, int drop, int cut);
+int ty_dec_digits_pad(ty_dec_digits_t *d, int scale);
+int ty_dec_digits_typmod(ty_dec_digits_t *d, int precision, int scale);
+int ty_dec_digits_pack(ty_dec_digits_t *d, int neg, ty_dec128_t *out);
+
 #endif /* TY_DECIMAL_H */
