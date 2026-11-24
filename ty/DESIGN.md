@@ -11,8 +11,10 @@ a type, and none of what a host adds: no session, no catalog, no
 - [`../sm/TYPEMOVE_PLAN.md`](../sm/TYPEMOVE_PLAN.md) says what
   moves into ty, and in what order.
 
-Nothing is in ty yet but the error state and the memory
-functions. The first type to move is decimal.
+ty holds the operations of the integers, floats, decimals, bool,
+uuid, bytea, the string types, `date`, `time`, `timetz`,
+`timestamp`, `timestamptz` and `interval`. `money`, `"char"`,
+`oid`, arrays and `jsonb` are out of its scope.
 
 ---
 
@@ -159,8 +161,11 @@ today's date or the offset a zone has now.
   reads the time, as the text in of 'today' does, has one before
   any call that needs an sm transaction. It keeps the time sm
   gave, so `now()` for a row reads a variable.
-- `now()` is the time of BEGIN. In PostgreSQL it is the time of
-  the first statement.
+- `now()` is the time of BEGIN, as in PostgreSQL. PostgreSQL
+  takes the time of the statement that begins the transaction,
+  so `now() = statement_timestamp()` is true in a transaction of
+  one statement. digres reads the clock again when the
+  transaction begins, so there it is false, by some microseconds.
 - `ty_set_session_zone` gives ty the session's zone, for the
   calling thread, as a setting of that thread. `ty_xact_now` gives
   the time of the transaction as the fields of that zone, kept for

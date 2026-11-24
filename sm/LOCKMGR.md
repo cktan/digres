@@ -125,8 +125,9 @@ key: a kind of `sm3::heap_relid` in a table's store is
 `SM_LOCKNAME_ROW`. A lock already held keeps the kind it was
 taken with. A write gives no kind. A write waiting on a lock
 lists its holder's kind, and the lock a refused write takes
-(§1.9) has kind 0 and is listed as a key's. `pg_locks` reports a
-row lock by its table, not by which row.
+(§1.9) has kind 0 and is listed as a key's. digres's
+`pg_lock_status()` reports a row lock by its table, not by which
+row.
 
 **One type serves every object.** Every sm3 object draws its oid
 from the one sequence `sm3.oid`, so an oid names one object of
@@ -1190,7 +1191,7 @@ that mutex, and sees the new definition
 | savepoint rollback | a lock first taken past the mark goes; a conversion is never undone |
 | prepare, crash, restart | the record keeps ids, and the hash is fixed |
 | `FOR UPDATE` of a million rows with long primary keys | no key bytes kept, none copied under a mutex |
-| `pg_locks` | a row lock's table, but not its row |
+| `pg_lock_status()` | a row lock's table, but not its row |
 
 ### 4.10 What keeping no write lock costs
 
@@ -1245,7 +1246,7 @@ that mutex, and sees the new definition
 | PostgreSQL's in-tuple row locks for `FOR SHARE` (multixact) | explicit locks are few next to writes, except a foreign key check for each child row. Worth doing later if those turn out many |
 | The lock keeps the row's key, to tell apart keys that hash alike | it needs key bytes in the list, the record and under a mutex, for a case a 64-bit hash makes rare |
 | The id keeps the relid in the first word's high bits | sm1 then knows a relid, which is sm2's. The caller's `kind` keeps sm1 out of it |
-| `pg_locks` reports a row lock with no kind, and the test counts by mode alone | simplest, but `pg_locks` says less |
+| `pg_lock_status()` reports a row lock with no kind, and the test counts by mode alone | simplest, but `pg_lock_status()` says less |
 | A `LOCK` key no DDL writes, for a table's lock | correct, but a convention the next reader has to notice. `LOCKTYPE_OID` is structural |
 | A lock named by storeid | it moves under `TRUNCATE` (§4.7) |
 | Row locks in a namespace of their own | a writer would never meet them (§4.3) |

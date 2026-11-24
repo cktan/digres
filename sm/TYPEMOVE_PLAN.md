@@ -884,10 +884,11 @@ notice ([`../CLAUDE.md`](../CLAUDE.md)).
        now()` 4,260,461 and 4,257,898 (-0.06%); `d =
        current_date` 4,212,892 and 4,215,680 (+0.07%); `ts <
        current_timestamp` 4,356,184 and 4,358,714 (+0.06%).
-     - `now()` is the time of BEGIN. In PostgreSQL it is the
-       time of the first statement, so `now() =
-       statement_timestamp()` is true there in the first
-       statement, and false here.
+     - `now()` is the time of BEGIN, as in PostgreSQL.
+       PostgreSQL takes the time of the statement that begins
+       the transaction, so `now() = statement_timestamp()` is
+       true there in a transaction of one statement. It is false
+       here, by some microseconds, as the clock is read again.
      - Moved after it (2026-11-23): CURRENT_DATE, CURRENT_TIME
        and LOCALTIME (`ty_current_date`, `ty_current_time`,
        `ty_local_time`); `time_timetz`, `timestamptz_timetz` and

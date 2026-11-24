@@ -248,12 +248,12 @@ columns a statement named.
 
 - **PostgreSQL does not take it.** A schema with it is
   digres's; PostgreSQL refuses it as a syntax error.
-- **psql's `\d` shows the insert default only**, and `pg_dump`
-  dumps it alone: both read PostgreSQL's catalog, which has a
-  place for one default ([`SYSCATALOG.md`](SYSCATALOG.md)). A
-  dump restored
-  keeps the column and its insert default and loses the update
-  default.
+- **psql's `\d` shows the insert default only**: it reads
+  PostgreSQL's catalog, which has a place for one default
+  ([`SYSCATALOG.md`](SYSCATALOG.md)). `pg_dump` reads the same
+  catalog, but does not run on digres yet
+  ([`UNSUPPORTED.md`](UNSUPPORTED.md), "Catalog and
+  introspection").
 - **It is not a commit time.** A time is the transaction's
   start, known when the row is written; when it commits is
   not.

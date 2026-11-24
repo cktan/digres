@@ -4,7 +4,8 @@
 the sm storage stack (`sm/`). DG keeps PG's wire protocol,
 analyzer, planner, and executor. It replaces the process model,
 storage engine, transaction manager, catalog, and authentication
-layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
+layer. It moves the operations of the SQL types into a library,
+`ty/`. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
 
 > **Roles, authentication, and authorization are redone.** DG
 > does not keep PG's role and privilege machinery. A new
@@ -15,18 +16,21 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
 | --- | --- | --- |
 | Wire protocol & clients | PG v3 protocol; `psql`, `libpq`, `pgbench` | Unchanged; uses stock PG 18 clients |
 | Source language | C | Strict C++20 (`-fno-rtti`), errors as C++ exceptions |
+| SQL type operations | Built into the backend (`utils/adt`) | Standalone library (`ty/`) that both `sm` and DG call |
+| Time zone data | Files on disk | Compiled into `ty/` |
 | Process model | Multi-process (`fork` per connection) | Single process, one `std::thread` per session |
-| Shared state | SysV / POSIX shared memory (`ShmemAlloc`) | Process heap (`pcb` and `shmem`); globals are `thread_local` |
+| Shared state | SysV / POSIX shared memory (`ShmemAlloc`) | Process heap (`pcb` and `shmem`); other globals are `thread_local` |
 | SQL parser | Built into the backend (`gram.y`, `scan.l`) | Standalone library (`sq/`) of original PG sql parser linked into DG |
-| Storage engine | Heap files, 8 KB pages, `smgr`, buffer pool | RocksDB via `sm/` (one column family per store) |
-| Row identity | Physical tuple ID (`ctid`: block + offset) | Primary key bytes, or hidden `int8` `_id` if keyless |
+| Storage engine | Heap files, 8 KB pages, `smgr`, buffer pool | RocksDB via `sm/` (one column family per store); immutable files for a column store |
+| Row identity | Physical tuple ID (`ctid`: block + offset) | Primary key bytes, or hidden `int8` `_id` if keyless or a column store |
 | Table organization | Unordered heap + separate B-tree for PK | Index-organized (clustered on PK or `_id`) |
+| Column store | None | `WITH (storage = columnar)`, for analytics |
 | Database portability | Cluster-bound (shared XIDs, OIDs, WAL, `global/`) | Self-contained directory (`base/X` holds data, catalog, WAL); its import not built yet |
 | Garbage collection | `VACUUM` and autovacuum processes | Automatic in `sm1`, and a btree's dead entries by a background btree reaper; `VACUUM` compacts RocksDB stores and cleans btree leaves |
 | Durability & recovery | PG WAL (`pg_wal`), checkpointer, redo recovery | RocksDB WAL and flush; `CHECKPOINT` is a no-op |
 | Transactions & MVCC | Heap `xmin`/`xmax`, `pg_xact` SLRU, snapshots | `sm1` MVCC on RocksDB; no XID columns on rows |
 | `SERIALIZABLE` | Predicate locks and SSI in shared memory | `sm1` serializable isolation |
-| Row & table locks | Shared-memory lock tables + heap tuple header bits | `sm1` lock manager (5 table modes, row locks in memory) |
+| Row & table locks | Shared-memory lock tables + heap tuple header bits | All in `sm1`'s lock manager (5 table modes, row locks in memory); DG has none, but for advisory locks |
 | System catalog | Heap tables (`pg_class`, `pg_attribute`, ...) | Compiled-in arrays + `sm3` catalog; virtual read-only relations |
 | Roles & auth | `pg_authid` heap table, `pg_hba.conf`, TLS, GSSAPI | **Redone**: new `aa/` library in `pg_global`; fixed peer / SCRAM-SHA-256 rules; TLS by one setting; no GSSAPI |
 | Index access methods | B-tree, Hash, GiST, SP-GiST, GIN, BRIN | `lsm` (default) and `btree`, a B-link tree, both in `sm`; no bitmap scans |
@@ -41,16 +45,19 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
   for background work (autovacuum, checkpointer, WAL writer,
   background writer, syslogger). DG runs in a single process.
   Each client connection is a `std::thread`. All background
-  processes are removed.
+  processes are removed. `sm` does background work in threads.
 - **Thread-local globals.** Every writable global and file-scope
   static variable in DG is marked `thread_local /*LOCAL*/`. The
-  build verifies this before linking. Threads share state only
-  through two process-wide structs, `pcb` and `shmem`. Only
-  the main thread writes `pcb`. Most of its fields do not change
-  after startup. A field that changes later is atomic, as the
-  reload time is, or guarded by a mutex, as the file logger's
-  settings are by `shmem->log.mutex`. Each field of `shmem` is
-  atomic, guarded by a mutex, or an object that guards itself.
+  build verifies this before linking. Only two structs are shared
+  by the threads, `pcb` and `shmem`:
+  - `pcb`: only the main thread writes it. After the first
+    thread starts, the main thread writes only its atomic
+    fields, such as the reload time.
+  - `shmem`: every thread can write it. Each field is atomic,
+    guarded by a mutex, or an object that guards itself.
+  - Two more structs belong to one thread each: `tcb` is a
+    thread's own state, and `postmaster_tcb` is the main
+    thread's.
 - **`log_min_messages` and `log_min_error_statement` are the
   server's, not a session's.** In PG a superuser can `SET` them
   for one session. In DG they are `PGC_SIGHUP`: a `SET` fails with
@@ -72,7 +79,8 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
 - **Exceptions instead of `sigsetjmp`.** DG compiles all backend
   code as C++20. `ereport(ERROR)` throws `pg_error_t`, and
   `proc_exit()` throws `proc_exit_t` to unwind the session thread
-  without terminating the server process.
+  without terminating the server process. The `PG_TRY`
+  macros are removed: code uses `try` and `catch`.
 - **Signals are interrupt bits.** The postmaster blocks signals
   and reads them via `signalfd`. Session threads wake and cancel
   each other through `sm_sys.h` interrupt flags and latches
@@ -85,6 +93,22 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
 - **Standalone parser (`sq/`).** The SQL grammar and scanner live
   in `sq/` with no dependency on the backend. DG links `libsq.a`
   and translates parse nodes directly into its memory contexts.
+- **Standalone type operations (`ty/`).** In PG, the operations
+  of a type are in the backend, tied to its memory contexts and
+  its errors. In DG, they are pure functions in `ty/`
+  ([`ty/DESIGN.md`](ty/DESIGN.md)), with no dependency on `sm` or
+  the backend. DG's SQL functions are wrappers that call them.
+  The types are the integers, floats, decimals, bool, uuid,
+  bytea, the string types, dates and times, and `interval`. The
+  answers are PG's, except for `numeric` (§6). Some parts stay in
+  DG, such as the binary forms, the regular expression engine,
+  the array functions, `money`, and `jsonb`
+  ([`sm/TYPEMOVE_PLAN.md`](sm/TYPEMOVE_PLAN.md) §7, "What stays
+  in digres for good").
+- **Time zone data is compiled in.** PG reads time zone files
+  from disk. DG has the IANA data in `ty/`
+  ([`ty/TZDATA.md`](ty/TZDATA.md)), so new data needs a new
+  build. Zone names and POSIX specs work as in PG.
 
 ## 2. Storage Engine and Table Layout
 
@@ -96,17 +120,41 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
   such a directory into another instance is not built yet.
 - **Index-organized tables.** PG stores rows in an unordered heap
   and builds a separate B-tree file for the primary key. DG
-  stores every table in primary-key order in `sm`, so a
-  sequential scan reads rows in key order. This does not set the
-  order of a query's result: the plan can use a secondary index,
-  a join, or another operator. Use `ORDER BY` when the result
-  needs an order. A primary key index uses zero extra bytes. A
-  primary key is capped at 1024 encoded bytes.
+  stores every row store table, the default kind, in primary-key
+  order in `sm`, so a sequential scan reads rows in key order.
+  This does not set the order of a query's result: the plan can
+  use a secondary index, a join, or another operator. Use `ORDER
+  BY` when the result needs an order. A primary key index uses
+  zero extra bytes. A primary key is capped at 1024 encoded
+  bytes.
 - **Row keys replace `ctid`.** PG identifies physical tuples by
   `ctid` (page and slot). DG has no pages or `ctid`. A table
   without a primary key gets a hidden `int8` system column named
   `_id` as its key. System columns `xmin`, `xmax`, `cmin`, and
   `cmax` do not exist.
+- **Added in DG: the Column Store.** PG has no column store. In
+  DG, `CREATE TABLE ... WITH (storage = columnar)` makes a table
+  for analytics ([`sm/COLSTORE.md`](sm/COLSTORE.md)):
+  - **Writes.** New rows go to a row store in RocksDB. A worker
+    thread seals them in groups of 10k rows, as one compressed,
+    immutable file for each column. `COPY` into an empty table
+    writes the files directly.
+  - **Scans.** A scan reads only the columns the query uses. It
+    skips each group of rows that the predicate cannot match, by
+    the min, max, and filter of each column.
+  - **Updates and deletes** work on sealed rows. A worker thread
+    rewrites a group when a fifth of its rows are dead.
+  - **Isolation.** `READ COMMITTED` and `REPEATABLE READ` work.
+    A `SERIALIZABLE` transaction that uses the table fails.
+  - **No index and no key.** `PRIMARY KEY`, `UNIQUE`, `FOREIGN
+    KEY`, and `CREATE INDEX` give a warning and make nothing.
+    A foreign key that references the table, `ON CONFLICT` with
+    a column list, and `TABLESAMPLE` fail. `NOT NULL`, `CHECK`,
+    and generated columns apply.
+  - **Limits.** A value is 2,048 bytes at most. A row of more
+    than 64 KB fails in a scan.
+  - **Executor.** PG's executor still takes one row at a time.
+    A vector-aware executor is not built yet.
 - **PG's storage layers are removed.** PG's buffer manager,
   `smgr`, free-space map, visibility map, TOAST tables, and
   `xlog.c` are removed. `sm` stores a long value out of line, as
@@ -171,9 +219,15 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
   encoding and collation `C`. A column's `COLLATE`, `CREATE
   COLLATION`, and an index key collation other than the
   column's are refused.
-- **Missing introspection.** `information_schema` and the
-  `pg_stat_*` views are missing. `pg_description` is empty,
-  `COMMENT ON` is refused, and `pg_stats` is a function.
+- **Missing introspection.** `information_schema`, the
+  `pg_stat_*` views, and the system views such as `pg_locks`,
+  `pg_settings`, `pg_indexes`, and `pg_timezone_names` are
+  missing. Some have a function in their place: `pg_stats()`,
+  `pg_lock_status()`, `pg_show_all_settings()`, and
+  `pg_timezone_names()`. `pg_description` is empty, and `COMMENT
+  ON` is refused.
+- **`pg_dump` does not run.** It calls `pg_is_in_recovery()` when
+  it connects, and DG does not have that function.
 
 ## 4. Transactions, Locking, and Concurrency
 
@@ -184,14 +238,22 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
 - **Isolation levels.** `READ COMMITTED`, `REPEATABLE READ`, and
   `SERIALIZABLE` are implemented by `sm1`. PG's predicate lock
   manager and SLRU are removed.
-- **Single lock manager.** PG's lock manager and multixacts are
-  removed. `sm1` handles table and row locks with its own
+- **The locks are in `sm`.** PG's lock manager and multixacts are
+  removed, and DG has none of its own. `sm1` holds every lock on
+  a table, a row, a schema, or another object, and has its own
   deadlock detector. PG's eight `LOCK TABLE` modes map onto
   `sm1`'s five modes, and `FOR KEY SHARE` / `FOR NO KEY UPDATE`
-  map to `FOR SHARE` / `FOR UPDATE`. Advisory locks use a
-  separate in-memory table in DG. There are no lock wait queues:
-  a soft deadlock aborts a transaction where PG reorders the
-  waiters. `pg_locks` shows `sm`'s mode names.
+  map to `FOR SHARE` / `FOR UPDATE`. There are no lock wait
+  queues: a soft deadlock aborts a transaction where PG reorders
+  the waiters. `pg_lock_status()` shows `sm`'s mode names.
+- **Advisory locks are the one exception.** DG keeps them in an
+  in-memory table of its own (`advisory_lock.c`). Neither
+  detector sees a deadlock through an advisory lock and a lock
+  of `sm`: `lock_timeout` or a cancel ends it.
+- **The clock of a transaction is `sm`'s.** DG reads it when the
+  transaction starts. So `now()` is a little later than
+  `statement_timestamp()` in a transaction of one statement. In
+  PG, the two are equal there.
 - **Behavioral differences under concurrency:**
   - Updating a primary key column in a way that collides with an
     existing row during the scan (e.g., `UPDATE t SET k = k + 1`)
@@ -222,8 +284,7 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
   - **`btree` (`USING btree`):** Stores secondary index entries
     in 4 KB Lehman-Yao B-link tree pages stored as RocksDB
     values and cached in `sm1`'s buffer pool, where rows decide
-    visibility. `pg_dump` writes `USING btree` for every index,
-    so a restored schema gets this kind, not the default.
+    visibility.
 - **Index limits.** An `interval` column cannot be an index key.
   `NULLS NOT DISTINCT` and non-default operator classes are
   refused, and so is `DROP INDEX CONCURRENTLY`. A row
@@ -235,8 +296,8 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
   sort.
 - **Serial execution.** Parallel query workers, parallel index
   builds, and LLVM JIT compilation are removed.
-- **Bulk load on `COPY`.** `COPY` into an empty table loads rows
-  via sorted bulk files directly into RocksDB.
+- **Bulk load on `COPY`.** `COPY` into an empty row store table
+  loads rows via sorted bulk files directly into RocksDB.
 
 ## 6. SQL Surface and Data Types
 
@@ -252,11 +313,31 @@ layer. [`PERF.md`](PERF.md) measures how fast DG runs against PG.
   `decimal128` (18 to 36 digits), with no `varlena` header,
   `NaN`, or `Infinity` (unconstrained `numeric` columns default
   to `numeric(17,3)`).
+- **`numeric` arithmetic gives an error where PG gives more
+  digits** ([`dg/DECIMAL.md`](dg/DECIMAL.md#25-arithmetic) §2.5):
+  - `+`, `-`, and `*` of two `decimal64` give a `decimal64`, as
+    `int4` with `int4` gives an `int4`. The result is exact, or
+    "numeric field overflow" past 17 digits: `9999999999999999.9
+    + 0.1` fails. Cast one side to `numeric(18,1)` or wider to
+    get a `decimal128`, of 36 digits at most.
+  - `/` rounds to the digits its type holds: `70.0 / 70` prints
+    16 places, and PG prints 20.
+  - `exp`, `ln`, `log`, `power` with a fraction, `stddev`, and
+    `variance` of a `numeric` are computed in `double`, to about
+    15 digits. A result too small for a `double` is an error:
+    `0.1 ^ 1000` fails, and PG gives 0.
+  - `sum` fails past 36 digits. PG's never overflows.
+  - A literal with an exponent (`1e3`), or with more than 36
+    digits, is a `float8`.
+  - `int8` and `decimal64` have no common type: `coalesce(n,
+    1.5)` fails for an `int8` column `n`.
 - **Unsupported column types.** Arrays, JSON/JSONB, XML, ranges,
   geometric types, network types (`inet`, `cidr`, `macaddr`),
-  bit strings, full-text search (`tsvector`, `tsquery`), `oid`,
-  `tid`, and composite/user-defined types cannot be stored as
-  table columns.
+  bit strings, `timetz`, `money`, `"char"`, `oid`, `xid`, `tid`,
+  `pg_lsn`, and composite/user-defined types cannot be stored as
+  table columns. Expressions can use most of them. There is no
+  XML: its functions fail, as in a PG built without libxml. The
+  full-text search types (`tsvector`, `tsquery`) are removed.
 - **ALTER TABLE.** DG takes `ADD COLUMN`, `DROP COLUMN`,
   `ALTER COLUMN TYPE`, `SET`/`DROP NOT NULL`, `SET`/`DROP
   DEFAULT`, and `RENAME`. It takes `ADD` and `DROP CONSTRAINT`

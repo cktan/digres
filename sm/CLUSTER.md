@@ -474,9 +474,9 @@ Other documents cite these items as questions 1 to 6.
 4. **`DEFERRABLE` primary keys are refused**, at CREATE and at
    ALTER. Uniqueness is sm1's, checked at the write, as for any
    unique index, and a DEFERRABLE foreign key is refused too.
-5. **`pg_locks` shows a row lock's relation alone**, its page and
-   tuple NULL. A lock keeps a hash of its key, so sm cannot say
-   which row it names
+5. **`pg_lock_status()` shows a row lock's relation alone**, its
+   page and tuple NULL. A lock keeps a hash of its key, so sm
+   cannot say which row it names
    ([`LOCKMGR.md`](LOCKMGR.md#13-what-a-lock-names) §1.3). A test
    of digres's locks a row of a keyed table
    (`../dg/test/server.sh`, lock status).

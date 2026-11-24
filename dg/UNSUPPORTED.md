@@ -62,8 +62,9 @@ regression files are taken out for it (`test/pgregress`,
   ([`../sm/GENERATED.md`](../sm/GENERATED.md), step 415), but
   for ADD COLUMN of one, SET and DROP EXPRESSION,
   ALTER COLUMN TYPE of one, and a NOT NULL virtual one. `WITH`
-  takes only `fillfactor` and `autovacuum_enabled`, and ignores
-  them (step 208).
+  takes only `storage`, which chooses a row store or a column
+  store (§10, "A column store table"), and `fillfactor` and
+  `autovacuum_enabled`, which it ignores (step 208).
 - **Unlogged tables, temporary sequences, ON COMMIT on a
   permanent table** — refused (step 80).
 - **Materialized views, foreign tables, composite types,
@@ -96,13 +97,13 @@ regression files are taken out for it (`test/pgregress`,
 
 ## 2. Indexes and plans
 
-- **Index methods other than btree** — removed: hash, GIN,
-  GiST, SP-GiST and BRIN ([`README.md`](README.md); pgregress:
-  39).
+- **Index methods other than `lsm` and `btree`** — removed:
+  hash, GIN, GiST, SP-GiST and BRIN ([`README.md`](README.md);
+  pgregress: 39). `lsm`, the default, is digres's own (§10).
 - **NULLS NOT DISTINCT, non-default operator classes and
   collations, interval keys** — refused (step 50, 99). An
-  index is btree over columns and expressions, ASC or DESC,
-  UNIQUE, partial, with INCLUDE.
+  index, of either method, is over columns and expressions, ASC
+  or DESC, UNIQUE, partial, with INCLUDE.
 - **Partial and expression indexes** — differs
   ([`EXPRINDEX.md`](EXPRINDEX.md),
   step 311): an expression key of type numeric needs a
@@ -248,7 +249,10 @@ regression files are taken out for it (`test/pgregress`,
   functions (step 2).
 - **numeric** — differs: decimal64 or decimal128, at most 36
   digits, no NaN or infinity; an unconstrained numeric column
-  is numeric(17,3) ([`DECIMAL.md`](DECIMAL.md)).
+  is numeric(17,3) ([`DECIMAL.md`](DECIMAL.md)). Arithmetic past
+  a type's digits is an error, and `exp`, `ln`, `log`, a power
+  with a fraction, `stddev` and `variance` are computed in
+  double ([`DECIMAL.md`](DECIMAL.md#25-arithmetic) §2.5).
 
 ## 6. Functions and languages
 
@@ -323,8 +327,9 @@ regression files are taken out for it (`test/pgregress`,
 - **SERIALIZABLE** — differs: sm's own, not PostgreSQL's SSI
   ([`../sm/XCTMGR.md`](../sm/XCTMGR.md#7-ssi-serializable-snapshot-isolation)
   §7).
-- **pg_locks** — differs: sm's mode names; a keyed row's page
-  and tuple are NULL (step 193).
+- **pg_lock_status()** — differs: sm's mode names; a keyed row's
+  page and tuple are NULL (step 193). The view `pg_locks` is
+  missing (§9, "System views").
 
 ## 9. Catalog and introspection
 
@@ -332,14 +337,20 @@ regression files are taken out for it (`test/pgregress`,
   `\d` reads relations made from it, read only
   ([`SYSCATALOG.md`](SYSCATALOG.md)). `information_schema` and
   the statistics
-  views are missing; `pg_description` is empty (step 123);
-  `pg_stats` is a function (step 78).
+  views are missing; `pg_description` is empty (step 123).
+- **System views** — removed: `pg_locks`, `pg_settings`,
+  `pg_indexes`, `pg_timezone_names` and the like, but for
+  `pg_roles` and `pg_views`. A function is in the place of some:
+  `pg_lock_status()`, `pg_show_all_settings()`,
+  `pg_timezone_names()` and `pg_stats()` (step 78).
+- **pg_dump** — refused: it fails as it connects, as
+  `pg_is_in_recovery()` is removed (§7, "Replication and
+  recovery").
 
 ## 10. What digres adds
 
 What digres takes that PostgreSQL does not. A schema that uses
-it is digres's: PostgreSQL refuses it, and `pg_dump` from
-digres does not carry it.
+it is digres's: PostgreSQL refuses it.
 
 - **A column's update default** — added
   ([`ONUPDATE.md`](ONUPDATE.md), step
@@ -353,3 +364,19 @@ digres does not carry it.
   it as its one rule beyond PostgreSQL's
   ([`../sq/DESIGN.md`](../sq/DESIGN.md)
   §2); psql's `\d` shows the plain default alone.
+- **A column store table** — added
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md)): `CREATE TABLE ...
+  WITH (storage = columnar)` keeps a table column by column, for
+  analytics. `storage = row` is the default. On such a table:
+  - `PRIMARY KEY`, `UNIQUE`, `EXCLUDE`, `FOREIGN KEY` and `CREATE
+    INDEX` give a warning and make nothing. `NOT NULL`, `CHECK`
+    and generated columns apply.
+  - A SERIALIZABLE transaction, `TABLESAMPLE`, a foreign key
+    that references the table, and `ON CONFLICT` with a column
+    list are refused.
+  - A value of more than 2,048 bytes is refused, and a row of
+    more than 64 KB fails in a scan.
+- **`USING lsm`** — added: an index whose entries are keys in
+  RocksDB, the default method
+  ([`../sm/LSMINDEX.md`](../sm/LSMINDEX.md)). `USING btree` makes
+  a B-link tree ([`../sm/BTREEINDEX.md`](../sm/BTREEINDEX.md)).

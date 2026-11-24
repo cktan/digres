@@ -269,9 +269,9 @@ there is none.
   `sm0::dupkey_t` and the persisted index status carry the one
   key. digres reads the row by that key to say its "Key (…)=(…)
   is duplicated".
-- **`pg_locks`** shows a row lock as its relation alone, for both
-  kinds of table, as sm1 keeps a lock's id and not its key
-  (LOCKMGR.md).
+- **`pg_lock_status()`** shows a row lock as its relation alone,
+  for both kinds of table, as sm1 keeps a lock's id and not its
+  key (LOCKMGR.md).
 
 ### 2.8 Costs
 

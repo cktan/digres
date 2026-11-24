@@ -444,18 +444,32 @@ Owed, and blocking nothing above:
     thread runs it;
   - what it saves: the memory of one queue, and a second check
     each second of whether keys wait.
-- **Edges from digres in sm1's wait-for graph.** digres keeps
-  PostgreSQL's advisory locks (`pg_advisory_lock()`,
-  `pg_advisory_xact_lock()` and the rest) in a table of its own,
+- **Move advisory locks into sm.** They are the only locks left
+  in digres: `pg_advisory_lock()`, `pg_advisory_xact_lock()` and
+  the rest are in a table of its own,
   `../dg/src/backend/storage/lmgr/advisory_lock.c`, with a
-  deadlock detector for cycles among them
-  ([`../dg/DESIGN.md`](../dg/DESIGN.md) §4). A cycle through an
-  advisory lock and an sm1 lock is seen by neither, and waits
-  until `lock_timeout` or a cancel. sm1 could take an edge from
-  its caller -- "session A waits for session B", set while A
-  waits on the advisory lock and cleared after -- and follow it
-  in `find_cycle()` as its own, so the one detector finds every
-  cycle.
+  deadlock detector for cycles among them. A cycle through an
+  advisory lock and an sm1 lock is seen by neither detector, and
+  waits until `lock_timeout` or a cancel. In sm1's lock table,
+  the one detector finds every cycle.
+  - It changes a decision of record, "Advisory locks are not
+    sm's" ([`../dg/DESIGN.md`](../dg/DESIGN.md) §4).
+  - What sm1's locks must learn:
+    - a name for an advisory key: two 32-bit numbers and a form.
+      A key is of one database, and each database has a lock
+      table of its own already;
+    - a hold of the session, not of the transaction: it survives
+      a commit, an abort and a rollback to a savepoint;
+    - counted holds, at both scopes, and an unlock of one hold
+      before the transaction ends;
+    - a lock with no sm transaction begun.
+  - What digres keeps: the SQL functions, and their errors and
+    warnings. `pg_lock_status()` and `pg_blocking_pids()` then
+    read sm alone.
+  - The smaller change, if that is too much: sm1 takes an edge
+    from its caller -- "session A waits for session B", set while
+    A waits on the advisory lock and cleared after -- and follows
+    it in `find_cycle()` as its own.
 - **A snapshot handed to another session.**
   `pg_export_snapshot()` and `SET TRANSACTION SNAPSHOT` share
   PostgreSQL's snapshot, which is not what decides what a session
