@@ -950,3 +950,84 @@ loop's blocks; the lowest failing row among several, one past
 the last whole vector, and one in a row not valid and one in a
 null row, which are no error; and the results written over the
 inputs.
+
+## 22. to_char and its reverse
+
+`ty_tochar.h` writes `to_char` of a timestamp, a timestamptz
+and an interval by a format: keywords (`YYYY`, `MM`, `HH24`,
+`Month`, `TZ` and the others), a prefix `FM` or `TM` before one
+and a suffix `TH`, `th` or `SP` after it, and text, quoted or
+not. The code is new. The keywords, the output and the errors
+are those of PostgreSQL's `formatting.c`, byte for byte.
+
+1. `ty_dch_compile` reads the format once into nodes, as
+   PostgreSQL's `parse_format` does: the first keyword that
+   matches wins, so `HH24` is read before `HH`.
+2. `ty_timestamp_to_char`, `ty_timestamptz_to_char` and
+   `ty_interval_to_char` take a value's fields and write each
+   node.
+
+A timestamptz takes its zone, and ty finds the zone's
+abbreviation and offset (`ty_tz_t`). `TM` takes the localized
+names from the host, through a function in a
+`ty_tochar_locale_t`: the host has the names of its `lc_time`
+and cases them under its collation. With no host locale, `TM`
+writes the C locale's English names. The result is a text of
+room for 12 bytes a byte of format, as PostgreSQL allots, and
+no field writes more.
+
+digres compiles a call site's format once and keeps it in the
+call's `fn_extra`, with the format's text, so a format that is
+the same for each row is read once. It forgets the old format
+before it compiles a new one, so a format that fails leaves no
+pointer to freed memory.
+
+The numbers' `to_char` is in the same header: `ty_num_compile`
+reads a format of `9`, `0`, the point and `D`, the comma and
+`G`, the signs (`S`, `MI`, `PL`, `SG`, `PR`), `L`, `B`, `FM`,
+`V`, `TH`, `RN` and `EEEE`, and checks it with PostgreSQL's
+errors. ty makes the digits of an int4, an int8, a float4 and a
+float8, and writes them by the format, as PostgreSQL's
+`NUM_processor` does. A float's digits are those of PostgreSQL's
+`snprintf`, whose NaN is `NaN` where libc's is `nan`. D, G, L and
+S take the host's `lconv` symbols, through a function in a
+`ty_num_locale_t` that is called only for a format that uses one.
+digres makes a decimal's digits itself, as ty has no decimal text
+yet, and gives them to `ty_num_to_char_digits`.
+
+The reverse parse of a date format is `ty_dch_parse`: the text
+read field by field, as PostgreSQL's `DCH_from_char`, then the
+fields made a date and time, as its `do_to_timestamp`. It serves
+`to_timestamp`, `to_date` and jsonpath's `datetime()`, whose
+standard mode `ty_dch_compile` and `ty_dch_parse` take as `std`.
+`ty_dch_to_timestamp` and `ty_dch_to_date` finish the first two.
+The host gives two functions, in a `ty_dch_parse_host_t`: the
+localized names that TM matches, folded by its collation, and
+the zone abbreviations of its session's table. An error comes
+with PostgreSQL's code, detail and hint (`ty_dch_error_t`), or
+as `DateTimeParseError`'s code, whose message the host writes
+from the text. digres keeps its cache of date formats, which
+now holds ty's compiled formats, as jsonpath calls the parse with
+no FmgrInfo to keep one in.
+
+`to_number` is `ty_num_from_char`: the text read by a number
+format, as PostgreSQL's `NUM_processor` reads it, into the text
+`numeric_in` reads, with the precision and the scale of the
+result. digres makes the decimal of it, and divides by V's power
+of 10. `formatting.c` now holds only digres's glue: the caches of
+formats, the host's functions, and the decimal steps.
+
+The tests: `test/tochar_known.txt`, 18,484 lines that the digres
+before the move printed (`test/gen_tochar.py`), of timestamps,
+timestamptz in 11 zones and intervals, each keyword with each
+prefix and suffix, and mixed formats; `test/tonum_known.txt`,
+7,973 lines of int4, int8, float4, float8 and numeric by 99
+number formats (`test/gen_tonum.py`); `test/fromchar_known.txt`,
+8,736 texts by formats through `to_timestamp` and `to_date`, of
+which 1,433 are errors, each with its message, detail and hint
+(`test/gen_fromchar.py`); `test/test_tochar.cc` for
+the errors, the host's names and symbols, and the edges; and
+`dg/test/select_tochar_ops.sql`, `select_tonum_ops.sql`,
+`select_fromchar_ops.sql` and `select_tonumber_ops.sql`, with a
+German locale, zone abbreviations, jsonpath's standard mode, and
+PostgreSQL's own `to_number` cases.

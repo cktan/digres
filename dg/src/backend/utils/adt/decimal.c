@@ -3319,14 +3319,24 @@ Datum decimal64_trunc0(PG_FUNCTION_ARGS) {
   return d64_round_or_trunc(PG_GETARG_DATUM(0), 0, true);
 }
 
-/* to_char(decimal64, text), as numeric's: its value as a decimal128 on the stack. */
+/*
+ * to_char(decimal64, text), as numeric's: its value as a decimal128 on the
+ * stack. The call keeps this call's FmgrInfo, where numeric_to_char keeps
+ * its compiled format.
+ */
 Datum decimal64_to_char(PG_FUNCTION_ARGS) {
   Datum d = PG_GETARG_DATUM(0);
   decimal_t num;
+  LOCAL_FCINFO(call, 2);
 
   decimal_set(&num, d64_value(d), d64_scale(d));
-  return DirectFunctionCall2Coll(numeric_to_char, PG_GET_COLLATION(),
-                                 PointerGetDatum(&num), PG_GETARG_DATUM(1));
+  InitFunctionCallInfoData(*call, fcinfo->flinfo, 2, PG_GET_COLLATION(), NULL,
+                           NULL);
+  call->args[0].value = PointerGetDatum(&num);
+  call->args[0].isnull = false;
+  call->args[1].value = PG_GETARG_DATUM(1);
+  call->args[1].isnull = false;
+  return numeric_to_char(call);
 }
 
 /* ceil(decimal64) and ceiling(decimal64): the nearest integer >= it. */

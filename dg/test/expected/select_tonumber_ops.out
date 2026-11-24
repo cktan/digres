@@ -1,0 +1,1643 @@
+-- Verify to_number, which ty reads (ty_num_from_char): PostgreSQL's own cases,
+-- and round trips of numbers through to_char by number formats, as they
+-- are and perturbed. digres makes the decimal of ty's digits. A refusal is
+-- what is tested, so an error goes on to the next statement.
+\set ON_ERROR_STOP off
+SELECT to_number('-34,338,492', '99G999G999');
+ to_number 
+-----------
+ -34338492
+(1 row)
+
+SELECT to_number('-34,338,492.654,878', '99G999G999D999G999');
+    to_number     
+------------------
+ -34338492.654878
+(1 row)
+
+SELECT to_number('<564646.654564>', '999999.999999PR');
+   to_number    
+----------------
+ -564646.654564
+(1 row)
+
+SELECT to_number('0.00001-', '9.999999S');
+ to_number 
+-----------
+  -0.00001
+(1 row)
+
+SELECT to_number('5.01-', 'FM9.999999S');
+ to_number 
+-----------
+     -5.01
+(1 row)
+
+SELECT to_number('5.01-', 'FM9.999999MI');
+ to_number 
+-----------
+     -5.01
+(1 row)
+
+SELECT to_number('5 4 4 4 4 8 . 7 8', '9 9 9 9 9 9 . 9 9');
+ to_number 
+-----------
+ 544448.78
+(1 row)
+
+SELECT to_number('.01', 'FM9.99');
+ to_number 
+-----------
+      0.01
+(1 row)
+
+SELECT to_number('.0', '99999999.99999999');
+ to_number 
+-----------
+       0.0
+(1 row)
+
+SELECT to_number('0', '99.99');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number('.-01', 'S99.99');
+ to_number 
+-----------
+     -0.01
+(1 row)
+
+SELECT to_number('.01-', '99.99S');
+ to_number 
+-----------
+     -0.01
+(1 row)
+
+SELECT to_number(' . 0 1-', ' 9 9 . 9 9 S');
+ to_number 
+-----------
+     -0.01
+(1 row)
+
+SELECT to_number('34,50', '999,99');
+ to_number 
+-----------
+      3450
+(1 row)
+
+SELECT to_number('123,000', '999G');
+ to_number 
+-----------
+       123
+(1 row)
+
+SELECT to_number('123456', '999G999');
+ to_number 
+-----------
+    123456
+(1 row)
+
+SELECT to_number('$1234.56', 'L9,999.99');
+ to_number 
+-----------
+   1234.56
+(1 row)
+
+SELECT to_number('$1234.56', 'L99,999.99');
+ to_number 
+-----------
+   1234.56
+(1 row)
+
+SELECT to_number('$1,234.56', 'L99,999.99');
+ to_number 
+-----------
+   1234.56
+(1 row)
+
+SELECT to_number('1234.56', 'L99,999.99');
+ to_number 
+-----------
+   1234.56
+(1 row)
+
+SELECT to_number('1,234.56', 'L99,999.99');
+ to_number 
+-----------
+   1234.56
+(1 row)
+
+SELECT to_number('42nd', '99th');
+ to_number 
+-----------
+        42
+(1 row)
+
+SELECT to_number('123456', '99999V99');
+        to_number        
+-------------------------
+ 1234.560000000000000000
+(1 row)
+
+SELECT to_number('1234', '9.99EEEE');
+psql:test/select_tonumber_ops.sql:29: ERROR:  "EEEE" not supported for input
+SELECT to_number('CvIiI', 'rn');
+ to_number 
+-----------
+       108
+(1 row)
+
+SELECT to_number('MMXX  ', 'RN');
+ to_number 
+-----------
+      2020
+(1 row)
+
+SELECT to_number('  XIV', '  RN');
+ to_number 
+-----------
+        14
+(1 row)
+
+SELECT to_number('  XIV  ', '  RN');
+ to_number 
+-----------
+        14
+(1 row)
+
+SELECT to_number('M CC', 'RN');
+ to_number 
+-----------
+      1000
+(1 row)
+
+SELECT to_number('I', 'RN');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number('MMMDCCCLXXXVIII', 'RN');
+ to_number 
+-----------
+      3888
+(1 row)
+
+SELECT to_number('viv', 'RN');
+psql:test/select_tonumber_ops.sql:37: ERROR:  invalid Roman numeral
+SELECT to_number('DCCCD', 'RN');
+psql:test/select_tonumber_ops.sql:38: ERROR:  invalid Roman numeral
+SELECT to_number('XIXL', 'RN');
+psql:test/select_tonumber_ops.sql:39: ERROR:  invalid Roman numeral
+SELECT to_number('MCCM', 'RN');
+psql:test/select_tonumber_ops.sql:40: ERROR:  invalid Roman numeral
+SELECT to_number('MMMM', 'RN');
+psql:test/select_tonumber_ops.sql:41: ERROR:  invalid Roman numeral
+SELECT to_number('VV', 'RN');
+psql:test/select_tonumber_ops.sql:42: ERROR:  invalid Roman numeral
+SELECT to_number('IIII', 'RN');
+psql:test/select_tonumber_ops.sql:43: ERROR:  invalid Roman numeral
+SELECT to_number('IIIV', 'RN');
+psql:test/select_tonumber_ops.sql:44: ERROR:  invalid Roman numeral
+SELECT to_number('IVX', 'RN');
+psql:test/select_tonumber_ops.sql:45: ERROR:  invalid Roman numeral
+SELECT to_number('LXXL', 'RN');
+psql:test/select_tonumber_ops.sql:46: ERROR:  invalid Roman numeral
+SELECT to_number('12 abc', 'RN');
+psql:test/select_tonumber_ops.sql:47: ERROR:  invalid Roman numeral
+SELECT to_number('', 'RN');
+psql:test/select_tonumber_ops.sql:48: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number('123', '');
+ to_number 
+-----------
+          
+(1 row)
+
+SELECT to_number('', '999');
+psql:test/select_tonumber_ops.sql:50: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number('-12', 'S99');
+ to_number 
+-----------
+       -12
+(1 row)
+
+SELECT to_number('12-', '99S');
+ to_number 
+-----------
+       -12
+(1 row)
+
+SELECT to_number('+12', 'SG99');
+ to_number 
+-----------
+        12
+(1 row)
+
+SELECT to_number('12+', '99PL');
+ to_number 
+-----------
+        12
+(1 row)
+
+SELECT to_number('12-', '99MI');
+ to_number 
+-----------
+       -12
+(1 row)
+
+SELECT to_number('<12>', '99PR');
+ to_number 
+-----------
+       -12
+(1 row)
+
+SELECT to_number('1 -', '9S');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number('123.456', '999.999');
+ to_number 
+-----------
+   123.456
+(1 row)
+
+SELECT to_number('123.456', '999.99');
+ to_number 
+-----------
+    123.45
+(1 row)
+
+SELECT to_number('123.456', '999');
+ to_number 
+-----------
+       123
+(1 row)
+
+SELECT to_number('1e5', '9999');
+ to_number 
+-----------
+        15
+(1 row)
+
+SELECT to_number('abc', '999');
+psql:test/select_tonumber_ops.sql:62: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number('12.34.56', '99.99.99');
+psql:test/select_tonumber_ops.sql:63: ERROR:  multiple decimal points
+SELECT to_number('1,2,3', '9,9,9');
+ to_number 
+-----------
+       123
+(1 row)
+
+SELECT to_number('1.2', '9D9');
+ to_number 
+-----------
+       1.2
+(1 row)
+
+SELECT to_number('  12', '9999');
+ to_number 
+-----------
+        12
+(1 row)
+
+SELECT to_number('12  ', '9999');
+ to_number 
+-----------
+        12
+(1 row)
+
+SELECT to_number('1234567', '999');
+ to_number 
+-----------
+       123
+(1 row)
+
+SELECT to_number('99999999999999999999', '99999999999999999999');
+      to_number       
+----------------------
+ 99999999999999999999
+(1 row)
+
+SELECT to_number('0012', '0000');
+ to_number 
+-----------
+        12
+(1 row)
+
+SELECT to_number('12', '0000');
+ to_number 
+-----------
+        12
+(1 row)
+
+SELECT to_number('-0', 'S9');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number('+', 'S9');
+psql:test/select_tonumber_ops.sql:73: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number('-', 'S9');
+psql:test/select_tonumber_ops.sql:74: ERROR:  invalid input syntax for type numeric: "-"
+SELECT to_number('.', '9.9');
+psql:test/select_tonumber_ops.sql:75: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number('9.', '9.9');
+ to_number 
+-----------
+         9
+(1 row)
+
+SELECT to_number('12th', '99TH');
+ to_number 
+-----------
+        12
+(1 row)
+
+SELECT to_number('1st', '9th');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number('1,234', '9,999');
+ to_number 
+-----------
+      1234
+(1 row)
+
+SELECT to_number('1234', '9,999');
+ to_number 
+-----------
+      1234
+(1 row)
+
+SELECT to_number('1 234', '9G999');
+ to_number 
+-----------
+      1234
+(1 row)
+
+SELECT to_number('€12', 'L99');
+ to_number 
+-----------
+        12
+(1 row)
+
+SELECT to_number('12€', '99L');
+ to_number 
+-----------
+        12
+(1 row)
+
+SELECT to_number('1.5', '9V9');
+      to_number      
+---------------------
+ 0.10000000000000000
+(1 row)
+
+SELECT to_number('15', '9V9');
+      to_number      
+---------------------
+ 1.50000000000000000
+(1 row)
+
+SELECT to_number('15', '99V9');
+      to_number      
+---------------------
+ 1.50000000000000000
+(1 row)
+
+SELECT to_number(to_char(0::numeric, '9999.99'), '9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, '9999.99') || 'x', '9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0::numeric, 'FM9999.99'), 'FM9999.99');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, 'FM9999.99') || 'x', 'FM9999.99');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0::numeric, 'S9999.99'), 'S9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, 'S9999.99') || 'x', 'S9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0::numeric, '9999.99S'), '9999.99S');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, '9999.99S') || 'x', '9999.99S');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0::numeric, '99G999D99'), '99G999D99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, '99G999D99') || 'x', '99G999D99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0::numeric, 'FM99G999D99MI'), 'FM99G999D99MI');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, 'FM99G999D99MI') || 'x', 'FM99G999D99MI');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0::numeric, '9999PR'), '9999PR');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, '9999PR') || 'x', '9999PR');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0::numeric, '0000.00'), '0000.00');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, '0000.00') || 'x', '0000.00');
+ to_number 
+-----------
+       0.0
+(1 row)
+
+SELECT to_number(to_char(0::numeric, 'PL9999.99'), 'PL9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, 'PL9999.99') || 'x', 'PL9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0::numeric, 'SG9999'), 'SG9999');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, 'SG9999') || 'x', 'SG9999');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0::numeric, 'L9999.99'), 'L9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, 'L9999.99') || 'x', 'L9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0::numeric, '9999th'), '9999th');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, '9999th') || 'x', '9999th');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0::numeric, '99V99'), '99V99');
+      to_number       
+----------------------
+ 0.000000000000000000
+(1 row)
+
+SELECT to_number(' ' || to_char(0::numeric, '99V99') || 'x', '99V99');
+      to_number       
+----------------------
+ 0.000000000000000000
+(1 row)
+
+SELECT to_number(to_char(1::numeric, '9999.99'), '9999.99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, '9999.99') || 'x', '9999.99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(to_char(1::numeric, 'FM9999.99'), 'FM9999.99');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, 'FM9999.99') || 'x', 'FM9999.99');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(to_char(1::numeric, 'S9999.99'), 'S9999.99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, 'S9999.99') || 'x', 'S9999.99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(to_char(1::numeric, '9999.99S'), '9999.99S');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, '9999.99S') || 'x', '9999.99S');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(to_char(1::numeric, '99G999D99'), '99G999D99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, '99G999D99') || 'x', '99G999D99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(to_char(1::numeric, 'FM99G999D99MI'), 'FM99G999D99MI');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, 'FM99G999D99MI') || 'x', 'FM99G999D99MI');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(to_char(1::numeric, '9999PR'), '9999PR');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, '9999PR') || 'x', '9999PR');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(to_char(1::numeric, '0000.00'), '0000.00');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, '0000.00') || 'x', '0000.00');
+ to_number 
+-----------
+       1.0
+(1 row)
+
+SELECT to_number(to_char(1::numeric, 'PL9999.99'), 'PL9999.99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, 'PL9999.99') || 'x', 'PL9999.99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(to_char(1::numeric, 'SG9999'), 'SG9999');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, 'SG9999') || 'x', 'SG9999');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(to_char(1::numeric, 'L9999.99'), 'L9999.99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, 'L9999.99') || 'x', 'L9999.99');
+ to_number 
+-----------
+      1.00
+(1 row)
+
+SELECT to_number(to_char(1::numeric, '9999th'), '9999th');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, '9999th') || 'x', '9999th');
+ to_number 
+-----------
+         1
+(1 row)
+
+SELECT to_number(to_char(1::numeric, '99V99'), '99V99');
+      to_number       
+----------------------
+ 1.000000000000000000
+(1 row)
+
+SELECT to_number(' ' || to_char(1::numeric, '99V99') || 'x', '99V99');
+      to_number       
+----------------------
+ 1.000000000000000000
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, '9999.99'), '9999.99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, '9999.99') || 'x', '9999.99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, 'FM9999.99'), 'FM9999.99');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, 'FM9999.99') || 'x', 'FM9999.99');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, 'S9999.99'), 'S9999.99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, 'S9999.99') || 'x', 'S9999.99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, '9999.99S'), '9999.99S');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, '9999.99S') || 'x', '9999.99S');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, '99G999D99'), '99G999D99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, '99G999D99') || 'x', '99G999D99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, 'FM99G999D99MI'), 'FM99G999D99MI');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, 'FM99G999D99MI') || 'x', 'FM99G999D99MI');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, '9999PR'), '9999PR');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, '9999PR') || 'x', '9999PR');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, '0000.00'), '0000.00');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, '0000.00') || 'x', '0000.00');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, 'PL9999.99'), 'PL9999.99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, 'PL9999.99') || 'x', 'PL9999.99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, 'SG9999'), 'SG9999');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, 'SG9999') || 'x', 'SG9999');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, 'L9999.99'), 'L9999.99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, 'L9999.99') || 'x', 'L9999.99');
+ to_number 
+-----------
+     -1.00
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, '9999th'), '9999th');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, '9999th') || 'x', '9999th');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(to_char(-1::numeric, '99V99'), '99V99');
+       to_number       
+-----------------------
+ -1.000000000000000000
+(1 row)
+
+SELECT to_number(' ' || to_char(-1::numeric, '99V99') || 'x', '99V99');
+       to_number       
+-----------------------
+ -1.000000000000000000
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, '9999.99'), '9999.99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, '9999.99') || 'x', '9999.99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, 'FM9999.99'), 'FM9999.99');
+ to_number 
+-----------
+      12.5
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, 'FM9999.99') || 'x', 'FM9999.99');
+ to_number 
+-----------
+      12.5
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, 'S9999.99'), 'S9999.99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, 'S9999.99') || 'x', 'S9999.99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, '9999.99S'), '9999.99S');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, '9999.99S') || 'x', '9999.99S');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, '99G999D99'), '99G999D99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, '99G999D99') || 'x', '99G999D99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, 'FM99G999D99MI'), 'FM99G999D99MI');
+ to_number 
+-----------
+      12.5
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, 'FM99G999D99MI') || 'x', 'FM99G999D99MI');
+ to_number 
+-----------
+      12.5
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, '9999PR'), '9999PR');
+ to_number 
+-----------
+        13
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, '9999PR') || 'x', '9999PR');
+ to_number 
+-----------
+        13
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, '0000.00'), '0000.00');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, '0000.00') || 'x', '0000.00');
+ to_number 
+-----------
+      12.5
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, 'PL9999.99'), 'PL9999.99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, 'PL9999.99') || 'x', 'PL9999.99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, 'SG9999'), 'SG9999');
+ to_number 
+-----------
+        13
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, 'SG9999') || 'x', 'SG9999');
+ to_number 
+-----------
+        13
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, 'L9999.99'), 'L9999.99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, 'L9999.99') || 'x', 'L9999.99');
+ to_number 
+-----------
+     12.50
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, '9999th'), '9999th');
+ to_number 
+-----------
+        13
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, '9999th') || 'x', '9999th');
+ to_number 
+-----------
+        13
+(1 row)
+
+SELECT to_number(to_char(12.5::numeric, '99V99'), '99V99');
+       to_number       
+-----------------------
+ 12.500000000000000000
+(1 row)
+
+SELECT to_number(' ' || to_char(12.5::numeric, '99V99') || 'x', '99V99');
+      to_number       
+----------------------
+ 1.250000000000000000
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, '9999.99'), '9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, '9999.99') || 'x', '9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, 'FM9999.99'), 'FM9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, 'FM9999.99') || 'x', 'FM9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, 'S9999.99'), 'S9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, 'S9999.99') || 'x', 'S9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, '9999.99S'), '9999.99S');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, '9999.99S') || 'x', '9999.99S');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, '99G999D99'), '99G999D99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, '99G999D99') || 'x', '99G999D99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, 'FM99G999D99MI'), 'FM99G999D99MI');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, 'FM99G999D99MI') || 'x', 'FM99G999D99MI');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, '9999PR'), '9999PR');
+ to_number 
+-----------
+     -1235
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, '9999PR') || 'x', '9999PR');
+ to_number 
+-----------
+     -1235
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, '0000.00'), '0000.00');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, '0000.00') || 'x', '0000.00');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, 'PL9999.99'), 'PL9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, 'PL9999.99') || 'x', 'PL9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, 'SG9999'), 'SG9999');
+ to_number 
+-----------
+     -1235
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, 'SG9999') || 'x', 'SG9999');
+ to_number 
+-----------
+     -1235
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, 'L9999.99'), 'L9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, 'L9999.99') || 'x', 'L9999.99');
+ to_number 
+-----------
+  -1234.57
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, '9999th'), '9999th');
+ to_number 
+-----------
+     -1235
+(1 row)
+
+SELECT to_number(' ' || to_char(-1234.567::numeric, '9999th') || 'x', '9999th');
+ to_number 
+-----------
+     -1235
+(1 row)
+
+SELECT to_number(to_char(-1234.567::numeric, '99V99'), '99V99');
+psql:test/select_tonumber_ops.sql:215: ERROR:  invalid input syntax for type numeric: "-"
+SELECT to_number(' ' || to_char(-1234.567::numeric, '99V99') || 'x', '99V99');
+psql:test/select_tonumber_ops.sql:216: ERROR:  invalid input syntax for type numeric: "-"
+SELECT to_number(to_char(99999.99::numeric, '9999.99'), '9999.99');
+psql:test/select_tonumber_ops.sql:217: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(99999.99::numeric, '9999.99') || 'x', '9999.99');
+psql:test/select_tonumber_ops.sql:218: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(99999.99::numeric, 'FM9999.99'), 'FM9999.99');
+psql:test/select_tonumber_ops.sql:219: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(99999.99::numeric, 'FM9999.99') || 'x', 'FM9999.99');
+psql:test/select_tonumber_ops.sql:220: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(99999.99::numeric, 'S9999.99'), 'S9999.99');
+psql:test/select_tonumber_ops.sql:221: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(' ' || to_char(99999.99::numeric, 'S9999.99') || 'x', 'S9999.99');
+psql:test/select_tonumber_ops.sql:222: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(to_char(99999.99::numeric, '9999.99S'), '9999.99S');
+psql:test/select_tonumber_ops.sql:223: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(99999.99::numeric, '9999.99S') || 'x', '9999.99S');
+psql:test/select_tonumber_ops.sql:224: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(99999.99::numeric, '99G999D99'), '99G999D99');
+ to_number 
+-----------
+  99999.99
+(1 row)
+
+SELECT to_number(' ' || to_char(99999.99::numeric, '99G999D99') || 'x', '99G999D99');
+ to_number 
+-----------
+     99999
+(1 row)
+
+SELECT to_number(to_char(99999.99::numeric, 'FM99G999D99MI'), 'FM99G999D99MI');
+ to_number 
+-----------
+   99999.9
+(1 row)
+
+SELECT to_number(' ' || to_char(99999.99::numeric, 'FM99G999D99MI') || 'x', 'FM99G999D99MI');
+ to_number 
+-----------
+   99999.9
+(1 row)
+
+SELECT to_number(to_char(99999.99::numeric, '9999PR'), '9999PR');
+psql:test/select_tonumber_ops.sql:229: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(99999.99::numeric, '9999PR') || 'x', '9999PR');
+psql:test/select_tonumber_ops.sql:230: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(99999.99::numeric, '0000.00'), '0000.00');
+psql:test/select_tonumber_ops.sql:231: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(99999.99::numeric, '0000.00') || 'x', '0000.00');
+psql:test/select_tonumber_ops.sql:232: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(99999.99::numeric, 'PL9999.99'), 'PL9999.99');
+psql:test/select_tonumber_ops.sql:233: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(' ' || to_char(99999.99::numeric, 'PL9999.99') || 'x', 'PL9999.99');
+psql:test/select_tonumber_ops.sql:234: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(to_char(99999.99::numeric, 'SG9999'), 'SG9999');
+psql:test/select_tonumber_ops.sql:235: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(' ' || to_char(99999.99::numeric, 'SG9999') || 'x', 'SG9999');
+psql:test/select_tonumber_ops.sql:236: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(to_char(99999.99::numeric, 'L9999.99'), 'L9999.99');
+psql:test/select_tonumber_ops.sql:237: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(99999.99::numeric, 'L9999.99') || 'x', 'L9999.99');
+psql:test/select_tonumber_ops.sql:238: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(99999.99::numeric, '9999th'), '9999th');
+psql:test/select_tonumber_ops.sql:239: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(99999.99::numeric, '9999th') || 'x', '9999th');
+psql:test/select_tonumber_ops.sql:240: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(99999.99::numeric, '99V99'), '99V99');
+psql:test/select_tonumber_ops.sql:241: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(99999.99::numeric, '99V99') || 'x', '99V99');
+psql:test/select_tonumber_ops.sql:242: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(0.001::numeric, '9999.99'), '9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, '9999.99') || 'x', '9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, 'FM9999.99'), 'FM9999.99');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, 'FM9999.99') || 'x', 'FM9999.99');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, 'S9999.99'), 'S9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, 'S9999.99') || 'x', 'S9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, '9999.99S'), '9999.99S');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, '9999.99S') || 'x', '9999.99S');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, '99G999D99'), '99G999D99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, '99G999D99') || 'x', '99G999D99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, 'FM99G999D99MI'), 'FM99G999D99MI');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, 'FM99G999D99MI') || 'x', 'FM99G999D99MI');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, '9999PR'), '9999PR');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, '9999PR') || 'x', '9999PR');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, '0000.00'), '0000.00');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, '0000.00') || 'x', '0000.00');
+ to_number 
+-----------
+       0.0
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, 'PL9999.99'), 'PL9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, 'PL9999.99') || 'x', 'PL9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, 'SG9999'), 'SG9999');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, 'SG9999') || 'x', 'SG9999');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, 'L9999.99'), 'L9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, 'L9999.99') || 'x', 'L9999.99');
+ to_number 
+-----------
+      0.00
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, '9999th'), '9999th');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, '9999th') || 'x', '9999th');
+ to_number 
+-----------
+         0
+(1 row)
+
+SELECT to_number(to_char(0.001::numeric, '99V99'), '99V99');
+      to_number       
+----------------------
+ 0.000000000000000000
+(1 row)
+
+SELECT to_number(' ' || to_char(0.001::numeric, '99V99') || 'x', '99V99');
+      to_number       
+----------------------
+ 0.000000000000000000
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, '9999.99'), '9999.99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, '9999.99') || 'x', '9999.99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, 'FM9999.99'), 'FM9999.99');
+ to_number 
+-----------
+      -0.5
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, 'FM9999.99') || 'x', 'FM9999.99');
+ to_number 
+-----------
+      -0.5
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, 'S9999.99'), 'S9999.99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, 'S9999.99') || 'x', 'S9999.99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, '9999.99S'), '9999.99S');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, '9999.99S') || 'x', '9999.99S');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, '99G999D99'), '99G999D99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, '99G999D99') || 'x', '99G999D99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, 'FM99G999D99MI'), 'FM99G999D99MI');
+ to_number 
+-----------
+      -0.5
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, 'FM99G999D99MI') || 'x', 'FM99G999D99MI');
+ to_number 
+-----------
+      -0.5
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, '9999PR'), '9999PR');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, '9999PR') || 'x', '9999PR');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, '0000.00'), '0000.00');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, '0000.00') || 'x', '0000.00');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, 'PL9999.99'), 'PL9999.99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, 'PL9999.99') || 'x', 'PL9999.99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, 'SG9999'), 'SG9999');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, 'SG9999') || 'x', 'SG9999');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, 'L9999.99'), 'L9999.99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, 'L9999.99') || 'x', 'L9999.99');
+ to_number 
+-----------
+     -0.50
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, '9999th'), '9999th');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, '9999th') || 'x', '9999th');
+ to_number 
+-----------
+        -1
+(1 row)
+
+SELECT to_number(to_char(-0.5::numeric, '99V99'), '99V99');
+       to_number       
+-----------------------
+ -0.500000000000000000
+(1 row)
+
+SELECT to_number(' ' || to_char(-0.5::numeric, '99V99') || 'x', '99V99');
+       to_number       
+-----------------------
+ -0.500000000000000000
+(1 row)
+
+SELECT to_number(to_char(1234567::numeric, '9999.99'), '9999.99');
+psql:test/select_tonumber_ops.sql:295: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, '9999.99') || 'x', '9999.99');
+psql:test/select_tonumber_ops.sql:296: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(1234567::numeric, 'FM9999.99'), 'FM9999.99');
+psql:test/select_tonumber_ops.sql:297: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, 'FM9999.99') || 'x', 'FM9999.99');
+psql:test/select_tonumber_ops.sql:298: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(1234567::numeric, 'S9999.99'), 'S9999.99');
+psql:test/select_tonumber_ops.sql:299: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(' ' || to_char(1234567::numeric, 'S9999.99') || 'x', 'S9999.99');
+psql:test/select_tonumber_ops.sql:300: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(to_char(1234567::numeric, '9999.99S'), '9999.99S');
+psql:test/select_tonumber_ops.sql:301: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, '9999.99S') || 'x', '9999.99S');
+psql:test/select_tonumber_ops.sql:302: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(1234567::numeric, '99G999D99'), '99G999D99');
+psql:test/select_tonumber_ops.sql:303: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, '99G999D99') || 'x', '99G999D99');
+psql:test/select_tonumber_ops.sql:304: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(1234567::numeric, 'FM99G999D99MI'), 'FM99G999D99MI');
+psql:test/select_tonumber_ops.sql:305: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, 'FM99G999D99MI') || 'x', 'FM99G999D99MI');
+psql:test/select_tonumber_ops.sql:306: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(1234567::numeric, '9999PR'), '9999PR');
+psql:test/select_tonumber_ops.sql:307: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, '9999PR') || 'x', '9999PR');
+psql:test/select_tonumber_ops.sql:308: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(1234567::numeric, '0000.00'), '0000.00');
+psql:test/select_tonumber_ops.sql:309: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, '0000.00') || 'x', '0000.00');
+psql:test/select_tonumber_ops.sql:310: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(1234567::numeric, 'PL9999.99'), 'PL9999.99');
+psql:test/select_tonumber_ops.sql:311: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(' ' || to_char(1234567::numeric, 'PL9999.99') || 'x', 'PL9999.99');
+psql:test/select_tonumber_ops.sql:312: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(to_char(1234567::numeric, 'SG9999'), 'SG9999');
+psql:test/select_tonumber_ops.sql:313: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(' ' || to_char(1234567::numeric, 'SG9999') || 'x', 'SG9999');
+psql:test/select_tonumber_ops.sql:314: ERROR:  invalid input syntax for type numeric: "+"
+SELECT to_number(to_char(1234567::numeric, 'L9999.99'), 'L9999.99');
+psql:test/select_tonumber_ops.sql:315: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, 'L9999.99') || 'x', 'L9999.99');
+psql:test/select_tonumber_ops.sql:316: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(1234567::numeric, '9999th'), '9999th');
+psql:test/select_tonumber_ops.sql:317: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, '9999th') || 'x', '9999th');
+psql:test/select_tonumber_ops.sql:318: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(to_char(1234567::numeric, '99V99'), '99V99');
+psql:test/select_tonumber_ops.sql:319: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number(' ' || to_char(1234567::numeric, '99V99') || 'x', '99V99');
+psql:test/select_tonumber_ops.sql:320: ERROR:  invalid input syntax for type numeric: " "
+SELECT to_number('15', '99V');
+      to_number      
+---------------------
+ 15.0000000000000000
+(1 row)
+
+SELECT to_number('15', 'V99');
+      to_number       
+----------------------
+ 0.150000000000000000
+(1 row)
+
+SELECT to_char(15::numeric, '99V');
+ to_char 
+---------
+  15
+(1 row)
+
+SELECT to_char(1.5::numeric, '9V');
+ to_char 
+---------
+  2
+(1 row)
+

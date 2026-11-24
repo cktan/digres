@@ -267,7 +267,11 @@ are the catalog tables psql reads
        2026-11-23). The case functions of the C ctype are in
        ty (`ty_ascii_lower` and the like); the other ctypes,
        ICU and the builtin provider, stay in digres.
-       **Left: `to_char` and the regular expressions of text**
+       `to_char` of timestamp, timestamptz, interval and the
+       numbers is in ty (`ty_tochar.h`, 2026-11-23), and so is
+       the reverse parse of a date format (`to_timestamp`,
+       `to_date`, jsonpath's `datetime()`) and `to_number`.
+       **Left: the regular expressions of text**
        ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
     3. **Types that read a setting**: what is left of them
        waits for its hooks. The text in takes the date order

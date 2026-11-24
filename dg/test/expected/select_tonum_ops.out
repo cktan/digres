@@ -1,0 +1,54 @@
+-- Verify to_char of numbers, which ty writes (ty_tochar.h): the locale's
+-- symbols for D, G, L and S, and TM's month names, by a German locale; a
+-- format that changes from row to row; and each error of a format. A
+-- refusal is what is tested, so an error goes on to the next statement.
+\set ON_ERROR_STOP off
+SET lc_numeric = 'de_DE.utf8';
+SET lc_monetary = 'de_DE.utf8';
+SET lc_time = 'de_DE.utf8';
+SELECT to_char(1234567.891::float8, 'L9G999G999D999S') AS de, to_char(-1234.5::numeric, 'FM9G999D99S') AS num, to_char(-42, 'S9999') AS i4, to_char(1234567::int8, '9,999,999.99') AS comma;
+       de        |   num    |  i4   |     comma     
+-----------------+----------+-------+---------------
+ €1.234.567,891+ | 1.234,5- |   -42 |  1,234,567.00
+(1 row)
+
+SELECT to_char(timestamp '2024-03-15 10:00:00', 'TMMonth TMMon TMDay TMDy TMMONTH') AS tm;
+            tm            
+--------------------------
+ MäRz MäR Freitag Fr MäRZ
+(1 row)
+
+RESET lc_numeric;
+RESET lc_monetary;
+RESET lc_time;
+SELECT f, to_char(1234.5::float8, f) AS f8, to_char(-1234, f) AS i4, to_char(1234.5::numeric, f) AS num FROM (VALUES ('9999.99'), ('FM9999.99'), ('9999.99'), ('S9,999.9'), ('RN'), ('9.9EEEE'), (''), (NULL)) v(f);
+     f     |       f8        |       i4        |       num       
+-----------+-----------------+-----------------+-----------------
+ 9999.99   |  1234.50        | -1234.00        |  1234.50
+ FM9999.99 | 1234.5          | -1234.          | 1234.5
+ 9999.99   |  1234.50        | -1234.00        |  1234.50
+ S9,999.9  | +1,234.5        | -1,234.0        | +1,234.5
+ RN        |        MCCXXXIV | ############### |         MCCXXXV
+ 9.9EEEE   |  1.2e+03        | -1.2e+03        |  1.2e+03
+           |                 |                 | 
+           |                 |                 | 
+(8 rows)
+
+SELECT to_char(1, '9.9.9');
+psql:test/select_tonum_ops.sql:15: ERROR:  multiple decimal points
+SELECT to_char(1, 'S9S');
+psql:test/select_tonum_ops.sql:16: ERROR:  cannot use "S" twice
+SELECT to_char(1, 'RNMI');
+psql:test/select_tonum_ops.sql:17: ERROR:  "RN" is incompatible with other formats
+DETAIL:  "RN" may only be used together with "FM".
+SELECT to_char(1, 'FM9EEEE');
+psql:test/select_tonum_ops.sql:18: ERROR:  "EEEE" is incompatible with other formats
+DETAIL:  "EEEE" may only be used together with digit and decimal point patterns.
+SELECT to_char(1, '9V9999999999');
+psql:test/select_tonum_ops.sql:19: ERROR:  integer out of range
+SELECT to_char(1::int8, '9V9999999999999999999');
+psql:test/select_tonum_ops.sql:20: ERROR:  bigint out of range
+SELECT to_char('NaN'::float8, '999TH');
+psql:test/select_tonum_ops.sql:21: ERROR:  "NaN" is not a number
+SELECT to_char(5, 'TH');
+psql:test/select_tonum_ops.sql:22: ERROR:  "." is not a number

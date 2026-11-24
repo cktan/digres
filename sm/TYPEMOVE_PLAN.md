@@ -1011,6 +1011,77 @@ copied from PostgreSQL keeps its copyright notice
        and 10,393,400 (-0.08%); bytea 9,012,082 and 9,015,957
        (+0.04%); text descending 6,854,693 and 6,854,848
        (+0.00%). Two runs of one binary differ by up to 0.4%.
+     - `to_char` of timestamp, timestamptz and interval moved
+       too (2026-11-23): `ty_tochar.h`, new code with
+       PostgreSQL's keywords, output and errors. ty compiles a
+       format once; digres keeps it in the call site's
+       `fn_extra`, gives `TM` its localized names through a
+       `ty_tochar_locale_t`, and gives the session's zone. The
+       tests: 18,484 lines the digres before the move printed
+       (`ty/test/tochar_known.txt`), which the new digres prints
+       the same, with the same 320 errors; ty cases for the
+       errors, the host's names and the edges; and
+       `dg/test/select_tochar_ops.sql`. Measured by callgrind,
+       2,000 rows, instructions a statement (old, new):
+       `'YYYY-MM-DD HH24.MI.SS'` 13,085,690 and 8,308,534
+       (-36.51%); a timestamptz with `TZ` 13,905,276 and
+       9,317,546 (-32.99%); `'FMDay, FMDDth FMMonth YYYY'`
+       11,751,572 and 9,190,402 (-21.79%); an interval by
+       `'HH24.MI.SS.US'` 10,471,196 and 7,186,992 (-31.36%).
+       PostgreSQL wrote each field by `sprintf` and looked the
+       format up in a cache of 20; ty writes the digits itself.
+     - The numbers' `to_char` moved too (2026-11-23):
+       `ty_num_compile` and the checks of a format, the digits
+       of int4, int8, float4 and float8, and the writing of them
+       by the format. digres makes a decimal's digits, as ty has
+       no decimal text yet, and gives the `lconv` symbols through
+       a `ty_num_locale_t`. The tests: 7,973 lines of five types
+       by 99 formats that the digres before the move printed
+       (`ty/test/tonum_known.txt`), the same on the new digres
+       with the same errors; ty cases for each check and the
+       host's symbols; and `dg/test/select_tonum_ops.sql`, with a
+       German locale for D, G, L, S and TM. Measured by
+       callgrind, 2,000 rows (old, new): int4 by `'999,999'`
+       6,964,717 and 6,791,349 (-2.49%); int8 by `'FM999999999'`
+       7,169,558 and 6,863,731 (-4.27%); a float8 by `'99999.99'`
+       17,286,078 and 15,274,998 (-11.63%); a decimal by
+       `'FM99999.990'` 9,134,299 and 8,779,824 (-3.88%). The
+       first version read up to 18% more: integers' digits came
+       from `snprintf`, each digit buffer from the heap, and a
+       decimal64's `to_char` compiled its format each row, as it
+       called `numeric_to_char` with no FmgrInfo to keep it in.
+     - The reverse parse of a date format moved too
+       (2026-11-23): `ty_dch_parse`, as PostgreSQL's
+       `DCH_from_char` and `do_to_timestamp`, for
+       `to_timestamp`, `to_date` and jsonpath's `datetime()`.
+       digres gives TM's localized names and the session's zone
+       abbreviations through a `ty_dch_parse_host_t`, and keeps
+       its cache of date formats, now of ty's compiled formats.
+       An error comes with PostgreSQL's code, detail and hint.
+       The tests: 8,736 texts by formats, 1,433 of them errors,
+       that the digres before the move gave
+       (`ty/test/fromchar_known.txt`), the same on the new
+       digres; ty cases for the standard mode and the flags; and
+       `dg/test/select_fromchar_ops.sql`, with zone
+       abbreviations, a German locale and jsonpath. Measured by
+       callgrind, 2,000 rows (old, new): `to_date(..., 'YYYYMMDD')`
+       10,688,262 and 10,763,002 (+0.70%); `to_date(c,
+       '"name"FMJ')` 7,380,431 and 7,221,680 (-2.15%). The first
+       version read 26% more: it copied each number's text by
+       `snprintf`, and zeroed the whole error a call.
+     - `to_number` moved too (2026-11-23): `ty_num_from_char`
+       reads the text by a number format into what `numeric_in`
+       reads, with the precision and the scale; digres makes the
+       decimal and applies V. PostgreSQL's number engine is gone
+       from `formatting.c`, which is down to digres's glue, 1,575
+       lines of 6,358. The tests: `dg/test/select_tonumber_ops.sql`,
+       PostgreSQL's own cases and round trips through `to_char`,
+       perturbed, which the digres before the move gives the
+       same; and ty cases for the digits, the signs and the
+       errors. Measured by callgrind, 2,000 rows (old, new):
+       `to_number(a::text, '99999')` 7,369,823 and 7,243,472
+       (-1.71%); by `'FM9,999.99'` 8,794,087 and 8,555,094
+       (-2.72%); by `'S99999'` 7,968,582 and 7,871,837 (-1.21%).
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and
