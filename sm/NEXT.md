@@ -238,7 +238,8 @@ are the catalog tables psql reads
        and out and encode and decode included. Left over in
        digres: sort support. The state of `string_agg`, over
        text and bytea, is in ty since 2026-11-23
-       (`ty_string_agg_t`). The states of the bool aggregates, and of avg and
+       (`ty_string_agg_t`), and HyperLogLog, which sorts use to
+       end their abbreviated keys (`ty_hll.h`). The states of the bool aggregates, and of avg and
        sum over int2 and int4, are in ty since 2026-11-23
        (`ty_bool_agg_t`, `ty_int_avg_t`). Done after that:
        the floats, with their text (`ty_float.h`), and text for

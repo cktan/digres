@@ -504,6 +504,34 @@ their inverses, erf, erfc, gamma or lgamma correctly, so another
 machine may give the next float: the test takes one float apart
 as the same for those, and needs the same bits for the rest.
 
+## 12. HyperLogLog
+
+`ty_hll.h` estimates the number of distinct values in a set from
+a 32-bit hash of each, in 2^4 to 2^16 registers of a byte. A sort
+uses it to decide when to stop its abbreviated keys, and a hash
+aggregate to size its spill partitions. ty's code is new. Its
+estimates are those of PostgreSQL's
+`src/backend/lib/hyperloglog.c`, bit for bit, so a sort ends its
+abbreviated keys at the row PostgreSQL's would:
+
+- the register is the first `width` bits of the hash, and its
+  value the most leading zeros of the rest, plus one;
+- the estimate sums 2^-r over the registers in their order, and
+  takes the paper's corrections for a small and a large number,
+  with PostgreSQL's constants and in PostgreSQL's order of
+  operations.
+
+`ty_hll_add` is in line, as a sort calls it for each row. The
+registers are the alloc function's. digres's `hyperloglog.c`
+keeps PostgreSQL's names and errors, and calls ty.
+
+The tests: `test/test_hll.cc` compares 45 estimates, of 5 widths
+and of 0 to 1,000,000 values, with those that PostgreSQL's file,
+built alone, printed for the same hashes, and checks the
+correction for a large number and the widths by error. digres's
+`server.sh` checks that a sort logs the estimates of the digres
+before the move (`trace_sort`).
+
 ## 16. text
 
 `ty_text.h` holds the operations of text: UTF-8 strings ordered

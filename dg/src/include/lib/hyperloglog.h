@@ -38,32 +38,29 @@
 #ifndef HYPERLOGLOG_H
 #define HYPERLOGLOG_H
 
+#include "ty_hll.h"
+
 /*
  * HyperLogLog is an approximate technique for computing the number of distinct
  * entries in a set.  Importantly, it does this by using a fixed amount of
  * memory.  See the 2007 paper "HyperLogLog: the analysis of a near-optimal
  * cardinality estimation algorithm" for more.
  *
- * hyperLogLogState
- *
- *		registerWidth		register width, in bits ("k")
- *		nRegisters			number of registers
- *		alphaMM				alpha * m ^ 2 (see
- *initHyperLogLog()) hashesArr			array of hashes arrSize
- *size of hashesArr
+ * The state is ty's (ty_hll.h).
  */
-typedef struct hyperLogLogState {
-  uint8 registerWidth;
-  Size nRegisters;
-  double alphaMM;
-  uint8 *hashesArr;
-  Size arrSize;
-} hyperLogLogState;
+typedef ty_hll_t hyperLogLogState;
 
 extern void initHyperLogLog(hyperLogLogState *cState, uint8 bwidth);
 extern void initHyperLogLogError(hyperLogLogState *cState, double error);
-extern void addHyperLogLog(hyperLogLogState *cState, uint32 hash);
 extern double estimateHyperLogLog(hyperLogLogState *cState);
 extern void freeHyperLogLog(hyperLogLogState *cState);
+
+/*
+ * Adds element to the estimator, from caller-supplied hash, which must spread
+ * its bits evenly (hash_any(), typically). In line: a sort calls it a row.
+ */
+static inline void addHyperLogLog(hyperLogLogState *cState, uint32 hash) {
+  ty_hll_add(cState, hash);
+}
 
 #endif /* HYPERLOGLOG_H */

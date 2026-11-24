@@ -979,6 +979,19 @@ copied from PostgreSQL keeps its copyright notice
        4,570,195 and 4,606,483 (+0.79%); over bytea 6,767,978 and
        6,759,987 (-0.12%); in 200 groups 5,786,703 and 5,786,707
        (+0.00%).
+     - HyperLogLog moved too (2026-11-23): `ty_hll.h`, new
+       code whose estimates are those of PostgreSQL's
+       `hyperloglog.c`, bit for bit. digres's file keeps
+       PostgreSQL's names and errors, and calls ty; the add is in
+       line. The tests: 45 estimates that PostgreSQL's file,
+       built alone, printed for the same hashes; and a check in
+       `server.sh` that a sort logs the estimates of the digres
+       before the move (`trace_sort`), which fails if either
+       correction changes. Measured by callgrind, a sort of 2,000
+       rows, instructions a statement (old, new): text 7,042,167
+       and 6,880,367 (-2.30%); uuid 10,426,348 and 10,359,120
+       (-0.64%); bytea 9,179,542 and 9,018,193 (-1.76%); text
+       descending 7,022,347 and 6,854,998 (-2.38%).
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and
