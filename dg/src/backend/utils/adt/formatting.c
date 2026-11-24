@@ -260,16 +260,9 @@ static const char *const rm_months_lower[] = {"xii", "xi", "x", "ix", "viii",
                                               "ii",  "i",  NULL};
 
 /* ----------
- * Roman numerals
+ * Roman numerals: ty writes them (ty_num_roman); to_number reads them
  * ----------
  */
-static const char *const rm1[] = {"I",  "II",  "III",  "IV", "V",
-                                  "VI", "VII", "VIII", "IX", NULL};
-static const char *const rm10[] = {"X",  "XX",  "XXX",  "XL", "L",
-                                   "LX", "LXX", "LXXX", "XC", NULL};
-static const char *const rm100[] = {"C",  "CC",  "CCC",  "CD", "D",
-                                    "DC", "DCC", "DCCC", "CM", NULL};
-
 /*
  * MACRO: Check if the current and next characters form a valid subtraction
  * combination for roman numerals.
@@ -1022,10 +1015,8 @@ static bool from_char_seq_search(int *dest, const char **src,
 static bool do_to_timestamp(text *date_txt, text *fmt, Oid collid, bool std,
                             struct pg_tm *tm, fsec_t *fsec, struct fmt_tz *tz,
                             int *fprec, uint32 *flags, Node *escontext);
-static char *fill_str(char *str, int c, int max);
 static FormatNode *NUM_cache(int len, NUMDesc *Num, text *pars_str,
                              bool *shouldFree);
-static char *int_to_roman(int number);
 static int roman_to_int(NUMProc *Np, int input_len);
 static void NUM_prepare_locale(NUMProc *Np);
 static char *get_last_relevant_decnum(char *num);
@@ -3066,43 +3057,67 @@ static DCHCacheEntry *DCH_cache_fetch(const char *str, bool std) {
  * The format of a to_char call site, compiled by ty and kept in its
  * fn_extra, with the format's text to tell it is the same next time.
  */
-typedef struct DCHFormat {
-  ty_dch_format_t *format;
+typedef struct ToCharFormat {
+  void *format; /* ty's ty_dch_format_t or ty_num_format_t */
   int len;
   char text[FLEXIBLE_ARRAY_MEMBER];
-} DCHFormat;
+} ToCharFormat;
 
 /*
  * The compiled format fmt: the call site's, if it is the same text, else
- * compiled anew in the call site's memory. A call with no FmgrInfo compiles
- * into the current context.
+ * compiled anew by compile in the call site's memory, or NULL with ty's
+ * error. A call with no FmgrInfo compiles into the current context.
+ * 1. The call site's format, if its text is fmt's.
+ * 2. Else free it, and forget it before anything can fail: an error the
+ *    caller catches must not leave fn_extra pointing at freed memory.
+ * 3. Compile fmt, and keep it only if it compiles.
  */
-static const ty_dch_format_t *dch_format(FunctionCallInfo fcinfo, text *fmt) {
+static void *tochar_format(FunctionCallInfo fcinfo, text *fmt,
+                           int (*compile)(const char *, size_t, void **)) {
   FmgrInfo *flinfo = fcinfo->flinfo;
-  DCHFormat *cache = flinfo ? (DCHFormat *)flinfo->fn_extra : NULL;
+  ToCharFormat *cache = flinfo ? (ToCharFormat *)flinfo->fn_extra : NULL;
   int len = VARSIZE_ANY_EXHDR(fmt);
   MemoryContext oldcontext;
+  void *format;
 
   if (NULL != cache && cache->len == len &&
       0 == memcmp(cache->text, VARDATA_ANY(fmt), len))
     return cache->format;
-
-  /* the compiled format lives as long as the call site */
-  oldcontext = MemoryContextSwitchTo(flinfo ? flinfo->fn_mcxt
-                                            : CurrentMemoryContext);
   if (NULL != cache) {
+    flinfo->fn_extra = NULL;
     ty_free(cache->format);
     pfree(cache);
   }
-  cache = (DCHFormat *)palloc(offsetof(DCHFormat, text) + len);
+
+  /* the compiled format lives as long as the call site */
+  oldcontext =
+      MemoryContextSwitchTo(flinfo ? flinfo->fn_mcxt : CurrentMemoryContext);
+  if (compile(VARDATA_ANY(fmt), len, &format)) {
+    MemoryContextSwitchTo(oldcontext);
+    return NULL;
+  }
+  cache = (ToCharFormat *)palloc(offsetof(ToCharFormat, text) + len);
+  cache->format = format;
   cache->len = len;
   memcpy(cache->text, VARDATA_ANY(fmt), len);
-  if (ty_dch_compile(VARDATA_ANY(fmt), len, &cache->format))
-    ty_raise_alloc();
   MemoryContextSwitchTo(oldcontext);
   if (flinfo)
     flinfo->fn_extra = cache;
-  return cache->format;
+  return format;
+}
+
+/* ty_dch_compile, as tochar_format calls it. */
+static int dch_compile(const char *fmt, size_t len, void **out) {
+  return ty_dch_compile(fmt, len, (ty_dch_format_t **)out);
+}
+
+/* The compiled date format of the call site; it fails only for memory. */
+static const ty_dch_format_t *dch_format(FunctionCallInfo fcinfo, text *fmt) {
+  void *f = tochar_format(fcinfo, fmt, dch_compile);
+
+  if (NULL == f)
+    ty_raise_alloc();
+  return (const ty_dch_format_t *)f;
 }
 
 /*
@@ -3861,12 +3876,6 @@ fail:
  *	the NUMBER version part
  *********************************************************************/
 
-static char *fill_str(char *str, int c, int max) {
-  memset(str, c, max);
-  *(str + max) = '\0';
-  return str;
-}
-
 #define zeroize_NUM(_n) \
 do { \
 	(_n)->flag		= 0;	\
@@ -4035,56 +4044,7 @@ static FormatNode *NUM_cache(int len, NUMDesc *Num, text *pars_str,
   return format;
 }
 
-/*
- * Convert integer to Roman numerals
- * Result is upper-case and not blank-padded (NUM_processor converts as needed)
- * If input is out-of-range, produce '###############'
- */
-static char *int_to_roman(int number) {
-  int len, num;
-  char *p, *result, numstr[12];
-
-  result = (char *)palloc(MAX_ROMAN_LEN + 1);
-  *result = '\0';
-
-  /*
-   * This range limit is the same as in Oracle(TM).  The difficulty with
-   * handling 4000 or more is that we'd need to use more than 3 "M"'s, and
-   * more than 3 of the same digit isn't considered a valid Roman string.
-   */
-  if (number > 3999 || number < 1) {
-    fill_str(result, '#', MAX_ROMAN_LEN);
-    return result;
-  }
-
-  /* Convert to decimal, then examine each digit */
-  len = snprintf(numstr, sizeof(numstr), "%d", number);
-  Assert(len > 0 && len <= 4);
-
-  for (p = numstr; *p != '\0'; p++, --len) {
-    num = *p - ('0' + 1);
-    if (num < 0)
-      continue; /* ignore zeroes */
-    /* switch on current column position */
-    switch (len) {
-    case 4:
-      while (num-- >= 0)
-        strcat(result, "M");
-      break;
-    case 3:
-      strcat(result, rm100[num]);
-      break;
-    case 2:
-      strcat(result, rm10[num]);
-      break;
-    case 1:
-      strcat(result, rm1[num]);
-      break;
-    }
-  }
-  return result;
-}
-
+  
 /*
  * Convert a roman numeral (standard form) to an integer.
  * Result is an integer between 1 and 3999.
@@ -5092,41 +5052,67 @@ static char *NUM_processor(FormatNode *node, NUMDesc *Num, char *inout,
   }
 }
 
-/* ----------
- * MACRO: Start part of NUM - for all NUM's to_char variants
- *	(sorry, but I hate copy same code - macro is better..)
- * ----------
+/*
+ * The compiled number format of the call site, or PostgreSQL's syntax error
+ * with its detail.
  */
-#define NUM_TOCHAR_prepare \
-do { \
-	int len = VARSIZE_ANY_EXHDR(fmt); \
-	if (len <= 0 || len >= (INT_MAX-VARHDRSZ)/NUM_MAX_ITEM_SIZ)		\
-		PG_RETURN_TEXT_P(cstring_to_text("")); \
-	result	= (text *) palloc0((len * NUM_MAX_ITEM_SIZ) + 1 + VARHDRSZ);	\
-	format	= NUM_cache(len, &Num, fmt, &shouldFree);		\
-} while (0)
+static int num_compile(const char *fmt, size_t len, void **out) {
+  return ty_num_compile(fmt, len, (ty_num_format_t **)out);
+}
 
-/* ----------
- * MACRO: Finish part of NUM
- * ----------
+/* The compiled number format of a to_char call site. */
+static const ty_num_format_t *num_format(FunctionCallInfo fcinfo, text *fmt) {
+  void *f = tochar_format(fcinfo, fmt, num_compile);
+  const char *msg;
+
+  if (NULL != f)
+    return (const ty_num_format_t *)f;
+  if (TY_ERR_INVALID != ty_errnum())
+    ty_raise_alloc();
+  msg = ty_errmsg();
+  ereport(ERROR,
+          (errcode(ERRCODE_SYNTAX_ERROR), errmsg("%s", msg),
+           0 == strcmp(msg, "\"EEEE\" is incompatible with other formats")
+               ? errdetail("\"EEEE\" may only be used together with digit "
+                           "and decimal point patterns.")
+           : 0 == strcmp(msg, "\"RN\" is incompatible with other formats")
+               ? errdetail("\"RN\" may only be used together with \"FM\".")
+               : 0));
+}
+
+/* The lconv symbols of the session, for ty's D, G, L and S. */
+static void num_symbols(void *ctx, ty_num_symbols_t *out) {
+  struct lconv *lconv = PGLC_localeconv();
+
+  out->negative_sign = lconv->negative_sign;
+  out->positive_sign = lconv->positive_sign;
+  out->decimal_point = lconv->decimal_point;
+  out->thousands_sep = lconv->thousands_sep;
+  out->currency_symbol = lconv->currency_symbol;
+}
+
+/*
+ * Whether a format gives an empty text without being read, as PostgreSQL's
+ * NUM_TOCHAR_prepare: an empty one, or one too long for its result.
  */
-#define NUM_TOCHAR_finish \
-do { \
-	int		len; \
-									\
-	NUM_processor(format, &Num, VARDATA(result), numstr, 0, out_pre_spaces, sign, true, PG_GET_COLLATION()); \
-									\
-	if (shouldFree)					\
-		pfree(format);                                                    \
-                                                                               \
-     /*                                                                        \
-      * Convert null-terminated representation of result to standard text.     \
-      * The result is usually much bigger than it needs to be, but there       \
-      * seems little point in realloc'ing it smaller.                          \
-      */								\
-	len = strlen(VARDATA(result));	\
-	SET_VARSIZE(result, len + VARHDRSZ); \
-} while (0)
+static bool num_format_empty(text *fmt) {
+  int len = VARSIZE_ANY_EXHDR(fmt);
+
+  return len <= 0 || len >= (INT_MAX - VARHDRSZ) / NUM_MAX_ITEM_SIZ;
+}
+
+/* Finish a number's to_char by ty: the text, or its error. */
+static Datum num_result(int rc, text *res) {
+  if (0 == rc)
+    PG_RETURN_TEXT_P(res);
+  if (TY_ERR_RANGE == ty_errnum())
+    ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
+  if (TY_ERR_INVALID == ty_errnum())
+    ereport(ERROR, (errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+                    errmsg("%s", ty_errmsg())));
+  ty_raise_alloc();
+}
 
 /* -------------------
  * NUMERIC to_number() (convert string to numeric)
@@ -5185,31 +5171,34 @@ Datum numeric_to_number(PG_FUNCTION_ARGS) {
  */
 Datum numeric_to_char(PG_FUNCTION_ARGS) {
   Numeric value = PG_GETARG_NUMERIC(0);
-  text *fmt = PG_GETARG_TEXT_PP(1);
-  NUMDesc Num;
-  FormatNode *format;
-  text *result;
-  bool shouldFree;
-  int out_pre_spaces = 0, sign = 0;
-  char *numstr, *orgnum, *p;
+  text *fmt = PG_GETARG_TEXT_PP(1), *result;
+  const ty_num_format_t *format;
+  ty_num_desc_t num;
+  ty_num_locale_t loc = {NULL, num_symbols};
+  int out_pre_spaces = 0, sign = 0, rc;
+  char *numstr, *orgnum, *p, roman[16];
 
-  NUM_TOCHAR_prepare;
+  if (num_format_empty(fmt))
+    PG_RETURN_TEXT_P(cstring_to_text(""));
+  format = num_format(fcinfo, fmt);
+  ty_num_describe(format, &num);
 
   /*
-   * On DateType depend part (numeric)
+   * On DateType depend part (numeric): digres makes the digits of its
+   * decimal, and ty writes them by the format
    */
-  if (IS_ROMAN(&Num)) {
+  if (num.roman) {
     int32 intvalue;
     bool err;
 
     /* Round and convert to int */
     intvalue = numeric_int4_opt_error(value, &err);
-    /* On overflow, just use PG_INT32_MAX; int_to_roman will cope */
+    /* On overflow, just use PG_INT32_MAX; ty_num_roman will cope */
     if (err)
       intvalue = PG_INT32_MAX;
-    numstr = int_to_roman(intvalue);
-  } else if (IS_EEEE(&Num)) {
-    orgnum = numeric_out_sci(value, Num.post);
+    numstr = (char *)ty_num_roman(intvalue, roman);
+  } else if (num.eeee) {
+    orgnum = numeric_out_sci(value, num.post);
 
     /*
      * numeric_out_sci() does not emit a sign for positive numbers.  We
@@ -5223,10 +5212,11 @@ Datum numeric_to_char(PG_FUNCTION_ARGS) {
        * Allow 6 characters for the leading sign, the decimal point,
        * "e", the exponent's sign and two exponent digits.
        */
-      numstr = (char *)palloc(Num.pre + Num.post + 7);
-      fill_str(numstr, '#', Num.pre + Num.post + 6);
+      numstr = (char *)palloc(num.pre + num.post + 7);
+      memset(numstr, '#', num.pre + num.post + 6);
+      numstr[num.pre + num.post + 6] = '\0';
       *numstr = ' ';
-      *(numstr + Num.pre + 1) = '.';
+      *(numstr + num.pre + 1) = '.';
     } else if (*orgnum != '-') {
       numstr = (char *)palloc(strlen(orgnum) + 2);
       *numstr = ' ';
@@ -5239,19 +5229,19 @@ Datum numeric_to_char(PG_FUNCTION_ARGS) {
     Numeric val = value;
     Numeric x;
 
-    if (IS_MULTI(&Num)) {
+    if (num.multi) {
       Numeric a = int64_to_numeric(10);
-      Numeric b = int64_to_numeric(Num.multi);
+      Numeric b = int64_to_numeric(num.multi);
 
       x = DatumGetNumeric(DirectFunctionCall2(numeric_power, NumericGetDatum(a),
                                               NumericGetDatum(b)));
       val = DatumGetNumeric(DirectFunctionCall2(
           numeric_mul, NumericGetDatum(value), NumericGetDatum(x)));
-      Num.pre += Num.multi;
+      num.pre += num.multi;
     }
 
     x = DatumGetNumeric(DirectFunctionCall2(numeric_round, NumericGetDatum(val),
-                                            Int32GetDatum(Num.post)));
+                                            Int32GetDatum(num.post)));
     orgnum =
         DatumGetCString(DirectFunctionCall1(numeric_out, NumericGetDatum(x)));
 
@@ -5269,18 +5259,20 @@ Datum numeric_to_char(PG_FUNCTION_ARGS) {
       numstr_pre_len = strlen(numstr);
 
     /* needs padding? */
-    if (numstr_pre_len < Num.pre)
-      out_pre_spaces = Num.pre - numstr_pre_len;
+    if (numstr_pre_len < num.pre)
+      out_pre_spaces = num.pre - numstr_pre_len;
     /* overflowed prefix digit format? */
-    else if (numstr_pre_len > Num.pre) {
-      numstr = (char *)palloc(Num.pre + Num.post + 2);
-      fill_str(numstr, '#', Num.pre + Num.post + 1);
-      *(numstr + Num.pre) = '.';
+    else if (numstr_pre_len > num.pre) {
+      numstr = (char *)palloc(num.pre + num.post + 2);
+      memset(numstr, '#', num.pre + num.post + 1);
+      numstr[num.pre + num.post + 1] = '\0';
+      *(numstr + num.pre) = '.';
     }
   }
 
-  NUM_TOCHAR_finish;
-  PG_RETURN_TEXT_P(result);
+  rc = ty_num_to_char_digits(format, numstr, out_pre_spaces, sign, num.pre,
+                             num.post, &loc, TYVO(&result));
+  return num_result(rc, result);
 }
 
 /* ---------------
@@ -5289,80 +5281,15 @@ Datum numeric_to_char(PG_FUNCTION_ARGS) {
  */
 Datum int4_to_char(PG_FUNCTION_ARGS) {
   int32 value = PG_GETARG_INT32(0);
-  text *fmt = PG_GETARG_TEXT_PP(1);
-  NUMDesc Num;
-  FormatNode *format;
-  text *result;
-  bool shouldFree;
-  int out_pre_spaces = 0, sign = 0;
-  char *numstr, *orgnum;
+  text *fmt = PG_GETARG_TEXT_PP(1), *result;
+  ty_num_locale_t loc = {NULL, num_symbols};
+  int rc;
 
-  NUM_TOCHAR_prepare;
-
-  /*
-   * On DateType depend part (int32)
-   */
-  if (IS_ROMAN(&Num))
-    numstr = int_to_roman(value);
-  else if (IS_EEEE(&Num)) {
-    /* we can do it easily because float8 won't lose any precision */
-    float8 val = (float8)value;
-
-    orgnum = (char *)psprintf("%+.*e", Num.post, val);
-
-    /*
-     * Swap a leading positive sign for a space.
-     */
-    if (*orgnum == '+')
-      *orgnum = ' ';
-
-    numstr = orgnum;
-  } else {
-    int numstr_pre_len;
-
-    if (IS_MULTI(&Num)) {
-      double multi = pow((double)10, (double)Num.multi);
-
-      value = DatumGetInt32(DirectFunctionCall2(
-          int4mul, Int32GetDatum(value),
-          DirectFunctionCall1(dtoi4, Float8GetDatum(multi))));
-      Num.pre += Num.multi;
-    }
-
-    orgnum =
-        DatumGetCString(DirectFunctionCall1(int4out, Int32GetDatum(value)));
-
-    if (*orgnum == '-') {
-      sign = '-';
-      orgnum++;
-    } else
-      sign = '+';
-
-    numstr_pre_len = strlen(orgnum);
-
-    /* post-decimal digits?  Pad out with zeros. */
-    if (Num.post) {
-      numstr = (char *)palloc(numstr_pre_len + Num.post + 2);
-      strcpy(numstr, orgnum);
-      *(numstr + numstr_pre_len) = '.';
-      memset(numstr + numstr_pre_len + 1, '0', Num.post);
-      *(numstr + numstr_pre_len + Num.post + 1) = '\0';
-    } else
-      numstr = orgnum;
-
-    /* needs padding? */
-    if (numstr_pre_len < Num.pre)
-      out_pre_spaces = Num.pre - numstr_pre_len;
-    /* overflowed prefix digit format? */
-    else if (numstr_pre_len > Num.pre) {
-      numstr = (char *)palloc(Num.pre + Num.post + 2);
-      fill_str(numstr, '#', Num.pre + Num.post + 1);
-      *(numstr + Num.pre) = '.';
-    }
-  }
-
-  NUM_TOCHAR_finish;
-  PG_RETURN_TEXT_P(result);
+  if (num_format_empty(fmt))
+    PG_RETURN_TEXT_P(cstring_to_text(""));
+  /* ty makes the digits and writes them by the format */
+  rc = ty_int32_to_char(value, num_format(fcinfo, fmt), &loc, TYVO(&result));
+  return num_result(rc, result);
 }
 
 /* ---------------
@@ -5371,90 +5298,15 @@ Datum int4_to_char(PG_FUNCTION_ARGS) {
  */
 Datum int8_to_char(PG_FUNCTION_ARGS) {
   int64 value = PG_GETARG_INT64(0);
-  text *fmt = PG_GETARG_TEXT_PP(1);
-  NUMDesc Num;
-  FormatNode *format;
-  text *result;
-  bool shouldFree;
-  int out_pre_spaces = 0, sign = 0;
-  char *numstr, *orgnum;
+  text *fmt = PG_GETARG_TEXT_PP(1), *result;
+  ty_num_locale_t loc = {NULL, num_symbols};
+  int rc;
 
-  NUM_TOCHAR_prepare;
-
-  /*
-   * On DateType depend part (int64)
-   */
-  if (IS_ROMAN(&Num)) {
-    int32 intvalue;
-
-    /* On overflow, just use PG_INT32_MAX; int_to_roman will cope */
-    if (value <= PG_INT32_MAX && value >= PG_INT32_MIN)
-      intvalue = (int32)value;
-    else
-      intvalue = PG_INT32_MAX;
-    numstr = int_to_roman(intvalue);
-  } else if (IS_EEEE(&Num)) {
-    /* to avoid loss of precision, must go via numeric not float8 */
-    orgnum = numeric_out_sci(int64_to_numeric(value), Num.post);
-
-    /*
-     * numeric_out_sci() does not emit a sign for positive numbers.  We
-     * need to add a space in this case so that positive and negative
-     * numbers are aligned.  We don't have to worry about NaN/inf here.
-     */
-    if (*orgnum != '-') {
-      numstr = (char *)palloc(strlen(orgnum) + 2);
-      *numstr = ' ';
-      strcpy(numstr + 1, orgnum);
-    } else {
-      numstr = orgnum;
-    }
-  } else {
-    int numstr_pre_len;
-
-    if (IS_MULTI(&Num)) {
-      double multi = pow((double)10, (double)Num.multi);
-
-      value = DatumGetInt64(DirectFunctionCall2(
-          int8mul, Int64GetDatum(value),
-          DirectFunctionCall1(dtoi8, Float8GetDatum(multi))));
-      Num.pre += Num.multi;
-    }
-
-    orgnum =
-        DatumGetCString(DirectFunctionCall1(int8out, Int64GetDatum(value)));
-
-    if (*orgnum == '-') {
-      sign = '-';
-      orgnum++;
-    } else
-      sign = '+';
-
-    numstr_pre_len = strlen(orgnum);
-
-    /* post-decimal digits?  Pad out with zeros. */
-    if (Num.post) {
-      numstr = (char *)palloc(numstr_pre_len + Num.post + 2);
-      strcpy(numstr, orgnum);
-      *(numstr + numstr_pre_len) = '.';
-      memset(numstr + numstr_pre_len + 1, '0', Num.post);
-      *(numstr + numstr_pre_len + Num.post + 1) = '\0';
-    } else
-      numstr = orgnum;
-
-    /* needs padding? */
-    if (numstr_pre_len < Num.pre)
-      out_pre_spaces = Num.pre - numstr_pre_len;
-    /* overflowed prefix digit format? */
-    else if (numstr_pre_len > Num.pre) {
-      numstr = (char *)palloc(Num.pre + Num.post + 2);
-      fill_str(numstr, '#', Num.pre + Num.post + 1);
-      *(numstr + Num.pre) = '.';
-    }
-  }
-
-  NUM_TOCHAR_finish;
-  PG_RETURN_TEXT_P(result);
+  if (num_format_empty(fmt))
+    PG_RETURN_TEXT_P(cstring_to_text(""));
+  /* ty makes the digits and writes them by the format */
+  rc = ty_int64_to_char(value, num_format(fcinfo, fmt), &loc, TYVO(&result));
+  return num_result(rc, result);
 }
 
 /* -----------------
@@ -5463,94 +5315,15 @@ Datum int8_to_char(PG_FUNCTION_ARGS) {
  */
 Datum float4_to_char(PG_FUNCTION_ARGS) {
   float4 value = PG_GETARG_FLOAT4(0);
-  text *fmt = PG_GETARG_TEXT_PP(1);
-  NUMDesc Num;
-  FormatNode *format;
-  text *result;
-  bool shouldFree;
-  int out_pre_spaces = 0, sign = 0;
-  char *numstr, *p;
+  text *fmt = PG_GETARG_TEXT_PP(1), *result;
+  ty_num_locale_t loc = {NULL, num_symbols};
+  int rc;
 
-  NUM_TOCHAR_prepare;
-
-  if (IS_ROMAN(&Num)) {
-    int32 intvalue;
-
-    /* See notes in ftoi4() */
-    value = rint(value);
-    /* On overflow, just use PG_INT32_MAX; int_to_roman will cope */
-    if (!isnan(value) && FLOAT4_FITS_IN_INT32(value))
-      intvalue = (int32)value;
-    else
-      intvalue = PG_INT32_MAX;
-    numstr = int_to_roman(intvalue);
-  } else if (IS_EEEE(&Num)) {
-    if (isnan(value) || isinf(value)) {
-      /*
-       * Allow 6 characters for the leading sign, the decimal point,
-       * "e", the exponent's sign and two exponent digits.
-       */
-      numstr = (char *)palloc(Num.pre + Num.post + 7);
-      fill_str(numstr, '#', Num.pre + Num.post + 6);
-      *numstr = ' ';
-      *(numstr + Num.pre + 1) = '.';
-    } else {
-      numstr = psprintf("%+.*e", Num.post, value);
-
-      /*
-       * Swap a leading positive sign for a space.
-       */
-      if (*numstr == '+')
-        *numstr = ' ';
-    }
-  } else {
-    float4 val = value;
-    char *orgnum;
-    int numstr_pre_len;
-
-    if (IS_MULTI(&Num)) {
-      float multi = pow((double)10, (double)Num.multi);
-
-      val = value * multi;
-      Num.pre += Num.multi;
-    }
-
-    orgnum = psprintf("%.0f", fabs(val));
-    numstr_pre_len = strlen(orgnum);
-
-    /* adjust post digits to fit max float digits */
-    if (numstr_pre_len >= FLT_DIG)
-      Num.post = 0;
-    else if (numstr_pre_len + Num.post > FLT_DIG)
-      Num.post = FLT_DIG - numstr_pre_len;
-    orgnum = psprintf("%.*f", Num.post, val);
-
-    if (*orgnum == '-') { /* < 0 */
-      sign = '-';
-      numstr = orgnum + 1;
-    } else {
-      sign = '+';
-      numstr = orgnum;
-    }
-
-    if ((p = strchr(numstr, '.')))
-      numstr_pre_len = p - numstr;
-    else
-      numstr_pre_len = strlen(numstr);
-
-    /* needs padding? */
-    if (numstr_pre_len < Num.pre)
-      out_pre_spaces = Num.pre - numstr_pre_len;
-    /* overflowed prefix digit format? */
-    else if (numstr_pre_len > Num.pre) {
-      numstr = (char *)palloc(Num.pre + Num.post + 2);
-      fill_str(numstr, '#', Num.pre + Num.post + 1);
-      *(numstr + Num.pre) = '.';
-    }
-  }
-
-  NUM_TOCHAR_finish;
-  PG_RETURN_TEXT_P(result);
+  if (num_format_empty(fmt))
+    PG_RETURN_TEXT_P(cstring_to_text(""));
+  /* ty makes the digits and writes them by the format */
+  rc = ty_float4_to_char(value, num_format(fcinfo, fmt), &loc, TYVO(&result));
+  return num_result(rc, result);
 }
 
 /* -----------------
@@ -5559,92 +5332,13 @@ Datum float4_to_char(PG_FUNCTION_ARGS) {
  */
 Datum float8_to_char(PG_FUNCTION_ARGS) {
   float8 value = PG_GETARG_FLOAT8(0);
-  text *fmt = PG_GETARG_TEXT_PP(1);
-  NUMDesc Num;
-  FormatNode *format;
-  text *result;
-  bool shouldFree;
-  int out_pre_spaces = 0, sign = 0;
-  char *numstr, *p;
+  text *fmt = PG_GETARG_TEXT_PP(1), *result;
+  ty_num_locale_t loc = {NULL, num_symbols};
+  int rc;
 
-  NUM_TOCHAR_prepare;
-
-  if (IS_ROMAN(&Num)) {
-    int32 intvalue;
-
-    /* See notes in dtoi4() */
-    value = rint(value);
-    /* On overflow, just use PG_INT32_MAX; int_to_roman will cope */
-    if (!isnan(value) && FLOAT8_FITS_IN_INT32(value))
-      intvalue = (int32)value;
-    else
-      intvalue = PG_INT32_MAX;
-    numstr = int_to_roman(intvalue);
-  } else if (IS_EEEE(&Num)) {
-    if (isnan(value) || isinf(value)) {
-      /*
-       * Allow 6 characters for the leading sign, the decimal point,
-       * "e", the exponent's sign and two exponent digits.
-       */
-      numstr = (char *)palloc(Num.pre + Num.post + 7);
-      fill_str(numstr, '#', Num.pre + Num.post + 6);
-      *numstr = ' ';
-      *(numstr + Num.pre + 1) = '.';
-    } else {
-      numstr = psprintf("%+.*e", Num.post, value);
-
-      /*
-       * Swap a leading positive sign for a space.
-       */
-      if (*numstr == '+')
-        *numstr = ' ';
-    }
-  } else {
-    float8 val = value;
-    char *orgnum;
-    int numstr_pre_len;
-
-    if (IS_MULTI(&Num)) {
-      double multi = pow((double)10, (double)Num.multi);
-
-      val = value * multi;
-      Num.pre += Num.multi;
-    }
-
-    orgnum = psprintf("%.0f", fabs(val));
-    numstr_pre_len = strlen(orgnum);
-
-    /* adjust post digits to fit max double digits */
-    if (numstr_pre_len >= DBL_DIG)
-      Num.post = 0;
-    else if (numstr_pre_len + Num.post > DBL_DIG)
-      Num.post = DBL_DIG - numstr_pre_len;
-    orgnum = psprintf("%.*f", Num.post, val);
-
-    if (*orgnum == '-') { /* < 0 */
-      sign = '-';
-      numstr = orgnum + 1;
-    } else {
-      sign = '+';
-      numstr = orgnum;
-    }
-
-    if ((p = strchr(numstr, '.')))
-      numstr_pre_len = p - numstr;
-    else
-      numstr_pre_len = strlen(numstr);
-
-    /* needs padding? */
-    if (numstr_pre_len < Num.pre)
-      out_pre_spaces = Num.pre - numstr_pre_len;
-    /* overflowed prefix digit format? */
-    else if (numstr_pre_len > Num.pre) {
-      numstr = (char *)palloc(Num.pre + Num.post + 2);
-      fill_str(numstr, '#', Num.pre + Num.post + 1);
-      *(numstr + Num.pre) = '.';
-    }
-  }
-
-  NUM_TOCHAR_finish;
-  PG_RETURN_TEXT_P(result);
+  if (num_format_empty(fmt))
+    PG_RETURN_TEXT_P(cstring_to_text(""));
+  /* ty makes the digits and writes them by the format */
+  rc = ty_float8_to_char(value, num_format(fcinfo, fmt), &loc, TYVO(&result));
+  return num_result(rc, result);
 }

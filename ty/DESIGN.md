@@ -978,13 +978,30 @@ no field writes more.
 
 digres compiles a call site's format once and keeps it in the
 call's `fn_extra`, with the format's text, so a format that is
-the same for each row is read once. The number formats and the
-reverse parse (`to_timestamp`, `to_date`, `to_number`) stay in
-digres for now.
+the same for each row is read once. It forgets the old format
+before it compiles a new one, so a format that fails leaves no
+pointer to freed memory.
+
+The numbers' `to_char` is in the same header: `ty_num_compile`
+reads a format of `9`, `0`, the point and `D`, the comma and
+`G`, the signs (`S`, `MI`, `PL`, `SG`, `PR`), `L`, `B`, `FM`,
+`V`, `TH`, `RN` and `EEEE`, and checks it with PostgreSQL's
+errors. ty makes the digits of an int4, an int8, a float4 and a
+float8, and writes them by the format, as PostgreSQL's
+`NUM_processor` does. A float's digits are those of PostgreSQL's
+`snprintf`, whose NaN is `NaN` where libc's is `nan`. D, G, L and
+S take the host's `lconv` symbols, through a function in a
+`ty_num_locale_t` that is called only for a format that uses one.
+digres makes a decimal's digits itself, as ty has no decimal text
+yet, and gives them to `ty_num_to_char_digits`. The reverse parse
+(`to_timestamp`, `to_date`, `to_number`) stays in digres for now.
 
 The tests: `test/tochar_known.txt`, 18,484 lines that the digres
 before the move printed (`test/gen_tochar.py`), of timestamps,
 timestamptz in 11 zones and intervals, each keyword with each
-prefix and suffix, and mixed formats; `test/test_tochar.cc` for
-the errors, the host's names and the edges; and
-`dg/test/select_tochar_ops.sql`.
+prefix and suffix, and mixed formats; `test/tonum_known.txt`,
+7,973 lines of int4, int8, float4, float8 and numeric by 99
+number formats (`test/gen_tonum.py`); `test/test_tochar.cc` for
+the errors, the host's names and symbols, and the edges; and
+`dg/test/select_tochar_ops.sql` and `select_tonum_ops.sql`, with
+a German locale.

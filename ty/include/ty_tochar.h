@@ -76,4 +76,70 @@ int ty_timestamptz_to_char(int64_t ts, const ty_tz_t *tz,
 int ty_interval_to_char(const ty_interval_t *iv, const ty_dch_format_t *f,
                         const ty_tochar_locale_t *loc, ty_varlena_t **out);
 
+/*
+ * to_char of a number: a format of 9, 0, the point and D, the comma and G,
+ * the signs (S, MI, PL, SG, PR), L, B, FM, V, TH, RN and EEEE, as
+ * PostgreSQL's NUM_processor.
+ *
+ * ty_num_compile reads a format and checks it, with PostgreSQL's errors,
+ * all TY_ERR_INVALID ("multiple decimal points", "cannot use "S" twice",
+ * ""EEEE" is incompatible with other formats" and the rest).
+ */
+typedef struct ty_num_format_t ty_num_format_t;
+int ty_num_compile(const char *fmt, size_t len, ty_num_format_t **out);
+
+/* The parts of a format a host needs to make a number's digits. */
+typedef struct ty_num_desc_t {
+  int pre;   /* digits before the point */
+  int post;  /* digits after it */
+  int multi; /* V's power of 10 */
+  int roman; /* RN */
+  int eeee;  /* EEEE */
+} ty_num_desc_t;
+void ty_num_describe(const ty_num_format_t *f, ty_num_desc_t *d);
+
+/*
+ * The host's locale, for D, G, L and S: its lconv strings, as they are
+ * (ty takes PostgreSQL's defaults for those that are empty or NULL). symbols
+ * is called only for a format that uses one.
+ */
+typedef struct ty_num_symbols_t {
+  const char *negative_sign;
+  const char *positive_sign;
+  const char *decimal_point;
+  const char *thousands_sep;
+  const char *currency_symbol;
+} ty_num_symbols_t;
+typedef struct ty_num_locale_t {
+  void *ctx;
+  void (*symbols)(void *ctx, ty_num_symbols_t *out);
+} ty_num_locale_t;
+
+/*
+ * to_char of an int4, an int8, a float4 and a float8. An empty format gives
+ * an empty text. The errors: TY_ERR_RANGE "integer out of range" or "bigint
+ * out of range" from V; TY_ERR_INVALID ""nan" is not a number" from TH; and
+ * TY_ERR_NOMEM.
+ */
+int ty_int32_to_char(int32_t v, const ty_num_format_t *f,
+                     const ty_num_locale_t *loc, ty_varlena_t **out);
+int ty_int64_to_char(int64_t v, const ty_num_format_t *f,
+                     const ty_num_locale_t *loc, ty_varlena_t **out);
+int ty_float4_to_char(float v, const ty_num_format_t *f,
+                      const ty_num_locale_t *loc, ty_varlena_t **out);
+int ty_float8_to_char(double v, const ty_num_format_t *f,
+                      const ty_num_locale_t *loc, ty_varlena_t **out);
+
+/*
+ * For a host that makes the digits itself, as digres does for a decimal:
+ * the Roman numeral of n (15 # out of 1 to 3999) in buf, and the format
+ * written by digits: numstr is the number without its sign ('+' or '-' in
+ * sign), padded by out_pre_spaces, with pre and post as the host has
+ * adjusted them.
+ */
+const char *ty_num_roman(int n, char buf[16]);
+int ty_num_to_char_digits(const ty_num_format_t *f, const char *numstr,
+                          int out_pre_spaces, int sign, int pre, int post,
+                          const ty_num_locale_t *loc, ty_varlena_t **out);
+
 #endif /* TY_TOCHAR_H */

@@ -221,3 +221,127 @@ TEST_CASE("to_char errors, locale and edges") {
   CHECK(ts_char(feb, "FMxTMy") == "x0");
   CHECK(ts_char(feb, "\"YYYY\\\"\" YYYY") == "YYYY\" 2000");
 }
+
+namespace {
+
+/* to_char of a number of type t (i4, i8, f4, f8) and text v. */
+std::string num_char(const std::string &t, const std::string &v,
+                     const std::string &fmt,
+                     const ty_num_locale_t *loc = nullptr) {
+  ty_num_format_t *f;
+
+  if (0 != ty_num_compile(fmt.data(), fmt.size(), &f)) {
+    return "ERR " + std::string(ty_errmsg());
+  }
+  vl_out_t r;
+  int rc = "i4" == t ? ty_int32_to_char((int32_t)strtol(v.c_str(), nullptr, 10),
+                                        f, loc, &r)
+           : "i8" == t
+               ? ty_int64_to_char(strtoll(v.c_str(), nullptr, 10), f, loc, &r)
+           : "f4" == t
+               ? ty_float4_to_char(strtof(v.c_str(), nullptr), f, loc, &r)
+               : ty_float8_to_char(strtod(v.c_str(), nullptr), f, loc, &r);
+
+  ty_free(f);
+  return 0 == rc ? r.str() : "ERR " + std::string(ty_errmsg());
+}
+
+/* A host's locale for the test: German numbers, and a euro. */
+void german(void *, ty_num_symbols_t *s) {
+  s->negative_sign = "-";
+  s->positive_sign = "";
+  s->decimal_point = ",";
+  s->thousands_sep = ".";
+  s->currency_symbol = "€";
+}
+
+} // namespace
+
+// Verify every number PostgreSQL printed by to_char, byte for byte.
+// 1. Read test/tonum_known.txt: int4, int8, float4 and float8 by 99 formats
+//    (the numeric lines are digres's, whose digits it makes).
+// 2. Run each through ty, and compare the text.
+TEST_CASE("to_char of numbers prints what PostgreSQL printed") {
+  const char *env = getenv("TY_VECTORS");
+  std::string dir = env ? env : "test/vectors.txt";
+  std::string path = dir.substr(0, dir.rfind('/') + 1) + "tonum_known.txt";
+  FILE *fp = fopen(path.c_str(), "r");
+  char line[8192];
+  int n = 0, bad = 0;
+
+  REQUIRE(nullptr != fp);
+
+  // 1. Read test/tonum_known.txt.
+  while (fgets(line, sizeof line, fp)) {
+    char kind[16], v[128], fmt[4096], want[4096];
+
+    if (4 != sscanf(line, "tonum.%15s %127s %4095s => %4095s", kind, v, fmt,
+                    want) ||
+        0 == strcmp(kind, "num")) {
+      continue;
+    }
+
+    // 2. Run each through ty, and compare the text.
+    std::string got = num_char(kind, v, unhex(fmt));
+
+    n++;
+    if (got != unhex(want) && bad++ < 20) {
+      INFO(line);
+      CHECK(got == unhex(want));
+    }
+  }
+  fclose(fp);
+  CHECK(0 == bad);
+  CHECK(n > 6000);
+}
+
+// Verify the checks of a number format, the locale, and the errors.
+// 1. Each check of the format, with PostgreSQL's message.
+// 2. D, G, L and S take the host's symbols; a format with none of them
+//    does not ask for them.
+// 3. V past the integer's range, and TH of a number that is not one.
+TEST_CASE("to_char of numbers: checks, locale and errors") {
+  // 1. Each check of the format, with PostgreSQL's message.
+  CHECK(num_char("i4", "1", "9.9.9") == "ERR multiple decimal points");
+  CHECK(num_char("i4", "1", "9V9.9") ==
+        "ERR cannot use \"V\" and decimal point together");
+  CHECK(num_char("i4", "1", "S9S") == "ERR cannot use \"S\" twice");
+  CHECK(num_char("i4", "1", "MIS9") ==
+        "ERR cannot use \"S\" and \"PL\"/\"MI\"/\"SG\"/\"PR\" together");
+  CHECK(num_char("i4", "1", "S9MI") ==
+        "ERR cannot use \"S\" and \"MI\" together");
+  CHECK(num_char("i4", "1", "S9PL") ==
+        "ERR cannot use \"S\" and \"PL\" together");
+  CHECK(num_char("i4", "1", "S9SG") ==
+        "ERR cannot use \"S\" and \"SG\" together");
+  CHECK(num_char("i4", "1", "MI9PR") ==
+        "ERR cannot use \"PR\" and \"S\"/\"PL\"/\"MI\"/\"SG\" together");
+  CHECK(num_char("i4", "1", "PR9") == "ERR \"9\" must be ahead of \"PR\"");
+  CHECK(num_char("i4", "1", "PR0") == "ERR \"0\" must be ahead of \"PR\"");
+  CHECK(num_char("i4", "1", "RNRN") == "ERR cannot use \"RN\" twice");
+  CHECK(num_char("i4", "1", "RNMI") ==
+        "ERR \"RN\" is incompatible with other formats");
+  CHECK(num_char("i4", "1", "RN9") == "              I");
+  CHECK(num_char("i4", "1", "9EEEE9") ==
+        "ERR \"EEEE\" must be the last pattern used");
+  CHECK(num_char("i4", "1", "9EEEEEEEE") == "ERR cannot use \"EEEE\" twice");
+  CHECK(num_char("i4", "1", "FM9EEEE") ==
+        "ERR \"EEEE\" is incompatible with other formats");
+
+  // 2. D, G, L and S take the host's symbols; a format with none of them
+  //    does not ask for them.
+  ty_num_locale_t de = {nullptr, german};
+
+  CHECK(num_char("i4", "1234567", "L9G999G999D99S", &de) == "€1.234.567,00+");
+  CHECK(num_char("f8", "-1234.5", "FM9G999D99S", &de) == "1.234,5-");
+  CHECK(num_char("i4", "1234567", "9,999,999.99", &de) == " 1,234,567.00");
+
+  // 3. V past the integer's range, and TH of a number that is not one.
+  CHECK(num_char("i4", "1", "9V9999999999") == "ERR integer out of range");
+  CHECK(num_char("i4", "2147483647", "9V9") == "ERR integer out of range");
+  CHECK(num_char("i8", "1", "9V9999999999999999999") ==
+        "ERR bigint out of range");
+  CHECK(num_char("f8", "nan", "999TH") == "ERR \"NaN\" is not a number");
+  CHECK(num_char("i4", "5", "TH") == "ERR \".\" is not a number");
+  CHECK(num_char("i4", "5", "") == "");
+}

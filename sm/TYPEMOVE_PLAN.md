@@ -1030,8 +1030,28 @@ copied from PostgreSQL keeps its copyright notice
        `'HH24.MI.SS.US'` 10,471,196 and 7,186,992 (-31.36%).
        PostgreSQL wrote each field by `sprintf` and looked the
        format up in a cache of 20; ty writes the digits itself.
-       The numbers' `to_char` and the reverse parse
-       (`to_timestamp`, `to_date`, `to_number`) are left.
+     - The numbers' `to_char` moved too (2026-11-23):
+       `ty_num_compile` and the checks of a format, the digits
+       of int4, int8, float4 and float8, and the writing of them
+       by the format. digres makes a decimal's digits, as ty has
+       no decimal text yet, and gives the `lconv` symbols through
+       a `ty_num_locale_t`. The tests: 7,973 lines of five types
+       by 99 formats that the digres before the move printed
+       (`ty/test/tonum_known.txt`), the same on the new digres
+       with the same errors; ty cases for each check and the
+       host's symbols; and `dg/test/select_tonum_ops.sql`, with a
+       German locale for D, G, L, S and TM. Measured by
+       callgrind, 2,000 rows (old, new): int4 by `'999,999'`
+       6,964,717 and 6,791,349 (-2.49%); int8 by `'FM999999999'`
+       7,169,558 and 6,863,731 (-4.27%); a float8 by `'99999.99'`
+       17,286,078 and 15,274,998 (-11.63%); a decimal by
+       `'FM99999.990'` 9,134,299 and 8,779,824 (-3.88%). The
+       first version read up to 18% more: integers' digits came
+       from `snprintf`, each digit buffer from the heap, and a
+       decimal64's `to_char` compiled its format each row, as it
+       called `numeric_to_char` with no FmgrInfo to keep it in.
+       The reverse parse (`to_timestamp`, `to_date`,
+       `to_number`) is left.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and
