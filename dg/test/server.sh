@@ -4847,6 +4847,75 @@ cmp -s "$work/numbin.out" "$work/numbin.expected" ||
   "-12345.67|123456789012345678901234.12345,0.01|," ] ||
   fail "numerics copied in binary"
 
+# Verify that a numeric read in binary is rounded to its column's typmod, and
+# refused if it has too many digits before the point, as one read as text is:
+# by numeric_recv, before the same check as a row is stored.
+# 1. COPY a value in binary format from a numeric(36,6) into a numeric(20,2),
+#    a decimal128, and into a numeric(5,2), a decimal64: each is rounded half
+#    away from zero. The COPY's WHERE sees it rounded, before it is stored.
+# 2. The values that round to 10^18 and 10^3, and one of each past that, are
+#    refused with numeric_in's message and detail. The context names the
+#    column, as only the error of the column's input function does.
+# 3. A column with no digits before the point refuses 1.
+# 4. Each table holds only the values that were not refused.
+local_psql -c 'create table recv_src (n numeric(36,6))' \
+  -c 'create table recv_d128 (n numeric(20,2))' \
+  -c 'create table recv_d64 (n numeric(5,2))' \
+  -c 'create table recv_frac (n numeric(20,20))' > "$work/recv.out" 2>&1 ||
+  fail "numeric's binary typmod: tables"
+for c in "999999999999999999.994999 recv_d128" \
+  "-0.005 recv_d128 where n = -0.01" \
+  "999999999999999999.995 recv_d128" "-1000000000000000000 recv_d128" \
+  "999.994999 recv_d64" "-0.005 recv_d64 where n = -0.01" \
+  "999.995 recv_d64" "-1000 recv_d64" "0.999999 recv_frac" "1 recv_frac"; do
+  echo "$c"
+  read -r v t where <<< "$c"
+  local_psql -c 'delete from recv_src' \
+    -c "insert into recv_src values ($v)" \
+    -c "copy recv_src to '$work/recv.bin' with (format binary)" \
+    -c "copy $t from '$work/recv.bin' with (format binary) $where" 2>&1 |
+    grep -E '^(ERROR|DETAIL|CONTEXT)'
+done > "$work/recv.out"
+for t in recv_d128 recv_d64 recv_frac; do
+  local_psql -c "select '$t', n from $t order by n"
+done >> "$work/recv.out" 2>&1
+cat > "$work/recv.expected" <<'OUT'
+999999999999999999.994999 recv_d128
+-0.005 recv_d128 where n = -0.01
+999999999999999999.995 recv_d128
+ERROR:  numeric field overflow
+DETAIL:  A field with precision 20, scale 2 must round to an absolute value less than 10^18.
+CONTEXT:  COPY recv_d128, line 1, column n
+-1000000000000000000 recv_d128
+ERROR:  numeric field overflow
+DETAIL:  A field with precision 20, scale 2 must round to an absolute value less than 10^18.
+CONTEXT:  COPY recv_d128, line 1, column n
+999.994999 recv_d64
+-0.005 recv_d64 where n = -0.01
+999.995 recv_d64
+ERROR:  numeric field overflow
+DETAIL:  A field with precision 5, scale 2 must round to an absolute value less than 10^3.
+CONTEXT:  COPY recv_d64, line 1, column n
+-1000 recv_d64
+ERROR:  numeric field overflow
+DETAIL:  A field with precision 5, scale 2 must round to an absolute value less than 10^3.
+CONTEXT:  COPY recv_d64, line 1, column n
+0.999999 recv_frac
+1 recv_frac
+ERROR:  numeric field overflow
+DETAIL:  A field with precision 20, scale 20 must round to an absolute value less than 1.
+CONTEXT:  COPY recv_frac, line 1, column n
+recv_d128|-0.01
+recv_d128|999999999999999999.99
+recv_d64|-0.01
+recv_d64|999.99
+recv_frac|0.99999900000000000000
+OUT
+cmp -s "$work/recv.out" "$work/recv.expected" ||
+  fail "a numeric's typmod in binary"
+local_psql -c 'drop table recv_src, recv_d128, recv_d64, recv_frac' \
+  > /dev/null 2>&1
+
 # Verify that a column's DEFAULT is kept in sm and fills what an INSERT or
 # UPDATE leaves to it, in later sessions too.
 # 1. Make t22 with constant, expression, now() and numeric defaults.

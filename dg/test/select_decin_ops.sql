@@ -1,8 +1,8 @@
 -- Verify numeric's text in and out, which ty reads and writes
 -- (ty_decimal.h): each form, a typmod's rounding, the limits of 36
--- digits, each error with its detail, the binary form's typmod, and the
--- casts with the floats. A refusal is what is tested, so an error goes on
--- to the next statement.
+-- digits, each error with its detail, and the casts with the floats.
+-- The binary form's typmod is in server.sh, which can COPY a file.
+-- A refusal is tested, so an error goes on to the next statement.
 \set ON_ERROR_STOP off
 CREATE TEMP TABLE dec_in (i int primary key, x text);
 INSERT INTO dec_in VALUES (1, '  -12.50  '), (2, '.5'), (3, '5.'), (4, '1_000.5'), (5, '1.5e2'), (6, '1.5e-2'), (7, '0x1F'), (8, '-0o17'), (9, '0b101'), (11, '0.000000000000000000000000000000000001'), (12, '-0');
