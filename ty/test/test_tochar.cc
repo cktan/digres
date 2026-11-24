@@ -39,7 +39,7 @@ std::string unhex(const std::string &h) {
 struct fmt_t {
   ty_dch_format_t *f = nullptr;
   explicit fmt_t(const std::string &s) {
-    REQUIRE(0 == ty_dch_compile(s.data(), s.size(), &f));
+    REQUIRE(0 == ty_dch_compile(s.data(), s.size(), 0, &f));
   }
   ~fmt_t() { ty_free(f); }
 };
@@ -344,4 +344,207 @@ TEST_CASE("to_char of numbers: checks, locale and errors") {
   CHECK(num_char("f8", "nan", "999TH") == "ERR \"NaN\" is not a number");
   CHECK(num_char("i4", "5", "TH") == "ERR \".\" is not a number");
   CHECK(num_char("i4", "5", "") == "");
+}
+
+namespace {
+
+/* A host's TM names for the test: the C locale's English, in any case. */
+int c_names(void *, int kind, const char *s, int *index, size_t *len) {
+  static const char *const full_m[] = {
+      "January", "February", "March",     "April",   "May",      "June",
+      "July",    "August",   "September", "October", "November", "December"};
+  static const char *const abbr_m[] = {"Jan", "Feb", "Mar", "Apr",
+                                       "May", "Jun", "Jul", "Aug",
+                                       "Sep", "Oct", "Nov", "Dec"};
+  static const char *const full_d[] = {"Sunday",    "Monday",   "Tuesday",
+                                       "Wednesday", "Thursday", "Friday",
+                                       "Saturday"};
+  static const char *const abbr_d[] = {"Sun", "Mon", "Tue", "Wed",
+                                       "Thu", "Fri", "Sat"};
+  const char *const *t = TY_TOCHAR_FULL_MONTH == kind     ? full_m
+                         : TY_TOCHAR_ABBREV_MONTH == kind ? abbr_m
+                         : TY_TOCHAR_FULL_DAY == kind     ? full_d
+                                                          : abbr_d;
+  int n = kind <= TY_TOCHAR_ABBREV_MONTH ? 12 : 7;
+
+  for (int i = 0; i < n; i++) {
+    size_t l = strlen(t[i]);
+
+    if (0 == strncasecmp(s, t[i], l)) {
+      *index = i;
+      *len = l;
+      return 0;
+    }
+  }
+  return -1;
+}
+
+/* The reverse parse as to_timestamp (in UTC) or to_date gives it, or "E "
+ * and the hex of the message, detail and hint, as the vectors write it. */
+std::string from_char(const std::string &kind, const std::string &in,
+                      const std::string &fmt) {
+  ty_dch_format_t *f;
+  ty_dch_parse_host_t host = {nullptr, c_names, nullptr};
+  ty_dch_parsed_t p;
+  ty_dch_error_t err;
+  auto hex = [](const std::string &s) {
+    std::string h;
+    char b[3];
+
+    for (unsigned char c : s) {
+      snprintf(b, sizeof b, "%02x", c);
+      h += b;
+    }
+    return h.empty() ? std::string("-") : h;
+  };
+  auto e = [&](const std::string &msg, const std::string &detail,
+               const std::string &hint) {
+    return "E " + hex(msg) + "|" + hex(detail) + "|" + hex(hint);
+  };
+
+  REQUIRE(0 == ty_dch_compile(fmt.data(), fmt.size(), 0, &f));
+  int rc = ty_dch_parse(f, in.c_str(), 0, &host, &p, &err);
+
+  ty_free(f);
+  if (0 != rc) {
+    if (TY_DCH_E_DTERR == err.code) {
+      return e((-5 == err.dterr ? "time zone displacement out of range: \""
+                                : "date/time field value out of range: \"") +
+                   in + "\"",
+               "", "");
+    }
+    return e(ty_errmsg(), err.detail, err.hint);
+  }
+  if ("ts" == kind) {
+    int64_t ts;
+
+    if (0 != ty_dch_to_timestamp(&p, ty_tz_find("UTC"), &ts)) {
+      return e(ty_errmsg(), "", "");
+    }
+    return std::to_string(ts);
+  }
+  int32_t d;
+
+  if (0 != ty_dch_to_date(&p, &d)) {
+    return e(std::string(ty_errmsg()) + ": \"" + in + "\"", "", "");
+  }
+  return std::to_string(d);
+}
+
+} // namespace
+
+// Verify the reverse parse against what PostgreSQL gave, error for error.
+// 1. Read test/fromchar_known.txt: texts by formats, round trips of
+//    to_char and their perturbations, and PostgreSQL's own cases.
+// 2. Skip a format with a zone abbreviation (TZ): the session's table is
+//    digres's, and its comparison is digres's.
+// 3. Run each through ty as to_timestamp or to_date, and compare the value,
+//    or the message, the detail and the hint.
+TEST_CASE("to_timestamp and to_date give what PostgreSQL gave") {
+  const char *env = getenv("TY_VECTORS");
+  std::string dir = env ? env : "test/vectors.txt";
+  std::string path = dir.substr(0, dir.rfind('/') + 1) + "fromchar_known.txt";
+  FILE *fp = fopen(path.c_str(), "r");
+  char line[16384];
+  int n = 0, bad = 0;
+
+  REQUIRE(nullptr != fp);
+
+  // 1. Read test/fromchar_known.txt.
+  while (fgets(line, sizeof line, fp)) {
+    char kind[16], in[4096], fmt[4096];
+    const char *arrow = strstr(line, " => ");
+
+    if (nullptr == arrow ||
+        3 != sscanf(line, "fromchar.%15s %4095s %4095s", kind, in, fmt)) {
+      continue;
+    }
+    std::string want(arrow + 4);
+
+    while (!want.empty() && ('\n' == want.back() || '\r' == want.back())) {
+      want.pop_back();
+    }
+    std::string f = unhex(fmt);
+
+    // 2. Skip a format with a zone abbreviation (TZ).
+    bool tz = false;
+
+    for (size_t i = 0; i + 1 < f.size(); i++) {
+      if (('T' == f[i] || 't' == f[i]) &&
+          ('Z' == f[i + 1] || 'z' == f[i + 1]) &&
+          (i + 2 >= f.size() || !strchr("HhMm", f[i + 2]))) {
+        tz = true;
+      }
+    }
+    if (tz) {
+      continue;
+    }
+
+    // 3. Run each through ty as to_timestamp or to_date.
+    std::string got = from_char(kind, unhex(in), f);
+
+    n++;
+    if (got != want && bad++ < 20) {
+      INFO(line);
+      CHECK(got == want);
+    }
+  }
+  fclose(fp);
+  CHECK(0 == bad);
+  CHECK(n > 7000);
+}
+
+// Verify the standard mode of jsonpath's datetime(), and what a format
+// holds.
+// 1. A character not quoted must be one of "-./,':; " in the format.
+// 2. The text must match each separator, fill the format, and end with it.
+// 3. The flags: a date, a time, a zone; IW is neither, as PostgreSQL has it.
+TEST_CASE("the reverse parse's standard mode and flags") {
+  ty_dch_format_t *f;
+  ty_dch_parsed_t p;
+  ty_dch_error_t err;
+  auto parse = [&](const char *fmt, const char *in) {
+    REQUIRE(0 == ty_dch_compile(fmt, strlen(fmt), 1, &f));
+    int rc = ty_dch_parse(f, in, 1, nullptr, &p, &err);
+
+    ty_free(f);
+    return 0 == rc ? std::string("ok") : std::string(ty_errmsg());
+  };
+
+  // 1. A character not quoted must be one of "-./,':; " in the format.
+  CHECK(-1 == ty_dch_compile("YYYY*MM", 7, 1, &f));
+  CHECK(std::string(ty_errmsg()) == "invalid datetime format separator: \"*\"");
+  CHECK(-1 == ty_dch_compile("YYYYéMM", 8, 1, &f));
+  CHECK(std::string(ty_errmsg()) == "invalid datetime format separator: \"é\"");
+
+  // 2. The text must match each separator, fill the format, and end with it.
+  CHECK(parse("YYYY-MM-DD", "2024-02-29") == "ok");
+  CHECK(2024 == p.tm.year);
+  CHECK(parse("YYYY-MM-DD", "2024/02/29") ==
+        "unmatched format separator \"-\"");
+  CHECK(parse("YYYY-MM-DD HH24", "2024-02-29") ==
+        "input string is too short for datetime format");
+  CHECK(parse("YYYY-MM-DD", "2024-02-29 x") ==
+        "trailing characters remain in input string after datetime format");
+  CHECK(parse("YYYY\"x\"MM", "2024y02") == "unmatched format character \"x\"");
+  CHECK(TY_DCH_E_FORMAT == err.code);
+
+  // 3. The flags: a date, a time, a zone; IW is neither.
+  struct {
+    const char *fmt;
+    unsigned flags;
+  } cases[] = {{"YYYY-MM-DD", TY_DCH_DATED},
+               {"HH24:MI", TY_DCH_TIMED},
+               {"TZH", TY_DCH_ZONED},
+               {"YYYY HH TZ", TY_DCH_DATED | TY_DCH_TIMED | TY_DCH_ZONED},
+               {"IW", 0},
+               {"FX", 0},
+               {"", 0}};
+
+  for (const auto &c : cases) {
+    INFO(c.fmt);
+    REQUIRE(0 == ty_dch_compile(c.fmt, strlen(c.fmt), 0, &f));
+    CHECK(c.flags == ty_dch_flags(f));
+    ty_free(f);
+  }
 }

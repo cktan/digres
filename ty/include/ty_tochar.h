@@ -19,6 +19,7 @@
 #include <stdint.h>
 
 #include "ty.h"
+#include "ty_datetime.h"
 #include "ty_interval.h"
 #include "ty_timezone.h"
 #include "ty_varlena.h"
@@ -31,9 +32,12 @@ typedef struct ty_dch_format_t ty_dch_format_t;
  * date: a keyword is matched first, the longest of those that begin alike,
  * after a prefix FM or TM and before a suffix TH, th or SP; a "quoted"
  * string is text, with \ quoting the next character; anything else is a
- * character. Fails only with TY_ERR_NOMEM.
+ * character. std is the standard mode of jsonpath's datetime(), where a
+ * character not quoted must be one of "-./,':; ", else TY_ERR_INVALID
+ * ("invalid datetime format separator: "c""). Else it fails only with
+ * TY_ERR_NOMEM.
  */
-int ty_dch_compile(const char *fmt, size_t len, ty_dch_format_t **out);
+int ty_dch_compile(const char *fmt, size_t len, int std, ty_dch_format_t **out);
 
 /* The names TM asks for. */
 enum {
@@ -75,6 +79,77 @@ int ty_timestamptz_to_char(int64_t ts, const ty_tz_t *tz,
                            const ty_tochar_locale_t *loc, ty_varlena_t **out);
 int ty_interval_to_char(const ty_interval_t *iv, const ty_dch_format_t *f,
                         const ty_tochar_locale_t *loc, ty_varlena_t **out);
+
+/*
+ * The reverse parse: to_timestamp, to_date and jsonpath's datetime(), as
+ * PostgreSQL's DCH_from_char and do_to_timestamp. The host's hooks:
+ * match_name finds the localized name of a kind (TY_TOCHAR_*) that the text
+ * at s begins with, in any case by the host's collation, for TM: 0 and the
+ * name's place and the bytes it took, or -1. tz_abbrev finds the session's
+ * zone abbreviation the text at s begins with (DecodeTimezoneAbbrevPrefix):
+ * its bytes, 0 for none, and either its fixed offset east in *gmtoff or its
+ * zone in *tz. Either may be NULL: no TM names, no abbreviations.
+ */
+typedef struct ty_dch_parse_host_t {
+  void *ctx;
+  int (*match_name)(void *ctx, int kind, const char *s, int *index,
+                    size_t *len);
+  int (*tz_abbrev)(void *ctx, const char *s, int *gmtoff, const ty_tz_t **tz);
+} ty_dch_parse_host_t;
+
+/* The parts a format holds (DCH_datetime_type). */
+enum { TY_DCH_DATED = 1, TY_DCH_TIMED = 2, TY_DCH_ZONED = 4 };
+unsigned ty_dch_flags(const ty_dch_format_t *f);
+
+/* The fields the parse gives: the zone's offset is west of Greenwich. */
+typedef struct ty_dch_parsed_t {
+  ty_tm_t tm;
+  int32_t fsec;
+  int has_tz;
+  int gmtoffset;
+  int fprec; /* FFn's digits, or 0 */
+} ty_dch_parsed_t;
+
+/*
+ * The error of a parse, besides ty's message: PostgreSQL's code for it, and
+ * its detail and hint ("" for none). TY_DCH_E_DTERR is DateTimeParseError's,
+ * of dterr (-2 a field out of range, -5 a zone's offset out of range), whose
+ * message the host writes from the input.
+ */
+enum {
+  TY_DCH_E_FORMAT = 1, /* ERRCODE_INVALID_DATETIME_FORMAT */
+  TY_DCH_E_RANGE = 2,  /* ERRCODE_DATETIME_VALUE_OUT_OF_RANGE */
+  TY_DCH_E_FIELD = 3,  /* ERRCODE_DATETIME_FIELD_OVERFLOW */
+  TY_DCH_E_DTERR = 4
+};
+typedef struct ty_dch_error_t {
+  int code;
+  int dterr;
+  char detail[256];
+  char hint[128];
+} ty_dch_error_t;
+
+/*
+ * Read the NUL-terminated text in by the format f, in the standard mode if
+ * std: 0 and the fields, or -1 with ty's error and *err.
+ */
+int ty_dch_parse(const ty_dch_format_t *f, const char *in, int std,
+                 const ty_dch_parse_host_t *host, ty_dch_parsed_t *out,
+                 ty_dch_error_t *err);
+
+/*
+ * The parse made a timestamp, as to_timestamp: in its own zone, or else in
+ * tz, the session's; at FFn's precision. TY_ERR_RANGE "timestamp out of
+ * range".
+ */
+int ty_dch_to_timestamp(const ty_dch_parsed_t *p, const ty_tz_t *tz,
+                        int64_t *out);
+
+/*
+ * The parse made a date, as to_date: TY_ERR_RANGE "date out of range", to
+ * which PostgreSQL adds the text.
+ */
+int ty_dch_to_date(const ty_dch_parsed_t *p, int32_t *out);
 
 /*
  * to_char of a number: a format of 9, 0, the point and D, the comma and G,

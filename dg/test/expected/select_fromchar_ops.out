@@ -1,0 +1,65 @@
+-- Verify the reverse parse, which ty does (ty_dch_parse): to_timestamp and
+-- to_date with zone abbreviations from the session's table, TM's names in a
+-- German locale, and jsonpath's datetime() in the standard mode, with each
+-- type it makes and each of its errors. A refusal is what is tested, so an
+-- error goes on to the next statement.
+\set ON_ERROR_STOP off
+SET timezone = 'America/New_York';
+SELECT to_timestamp('2011-12-18 11:38 EST', 'YYYY-MM-DD HH12:MI TZ') AS est, to_timestamp('2011-07-18 11:38 MSK', 'YYYY-MM-DD HH12:MI TZ') AS msk, to_timestamp('2011-12-18 11:38', 'YYYY-MM-DD HH12:MI') AS local, to_timestamp('2024-03-10 02:30', 'YYYY-MM-DD HH24:MI') AS gap;
+          est           |          msk           |         local          |          gap           
+------------------------+------------------------+------------------------+------------------------
+ 2011-12-18 11:38:00-05 | 2011-07-18 03:38:00-04 | 2011-12-18 11:38:00-05 | 2024-03-10 03:30:00-04
+(1 row)
+
+SELECT to_timestamp('2011-12-18 11:38 PST', 'YYYY-MM-DD HH12:MI TZ') AS pst, to_timestamp('2011-12-18 11:38 +0530', 'YYYY-MM-DD HH12:MI OF') AS of;
+psql:test/select_fromchar_ops.sql:9: ERROR:  time zone displacement out of range: "2011-12-18 11:38 +0530"
+SELECT to_timestamp('2011-12-18 11:38 XYZ', 'YYYY-MM-DD HH12:MI TZ');
+psql:test/select_fromchar_ops.sql:10: ERROR:  invalid value "XYZ" for "TZ"
+DETAIL:  Time zone abbreviation is not recognized.
+SET lc_time = 'de_DE.utf8';
+SELECT to_date('15 März 2024', 'DD TMMonth YYYY') AS de_month, to_date('15 mär 2024', 'DD TMMon YYYY') AS de_mon, to_date('Freitag 15 MÄRZ 2024', 'TMDay DD TMMONTH YYYY') AS de_day;
+psql:test/select_fromchar_ops.sql:12: ERROR:  invalid value "MÄRZ" for "MONTH"
+DETAIL:  The given value did not match any of the allowed values for this field.
+SELECT to_date('15 March 2024', 'DD TMMonth YYYY');
+psql:test/select_fromchar_ops.sql:13: ERROR:  invalid value "March" for "Month"
+DETAIL:  The given value did not match any of the allowed values for this field.
+RESET lc_time;
+RESET timezone;
+SELECT jsonb_path_query_first('"2024-02-29"'::jsonb, '$.datetime("YYYY-MM-DD")'::jsonpath, '{}', false) AS d, jsonb_path_query_first('"12:34:56.789"'::jsonb, '$.datetime("HH24:MI:SS.FF3")'::jsonpath, '{}', false) AS t, jsonb_path_query_first('"12:34:56 +05:30"'::jsonb, '$.datetime("HH24:MI:SS TZH:TZM")'::jsonpath, '{}', false) AS ttz, jsonb_path_query_first('"2024-02-29 12:34:56"'::jsonb, '$.datetime("YYYY-MM-DD HH24:MI:SS")'::jsonpath, '{}', false) AS ts, jsonb_path_query_first('"2024-02-29 12:34:56 -08"'::jsonb, '$.datetime("YYYY-MM-DD HH24:MI:SS TZH")'::jsonpath, '{}', false) AS tstz;
+      d       |       t        |       ttz        |          ts           |            tstz             
+--------------+----------------+------------------+-----------------------+-----------------------------
+ "2024-02-29" | "12:34:56.789" | "12:34:56+05:30" | "2024-02-29T12:34:56" | "2024-02-29T12:34:56-08:00"
+(1 row)
+
+SELECT jsonb_path_query_first('"2024-02-29T12:34:56"'::jsonb, '$.datetime()'::jsonpath, '{}', false) AS iso, jsonb_path_query_first('"2024-02-29"'::jsonb, '$.datetime("YYYY-MM-DD").type()'::jsonpath, '{}', false) AS typ;
+          iso          |  typ   
+-----------------------+--------
+ "2024-02-29T12:34:56" | "date"
+(1 row)
+
+SELECT jsonb_path_query_first('"2024/02/29"'::jsonb, '$.datetime("YYYY-MM-DD")'::jsonpath, '{}', false);
+psql:test/select_fromchar_ops.sql:18: ERROR:  unmatched format separator "-"
+SELECT jsonb_path_query_first('"2024-02-29"'::jsonb, '$.datetime("YYYY-MM-DD HH24")'::jsonpath, '{}', false);
+psql:test/select_fromchar_ops.sql:19: ERROR:  input string is too short for datetime format
+SELECT jsonb_path_query_first('"2024-02-29 x"'::jsonb, '$.datetime("YYYY-MM-DD")'::jsonpath, '{}', false);
+psql:test/select_fromchar_ops.sql:20: ERROR:  trailing characters remain in input string after datetime format
+SELECT jsonb_path_query_first('"2024-02-29"'::jsonb, '$.datetime("YYYY*MM*DD")'::jsonpath, '{}', false);
+psql:test/select_fromchar_ops.sql:21: ERROR:  invalid datetime format separator: "*"
+SELECT jsonb_path_query_first('"20240229"'::jsonb, '$.datetime("YYYY\"x\"MMDD")'::jsonpath, '{}', false);
+psql:test/select_fromchar_ops.sql:22: ERROR:  input string is too short for datetime format
+SELECT jsonb_path_query_first('"2024-02-29 +05"'::jsonb, '$.datetime("YYYY-MM-DD TZH")'::jsonpath, '{}', false);
+psql:test/select_fromchar_ops.sql:23: ERROR:  datetime format is zoned but not timed
+SELECT jsonb_path_query_first('"12:00"'::jsonb, '$.datetime("HH24:MI TZH")'::jsonpath, '{}', false);
+psql:test/select_fromchar_ops.sql:24: ERROR:  input string is too short for datetime format
+SELECT jsonb_path_query_first('"2024"'::jsonb, '$.datetime("TZH")'::jsonpath, '{}', false);
+psql:test/select_fromchar_ops.sql:25: ERROR:  time zone displacement out of range: "2024"
+SELECT jsonb_path_query_first('"2024-02-30"'::jsonb, '$.datetime("YYYY-MM-DD")'::jsonpath, '{}', false);
+psql:test/select_fromchar_ops.sql:26: ERROR:  date/time field value out of range: "2024-02-30"
+SELECT jsonb_path_query_first('"2024-02-30"'::jsonb, '$.datetime("YYYY-MM-DD")'::jsonpath, '{}', true) IS NULL AS silent;
+ silent 
+--------
+ t
+(1 row)
+
+SELECT jsonb_path_query_first_tz('"2024-02-29 12:00"'::jsonb, '$.datetime("YYYY-MM-DD HH24:MI").timestamp_tz()'::jsonpath, '{}', false) AS tz;
+psql:test/select_fromchar_ops.sql:28: ERROR:  jsonpath item method .timestamp_tz() can only be applied to a string

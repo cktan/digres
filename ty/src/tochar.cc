@@ -7,142 +7,145 @@
  * tochar.cc -- to_char of timestamp, timestamptz and interval (ty_tochar.h):
  * the compile of a format, and the writing of each keyword's field.
  */
+#include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "error.h"
 #include "ty_datetime.h"
 #include "ty_tochar.h"
+#include "dch.h"
 
-namespace {
+using namespace ty_internal::dch;
 
-/* The keywords. A lowercase one that writes as its uppercase one has its id. */
-enum dch_id : uint8_t {
-  K_A_D,
-  K_A_M,
-  K_AD,
-  K_AM,
-  K_B_C,
-  K_BC,
-  K_CC,
-  K_DAY,
-  K_DDD,
-  K_DD,
-  K_DY,
-  K_Day,
-  K_Dy,
-  K_D,
-  K_FF1,
-  K_FF2,
-  K_FF3,
-  K_FF4,
-  K_FF5,
-  K_FF6,
-  K_FX,
-  K_HH24,
-  K_HH12,
-  K_HH,
-  K_IDDD,
-  K_ID,
-  K_IW,
-  K_IYYY,
-  K_IYY,
-  K_IY,
-  K_I,
-  K_J,
-  K_MI,
-  K_MM,
-  K_MONTH,
-  K_MON,
-  K_MS,
-  K_Month,
-  K_Mon,
-  K_OF,
-  K_P_M,
-  K_PM,
-  K_Q,
-  K_RM,
-  K_SSSS,
-  K_SS,
-  K_TZH,
-  K_TZM,
-  K_TZ,
-  K_US,
-  K_WW,
-  K_W,
-  K_Y_YYY,
-  K_YYYY,
-  K_YYY,
-  K_YY,
-  K_Y,
-  K_a_d,
-  K_a_m,
-  K_ad,
-  K_am,
-  K_b_c,
-  K_bc,
-  K_day,
-  K_dy,
-  K_month,
-  K_mon,
-  K_p_m,
-  K_pm,
-  K_rm,
-  K_tz
-};
-
-/* A keyword: its name, and the id it writes as. */
-struct keyword_t {
-  const char *name;
-  uint8_t len;
-  uint8_t id;
-};
+namespace ty_internal {
+namespace dch {
 
 /*
  * PostgreSQL's DCH_keywords, in its order: those that begin alike go longest
  * first, as the first match wins.
  */
 const keyword_t k_keywords[] = {
-    {"A.D.", 4, K_A_D},    {"A.M.", 4, K_A_M},    {"AD", 2, K_AD},
-    {"AM", 2, K_AM},       {"B.C.", 4, K_B_C},    {"BC", 2, K_BC},
-    {"CC", 2, K_CC},       {"DAY", 3, K_DAY},     {"DDD", 3, K_DDD},
-    {"DD", 2, K_DD},       {"DY", 2, K_DY},       {"Day", 3, K_Day},
-    {"Dy", 2, K_Dy},       {"D", 1, K_D},         {"FF1", 3, K_FF1},
-    {"FF2", 3, K_FF2},     {"FF3", 3, K_FF3},     {"FF4", 3, K_FF4},
-    {"FF5", 3, K_FF5},     {"FF6", 3, K_FF6},     {"FX", 2, K_FX},
-    {"HH24", 4, K_HH24},   {"HH12", 4, K_HH12},   {"HH", 2, K_HH},
-    {"IDDD", 4, K_IDDD},   {"ID", 2, K_ID},       {"IW", 2, K_IW},
-    {"IYYY", 4, K_IYYY},   {"IYY", 3, K_IYY},     {"IY", 2, K_IY},
-    {"I", 1, K_I},         {"J", 1, K_J},         {"MI", 2, K_MI},
-    {"MM", 2, K_MM},       {"MONTH", 5, K_MONTH}, {"MON", 3, K_MON},
-    {"MS", 2, K_MS},       {"Month", 5, K_Month}, {"Mon", 3, K_Mon},
-    {"OF", 2, K_OF},       {"P.M.", 4, K_P_M},    {"PM", 2, K_PM},
-    {"Q", 1, K_Q},         {"RM", 2, K_RM},       {"SSSSS", 5, K_SSSS},
-    {"SSSS", 4, K_SSSS},   {"SS", 2, K_SS},       {"TZH", 3, K_TZH},
-    {"TZM", 3, K_TZM},     {"TZ", 2, K_TZ},       {"US", 2, K_US},
-    {"WW", 2, K_WW},       {"W", 1, K_W},         {"Y,YYY", 5, K_Y_YYY},
-    {"YYYY", 4, K_YYYY},   {"YYY", 3, K_YYY},     {"YY", 2, K_YY},
-    {"Y", 1, K_Y},         {"a.d.", 4, K_a_d},    {"a.m.", 4, K_a_m},
-    {"ad", 2, K_ad},       {"am", 2, K_am},       {"b.c.", 4, K_b_c},
-    {"bc", 2, K_bc},       {"cc", 2, K_CC},       {"day", 3, K_day},
-    {"ddd", 3, K_DDD},     {"dd", 2, K_DD},       {"dy", 2, K_dy},
-    {"d", 1, K_D},         {"ff1", 3, K_FF1},     {"ff2", 3, K_FF2},
-    {"ff3", 3, K_FF3},     {"ff4", 3, K_FF4},     {"ff5", 3, K_FF5},
-    {"ff6", 3, K_FF6},     {"fx", 2, K_FX},       {"hh24", 4, K_HH24},
-    {"hh12", 4, K_HH12},   {"hh", 2, K_HH},       {"iddd", 4, K_IDDD},
-    {"id", 2, K_ID},       {"iw", 2, K_IW},       {"iyyy", 4, K_IYYY},
-    {"iyy", 3, K_IYY},     {"iy", 2, K_IY},       {"i", 1, K_I},
-    {"j", 1, K_J},         {"mi", 2, K_MI},       {"mm", 2, K_MM},
-    {"month", 5, K_month}, {"mon", 3, K_mon},     {"ms", 2, K_MS},
-    {"of", 2, K_OF},       {"p.m.", 4, K_p_m},    {"pm", 2, K_pm},
-    {"q", 1, K_Q},         {"rm", 2, K_rm},       {"sssss", 5, K_SSSS},
-    {"ssss", 4, K_SSSS},   {"ss", 2, K_SS},       {"tzh", 3, K_TZH},
-    {"tzm", 3, K_TZM},     {"tz", 2, K_tz},       {"us", 2, K_US},
-    {"ww", 2, K_WW},       {"w", 1, K_W},         {"y,yyy", 5, K_Y_YYY},
-    {"yyyy", 4, K_YYYY},   {"yyy", 3, K_YYY},     {"yy", 2, K_YY},
-    {"y", 1, K_Y},
+    {"A.D.", 4, K_A_D, 0, M_NONE},
+    {"A.M.", 4, K_A_M, 0, M_NONE},
+    {"AD", 2, K_AD, 0, M_NONE},
+    {"AM", 2, K_AM, 0, M_NONE},
+    {"B.C.", 4, K_B_C, 0, M_NONE},
+    {"BC", 2, K_BC, 0, M_NONE},
+    {"CC", 2, K_CC, 1, M_NONE},
+    {"DAY", 3, K_DAY, 0, M_NONE},
+    {"DDD", 3, K_DDD, 1, M_GREGORIAN},
+    {"DD", 2, K_DD, 1, M_GREGORIAN},
+    {"DY", 2, K_DY, 0, M_NONE},
+    {"Day", 3, K_Day, 0, M_NONE},
+    {"Dy", 2, K_Dy, 0, M_NONE},
+    {"D", 1, K_D, 1, M_GREGORIAN},
+    {"FF1", 3, K_FF1, 1, M_NONE},
+    {"FF2", 3, K_FF2, 1, M_NONE},
+    {"FF3", 3, K_FF3, 1, M_NONE},
+    {"FF4", 3, K_FF4, 1, M_NONE},
+    {"FF5", 3, K_FF5, 1, M_NONE},
+    {"FF6", 3, K_FF6, 1, M_NONE},
+    {"FX", 2, K_FX, 0, M_NONE},
+    {"HH24", 4, K_HH24, 1, M_NONE},
+    {"HH12", 4, K_HH12, 1, M_NONE},
+    {"HH", 2, K_HH, 1, M_NONE},
+    {"IDDD", 4, K_IDDD, 1, M_ISOWEEK},
+    {"ID", 2, K_ID, 1, M_ISOWEEK},
+    {"IW", 2, K_IW, 1, M_ISOWEEK},
+    {"IYYY", 4, K_IYYY, 1, M_ISOWEEK},
+    {"IYY", 3, K_IYY, 1, M_ISOWEEK},
+    {"IY", 2, K_IY, 1, M_ISOWEEK},
+    {"I", 1, K_I, 1, M_ISOWEEK},
+    {"J", 1, K_J, 1, M_NONE},
+    {"MI", 2, K_MI, 1, M_NONE},
+    {"MM", 2, K_MM, 1, M_GREGORIAN},
+    {"MONTH", 5, K_MONTH, 0, M_GREGORIAN},
+    {"MON", 3, K_MON, 0, M_GREGORIAN},
+    {"MS", 2, K_MS, 1, M_NONE},
+    {"Month", 5, K_Month, 0, M_GREGORIAN},
+    {"Mon", 3, K_Mon, 0, M_GREGORIAN},
+    {"OF", 2, K_OF, 0, M_NONE},
+    {"P.M.", 4, K_P_M, 0, M_NONE},
+    {"PM", 2, K_PM, 0, M_NONE},
+    {"Q", 1, K_Q, 1, M_NONE},
+    {"RM", 2, K_RM, 0, M_GREGORIAN},
+    {"SSSSS", 5, K_SSSS, 1, M_NONE},
+    {"SSSS", 4, K_SSSS, 1, M_NONE},
+    {"SS", 2, K_SS, 1, M_NONE},
+    {"TZH", 3, K_TZH, 0, M_NONE},
+    {"TZM", 3, K_TZM, 1, M_NONE},
+    {"TZ", 2, K_TZ, 0, M_NONE},
+    {"US", 2, K_US, 1, M_NONE},
+    {"WW", 2, K_WW, 1, M_GREGORIAN},
+    {"W", 1, K_W, 1, M_GREGORIAN},
+    {"Y,YYY", 5, K_Y_YYY, 1, M_GREGORIAN},
+    {"YYYY", 4, K_YYYY, 1, M_GREGORIAN},
+    {"YYY", 3, K_YYY, 1, M_GREGORIAN},
+    {"YY", 2, K_YY, 1, M_GREGORIAN},
+    {"Y", 1, K_Y, 1, M_GREGORIAN},
+    {"a.d.", 4, K_a_d, 0, M_NONE},
+    {"a.m.", 4, K_a_m, 0, M_NONE},
+    {"ad", 2, K_ad, 0, M_NONE},
+    {"am", 2, K_am, 0, M_NONE},
+    {"b.c.", 4, K_b_c, 0, M_NONE},
+    {"bc", 2, K_bc, 0, M_NONE},
+    {"cc", 2, K_CC, 1, M_NONE},
+    {"day", 3, K_day, 0, M_NONE},
+    {"ddd", 3, K_DDD, 1, M_GREGORIAN},
+    {"dd", 2, K_DD, 1, M_GREGORIAN},
+    {"dy", 2, K_dy, 0, M_NONE},
+    {"d", 1, K_D, 1, M_GREGORIAN},
+    {"ff1", 3, K_FF1, 1, M_NONE},
+    {"ff2", 3, K_FF2, 1, M_NONE},
+    {"ff3", 3, K_FF3, 1, M_NONE},
+    {"ff4", 3, K_FF4, 1, M_NONE},
+    {"ff5", 3, K_FF5, 1, M_NONE},
+    {"ff6", 3, K_FF6, 1, M_NONE},
+    {"fx", 2, K_FX, 0, M_NONE},
+    {"hh24", 4, K_HH24, 1, M_NONE},
+    {"hh12", 4, K_HH12, 1, M_NONE},
+    {"hh", 2, K_HH, 1, M_NONE},
+    {"iddd", 4, K_IDDD, 1, M_ISOWEEK},
+    {"id", 2, K_ID, 1, M_ISOWEEK},
+    {"iw", 2, K_IW, 1, M_ISOWEEK},
+    {"iyyy", 4, K_IYYY, 1, M_ISOWEEK},
+    {"iyy", 3, K_IYY, 1, M_ISOWEEK},
+    {"iy", 2, K_IY, 1, M_ISOWEEK},
+    {"i", 1, K_I, 1, M_ISOWEEK},
+    {"j", 1, K_J, 1, M_NONE},
+    {"mi", 2, K_MI, 1, M_NONE},
+    {"mm", 2, K_MM, 1, M_GREGORIAN},
+    {"month", 5, K_month, 0, M_GREGORIAN},
+    {"mon", 3, K_mon, 0, M_GREGORIAN},
+    {"ms", 2, K_MS, 1, M_NONE},
+    {"of", 2, K_OF, 0, M_NONE},
+    {"p.m.", 4, K_p_m, 0, M_NONE},
+    {"pm", 2, K_pm, 0, M_NONE},
+    {"q", 1, K_Q, 1, M_NONE},
+    {"rm", 2, K_rm, 0, M_GREGORIAN},
+    {"sssss", 5, K_SSSS, 1, M_NONE},
+    {"ssss", 4, K_SSSS, 1, M_NONE},
+    {"ss", 2, K_SS, 1, M_NONE},
+    {"tzh", 3, K_TZH, 0, M_NONE},
+    {"tzm", 3, K_TZM, 1, M_NONE},
+    {"tz", 2, K_tz, 0, M_NONE},
+    {"us", 2, K_US, 1, M_NONE},
+    {"ww", 2, K_WW, 1, M_GREGORIAN},
+    {"w", 1, K_W, 1, M_GREGORIAN},
+    {"y,yyy", 5, K_Y_YYY, 1, M_GREGORIAN},
+    {"yyyy", 4, K_YYYY, 1, M_GREGORIAN},
+    {"yyy", 3, K_YYY, 1, M_GREGORIAN},
+    {"yy", 2, K_YY, 1, M_GREGORIAN},
+    {"y", 1, K_Y, 1, M_GREGORIAN},
 };
-constexpr int k_nkeywords = sizeof k_keywords / sizeof k_keywords[0];
+const int k_nkeywords = sizeof k_keywords / sizeof k_keywords[0];
+
+} // namespace dch
+} // namespace ty_internal
+
+namespace {
 
 /* The first keyword of each first byte, or -1: made once, from the table. */
 struct first_t {
@@ -158,34 +161,6 @@ struct first_t {
 };
 const first_t k_first;
 
-/* The prefixes and the suffixes. */
-enum : uint8_t {
-  S_FM = 0x01,
-  S_TH = 0x02,
-  S_th = 0x04,
-  S_SP = 0x08,
-  S_TM = 0x10
-};
-
-/* A node: a keyword with its prefix and suffix, or a character. */
-struct node_t {
-  uint8_t is_key; /* a keyword, else a character */
-  uint8_t id;     /* the keyword's id */
-  uint8_t len;    /* the keyword's length, or the character's bytes */
-  uint8_t suffix; /* the prefix and suffix bits */
-  char ch[4];     /* the character */
-};
-
-} // namespace
-
-struct ty_dch_format_t {
-  size_t len; /* the bytes of the format */
-  size_t n;   /* the nodes */
-  node_t node[1];
-};
-
-namespace {
-
 /* The bytes of the UTF-8 character that begins with byte b: 1 to 4. */
 inline size_t char_len(unsigned char b) {
   return b < 0x80 ? 1 : (b & 0xe0) == 0xc0 ? 2 : (b & 0xf0) == 0xe0 ? 3 : 4;
@@ -196,20 +171,20 @@ inline bool starts(const char *p, const char *end, const char *s, size_t len) {
   return (size_t)(end - p) >= len && 0 == memcmp(p, s, len);
 }
 
-/* The keyword at p, or NULL: the first of those its first byte begins. */
-const keyword_t *find_keyword(const char *p, const char *end) {
+/* The keyword at p, or -1: the first of those its first byte begins. */
+int find_keyword(const char *p, const char *end) {
   unsigned char c = (unsigned char)*p;
 
   if (c <= ' ' || c >= '~' || k_first.at[c] < 0) {
-    return nullptr;
+    return -1;
   }
   for (int i = k_first.at[c]; i < k_nkeywords && k_keywords[i].name[0] == *p;
        i++) {
     if (starts(p, end, k_keywords[i].name, k_keywords[i].len)) {
-      return &k_keywords[i];
+      return i;
     }
   }
-  return nullptr;
+  return -1;
 }
 
 /* A prefix at p: FM or TM, either case as PostgreSQL's table has them. */
@@ -237,13 +212,29 @@ uint8_t find_suffix(const char *p, const char *end) {
   return 0;
 }
 
-/* Add a node of the character of n bytes at p. */
-inline void add_char(ty_dch_format_t *f, const char *p, size_t n) {
+/* Whether c is a separator: printable ASCII, not a letter nor a digit. */
+inline bool is_separator(char c) {
+  return c > 0x20 && c < 0x7f && !(c >= 'A' && c <= 'Z') &&
+         !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9');
+}
+
+/* Add a node of the character of n bytes at p, of kind type. */
+inline void add_char(ty_dch_format_t *f, const char *p, size_t n,
+                     uint8_t type) {
   node_t *d = &f->node[f->n++];
 
   d->is_key = 0;
   d->len = (uint8_t)n;
+  d->type = type;
+  d->suffix = 0;
   memcpy(d->ch, p, n);
+}
+
+/* The bytes of the character at p, no more than remain. */
+inline size_t char_at(const char *p, const char *end) {
+  size_t n = char_len((unsigned char)*p);
+
+  return n > (size_t)(end - p) ? (size_t)(end - p) : n;
 }
 
 } // namespace
@@ -252,10 +243,13 @@ inline void add_char(ty_dch_format_t *f, const char *p, size_t n) {
  * Compile a format.
  * 1. A prefix FM or TM is taken first; it is lost if no keyword follows it.
  * 2. A keyword, then a suffix after it.
- * 3. Else a "quoted" string: each character of it, \ quoting the next.
- * 4. Else a character; \ before " drops the \.
+ * 3. In the standard mode, a character not quoted must be one of
+ *    "-./,':; ": a space, or a separator.
+ * 4. Else a "quoted" string: each character of it, \ quoting the next.
+ * 5. Else a character, a separator or a space; \ before " drops the \.
  */
-int ty_dch_compile(const char *fmt, size_t len, ty_dch_format_t **out) {
+int ty_dch_compile(const char *fmt, size_t len, int std,
+                   ty_dch_format_t **out) {
   ty_dch_format_t *f = (ty_dch_format_t *)ty_alloc(
       sizeof(ty_dch_format_t) + (len ? len - 1 : 0) * sizeof(node_t));
 
@@ -268,7 +262,7 @@ int ty_dch_compile(const char *fmt, size_t len, ty_dch_format_t **out) {
   f->n = 0;
   while (p < end) {
     uint8_t prefix = find_prefix(p, end);
-    const keyword_t *k;
+    int k;
 
     if (prefix) {
       p += 2;
@@ -276,13 +270,14 @@ int ty_dch_compile(const char *fmt, size_t len, ty_dch_format_t **out) {
         break;
       }
     }
-    if (nullptr != (k = find_keyword(p, end))) {
+    if ((k = find_keyword(p, end)) >= 0) {
       node_t *d = &f->node[f->n++];
 
-      p += k->len;
+      p += k_keywords[k].len;
       d->is_key = 1;
-      d->id = k->id;
-      d->len = k->len;
+      d->id = k_keywords[k].id;
+      d->kw = (uint8_t)k;
+      d->len = k_keywords[k].len;
       d->suffix = prefix;
       if (p < end) {
         uint8_t s = find_suffix(p, end);
@@ -294,6 +289,21 @@ int ty_dch_compile(const char *fmt, size_t len, ty_dch_format_t **out) {
       }
       continue;
     }
+    if (std && '"' != *p) {
+      size_t n = char_at(p, end);
+
+      if (n > 1 || nullptr == strchr("-./,':; ", *p) || '\0' == *p) {
+        char msg[64];
+
+        snprintf(msg, sizeof msg, "invalid datetime format separator: \"%.*s\"",
+                 (int)n, p);
+        ty_free(f);
+        return ty_internal::set_error(TY_ERR_INVALID, msg);
+      }
+      add_char(f, p, 1, ' ' == *p ? T_SPACE : T_SEPARATOR);
+      p++;
+      continue;
+    }
     if ('"' == *p) {
       for (p++; p < end;) {
         if ('"' == *p) {
@@ -303,12 +313,9 @@ int ty_dch_compile(const char *fmt, size_t len, ty_dch_format_t **out) {
         if ('\\' == *p && p + 1 < end) {
           p++;
         }
-        size_t n = char_len((unsigned char)*p);
+        size_t n = char_at(p, end);
 
-        if (n > (size_t)(end - p)) {
-          n = (size_t)(end - p);
-        }
-        add_char(f, p, n);
+        add_char(f, p, n, T_CHAR);
         p += n;
       }
       continue;
@@ -316,12 +323,12 @@ int ty_dch_compile(const char *fmt, size_t len, ty_dch_format_t **out) {
     if ('\\' == *p && p + 1 < end && '"' == p[1]) {
       p++;
     }
-    size_t n = char_len((unsigned char)*p);
+    size_t n = char_at(p, end);
 
-    if (n > (size_t)(end - p)) {
-      n = (size_t)(end - p);
-    }
-    add_char(f, p, n);
+    add_char(f, p, n,
+             is_separator(*p)             ? T_SEPARATOR
+             : isspace((unsigned char)*p) ? T_SPACE
+                                          : T_CHAR);
     p += n;
   }
   *out = f;

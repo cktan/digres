@@ -268,8 +268,9 @@ are the catalog tables psql reads
        ty (`ty_ascii_lower` and the like); the other ctypes,
        ICU and the builtin provider, stay in digres.
        `to_char` of timestamp, timestamptz, interval and the
-       numbers is in ty (`ty_tochar.h`, 2026-11-23). **Left: the
-       reverse parse (`to_timestamp`, `to_date`, `to_number`),
+       numbers is in ty (`ty_tochar.h`, 2026-11-23), and so is
+       the reverse parse of a date format (`to_timestamp`,
+       `to_date`, jsonpath's `datetime()`). **Left: `to_number`,
        and the regular expressions of text**
        ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
     3. **Types that read a setting**: what is left of them

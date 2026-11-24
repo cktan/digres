@@ -115,7 +115,6 @@
  * Maximal length of one node
  * ----------
  */
-#define DCH_MAX_ITEM_SIZ	   12 /* max localized day name		*/
 #define NUM_MAX_ITEM_SIZ		8  /* roman number (RN has 15 chars)	*/
 
 #define MAX_L10N_DATA			80 /* max localized day or month name */
@@ -167,97 +166,6 @@ typedef struct {
 
 #define SUFFTYPE_PREFIX		1
 #define SUFFTYPE_POSTFIX	2
-
-#define CLOCK_24_HOUR		0
-#define CLOCK_12_HOUR		1
-
-/* ----------
- * Full months
- * ----------
- */
-static const char *const months_full[] = {
-    "January", "February",  "March",   "April",    "May",      "June", "July",
-    "August",  "September", "October", "November", "December", NULL};
-
-static const char *const days_short[] = {"Sun", "Mon", "Tue", "Wed",
-                                         "Thu", "Fri", "Sat", NULL};
-
-/* ----------
- * AD / BC
- * ----------
- *	There is no 0 AD.  Years go from 1 BC to 1 AD, so we make it
- *	positive and map year == -1 to year zero, and shift all negative
- *	years up one.  For interval years, we just return the year.
- */
-#define ADJUST_YEAR(year, is_interval)	((is_interval) ? (year) : ((year) <= 0 ? -((year) - 1) : (year)))
-
-#define A_D_STR		"A.D."
-#define a_d_STR		"a.d."
-#define AD_STR		"AD"
-#define ad_STR		"ad"
-
-#define B_C_STR		"B.C."
-#define b_c_STR		"b.c."
-#define BC_STR		"BC"
-#define bc_STR		"bc"
-
-/*
- * AD / BC strings for seq_search.
- *
- * These are given in two variants, a long form with periods and a standard
- * form without.
- *
- * The array is laid out such that matches for AD have an even index, and
- * matches for BC have an odd index.  So the boolean value for BC is given by
- * taking the array index of the match, modulo 2.
- */
-static const char *const adbc_strings[] = {ad_STR, bc_STR, AD_STR, BC_STR,
-                                           NULL};
-static const char *const adbc_strings_long[] = {a_d_STR, b_c_STR, A_D_STR,
-                                                B_C_STR, NULL};
-
-/* ----------
- * AM / PM
- * ----------
- */
-#define A_M_STR		"A.M."
-#define a_m_STR		"a.m."
-#define AM_STR		"AM"
-#define am_STR		"am"
-
-#define P_M_STR		"P.M."
-#define p_m_STR		"p.m."
-#define PM_STR		"PM"
-#define pm_STR		"pm"
-
-/*
- * AM / PM strings for seq_search.
- *
- * These are given in two variants, a long form with periods and a standard
- * form without.
- *
- * The array is laid out such that matches for AM have an even index, and
- * matches for PM have an odd index.  So the boolean value for PM is given by
- * taking the array index of the match, modulo 2.
- */
-static const char *const ampm_strings[] = {am_STR, pm_STR, AM_STR, PM_STR,
-                                           NULL};
-static const char *const ampm_strings_long[] = {a_m_STR, p_m_STR, A_M_STR,
-                                                P_M_STR, NULL};
-
-/* ----------
- * Months in roman-numeral
- * (Must be in reverse order for seq_search (in FROM_CHAR), because
- *	'VIII' must have higher precedence than 'V')
- * ----------
- */
-static const char *const rm_months_upper[] = {"XII", "XI", "X", "IX", "VIII",
-                                              "VII", "VI", "V", "IV", "III",
-                                              "II",  "I",  NULL};
-
-static const char *const rm_months_lower[] = {"xii", "xi", "x", "ix", "viii",
-                                              "vii", "vi", "v", "iv", "iii",
-                                              "ii",  "i",  NULL};
 
 /* ----------
  * Roman numerals: ty writes them (ty_num_roman); to_number reads them
@@ -391,7 +299,7 @@ typedef struct {
 #define NUM_CACHE_ENTRIES	20
 
 typedef struct {
-  FormatNode format[DCH_CACHE_SIZE + 1];
+  ty_dch_format_t *format; /* ty's, in TopMemoryContext */
   char str[DCH_CACHE_SIZE + 1];
   bool std;
   bool valid;
@@ -418,104 +326,9 @@ static thread_local /*LOCAL*/ int n_NUMCache =
     0; /* current number of entries */
 static thread_local /*LOCAL*/ int NUMCounter = 0; /* aging-event counter */
 
-/* ----------
- * For char->date/time conversion
- * ----------
- */
-typedef struct {
-  FromCharDateMode mode;
-  int hh, pm, mi, ss, ssss, d, /* stored as 1-7, Sunday = 1, 0 means missing */
-      dd, ddd, mm, ms, year, bc, ww, w, cc, j, us,
-      yysz,         /* is it YY or YYYY ? */
-      clock,        /* 12 or 24 hour clock? */
-      tzsign,       /* +1, -1, or 0 if no TZH/TZM fields */
-      tzh, tzm, ff; /* fractional precision */
-  bool has_tz;      /* was there a TZ field? */
-  int gmtoffset;    /* GMT offset of fixed-offset zone abbrev */
-  pg_tz *tzp;       /* pg_tz for dynamic abbrev */
-  char *abbrev;     /* dynamic abbrev */
-} TmFromChar;
-
-#define ZERO_tmfc(_X) memset(_X, 0, sizeof(TmFromChar))
-
-struct fmt_tz /* do_to_timestamp's timezone info output */
-{
-  bool has_tz;   /* was there any TZ/TZH/TZM field? */
-  int gmtoffset; /* GMT offset in seconds */
-};
-
-/* ----------
- * Debug
- * ----------
- */
-#ifdef DEBUG_TO_FROM_CHAR
-#define DEBUG_TMFC(_X) \
-		elog(DEBUG_elog_output, "TMFC:\nmode %d\nhh %d\npm %d\nmi %d\nss %d\nssss %d\nd %d\ndd %d\nddd %d\nmm %d\nms: %d\nyear %d\nbc %d\nww %d\nw %d\ncc %d\nj %d\nus: %d\nyysz: %d\nclock: %d", \
-			(_X)->mode, (_X)->hh, (_X)->pm, (_X)->mi, (_X)->ss, (_X)->ssss, \
-			(_X)->d, (_X)->dd, (_X)->ddd, (_X)->mm, (_X)->ms, (_X)->year, \
-			(_X)->bc, (_X)->ww, (_X)->w, (_X)->cc, (_X)->j, (_X)->us, \
-			(_X)->yysz, (_X)->clock)
-#define DEBUG_TM(_X) \
-		elog(DEBUG_elog_output, "TM:\nsec %d\nyear %d\nmin %d\nwday %d\nhour %d\nyday %d\nmday %d\nnisdst %d\nmon %d\n",\
-			(_X)->tm_sec, (_X)->tm_year,\
-			(_X)->tm_min, (_X)->tm_wday, (_X)->tm_hour, (_X)->tm_yday,\
-			(_X)->tm_mday, (_X)->tm_isdst, (_X)->tm_mon)
-#else
-#define DEBUG_TMFC(_X)
-#define DEBUG_TM(_X)
-#endif
-
-/* Zero a pg_tm, with day and month 1 */
-#define ZERO_tm(_X) \
-do {	\
-	memset(_X, 0, sizeof(*(_X))); \
-	(_X)->tm_mday = (_X)->tm_mon = 1; \
-} while(0)
-
 /*****************************************************************************
  *			KeyWord definitions
  *****************************************************************************/
-
-/* ----------
- * Suffixes (FormatNode.suffix is an OR of these codes)
- * ----------
- */
-#define DCH_S_FM	0x01
-#define DCH_S_TH	0x02
-#define DCH_S_th	0x04
-#define DCH_S_SP	0x08
-#define DCH_S_TM	0x10
-
-/* ----------
- * Suffix tests
- * ----------
- */
-#define S_THth(_s)	((((_s) & DCH_S_TH) || ((_s) & DCH_S_th)) ? 1 : 0)
-#define S_TH(_s)	(((_s) & DCH_S_TH) ? 1 : 0)
-#define S_th(_s)	(((_s) & DCH_S_th) ? 1 : 0)
-#define S_TH_TYPE(_s)	(((_s) & DCH_S_TH) ? TH_UPPER : TH_LOWER)
-
-/* Oracle toggles FM behavior, we don't; see docs. */
-#define S_FM(_s)	(((_s) & DCH_S_FM) ? 1 : 0)
-#define S_SP(_s)	(((_s) & DCH_S_SP) ? 1 : 0)
-#define S_TM(_s)	(((_s) & DCH_S_TM) ? 1 : 0)
-
-/* ----------
- * Suffixes definition for DATE-TIME TO/FROM CHAR
- * ----------
- */
-#define TM_SUFFIX_LEN	2
-
-static const KeySuffix DCH_suff[] = {
-    {"FM", 2, DCH_S_FM, SUFFTYPE_PREFIX},
-    {"fm", 2, DCH_S_FM, SUFFTYPE_PREFIX},
-    {"TM", TM_SUFFIX_LEN, DCH_S_TM, SUFFTYPE_PREFIX},
-    {"tm", 2, DCH_S_TM, SUFFTYPE_PREFIX},
-    {"TH", 2, DCH_S_TH, SUFFTYPE_POSTFIX},
-    {"th", 2, DCH_S_th, SUFFTYPE_POSTFIX},
-    {"SP", 2, DCH_S_SP, SUFFTYPE_POSTFIX},
-    /* last */
-    {NULL, 0, 0, 0}};
 
 /* ----------
  * Format-pictures (KeyWord).
@@ -545,124 +358,6 @@ static const KeySuffix DCH_suff[] = {
  *
  * ----------
  */
-
-typedef enum {
-  DCH_A_D,
-  DCH_A_M,
-  DCH_AD,
-  DCH_AM,
-  DCH_B_C,
-  DCH_BC,
-  DCH_CC,
-  DCH_DAY,
-  DCH_DDD,
-  DCH_DD,
-  DCH_DY,
-  DCH_Day,
-  DCH_Dy,
-  DCH_D,
-  DCH_FF1, /* FFn codes must be consecutive */
-  DCH_FF2,
-  DCH_FF3,
-  DCH_FF4,
-  DCH_FF5,
-  DCH_FF6,
-  DCH_FX, /* global suffix */
-  DCH_HH24,
-  DCH_HH12,
-  DCH_HH,
-  DCH_IDDD,
-  DCH_ID,
-  DCH_IW,
-  DCH_IYYY,
-  DCH_IYY,
-  DCH_IY,
-  DCH_I,
-  DCH_J,
-  DCH_MI,
-  DCH_MM,
-  DCH_MONTH,
-  DCH_MON,
-  DCH_MS,
-  DCH_Month,
-  DCH_Mon,
-  DCH_OF,
-  DCH_P_M,
-  DCH_PM,
-  DCH_Q,
-  DCH_RM,
-  DCH_SSSSS,
-  DCH_SSSS,
-  DCH_SS,
-  DCH_TZH,
-  DCH_TZM,
-  DCH_TZ,
-  DCH_US,
-  DCH_WW,
-  DCH_W,
-  DCH_Y_YYY,
-  DCH_YYYY,
-  DCH_YYY,
-  DCH_YY,
-  DCH_Y,
-  DCH_a_d,
-  DCH_a_m,
-  DCH_ad,
-  DCH_am,
-  DCH_b_c,
-  DCH_bc,
-  DCH_cc,
-  DCH_day,
-  DCH_ddd,
-  DCH_dd,
-  DCH_dy,
-  DCH_d,
-  DCH_ff1,
-  DCH_ff2,
-  DCH_ff3,
-  DCH_ff4,
-  DCH_ff5,
-  DCH_ff6,
-  DCH_fx,
-  DCH_hh24,
-  DCH_hh12,
-  DCH_hh,
-  DCH_iddd,
-  DCH_id,
-  DCH_iw,
-  DCH_iyyy,
-  DCH_iyy,
-  DCH_iy,
-  DCH_i,
-  DCH_j,
-  DCH_mi,
-  DCH_mm,
-  DCH_month,
-  DCH_mon,
-  DCH_ms,
-  DCH_of,
-  DCH_p_m,
-  DCH_pm,
-  DCH_q,
-  DCH_rm,
-  DCH_sssss,
-  DCH_ssss,
-  DCH_ss,
-  DCH_tzh,
-  DCH_tzm,
-  DCH_tz,
-  DCH_us,
-  DCH_ww,
-  DCH_w,
-  DCH_y_yyy,
-  DCH_yyyy,
-  DCH_yyy,
-  DCH_yy,
-  DCH_y,
-
-  /* last */
-  _DCH_last_
-} DCH_poz;
 
 typedef enum {
   NUM_COMMA,
@@ -705,128 +400,6 @@ typedef enum {
   /* last */
   _NUM_last_
 } NUM_poz;
-
-/* ----------
- * KeyWords for DATE-TIME version
- * ----------
- */
-static const KeyWord DCH_keywords[] = {
-    /*	name, len, id, is_digit, date_mode */
-    {"A.D.", 4, DCH_A_D, false, FROM_CHAR_DATE_NONE}, /* A */
-    {"A.M.", 4, DCH_A_M, false, FROM_CHAR_DATE_NONE},
-    {"AD", 2, DCH_AD, false, FROM_CHAR_DATE_NONE},
-    {"AM", 2, DCH_AM, false, FROM_CHAR_DATE_NONE},
-    {"B.C.", 4, DCH_B_C, false, FROM_CHAR_DATE_NONE}, /* B */
-    {"BC", 2, DCH_BC, false, FROM_CHAR_DATE_NONE},
-    {"CC", 2, DCH_CC, true, FROM_CHAR_DATE_NONE},    /* C */
-    {"DAY", 3, DCH_DAY, false, FROM_CHAR_DATE_NONE}, /* D */
-    {"DDD", 3, DCH_DDD, true, FROM_CHAR_DATE_GREGORIAN},
-    {"DD", 2, DCH_DD, true, FROM_CHAR_DATE_GREGORIAN},
-    {"DY", 2, DCH_DY, false, FROM_CHAR_DATE_NONE},
-    {"Day", 3, DCH_Day, false, FROM_CHAR_DATE_NONE},
-    {"Dy", 2, DCH_Dy, false, FROM_CHAR_DATE_NONE},
-    {"D", 1, DCH_D, true, FROM_CHAR_DATE_GREGORIAN},
-    {"FF1", 3, DCH_FF1, true, FROM_CHAR_DATE_NONE}, /* F */
-    {"FF2", 3, DCH_FF2, true, FROM_CHAR_DATE_NONE},
-    {"FF3", 3, DCH_FF3, true, FROM_CHAR_DATE_NONE},
-    {"FF4", 3, DCH_FF4, true, FROM_CHAR_DATE_NONE},
-    {"FF5", 3, DCH_FF5, true, FROM_CHAR_DATE_NONE},
-    {"FF6", 3, DCH_FF6, true, FROM_CHAR_DATE_NONE},
-    {"FX", 2, DCH_FX, false, FROM_CHAR_DATE_NONE},
-    {"HH24", 4, DCH_HH24, true, FROM_CHAR_DATE_NONE}, /* H */
-    {"HH12", 4, DCH_HH12, true, FROM_CHAR_DATE_NONE},
-    {"HH", 2, DCH_HH, true, FROM_CHAR_DATE_NONE},
-    {"IDDD", 4, DCH_IDDD, true, FROM_CHAR_DATE_ISOWEEK}, /* I */
-    {"ID", 2, DCH_ID, true, FROM_CHAR_DATE_ISOWEEK},
-    {"IW", 2, DCH_IW, true, FROM_CHAR_DATE_ISOWEEK},
-    {"IYYY", 4, DCH_IYYY, true, FROM_CHAR_DATE_ISOWEEK},
-    {"IYY", 3, DCH_IYY, true, FROM_CHAR_DATE_ISOWEEK},
-    {"IY", 2, DCH_IY, true, FROM_CHAR_DATE_ISOWEEK},
-    {"I", 1, DCH_I, true, FROM_CHAR_DATE_ISOWEEK},
-    {"J", 1, DCH_J, true, FROM_CHAR_DATE_NONE},   /* J */
-    {"MI", 2, DCH_MI, true, FROM_CHAR_DATE_NONE}, /* M */
-    {"MM", 2, DCH_MM, true, FROM_CHAR_DATE_GREGORIAN},
-    {"MONTH", 5, DCH_MONTH, false, FROM_CHAR_DATE_GREGORIAN},
-    {"MON", 3, DCH_MON, false, FROM_CHAR_DATE_GREGORIAN},
-    {"MS", 2, DCH_MS, true, FROM_CHAR_DATE_NONE},
-    {"Month", 5, DCH_Month, false, FROM_CHAR_DATE_GREGORIAN},
-    {"Mon", 3, DCH_Mon, false, FROM_CHAR_DATE_GREGORIAN},
-    {"OF", 2, DCH_OF, false, FROM_CHAR_DATE_NONE},    /* O */
-    {"P.M.", 4, DCH_P_M, false, FROM_CHAR_DATE_NONE}, /* P */
-    {"PM", 2, DCH_PM, false, FROM_CHAR_DATE_NONE},
-    {"Q", 1, DCH_Q, true, FROM_CHAR_DATE_NONE},         /* Q */
-    {"RM", 2, DCH_RM, false, FROM_CHAR_DATE_GREGORIAN}, /* R */
-    {"SSSSS", 5, DCH_SSSS, true, FROM_CHAR_DATE_NONE},  /* S */
-    {"SSSS", 4, DCH_SSSS, true, FROM_CHAR_DATE_NONE},
-    {"SS", 2, DCH_SS, true, FROM_CHAR_DATE_NONE},
-    {"TZH", 3, DCH_TZH, false, FROM_CHAR_DATE_NONE}, /* T */
-    {"TZM", 3, DCH_TZM, true, FROM_CHAR_DATE_NONE},
-    {"TZ", 2, DCH_TZ, false, FROM_CHAR_DATE_NONE},
-    {"US", 2, DCH_US, true, FROM_CHAR_DATE_NONE},      /* U */
-    {"WW", 2, DCH_WW, true, FROM_CHAR_DATE_GREGORIAN}, /* W */
-    {"W", 1, DCH_W, true, FROM_CHAR_DATE_GREGORIAN},
-    {"Y,YYY", 5, DCH_Y_YYY, true, FROM_CHAR_DATE_GREGORIAN}, /* Y */
-    {"YYYY", 4, DCH_YYYY, true, FROM_CHAR_DATE_GREGORIAN},
-    {"YYY", 3, DCH_YYY, true, FROM_CHAR_DATE_GREGORIAN},
-    {"YY", 2, DCH_YY, true, FROM_CHAR_DATE_GREGORIAN},
-    {"Y", 1, DCH_Y, true, FROM_CHAR_DATE_GREGORIAN},
-    {"a.d.", 4, DCH_a_d, false, FROM_CHAR_DATE_NONE}, /* a */
-    {"a.m.", 4, DCH_a_m, false, FROM_CHAR_DATE_NONE},
-    {"ad", 2, DCH_ad, false, FROM_CHAR_DATE_NONE},
-    {"am", 2, DCH_am, false, FROM_CHAR_DATE_NONE},
-    {"b.c.", 4, DCH_b_c, false, FROM_CHAR_DATE_NONE}, /* b */
-    {"bc", 2, DCH_bc, false, FROM_CHAR_DATE_NONE},
-    {"cc", 2, DCH_CC, true, FROM_CHAR_DATE_NONE},    /* c */
-    {"day", 3, DCH_day, false, FROM_CHAR_DATE_NONE}, /* d */
-    {"ddd", 3, DCH_DDD, true, FROM_CHAR_DATE_GREGORIAN},
-    {"dd", 2, DCH_DD, true, FROM_CHAR_DATE_GREGORIAN},
-    {"dy", 2, DCH_dy, false, FROM_CHAR_DATE_NONE},
-    {"d", 1, DCH_D, true, FROM_CHAR_DATE_GREGORIAN},
-    {"ff1", 3, DCH_FF1, true, FROM_CHAR_DATE_NONE}, /* f */
-    {"ff2", 3, DCH_FF2, true, FROM_CHAR_DATE_NONE},
-    {"ff3", 3, DCH_FF3, true, FROM_CHAR_DATE_NONE},
-    {"ff4", 3, DCH_FF4, true, FROM_CHAR_DATE_NONE},
-    {"ff5", 3, DCH_FF5, true, FROM_CHAR_DATE_NONE},
-    {"ff6", 3, DCH_FF6, true, FROM_CHAR_DATE_NONE},
-    {"fx", 2, DCH_FX, false, FROM_CHAR_DATE_NONE},
-    {"hh24", 4, DCH_HH24, true, FROM_CHAR_DATE_NONE}, /* h */
-    {"hh12", 4, DCH_HH12, true, FROM_CHAR_DATE_NONE},
-    {"hh", 2, DCH_HH, true, FROM_CHAR_DATE_NONE},
-    {"iddd", 4, DCH_IDDD, true, FROM_CHAR_DATE_ISOWEEK}, /* i */
-    {"id", 2, DCH_ID, true, FROM_CHAR_DATE_ISOWEEK},
-    {"iw", 2, DCH_IW, true, FROM_CHAR_DATE_ISOWEEK},
-    {"iyyy", 4, DCH_IYYY, true, FROM_CHAR_DATE_ISOWEEK},
-    {"iyy", 3, DCH_IYY, true, FROM_CHAR_DATE_ISOWEEK},
-    {"iy", 2, DCH_IY, true, FROM_CHAR_DATE_ISOWEEK},
-    {"i", 1, DCH_I, true, FROM_CHAR_DATE_ISOWEEK},
-    {"j", 1, DCH_J, true, FROM_CHAR_DATE_NONE},   /* j */
-    {"mi", 2, DCH_MI, true, FROM_CHAR_DATE_NONE}, /* m */
-    {"mm", 2, DCH_MM, true, FROM_CHAR_DATE_GREGORIAN},
-    {"month", 5, DCH_month, false, FROM_CHAR_DATE_GREGORIAN},
-    {"mon", 3, DCH_mon, false, FROM_CHAR_DATE_GREGORIAN},
-    {"ms", 2, DCH_MS, true, FROM_CHAR_DATE_NONE},
-    {"of", 2, DCH_OF, false, FROM_CHAR_DATE_NONE},    /* o */
-    {"p.m.", 4, DCH_p_m, false, FROM_CHAR_DATE_NONE}, /* p */
-    {"pm", 2, DCH_pm, false, FROM_CHAR_DATE_NONE},
-    {"q", 1, DCH_Q, true, FROM_CHAR_DATE_NONE},         /* q */
-    {"rm", 2, DCH_rm, false, FROM_CHAR_DATE_GREGORIAN}, /* r */
-    {"sssss", 5, DCH_SSSS, true, FROM_CHAR_DATE_NONE},  /* s */
-    {"ssss", 4, DCH_SSSS, true, FROM_CHAR_DATE_NONE},
-    {"ss", 2, DCH_SS, true, FROM_CHAR_DATE_NONE},
-    {"tzh", 3, DCH_TZH, false, FROM_CHAR_DATE_NONE}, /* t */
-    {"tzm", 3, DCH_TZM, true, FROM_CHAR_DATE_NONE},
-    {"tz", 2, DCH_tz, false, FROM_CHAR_DATE_NONE},
-    {"us", 2, DCH_US, true, FROM_CHAR_DATE_NONE},      /* u */
-    {"ww", 2, DCH_WW, true, FROM_CHAR_DATE_GREGORIAN}, /* w */
-    {"w", 1, DCH_W, true, FROM_CHAR_DATE_GREGORIAN},
-    {"y,yyy", 5, DCH_Y_YYY, true, FROM_CHAR_DATE_GREGORIAN}, /* y */
-    {"yyyy", 4, DCH_YYYY, true, FROM_CHAR_DATE_GREGORIAN},
-    {"yyy", 3, DCH_YYY, true, FROM_CHAR_DATE_GREGORIAN},
-    {"yy", 2, DCH_YY, true, FROM_CHAR_DATE_GREGORIAN},
-    {"y", 1, DCH_Y, true, FROM_CHAR_DATE_GREGORIAN},
-
-    /* last */
-    {NULL, 0, 0, 0, FROM_CHAR_DATE_NONE}};
 
 /* ----------
  * KeyWords for NUMBER version
@@ -875,32 +448,6 @@ static const KeyWord NUM_keywords[] = {
 
     /* last */
     {NULL, 0, 0}};
-
-/* ----------
- * KeyWords index for DATE-TIME version
- * ----------
- */
-static const int DCH_index[KeyWord_INDEX_SIZE] = {
-    /*
-    0	1	2	3	4	5	6	7	8	9
-    */
-    /*---- first 0..31 chars are skipped ----*/
-
-    -1,       -1,        -1,      -1,        -1,      -1,     -1,      -1,
-    -1,       -1,        -1,      -1,        -1,      -1,     -1,      -1,
-    -1,       -1,        -1,      -1,        -1,      -1,     -1,      -1,
-    -1,       -1,        -1,      -1,        -1,      -1,     -1,      -1,
-    -1,       DCH_A_D,   DCH_B_C, DCH_CC,    DCH_DAY, -1,     DCH_FF1, -1,
-    DCH_HH24, DCH_IDDD,  DCH_J,   -1,        -1,      DCH_MI, -1,      DCH_OF,
-    DCH_P_M,  DCH_Q,     DCH_RM,  DCH_SSSSS, DCH_TZH, DCH_US, -1,      DCH_WW,
-    -1,       DCH_Y_YYY, -1,      -1,        -1,      -1,     -1,      -1,
-    -1,       DCH_a_d,   DCH_b_c, DCH_cc,    DCH_day, -1,     DCH_ff1, -1,
-    DCH_hh24, DCH_iddd,  DCH_j,   -1,        -1,      DCH_mi, -1,      DCH_of,
-    DCH_p_m,  DCH_q,     DCH_rm,  DCH_sssss, DCH_tzh, DCH_us, -1,      DCH_ww,
-    -1,       DCH_y_yyy, -1,      -1,        -1,      -1
-
-    /*---- chars over 126 are skipped ----*/
-};
 
 /* ----------
  * KeyWords index for NUMBER version
@@ -957,11 +504,6 @@ typedef struct NUMProc {
       *L_positive_sign, *decimal, *L_thousands_sep, *L_currency_symbol;
 } NUMProc;
 
-/* Return flags for DCH_from_char() */
-#define DCH_DATED	0x01
-#define DCH_TIMED	0x02
-#define DCH_ZONED	0x04
-
 /*
  * These macros are used in NUM_processor() and its subsidiary routines.
  * OVERLOAD_TEST: true if we've reached end of input string
@@ -984,9 +526,6 @@ static void parse_format(FormatNode *node, const char *str, const KeyWord *kw,
                          const KeySuffix *suf, const int *index, uint32 flags,
                          NUMDesc *Num);
 
-static void DCH_from_char(FormatNode *node, const char *in, TmFromChar *out,
-                          Oid collid, bool std, Node *escontext);
-
 #ifdef DEBUG_TO_FROM_CHAR
 static void dump_index(const KeyWord *k, const int *index);
 static void dump_node(FormatNode *node, int max);
@@ -994,27 +533,12 @@ static void dump_node(FormatNode *node, int max);
 
 static const char *get_th(char *num, int type);
 static char *str_numth(char *dest, char *num, int type);
-static int adjust_partial_year_to_2020(int year);
-static int strspace_len(const char *str);
-static bool from_char_set_mode(TmFromChar *tmfc, const FromCharDateMode mode,
-                               Node *escontext);
-static bool from_char_set_int(int *dest, const int value,
-                              const FormatNode *node, Node *escontext);
-static int from_char_parse_int_len(int *dest, const char **src, const int len,
-                                   FormatNode *node, Node *escontext);
-static int from_char_parse_int(int *dest, const char **src, FormatNode *node,
-                               Node *escontext);
-static int seq_search_ascii(const char *name, const char *const *array,
-                            size_t *len);
 static int seq_search_localized(const char *name, char **array, size_t *len,
                                 Oid collid);
-static bool from_char_seq_search(int *dest, const char **src,
-                                 const char *const *array,
-                                 char **localized_array, Oid collid,
-                                 FormatNode *node, Node *escontext);
 static bool do_to_timestamp(text *date_txt, text *fmt, Oid collid, bool std,
-                            struct pg_tm *tm, fsec_t *fsec, struct fmt_tz *tz,
-                            int *fprec, uint32 *flags, Node *escontext);
+                            ty_dch_parsed_t *parsed, uint32 *flags,
+                            Node *escontext);
+static void dch_parsed_tm(const ty_dch_parsed_t *parsed, struct pg_tm *tm);
 static FormatNode *NUM_cache(int len, NUMDesc *Num, text *pars_str,
                              bool *shouldFree);
 static int roman_to_int(NUMProc *Np, int input_len);
@@ -1805,14 +1329,6 @@ static char *asc_toupper_z(const char *buff) {
  * If S_THth is on, skip two chars, assuming there are two available
  * ----------
  */
-#define SKIP_THth(ptr, _suf) \
-	do { \
-		if (S_THth(_suf)) \
-		{ \
-			if (*(ptr)) (ptr) += pg_mblen_cstr(ptr); \
-			if (*(ptr)) (ptr) += pg_mblen_cstr(ptr); \
-		} \
-	} while (0)
 
 #ifdef DEBUG_TO_FROM_CHAR
 /* -----------
@@ -1838,283 +1354,6 @@ static void dump_index(const KeyWord *k, const int *index) {
        count, free_i);
 }
 #endif /* DEBUG */
-
-/* ----------
- * Return true if next format picture is not digit value
- * ----------
- */
-static bool is_next_separator(FormatNode *n) {
-  if (n->type == NODE_TYPE_END)
-    return false;
-
-  if (n->type == NODE_TYPE_ACTION && S_THth(n->suffix))
-    return true;
-
-  /*
-   * Next node
-   */
-  n++;
-
-  /* end of format string is treated like a non-digit separator */
-  if (n->type == NODE_TYPE_END)
-    return true;
-
-  if (n->type == NODE_TYPE_ACTION) {
-    if (n->key->is_digit)
-      return false;
-
-    return true;
-  } else if (n->character[1] == '\0' && isdigit((unsigned char)n->character[0]))
-    return false;
-
-  return true; /* some non-digit input (separator) */
-}
-
-static int adjust_partial_year_to_2020(int year) {
-  /*
-   * Adjust all dates toward 2020; this is effectively what happens when we
-   * assume '70' is 1970 and '69' is 2069.
-   */
-  /* Force 0-69 into the 2000's */
-  if (year < 70)
-    return year + 2000;
-  /* Force 70-99 into the 1900's */
-  else if (year < 100)
-    return year + 1900;
-  /* Force 100-519 into the 2000's */
-  else if (year < 520)
-    return year + 2000;
-  /* Force 520-999 into the 1000's */
-  else if (year < 1000)
-    return year + 1000;
-  else
-    return year;
-}
-
-static int strspace_len(const char *str) {
-  int len = 0;
-
-  while (*str && isspace((unsigned char)*str)) {
-    str++;
-    len++;
-  }
-  return len;
-}
-
-/*
- * Set the date mode of a from-char conversion.
- *
- * Puke if the date mode has already been set, and the caller attempts to set
- * it to a conflicting mode.
- *
- * Returns true on success, false on failure (if escontext points to an
- * ErrorSaveContext; otherwise errors are thrown).
- */
-static bool from_char_set_mode(TmFromChar *tmfc, const FromCharDateMode mode,
-                               Node *escontext) {
-  if (mode != FROM_CHAR_DATE_NONE) {
-    if (tmfc->mode == FROM_CHAR_DATE_NONE)
-      tmfc->mode = mode;
-    else if (tmfc->mode != mode)
-      ereturn(escontext, false,
-              (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-               errmsg("invalid combination of date conventions"),
-               errhint("Do not mix Gregorian and ISO week date "
-                       "conventions in a formatting template.")));
-  }
-  return true;
-}
-
-/*
- * Set the integer pointed to by 'dest' to the given value.
- *
- * Puke if the destination integer has previously been set to some other
- * non-zero value.
- *
- * Returns true on success, false on failure (if escontext points to an
- * ErrorSaveContext; otherwise errors are thrown).
- */
-static bool from_char_set_int(int *dest, const int value,
-                              const FormatNode *node, Node *escontext) {
-  if (*dest != 0 && *dest != value)
-    ereturn(escontext, false,
-            (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-             errmsg("conflicting values for \"%s\" field in formatting string",
-                    node->key->name),
-             errdetail("This value contradicts a previous setting "
-                       "for the same field type.")));
-  *dest = value;
-  return true;
-}
-
-/*
- * Read a single integer from the source string, into the int pointed to by
- * 'dest'. If 'dest' is NULL, the result is discarded.
- *
- * In fixed-width mode (the node does not have the FM suffix), consume at most
- * 'len' characters.  However, any leading whitespace isn't counted in 'len'.
- *
- * We use strtol() to recover the integer value from the source string, in
- * accordance with the given FormatNode.
- *
- * If the conversion completes successfully, src will have been advanced to
- * point at the character immediately following the last character used in the
- * conversion.
- *
- * Returns the number of characters consumed, or -1 on error (if escontext
- * points to an ErrorSaveContext; otherwise errors are thrown).
- *
- * Note that from_char_parse_int() provides a more convenient wrapper where
- * the length of the field is the same as the length of the format keyword (as
- * with DD and MI).
- */
-static int from_char_parse_int_len(int *dest, const char **src, const int len,
-                                   FormatNode *node, Node *escontext) {
-  long result;
-  char copy[DCH_MAX_ITEM_SIZ + 1];
-  const char *init = *src;
-  int used;
-
-  /*
-   * Skip any whitespace before parsing the integer.
-   */
-  *src += strspace_len(*src);
-
-  Assert(len <= DCH_MAX_ITEM_SIZ);
-  used = (int)strlcpy(copy, *src, len + 1);
-
-  if (S_FM(node->suffix) || is_next_separator(node)) {
-    /*
-     * This node is in Fill Mode, or the next node is known to be a
-     * non-digit value, so we just slurp as many characters as we can get.
-     */
-    char *endptr;
-
-    errno = 0;
-    result = strtol(init, &endptr, 10);
-    *src = endptr;
-  } else {
-    /*
-     * We need to pull exactly the number of characters given in 'len' out
-     * of the string, and convert those.
-     */
-    char *last;
-
-    if (used < len)
-      ereturn(escontext, -1,
-              (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-               errmsg("source string too short for \"%s\" formatting field",
-                      node->key->name),
-               errdetail("Field requires %d characters, but only %d remain.",
-                         len, used),
-               errhint("If your source string is not fixed-width, "
-                       "try using the \"FM\" modifier.")));
-
-    errno = 0;
-    result = strtol(copy, &last, 10);
-    used = last - copy;
-
-    if (used > 0 && used < len)
-      ereturn(escontext, -1,
-              (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-               errmsg("invalid value \"%s\" for \"%s\"", copy, node->key->name),
-               errdetail(
-                   "Field requires %d characters, but only %d could be parsed.",
-                   len, used),
-               errhint("If your source string is not fixed-width, "
-                       "try using the \"FM\" modifier.")));
-
-    *src += used;
-  }
-
-  if (*src == init)
-    ereturn(escontext, -1,
-            (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-             errmsg("invalid value \"%s\" for \"%s\"", copy, node->key->name),
-             errdetail("Value must be an integer.")));
-
-  if (errno == ERANGE || result < INT_MIN || result > INT_MAX)
-    ereturn(
-        escontext, -1,
-        (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-         errmsg("value for \"%s\" in source string is out of range",
-                node->key->name),
-         errdetail("Value must be in the range %d to %d.", INT_MIN, INT_MAX)));
-
-  if (dest != NULL) {
-    if (!from_char_set_int(dest, (int)result, node, escontext))
-      return -1;
-  }
-
-  return *src - init;
-}
-
-/*
- * Call from_char_parse_int_len(), using the length of the format keyword as
- * the expected length of the field.
- *
- * Don't call this function if the field differs in length from the format
- * keyword (as with HH24; the keyword length is 4, but the field length is 2).
- * In such cases, call from_char_parse_int_len() instead to specify the
- * required length explicitly.
- */
-static int from_char_parse_int(int *dest, const char **src, FormatNode *node,
-                               Node *escontext) {
-  return from_char_parse_int_len(dest, src, node->key->len, node, escontext);
-}
-
-/*
- * Sequentially search null-terminated "array" for a case-insensitive match
- * to the initial character(s) of "name".
- *
- * Returns array index of match, or -1 for no match.
- *
- * *len is set to the length of the match, or 0 for no match.
- *
- * Case-insensitivity is defined per pg_ascii_tolower, so this is only
- * suitable for comparisons to ASCII strings.
- */
-static int seq_search_ascii(const char *name, const char *const *array,
-                            size_t *len) {
-  unsigned char firstc;
-  const char *const *a;
-
-  *len = 0;
-
-  /* empty string can't match anything */
-  if (!*name)
-    return -1;
-
-  /* we handle first char specially to gain some speed */
-  firstc = pg_ascii_tolower((unsigned char)*name);
-
-  for (a = array; *a != NULL; a++) {
-    const char *p;
-    const char *n;
-
-    /* compare first chars */
-    if (pg_ascii_tolower((unsigned char)**a) != firstc)
-      continue;
-
-    /* compare rest of string */
-    for (p = *a + 1, n = name + 1;; p++, n++) {
-      /* return success if we matched whole array entry */
-      if (*p == '\0') {
-        *len = n - name;
-        return a - array;
-      }
-      /* else, must have another character in "name" ... */
-      if (*n == '\0')
-        break;
-      /* ... and it must match */
-      if (pg_ascii_tolower((unsigned char)*p) !=
-          pg_ascii_tolower((unsigned char)*n))
-        break;
-    }
-  }
-
-  return -1;
-}
 
 /*
  * Compare 'name' with 'element' in a case-insensitive way, by first
@@ -2286,575 +1525,6 @@ static int seq_search_localized(const char *name, char **array, size_t *len,
 }
 
 /*
- * Perform a sequential search in 'array' (or 'localized_array', if that's
- * not NULL) for an entry matching the first character(s) of the 'src'
- * string case-insensitively.
- *
- * The 'array' is presumed to be English words (all-ASCII), but
- * if 'localized_array' is supplied, that might be non-English
- * so we need a more expensive case-folding transformation
- * (which will follow the rules of the collation 'collid').
- *
- * If a match is found, copy the array index of the match into the integer
- * pointed to by 'dest' and advance 'src' to the end of the part of the string
- * which matched.
- *
- * Returns true on match, false on failure (if escontext points to an
- * ErrorSaveContext; otherwise errors are thrown).
- *
- * 'node' is used only for error reports: node->key->name identifies the
- * field type we were searching for.
- */
-static bool from_char_seq_search(int *dest, const char **src,
-                                 const char *const *array,
-                                 char **localized_array, Oid collid,
-                                 FormatNode *node, Node *escontext) {
-  size_t len;
-
-  if (localized_array == NULL)
-    *dest = seq_search_ascii(*src, array, &len);
-  else
-    *dest = seq_search_localized(*src, localized_array, &len, collid);
-
-  if (len <= 0) {
-    /*
-     * In the error report, truncate the string at the next whitespace (if
-     * any) to avoid including irrelevant data.
-     */
-    char *copy = pstrdup(*src);
-    char *c;
-
-    for (c = copy; *c; c++) {
-      if (scanner_isspace(*c)) {
-        *c = '\0';
-        break;
-      }
-    }
-
-    ereturn(escontext, false,
-            (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-             errmsg("invalid value \"%s\" for \"%s\"", copy, node->key->name),
-             errdetail("The given value did not match any of "
-                       "the allowed values for this field.")));
-  }
-  *src += len;
-  return true;
-}
-
-/*
- * Process the string 'in' as denoted by the array of FormatNodes 'node[]'.
- * The TmFromChar struct pointed to by 'out' is populated with the results.
- *
- * 'collid' identifies the collation to use, if needed.
- * 'std' specifies standard parsing mode.
- *
- * If escontext points to an ErrorSaveContext, data errors will be reported
- * by filling that struct; the caller must test SOFT_ERROR_OCCURRED() to see
- * whether an error occurred.  Otherwise, errors are thrown.
- *
- * Note: we currently don't have any to_interval() function, so there
- * is no need here for INVALID_FOR_INTERVAL checks.
- */
-static void DCH_from_char(FormatNode *node, const char *in, TmFromChar *out,
-                          Oid collid, bool std, Node *escontext) {
-  FormatNode *n;
-  const char *s;
-  int len, value;
-  bool fx_mode = std;
-
-  /* number of extra skipped characters (more than given in format string) */
-  int extra_skip = 0;
-
-  /* cache localized days and months */
-  cache_locale_time();
-
-  for (n = node, s = in; n->type != NODE_TYPE_END && *s != '\0'; n++) {
-    /*
-     * Ignore spaces at the beginning of the string and before fields when
-     * not in FX (fixed width) mode.
-     */
-    if (!fx_mode && (n->type != NODE_TYPE_ACTION || n->key->id != DCH_FX) &&
-        (n->type == NODE_TYPE_ACTION || n == node)) {
-      while (*s != '\0' && isspace((unsigned char)*s)) {
-        s++;
-        extra_skip++;
-      }
-    }
-
-    if (n->type == NODE_TYPE_SPACE || n->type == NODE_TYPE_SEPARATOR) {
-      if (std) {
-        /*
-         * Standard mode requires strict matching between format
-         * string separators/spaces and input string.
-         */
-        Assert(n->character[0] && !n->character[1]);
-
-        if (*s == n->character[0])
-          s++;
-        else
-          ereturn(
-              escontext, ,
-              (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-               errmsg("unmatched format separator \"%c\"", n->character[0])));
-      } else if (!fx_mode) {
-        /*
-         * In non FX (fixed format) mode one format string space or
-         * separator match to one space or separator in input string.
-         * Or match nothing if there is no space or separator in the
-         * current position of input string.
-         */
-        extra_skip--;
-        if (isspace((unsigned char)*s) || is_separator_char(s)) {
-          s++;
-          extra_skip++;
-        }
-      } else {
-        /*
-         * In FX mode, on format string space or separator we consume
-         * exactly one character from input string.  Notice we don't
-         * insist that the consumed character match the format's
-         * character.
-         */
-        s += pg_mblen_cstr(s);
-      }
-      continue;
-    } else if (n->type != NODE_TYPE_ACTION) {
-      /*
-       * Text character, so consume one character from input string.
-       * Notice we don't insist that the consumed character match the
-       * format's character.
-       */
-      if (!fx_mode) {
-        /*
-         * In non FX mode we might have skipped some extra characters
-         * (more than specified in format string) before.  In this
-         * case we don't skip input string character, because it might
-         * be part of field.
-         */
-        if (extra_skip > 0)
-          extra_skip--;
-        else
-          s += pg_mblen_cstr(s);
-      } else {
-        int chlen = pg_mblen_cstr(s);
-
-        /*
-         * Standard mode requires strict match of format characters.
-         */
-        if (std && n->type == NODE_TYPE_CHAR &&
-            strncmp(s, n->character, chlen) != 0)
-          ereturn(escontext, ,
-                  (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-                   errmsg("unmatched format character \"%s\"", n->character)));
-
-        s += chlen;
-      }
-      continue;
-    }
-
-    if (!from_char_set_mode(out, n->key->date_mode, escontext))
-      return;
-
-    switch (n->key->id) {
-    case DCH_FX:
-      fx_mode = true;
-      break;
-    case DCH_A_M:
-    case DCH_P_M:
-    case DCH_a_m:
-    case DCH_p_m:
-      if (!from_char_seq_search(&value, &s, ampm_strings_long, NULL, InvalidOid,
-                                n, escontext))
-        return;
-      if (!from_char_set_int(&out->pm, value % 2, n, escontext))
-        return;
-      out->clock = CLOCK_12_HOUR;
-      break;
-    case DCH_AM:
-    case DCH_PM:
-    case DCH_am:
-    case DCH_pm:
-      if (!from_char_seq_search(&value, &s, ampm_strings, NULL, InvalidOid, n,
-                                escontext))
-        return;
-      if (!from_char_set_int(&out->pm, value % 2, n, escontext))
-        return;
-      out->clock = CLOCK_12_HOUR;
-      break;
-    case DCH_HH:
-    case DCH_HH12:
-      if (from_char_parse_int_len(&out->hh, &s, 2, n, escontext) < 0)
-        return;
-      out->clock = CLOCK_12_HOUR;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_HH24:
-      if (from_char_parse_int_len(&out->hh, &s, 2, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_MI:
-      if (from_char_parse_int(&out->mi, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_SS:
-      if (from_char_parse_int(&out->ss, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_MS: /* millisecond */
-      len = from_char_parse_int_len(&out->ms, &s, 3, n, escontext);
-      if (len < 0)
-        return;
-
-      /*
-       * 25 is 0.25 and 250 is 0.25 too; 025 is 0.025 and not 0.25
-       */
-      out->ms *= len == 1 ? 100 : len == 2 ? 10 : 1;
-
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_FF1:
-    case DCH_FF2:
-    case DCH_FF3:
-    case DCH_FF4:
-    case DCH_FF5:
-    case DCH_FF6:
-      out->ff = n->key->id - DCH_FF1 + 1;
-      /* FALLTHROUGH */
-    case DCH_US: /* microsecond */
-      len = from_char_parse_int_len(
-          &out->us, &s, n->key->id == DCH_US ? 6 : out->ff, n, escontext);
-      if (len < 0)
-        return;
-
-      out->us *= len == 1   ? 100000
-                 : len == 2 ? 10000
-                 : len == 3 ? 1000
-                 : len == 4 ? 100
-                 : len == 5 ? 10
-                            : 1;
-
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_SSSS:
-      if (from_char_parse_int(&out->ssss, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_tz:
-    case DCH_TZ: {
-      int tzlen;
-
-      tzlen = DecodeTimezoneAbbrevPrefix(s, &out->gmtoffset, &out->tzp);
-      if (tzlen > 0) {
-        out->has_tz = true;
-        /* we only need the zone abbrev for DYNTZ case */
-        if (out->tzp)
-          out->abbrev = pnstrdup(s, tzlen);
-        out->tzsign = 0; /* drop any earlier TZH/TZM info */
-        s += tzlen;
-        break;
-      } else if (isalpha((unsigned char)*s)) {
-        /*
-         * It doesn't match any abbreviation, but it starts
-         * with a letter.  OF format certainly won't succeed;
-         * assume it's a misspelled abbreviation and complain
-         * accordingly.
-         */
-        ereturn(escontext, ,
-                (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-                 errmsg("invalid value \"%s\" for \"%s\"", s, n->key->name),
-                 errdetail("Time zone abbreviation is not recognized.")));
-      }
-      /* otherwise parse it like OF */
-    }
-      /* FALLTHROUGH */
-    case DCH_OF:
-      /* OF is equivalent to TZH or TZH:TZM */
-      /* see TZH comments below */
-      if (*s == '+' || *s == '-' || *s == ' ') {
-        out->tzsign = *s == '-' ? -1 : +1;
-        s++;
-      } else {
-        if (extra_skip > 0 && *(s - 1) == '-')
-          out->tzsign = -1;
-        else
-          out->tzsign = +1;
-      }
-      if (from_char_parse_int_len(&out->tzh, &s, 2, n, escontext) < 0)
-        return;
-      if (*s == ':') {
-        s++;
-        if (from_char_parse_int_len(&out->tzm, &s, 2, n, escontext) < 0)
-          return;
-      }
-      break;
-    case DCH_TZH:
-
-      /*
-       * Value of TZH might be negative.  And the issue is that we
-       * might swallow minus sign as the separator.  So, if we have
-       * skipped more characters than specified in the format
-       * string, then we consider prepending last skipped minus to
-       * TZH.
-       */
-      if (*s == '+' || *s == '-' || *s == ' ') {
-        out->tzsign = *s == '-' ? -1 : +1;
-        s++;
-      } else {
-        if (extra_skip > 0 && *(s - 1) == '-')
-          out->tzsign = -1;
-        else
-          out->tzsign = +1;
-      }
-
-      if (from_char_parse_int_len(&out->tzh, &s, 2, n, escontext) < 0)
-        return;
-      break;
-    case DCH_TZM:
-      /* assign positive timezone sign if TZH was not seen before */
-      if (!out->tzsign)
-        out->tzsign = +1;
-      if (from_char_parse_int_len(&out->tzm, &s, 2, n, escontext) < 0)
-        return;
-      break;
-    case DCH_A_D:
-    case DCH_B_C:
-    case DCH_a_d:
-    case DCH_b_c:
-      if (!from_char_seq_search(&value, &s, adbc_strings_long, NULL, InvalidOid,
-                                n, escontext))
-        return;
-      if (!from_char_set_int(&out->bc, value % 2, n, escontext))
-        return;
-      break;
-    case DCH_AD:
-    case DCH_BC:
-    case DCH_ad:
-    case DCH_bc:
-      if (!from_char_seq_search(&value, &s, adbc_strings, NULL, InvalidOid, n,
-                                escontext))
-        return;
-      if (!from_char_set_int(&out->bc, value % 2, n, escontext))
-        return;
-      break;
-    case DCH_MONTH:
-    case DCH_Month:
-    case DCH_month:
-      if (!from_char_seq_search(&value, &s, months_full,
-                                S_TM(n->suffix) ? localized_full_months : NULL,
-                                collid, n, escontext))
-        return;
-      if (!from_char_set_int(&out->mm, value + 1, n, escontext))
-        return;
-      break;
-    case DCH_MON:
-    case DCH_Mon:
-    case DCH_mon:
-      if (!from_char_seq_search(&value, &s, months,
-                                S_TM(n->suffix) ? localized_abbrev_months
-                                                : NULL,
-                                collid, n, escontext))
-        return;
-      if (!from_char_set_int(&out->mm, value + 1, n, escontext))
-        return;
-      break;
-    case DCH_MM:
-      if (from_char_parse_int(&out->mm, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_DAY:
-    case DCH_Day:
-    case DCH_day:
-      if (!from_char_seq_search(&value, &s, days,
-                                S_TM(n->suffix) ? localized_full_days : NULL,
-                                collid, n, escontext))
-        return;
-      if (!from_char_set_int(&out->d, value, n, escontext))
-        return;
-      out->d++;
-      break;
-    case DCH_DY:
-    case DCH_Dy:
-    case DCH_dy:
-      if (!from_char_seq_search(&value, &s, days_short,
-                                S_TM(n->suffix) ? localized_abbrev_days : NULL,
-                                collid, n, escontext))
-        return;
-      if (!from_char_set_int(&out->d, value, n, escontext))
-        return;
-      out->d++;
-      break;
-    case DCH_DDD:
-      if (from_char_parse_int(&out->ddd, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_IDDD:
-      if (from_char_parse_int_len(&out->ddd, &s, 3, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_DD:
-      if (from_char_parse_int(&out->dd, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_D:
-      if (from_char_parse_int(&out->d, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_ID:
-      if (from_char_parse_int_len(&out->d, &s, 1, n, escontext) < 0)
-        return;
-      /* Shift numbering to match Gregorian where Sunday = 1 */
-      if (++out->d > 7)
-        out->d = 1;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_WW:
-    case DCH_IW:
-      if (from_char_parse_int(&out->ww, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_Q:
-
-      /*
-       * We ignore 'Q' when converting to date because it is unclear
-       * which date in the quarter to use, and some people specify
-       * both quarter and month, so if it was honored it might
-       * conflict with the supplied month. That is also why we don't
-       * throw an error.
-       *
-       * We still parse the source string for an integer, but it
-       * isn't stored anywhere in 'out'.
-       */
-      if (from_char_parse_int((int *)NULL, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_CC:
-      if (from_char_parse_int(&out->cc, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_Y_YYY: {
-      int matched, years, millennia, nch;
-
-      matched = sscanf(s, "%d,%03d%n", &millennia, &years, &nch);
-      if (matched < 2)
-        ereturn(escontext, ,
-                (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-                 errmsg("invalid value \"%s\" for \"%s\"", s, "Y,YYY")));
-
-      /* years += (millennia * 1000); */
-      if (pg_mul_s32_overflow(millennia, 1000, &millennia) ||
-          pg_add_s32_overflow(years, millennia, &years))
-        ereturn(escontext, ,
-                (errcode(ERRCODE_DATETIME_FIELD_OVERFLOW),
-                 errmsg("value for \"%s\" in source string is out of range",
-                        "Y,YYY")));
-
-      if (!from_char_set_int(&out->year, years, n, escontext))
-        return;
-      out->yysz = 4;
-      s += nch;
-      SKIP_THth(s, n->suffix);
-    } break;
-    case DCH_YYYY:
-    case DCH_IYYY:
-      if (from_char_parse_int(&out->year, &s, n, escontext) < 0)
-        return;
-      out->yysz = 4;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_YYY:
-    case DCH_IYY:
-      len = from_char_parse_int(&out->year, &s, n, escontext);
-      if (len < 0)
-        return;
-      if (len < 4)
-        out->year = adjust_partial_year_to_2020(out->year);
-      out->yysz = 3;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_YY:
-    case DCH_IY:
-      len = from_char_parse_int(&out->year, &s, n, escontext);
-      if (len < 0)
-        return;
-      if (len < 4)
-        out->year = adjust_partial_year_to_2020(out->year);
-      out->yysz = 2;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_Y:
-    case DCH_I:
-      len = from_char_parse_int(&out->year, &s, n, escontext);
-      if (len < 0)
-        return;
-      if (len < 4)
-        out->year = adjust_partial_year_to_2020(out->year);
-      out->yysz = 1;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_RM:
-    case DCH_rm:
-      if (!from_char_seq_search(&value, &s, rm_months_lower, NULL, InvalidOid,
-                                n, escontext))
-        return;
-      if (!from_char_set_int(&out->mm, MONTHS_PER_YEAR - value, n, escontext))
-        return;
-      break;
-    case DCH_W:
-      if (from_char_parse_int(&out->w, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    case DCH_J:
-      if (from_char_parse_int(&out->j, &s, n, escontext) < 0)
-        return;
-      SKIP_THth(s, n->suffix);
-      break;
-    }
-
-    /* Ignore all spaces after fields */
-    if (!fx_mode) {
-      extra_skip = 0;
-      while (*s != '\0' && isspace((unsigned char)*s)) {
-        s++;
-        extra_skip++;
-      }
-    }
-  }
-
-  /*
-   * Standard parsing mode doesn't allow unmatched format patterns or
-   * trailing characters in the input string.
-   */
-  if (std) {
-    if (n->type != NODE_TYPE_END)
-      ereturn(escontext, ,
-              (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-               errmsg("input string is too short for datetime format")));
-
-    while (*s != '\0' && isspace((unsigned char)*s))
-      s++;
-
-    if (*s != '\0')
-      ereturn(escontext, ,
-              (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-               errmsg("trailing characters remain in input string after "
-                      "datetime format")));
-  }
-}
-
-/*
  * The invariant for DCH cache entry management is that DCHCounter is equal
  * to the maximum age value among the existing entries, and we increment it
  * whenever an access occurs.  If we approach overflow, deal with that by
@@ -2870,98 +1540,22 @@ static inline void DCH_prevent_counter_overflow(void) {
 }
 
 /*
- * Get mask of date/time/zone components present in format nodes.
+ * A date format compiled by ty in the context cxt, or its error: the
+ * standard mode's separator, or an allocation's.
  */
-static int DCH_datetime_type(FormatNode *node) {
-  FormatNode *n;
-  int flags = 0;
+static ty_dch_format_t *dch_compile_or_raise(const char *str, size_t len,
+                                             bool std, MemoryContext cxt) {
+  MemoryContext oldcontext = MemoryContextSwitchTo(cxt);
+  ty_dch_format_t *f;
+  int rc = ty_dch_compile(str, len, std, &f);
 
-  for (n = node; n->type != NODE_TYPE_END; n++) {
-    if (n->type != NODE_TYPE_ACTION)
-      continue;
-
-    switch (n->key->id) {
-    case DCH_FX:
-      break;
-    case DCH_A_M:
-    case DCH_P_M:
-    case DCH_a_m:
-    case DCH_p_m:
-    case DCH_AM:
-    case DCH_PM:
-    case DCH_am:
-    case DCH_pm:
-    case DCH_HH:
-    case DCH_HH12:
-    case DCH_HH24:
-    case DCH_MI:
-    case DCH_SS:
-    case DCH_MS: /* millisecond */
-    case DCH_US: /* microsecond */
-    case DCH_FF1:
-    case DCH_FF2:
-    case DCH_FF3:
-    case DCH_FF4:
-    case DCH_FF5:
-    case DCH_FF6:
-    case DCH_SSSS:
-      flags |= DCH_TIMED;
-      break;
-    case DCH_tz:
-    case DCH_TZ:
-    case DCH_OF:
-    case DCH_TZH:
-    case DCH_TZM:
-      flags |= DCH_ZONED;
-      break;
-    case DCH_A_D:
-    case DCH_B_C:
-    case DCH_a_d:
-    case DCH_b_c:
-    case DCH_AD:
-    case DCH_BC:
-    case DCH_ad:
-    case DCH_bc:
-    case DCH_MONTH:
-    case DCH_Month:
-    case DCH_month:
-    case DCH_MON:
-    case DCH_Mon:
-    case DCH_mon:
-    case DCH_MM:
-    case DCH_DAY:
-    case DCH_Day:
-    case DCH_day:
-    case DCH_DY:
-    case DCH_Dy:
-    case DCH_dy:
-    case DCH_DDD:
-    case DCH_IDDD:
-    case DCH_DD:
-    case DCH_D:
-    case DCH_ID:
-    case DCH_WW:
-    case DCH_Q:
-    case DCH_CC:
-    case DCH_Y_YYY:
-    case DCH_YYYY:
-    case DCH_IYYY:
-    case DCH_YYY:
-    case DCH_IYY:
-    case DCH_YY:
-    case DCH_IY:
-    case DCH_Y:
-    case DCH_I:
-    case DCH_RM:
-    case DCH_rm:
-    case DCH_W:
-    case DCH_J:
-      flags |= DCH_DATED;
-      break;
-    }
-  }
-
-  return flags;
+  MemoryContextSwitchTo(oldcontext);
+  if (0 == rc)
+    return f;
+  if (TY_ERR_INVALID == ty_errnum())
+    ereport(ERROR, (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+                    errmsg("%s", ty_errmsg())));
+  ty_raise_alloc();
 }
 
 /* select a DCHCacheEntry to hold the given format picture */
@@ -3045,9 +1639,12 @@ static DCHCacheEntry *DCH_cache_fetch(const char *str, bool std) {
      */
     ent = DCH_cache_getnew(str, std);
 
-    parse_format(ent->format, str, DCH_keywords, DCH_suff, DCH_index,
-                 DCH_FLAG | (std ? STD_FLAG : 0), NULL);
-
+    /* ty compiles it; the entry lives as long as the session */
+    if (NULL != ent->format) {
+      ty_free(ent->format);
+      ent->format = NULL;
+    }
+    ent->format = dch_compile_or_raise(str, strlen(str), std, TopMemoryContext);
     ent->valid = true;
   }
   return ent;
@@ -3108,7 +1705,7 @@ static void *tochar_format(FunctionCallInfo fcinfo, text *fmt,
 
 /* ty_dch_compile, as tochar_format calls it. */
 static int dch_compile(const char *fmt, size_t len, void **out) {
-  return ty_dch_compile(fmt, len, (ty_dch_format_t **)out);
+  return ty_dch_compile(fmt, len, 0, (ty_dch_format_t **)out);
 }
 
 /* The compiled date format of the call site; it fails only for memory. */
@@ -3230,28 +1827,14 @@ Datum to_timestamp(PG_FUNCTION_ARGS) {
   text *fmt = PG_GETARG_TEXT_PP(1);
   Oid collid = PG_GET_COLLATION();
   Timestamp result;
-  int tz;
-  struct pg_tm tm;
-  struct fmt_tz ftz;
-  fsec_t fsec;
-  int fprec;
+  ty_dch_parsed_t parsed;
 
-  do_to_timestamp(date_txt, fmt, collid, false, &tm, &fsec, &ftz, &fprec, NULL,
-                  NULL);
+  do_to_timestamp(date_txt, fmt, collid, false, &parsed, NULL, NULL);
 
-  /* Use the specified time zone, if any. */
-  if (ftz.has_tz)
-    tz = ftz.gmtoffset;
-  else
-    tz = DetermineTimeZoneOffset(&tm, session_timezone);
-
-  if (tm2timestamp(&tm, fsec, &tz, &result) != 0)
+  /* ty: the text's zone, else the session's; then FFn's precision */
+  if (ty_dch_to_timestamp(&parsed, session_timezone, &result))
     ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
                     errmsg("timestamp out of range")));
-
-  /* Use the specified fractional precision, if any. */
-  if (fprec)
-    AdjustTimestampForTypmod(&result, fprec, NULL);
 
   PG_RETURN_TIMESTAMP(result);
 }
@@ -3265,29 +1848,29 @@ Datum to_date(PG_FUNCTION_ARGS) {
   text *date_txt = PG_GETARG_TEXT_PP(0);
   text *fmt = PG_GETARG_TEXT_PP(1);
   Oid collid = PG_GET_COLLATION();
-  DateADT result;
-  struct pg_tm tm;
-  struct fmt_tz ftz;
-  fsec_t fsec;
+  int32 result;
+  ty_dch_parsed_t parsed;
 
-  do_to_timestamp(date_txt, fmt, collid, false, &tm, &fsec, &ftz, NULL, NULL,
-                  NULL);
+  do_to_timestamp(date_txt, fmt, collid, false, &parsed, NULL, NULL);
 
-  /* Prevent overflow in Julian-day routines */
-  if (!IS_VALID_JULIAN(tm.tm_year, tm.tm_mon, tm.tm_mday))
-    ereport(ERROR,
-            (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-             errmsg("date out of range: \"%s\"", text_to_cstring(date_txt))));
-
-  result = date2j(tm.tm_year, tm.tm_mon, tm.tm_mday) - POSTGRES_EPOCH_JDATE;
-
-  /* Now check for just-out-of-range dates */
-  if (!IS_VALID_DATE(result))
+  /* ty checks the Julian range and a date's */
+  if (ty_dch_to_date(&parsed, &result))
     ereport(ERROR,
             (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
              errmsg("date out of range: \"%s\"", text_to_cstring(date_txt))));
 
   PG_RETURN_DATEADT(result);
+}
+
+/* The fields ty parsed, as a pg_tm. */
+static void dch_parsed_tm(const ty_dch_parsed_t *parsed, struct pg_tm *tm) {
+  memset(tm, 0, sizeof(*tm));
+  tm->tm_year = parsed->tm.year;
+  tm->tm_mon = parsed->tm.mon;
+  tm->tm_mday = parsed->tm.mday;
+  tm->tm_hour = parsed->tm.hour;
+  tm->tm_min = parsed->tm.min;
+  tm->tm_sec = parsed->tm.sec;
 }
 
 /*
@@ -3308,24 +1891,27 @@ Datum to_date(PG_FUNCTION_ARGS) {
 Datum parse_datetime(text *date_txt, text *fmt, Oid collid, bool strict,
                      Oid *typid, int32 *typmod, int *tz, Node *escontext) {
   struct pg_tm tm;
-  struct fmt_tz ftz;
+  ty_dch_parsed_t parsed;
   fsec_t fsec;
   int fprec;
   uint32 flags;
 
-  if (!do_to_timestamp(date_txt, fmt, collid, strict, &tm, &fsec, &ftz, &fprec,
-                       &flags, escontext))
+  if (!do_to_timestamp(date_txt, fmt, collid, strict, &parsed, &flags,
+                       escontext))
     return (Datum)0;
+  dch_parsed_tm(&parsed, &tm);
+  fsec = parsed.fsec;
+  fprec = parsed.fprec;
 
   *typmod = fprec ? fprec : -1; /* fractional part precision */
 
-  if (flags & DCH_DATED) {
-    if (flags & DCH_TIMED) {
-      if (flags & DCH_ZONED) {
+  if (flags & TY_DCH_DATED) {
+    if (flags & TY_DCH_TIMED) {
+      if (flags & TY_DCH_ZONED) {
         TimestampTz result;
 
-        if (ftz.has_tz) {
-          *tz = ftz.gmtoffset;
+        if (parsed.has_tz) {
+          *tz = parsed.gmtoffset;
         } else {
           /*
            * Time zone is present in format string, but not in input
@@ -3364,7 +1950,7 @@ Datum parse_datetime(text *date_txt, text *fmt, Oid collid, bool strict,
         return TimestampGetDatum(result);
       }
     } else {
-      if (flags & DCH_ZONED) {
+      if (flags & TY_DCH_ZONED) {
         ereturn(escontext, (Datum)0,
                 (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
                  errmsg("datetime format is zoned but not timed")));
@@ -3392,12 +1978,12 @@ Datum parse_datetime(text *date_txt, text *fmt, Oid collid, bool strict,
         return DateADTGetDatum(result);
       }
     }
-  } else if (flags & DCH_TIMED) {
-    if (flags & DCH_ZONED) {
+  } else if (flags & TY_DCH_TIMED) {
+    if (flags & TY_DCH_ZONED) {
       TimeTzADT *result = (TimeTzADT *)palloc(sizeof(TimeTzADT));
 
-      if (ftz.has_tz) {
-        *tz = ftz.gmtoffset;
+      if (parsed.has_tz) {
+        *tz = parsed.gmtoffset;
       } else {
         /*
          * Time zone is present in format string, but not in input
@@ -3441,49 +2027,93 @@ Datum parse_datetime(text *date_txt, text *fmt, Oid collid, bool strict,
 }
 
 /*
+ * The compiled date format of fmt_str: the session's cache's, or one
+ * compiled in the current context for a format too long for it, which
+ * *incache false says the caller frees.
+ */
+static const ty_dch_format_t *dch_fetch(const char *fmt_str, int fmt_len,
+                                        bool std, bool *incache) {
+  if (fmt_len > DCH_CACHE_SIZE) {
+    *incache = false;
+    return dch_compile_or_raise(fmt_str, fmt_len, std, CurrentMemoryContext);
+  }
+  *incache = true;
+  return DCH_cache_fetch(fmt_str, std)->format;
+}
+
+/*
  * Parses the datetime format string in 'fmt_str' and returns true if it
  * contains a timezone specifier, false if not.
  */
 bool datetime_format_has_tz(const char *fmt_str) {
   bool incache;
-  int fmt_len = strlen(fmt_str);
-  int result;
-  FormatNode *format;
-
-  if (fmt_len > DCH_CACHE_SIZE) {
-    /*
-     * Allocate new memory if format picture is bigger than static cache
-     * and do not use cache (call parser always)
-     */
-    incache = false;
-
-    format = palloc_array(FormatNode, fmt_len + 1);
-
-    parse_format(format, fmt_str, DCH_keywords, DCH_suff, DCH_index, DCH_FLAG,
-                 NULL);
-  } else {
-    /*
-     * Use cache buffers
-     */
-    DCHCacheEntry *ent = DCH_cache_fetch(fmt_str, false);
-
-    incache = true;
-    format = ent->format;
-  }
-
-  result = DCH_datetime_type(format);
+  const ty_dch_format_t *format =
+      dch_fetch(fmt_str, strlen(fmt_str), false, &incache);
+  unsigned flags = ty_dch_flags(format);
 
   if (!incache)
-    pfree(format);
+    ty_free((void *)format);
+  return 0 != (flags & TY_DCH_ZONED);
+}
 
-  return result & DCH_ZONED;
+/*
+ * TM's localized names, for ty: the name of lc_time that the text at s
+ * begins with, folded by the collation ctx points to.
+ */
+static int dch_match_name(void *ctx, int kind, const char *s, int *index,
+                          size_t *len) {
+  Oid collid = *(Oid *)ctx;
+  char **array;
+
+  /* cache localized days and months */
+  cache_locale_time();
+  array = TY_TOCHAR_FULL_MONTH == kind     ? localized_full_months
+          : TY_TOCHAR_ABBREV_MONTH == kind ? localized_abbrev_months
+          : TY_TOCHAR_FULL_DAY == kind     ? localized_full_days
+                                           : localized_abbrev_days;
+  *index = seq_search_localized(s, array, len, collid);
+  return *index < 0 ? -1 : 0;
+}
+
+/* TZ's abbreviations, for ty: those of the session's table. */
+static int dch_tz_abbrev(void *ctx, const char *s, int *gmtoff,
+                         const ty_tz_t **tz) {
+  pg_tz *tzp = NULL;
+  int len = DecodeTimezoneAbbrevPrefix(s, gmtoff, &tzp);
+
+  *tz = tzp;
+  return len;
+}
+
+/*
+ * Raise the error of a reverse parse, or save it in escontext: ty's message,
+ * detail and hint with PostgreSQL's code, or DateTimeParseError's.
+ */
+static void dch_parse_raise(const ty_dch_error_t *err, const char *date_str,
+                            Node *escontext) {
+  int code = TY_DCH_E_RANGE == err->code   ? ERRCODE_DATETIME_VALUE_OUT_OF_RANGE
+             : TY_DCH_E_FIELD == err->code ? ERRCODE_DATETIME_FIELD_OVERFLOW
+                                           : ERRCODE_INVALID_DATETIME_FORMAT;
+
+  if (TY_ERR_NOMEM == ty_errnum())
+    ty_raise_alloc();
+  if (TY_DCH_E_DTERR == err->code) {
+    DateTimeParseError(err->dterr, NULL, date_str, "timestamp", escontext);
+    return;
+  }
+  errsave(escontext,
+          (errcode(code), errmsg("%s", ty_errmsg()),
+           err->detail[0] ? errdetail("%s", err->detail) : 0,
+           err->hint[0] ? errhint("%s", err->hint) : 0));
 }
 
 /*
  * do_to_timestamp: shared code for to_timestamp and to_date
  *
- * Parse the 'date_txt' according to 'fmt', return results as a struct pg_tm,
- * fractional seconds, struct fmt_tz, and fractional precision.
+ * Parse the 'date_txt' according to 'fmt' into ty's fields: the date and
+ * time, the zone, and the fractional precision. ty reads the text field by
+ * field and makes the fields a date and time (ty_dch_parse); digres gives
+ * the format, the localized names and the zone abbreviations.
  *
  * 'collid' identifies the collation to use, if needed.
  * 'std' specifies standard parsing mode.
@@ -3494,382 +2124,31 @@ bool datetime_format_has_tz(const char *fmt_str) {
  * Returns true on success, false on failure (if escontext points to an
  * ErrorSaveContext; otherwise errors are thrown).  Note that currently,
  * soft-error behavior is provided for bad data but not bad format.
- *
- * We parse 'fmt' into a list of FormatNodes, which is then passed to
- * DCH_from_char to populate a TmFromChar with the parsed contents of
- * 'date_txt'.
- *
- * The TmFromChar is then analysed and converted into the final results in
- * struct 'tm', 'fsec', struct 'tz', and 'fprec'.
  */
 static bool do_to_timestamp(text *date_txt, text *fmt, Oid collid, bool std,
-                            struct pg_tm *tm, fsec_t *fsec, struct fmt_tz *tz,
-                            int *fprec, uint32 *flags, Node *escontext) {
-  FormatNode *format = NULL;
-  TmFromChar tmfc;
-  int fmt_len;
-  char *date_str;
-  int fmask;
-  bool incache = false;
+                            ty_dch_parsed_t *parsed, uint32 *flags,
+                            Node *escontext) {
+  char *date_str = text_to_cstring(date_txt);
+  char *fmt_str = text_to_cstring(fmt);
+  int fmt_len = VARSIZE_ANY_EXHDR(fmt);
+  ty_dch_parse_host_t host = {&collid, dch_match_name, dch_tz_abbrev};
+  ty_dch_error_t err;
+  bool incache;
+  const ty_dch_format_t *format = dch_fetch(fmt_str, fmt_len, std, &incache);
+  int rc = ty_dch_parse(format, date_str, std, &host, parsed, &err);
 
-  Assert(tm != NULL);
-  Assert(fsec != NULL);
-
-  date_str = text_to_cstring(date_txt);
-
-  ZERO_tmfc(&tmfc);
-  ZERO_tm(tm);
-  *fsec = 0;
-  tz->has_tz = false;
-  if (fprec)
-    *fprec = 0;
   if (flags)
-    *flags = 0;
-  fmask = 0; /* bit mask for ValidateDate() */
-
-  fmt_len = VARSIZE_ANY_EXHDR(fmt);
-
-  if (fmt_len) {
-    char *fmt_str;
-
-    fmt_str = text_to_cstring(fmt);
-
-    if (fmt_len > DCH_CACHE_SIZE) {
-      /*
-       * Allocate new memory if format picture is bigger than static
-       * cache and do not use cache (call parser always)
-       */
-      format = palloc_array(FormatNode, fmt_len + 1);
-
-      parse_format(format, fmt_str, DCH_keywords, DCH_suff, DCH_index,
-                   DCH_FLAG | (std ? STD_FLAG : 0), NULL);
-    } else {
-      /*
-       * Use cache buffers
-       */
-      DCHCacheEntry *ent = DCH_cache_fetch(fmt_str, std);
-
-      incache = true;
-      format = ent->format;
-    }
-
-#ifdef DEBUG_TO_FROM_CHAR
-    /* dump_node(format, fmt_len); */
-    /* dump_index(DCH_keywords, DCH_index); */
-#endif
-
-    DCH_from_char(format, date_str, &tmfc, collid, std, escontext);
-    pfree(fmt_str);
-    if (SOFT_ERROR_OCCURRED(escontext))
-      goto fail;
-
-    if (flags)
-      *flags = DCH_datetime_type(format);
-
-    if (!incache) {
-      pfree(format);
-      format = NULL;
-    }
+    *flags = 0 == rc ? ty_dch_flags(format) : 0;
+  if (!incache)
+    ty_free((void *)format);
+  pfree(fmt_str);
+  if (rc) {
+    dch_parse_raise(&err, date_str, escontext);
+    pfree(date_str);
+    return false;
   }
-
-  DEBUG_TMFC(&tmfc);
-
-  /*
-   * Convert to_date/to_timestamp input fields to standard 'tm'
-   */
-  if (tmfc.ssss) {
-    int x = tmfc.ssss;
-
-    tm->tm_hour = x / SECS_PER_HOUR;
-    x %= SECS_PER_HOUR;
-    tm->tm_min = x / SECS_PER_MINUTE;
-    x %= SECS_PER_MINUTE;
-    tm->tm_sec = x;
-  }
-
-  if (tmfc.ss)
-    tm->tm_sec = tmfc.ss;
-  if (tmfc.mi)
-    tm->tm_min = tmfc.mi;
-  if (tmfc.hh)
-    tm->tm_hour = tmfc.hh;
-
-  if (tmfc.clock == CLOCK_12_HOUR) {
-    if (tm->tm_hour < 1 || tm->tm_hour > HOURS_PER_DAY / 2) {
-      errsave(
-          escontext,
-          (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-           errmsg("hour \"%d\" is invalid for the 12-hour clock", tm->tm_hour),
-           errhint(
-               "Use the 24-hour clock, or give an hour between 1 and 12.")));
-      goto fail;
-    }
-
-    if (tmfc.pm && tm->tm_hour < HOURS_PER_DAY / 2)
-      tm->tm_hour += HOURS_PER_DAY / 2;
-    else if (!tmfc.pm && tm->tm_hour == HOURS_PER_DAY / 2)
-      tm->tm_hour = 0;
-  }
-
-  if (tmfc.year) {
-    /*
-     * If CC and YY (or Y) are provided, use YY as 2 low-order digits for
-     * the year in the given century.  Keep in mind that the 21st century
-     * AD runs from 2001-2100, not 2000-2099; 6th century BC runs from
-     * 600BC to 501BC.
-     */
-    if (tmfc.cc && tmfc.yysz <= 2) {
-      if (tmfc.bc)
-        tmfc.cc = -tmfc.cc;
-      tm->tm_year = tmfc.year % 100;
-      if (tm->tm_year) {
-        int tmp;
-
-        if (tmfc.cc >= 0) {
-          /* tm->tm_year += (tmfc.cc - 1) * 100; */
-          tmp = tmfc.cc - 1;
-          if (pg_mul_s32_overflow(tmp, 100, &tmp) ||
-              pg_add_s32_overflow(tm->tm_year, tmp, &tm->tm_year)) {
-            DateTimeParseError(DTERR_FIELD_OVERFLOW, NULL,
-                               text_to_cstring(date_txt), "timestamp",
-                               escontext);
-            goto fail;
-          }
-        } else {
-          /* tm->tm_year = (tmfc.cc + 1) * 100 - tm->tm_year + 1; */
-          tmp = tmfc.cc + 1;
-          if (pg_mul_s32_overflow(tmp, 100, &tmp) ||
-              pg_sub_s32_overflow(tmp, tm->tm_year, &tmp) ||
-              pg_add_s32_overflow(tmp, 1, &tm->tm_year)) {
-            DateTimeParseError(DTERR_FIELD_OVERFLOW, NULL,
-                               text_to_cstring(date_txt), "timestamp",
-                               escontext);
-            goto fail;
-          }
-        }
-      } else {
-        /* find century year for dates ending in "00" */
-        tm->tm_year = tmfc.cc * 100 + ((tmfc.cc >= 0) ? 0 : 1);
-      }
-    } else {
-      /* If a 4-digit year is provided, we use that and ignore CC. */
-      tm->tm_year = tmfc.year;
-      if (tmfc.bc)
-        tm->tm_year = -tm->tm_year;
-      /* correct for our representation of BC years */
-      if (tm->tm_year < 0)
-        tm->tm_year++;
-    }
-    fmask |= DTK_M(YEAR);
-  } else if (tmfc.cc) {
-    /* use first year of century */
-    if (tmfc.bc)
-      tmfc.cc = -tmfc.cc;
-    if (tmfc.cc >= 0) {
-      /* +1 because 21st century started in 2001 */
-      /* tm->tm_year = (tmfc.cc - 1) * 100 + 1; */
-      if (pg_mul_s32_overflow(tmfc.cc - 1, 100, &tm->tm_year) ||
-          pg_add_s32_overflow(tm->tm_year, 1, &tm->tm_year)) {
-        DateTimeParseError(DTERR_FIELD_OVERFLOW, NULL,
-                           text_to_cstring(date_txt), "timestamp", escontext);
-        goto fail;
-      }
-    } else {
-      /* +1 because year == 599 is 600 BC */
-      /* tm->tm_year = tmfc.cc * 100 + 1; */
-      if (pg_mul_s32_overflow(tmfc.cc, 100, &tm->tm_year) ||
-          pg_add_s32_overflow(tm->tm_year, 1, &tm->tm_year)) {
-        DateTimeParseError(DTERR_FIELD_OVERFLOW, NULL,
-                           text_to_cstring(date_txt), "timestamp", escontext);
-        goto fail;
-      }
-    }
-    fmask |= DTK_M(YEAR);
-  }
-
-  if (tmfc.j) {
-    j2date(tmfc.j, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
-    fmask |= DTK_DATE_M;
-  }
-
-  if (tmfc.ww) {
-    if (tmfc.mode == FROM_CHAR_DATE_ISOWEEK) {
-      /*
-       * If tmfc.d is not set, then the date is left at the beginning of
-       * the ISO week (Monday).
-       */
-      if (tmfc.d)
-        isoweekdate2date(tmfc.ww, tmfc.d, &tm->tm_year, &tm->tm_mon,
-                         &tm->tm_mday);
-      else
-        isoweek2date(tmfc.ww, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
-      fmask |= DTK_DATE_M;
-    } else {
-      /* tmfc.ddd = (tmfc.ww - 1) * 7 + 1; */
-      if (pg_sub_s32_overflow(tmfc.ww, 1, &tmfc.ddd) ||
-          pg_mul_s32_overflow(tmfc.ddd, 7, &tmfc.ddd) ||
-          pg_add_s32_overflow(tmfc.ddd, 1, &tmfc.ddd)) {
-        DateTimeParseError(DTERR_FIELD_OVERFLOW, NULL, date_str, "timestamp",
-                           escontext);
-        goto fail;
-      }
-    }
-  }
-
-  if (tmfc.w) {
-    /* tmfc.dd = (tmfc.w - 1) * 7 + 1; */
-    if (pg_sub_s32_overflow(tmfc.w, 1, &tmfc.dd) ||
-        pg_mul_s32_overflow(tmfc.dd, 7, &tmfc.dd) ||
-        pg_add_s32_overflow(tmfc.dd, 1, &tmfc.dd)) {
-      DateTimeParseError(DTERR_FIELD_OVERFLOW, NULL, date_str, "timestamp",
-                         escontext);
-      goto fail;
-    }
-  }
-  if (tmfc.dd) {
-    tm->tm_mday = tmfc.dd;
-    fmask |= DTK_M(DAY);
-  }
-  if (tmfc.mm) {
-    tm->tm_mon = tmfc.mm;
-    fmask |= DTK_M(MONTH);
-  }
-
-  if (tmfc.ddd && (tm->tm_mon <= 1 || tm->tm_mday <= 1)) {
-    /*
-     * The month and day field have not been set, so we use the
-     * day-of-year field to populate them.  Depending on the date mode,
-     * this field may be interpreted as a Gregorian day-of-year, or an ISO
-     * week date day-of-year.
-     */
-
-    if (!tm->tm_year && !tmfc.bc) {
-      errsave(
-          escontext,
-          (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
-           errmsg("cannot calculate day of year without year information")));
-      goto fail;
-    }
-
-    if (tmfc.mode == FROM_CHAR_DATE_ISOWEEK) {
-      int j0; /* zeroth day of the ISO year, in Julian */
-
-      j0 = isoweek2j(tm->tm_year, 1) - 1;
-
-      j2date(j0 + tmfc.ddd, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
-      fmask |= DTK_DATE_M;
-    } else {
-      const int *y;
-      int i;
-
-      static const int ysum[2][13] = {
-          {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365},
-          {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366}};
-
-      y = ysum[isleap(tm->tm_year)];
-
-      for (i = 1; i <= MONTHS_PER_YEAR; i++) {
-        if (tmfc.ddd <= y[i])
-          break;
-      }
-      if (tm->tm_mon <= 1)
-        tm->tm_mon = i;
-
-      if (tm->tm_mday <= 1)
-        tm->tm_mday = tmfc.ddd - y[i - 1];
-
-      fmask |= DTK_M(MONTH) | DTK_M(DAY);
-    }
-  }
-
-  if (tmfc.ms) {
-    int tmp = 0;
-
-    /* *fsec += tmfc.ms * 1000; */
-    if (pg_mul_s32_overflow(tmfc.ms, 1000, &tmp) ||
-        pg_add_s32_overflow(*fsec, tmp, fsec)) {
-      DateTimeParseError(DTERR_FIELD_OVERFLOW, NULL, date_str, "timestamp",
-                         escontext);
-      goto fail;
-    }
-  }
-  if (tmfc.us)
-    *fsec += tmfc.us;
-  if (fprec)
-    *fprec = tmfc.ff; /* fractional precision, if specified */
-
-  /* Range-check date fields according to bit mask computed above */
-  if (fmask != 0) {
-    /* We already dealt with AD/BC, so pass isjulian = true */
-    int dterr = ValidateDate(fmask, true, false, false, tm);
-
-    if (dterr != 0) {
-      /*
-       * Force the error to be DTERR_FIELD_OVERFLOW even if ValidateDate
-       * said DTERR_MD_FIELD_OVERFLOW, because we don't want to print an
-       * irrelevant hint about datestyle.
-       */
-      DateTimeParseError(DTERR_FIELD_OVERFLOW, NULL, date_str, "timestamp",
-                         escontext);
-      goto fail;
-    }
-  }
-
-  /* Range-check time fields too */
-  if (tm->tm_hour < 0 || tm->tm_hour >= HOURS_PER_DAY || tm->tm_min < 0 ||
-      tm->tm_min >= MINS_PER_HOUR || tm->tm_sec < 0 ||
-      tm->tm_sec >= SECS_PER_MINUTE || *fsec < INT64CONST(0) ||
-      *fsec >= USECS_PER_SEC) {
-    DateTimeParseError(DTERR_FIELD_OVERFLOW, NULL, date_str, "timestamp",
-                       escontext);
-    goto fail;
-  }
-
-  /*
-   * If timezone info was present, reduce it to a GMT offset.  (We cannot do
-   * this until we've filled all of the tm struct, since the zone's offset
-   * might be time-varying.)
-   */
-  if (tmfc.tzsign) {
-    /* TZH and/or TZM fields */
-    if (tmfc.tzh < 0 || tmfc.tzh > MAX_TZDISP_HOUR || tmfc.tzm < 0 ||
-        tmfc.tzm >= MINS_PER_HOUR) {
-      DateTimeParseError(DTERR_TZDISP_OVERFLOW, NULL, date_str, "timestamp",
-                         escontext);
-      goto fail;
-    }
-
-    tz->has_tz = true;
-    tz->gmtoffset = (tmfc.tzh * MINS_PER_HOUR + tmfc.tzm) * SECS_PER_MINUTE;
-    /* note we are flipping the sign convention here */
-    if (tmfc.tzsign > 0)
-      tz->gmtoffset = -tz->gmtoffset;
-  } else if (tmfc.has_tz) {
-    /* TZ field */
-    tz->has_tz = true;
-    if (tmfc.tzp == NULL) {
-      /* fixed-offset abbreviation; flip the sign convention */
-      tz->gmtoffset = -tmfc.gmtoffset;
-    } else {
-      /* dynamic-offset abbreviation, resolve using specified time */
-      tz->gmtoffset = DetermineTimeZoneAbbrevOffset(tm, tmfc.abbrev, tmfc.tzp);
-    }
-  }
-
-  DEBUG_TM(tm);
-
-  if (format && !incache)
-    pfree(format);
   pfree(date_str);
-
   return true;
-
-fail:
-  if (format && !incache)
-    pfree(format);
-  pfree(date_str);
-
-  return false;
 }
 
 /**********************************************************************

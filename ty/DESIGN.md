@@ -993,15 +993,33 @@ float8, and writes them by the format, as PostgreSQL's
 S take the host's `lconv` symbols, through a function in a
 `ty_num_locale_t` that is called only for a format that uses one.
 digres makes a decimal's digits itself, as ty has no decimal text
-yet, and gives them to `ty_num_to_char_digits`. The reverse parse
-(`to_timestamp`, `to_date`, `to_number`) stays in digres for now.
+yet, and gives them to `ty_num_to_char_digits`.
+
+The reverse parse of a date format is `ty_dch_parse`: the text
+read field by field, as PostgreSQL's `DCH_from_char`, then the
+fields made a date and time, as its `do_to_timestamp`. It serves
+`to_timestamp`, `to_date` and jsonpath's `datetime()`, whose
+standard mode `ty_dch_compile` and `ty_dch_parse` take as `std`.
+`ty_dch_to_timestamp` and `ty_dch_to_date` finish the first two.
+The host gives two functions, in a `ty_dch_parse_host_t`: the
+localized names that TM matches, folded by its collation, and
+the zone abbreviations of its session's table. An error comes
+with PostgreSQL's code, detail and hint (`ty_dch_error_t`), or
+as `DateTimeParseError`'s code, whose message the host writes
+from the text. digres keeps its cache of date formats, which
+now holds ty's compiled formats, as jsonpath calls the parse with
+no FmgrInfo to keep one in. `to_number` stays in digres for now.
 
 The tests: `test/tochar_known.txt`, 18,484 lines that the digres
 before the move printed (`test/gen_tochar.py`), of timestamps,
 timestamptz in 11 zones and intervals, each keyword with each
 prefix and suffix, and mixed formats; `test/tonum_known.txt`,
 7,973 lines of int4, int8, float4, float8 and numeric by 99
-number formats (`test/gen_tonum.py`); `test/test_tochar.cc` for
+number formats (`test/gen_tonum.py`); `test/fromchar_known.txt`,
+8,736 texts by formats through `to_timestamp` and `to_date`, of
+which 1,433 are errors, each with its message, detail and hint
+(`test/gen_fromchar.py`); `test/test_tochar.cc` for
 the errors, the host's names and symbols, and the edges; and
-`dg/test/select_tochar_ops.sql` and `select_tonum_ops.sql`, with
-a German locale.
+`dg/test/select_tochar_ops.sql`, `select_tonum_ops.sql` and
+`select_fromchar_ops.sql`, with a German locale, zone
+abbreviations and jsonpath's standard mode.

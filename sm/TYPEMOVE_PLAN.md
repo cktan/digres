@@ -1050,8 +1050,26 @@ copied from PostgreSQL keeps its copyright notice
        from `snprintf`, each digit buffer from the heap, and a
        decimal64's `to_char` compiled its format each row, as it
        called `numeric_to_char` with no FmgrInfo to keep it in.
-       The reverse parse (`to_timestamp`, `to_date`,
-       `to_number`) is left.
+     - The reverse parse of a date format moved too
+       (2026-11-23): `ty_dch_parse`, as PostgreSQL's
+       `DCH_from_char` and `do_to_timestamp`, for
+       `to_timestamp`, `to_date` and jsonpath's `datetime()`.
+       digres gives TM's localized names and the session's zone
+       abbreviations through a `ty_dch_parse_host_t`, and keeps
+       its cache of date formats, now of ty's compiled formats.
+       An error comes with PostgreSQL's code, detail and hint.
+       The tests: 8,736 texts by formats, 1,433 of them errors,
+       that the digres before the move gave
+       (`ty/test/fromchar_known.txt`), the same on the new
+       digres; ty cases for the standard mode and the flags; and
+       `dg/test/select_fromchar_ops.sql`, with zone
+       abbreviations, a German locale and jsonpath. Measured by
+       callgrind, 2,000 rows (old, new): `to_date(..., 'YYYYMMDD')`
+       10,688,262 and 10,763,002 (+0.70%); `to_date(c,
+       '"name"FMJ')` 7,380,431 and 7,221,680 (-2.15%). The first
+       version read 26% more: it copied each number's text by
+       `snprintf`, and zeroed the whole error a call. `to_number`
+       is left.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and
