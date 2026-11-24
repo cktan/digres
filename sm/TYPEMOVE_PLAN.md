@@ -1082,6 +1082,15 @@ copied from PostgreSQL keeps its copyright notice
        `to_number(a::text, '99999')` 7,369,823 and 7,243,472
        (-1.71%); by `'FM9,999.99'` 8,794,087 and 8,555,094
        (-2.72%); by `'S99999'` 7,968,582 and 7,871,837 (-1.21%).
+     - The regular expressions of text stay in digres
+       (2026-11-23): its engine is Henry Spencer's library, whose
+       classes are the collation's, and a copy is not wanted. ty
+       has a hook instead (`ty_regex.h`): one engine for the
+       process, set by the host, through which `ty_text_regex`
+       matches `~` and `~*`. digres sets its own at startup, and
+       catches its errors, so that no `ereport` exception crosses
+       ty or its caller, which report errors by their codes. Tested in ty with an engine of its own; nothing calls
+       it in digres yet. No statement's code changed.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

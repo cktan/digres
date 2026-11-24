@@ -1031,3 +1031,32 @@ the errors, the host's names and symbols, and the edges; and
 `select_fromchar_ops.sql` and `select_tonumber_ops.sql`, with a
 German locale, zone abbreviations, jsonpath's standard mode, and
 PostgreSQL's own `to_number` cases.
+
+## 23. Regular expressions
+
+ty has no regular expression engine of its own: a host gives
+one, for the whole process, through `ty_set_regex` in
+`ty_regex.h`, and a caller of ty matches `~` and `~*` by
+`ty_text_regex`. ty passes the bytes of the pattern and the
+text, the flags and the host's collation id, and gives back
+the answer, or the engine's message as `TY_ERR_INVALID`; with
+no engine set, `~` is an error. The pointer is an atomic, so a
+host may set it while other threads read it.
+
+digres sets PostgreSQL's engine (`regexp.c`), so a match through
+ty is digres's own, with its collations, its character classes
+and its cache of compiled patterns. Its engine catches an error
+and gives back its message: ty and its callers report errors by
+their return codes, and digres's `ereport`, a C++ exception,
+would cross them unseen, in the middle of their work. A cancel
+during a match comes back as such an error. digres's own `~` calls its engine directly,
+not through ty. The engine stays out of ty because it is Henry
+Spencer's library, 13,335 lines, whose character classes are
+the collation's: a rewrite could not match it, and a copy is
+not wanted.
+
+The tests: `test/test_regex.cc`, with an engine of its own, for
+the arguments passed, the answers, an engine's error and no
+engine. Nothing in digres calls `ty_text_regex` yet; when the
+hook went in, a build whose `~` and `~*` went through it passed
+all 231 pgregress files and printed digres's own errors.

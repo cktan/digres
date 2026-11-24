@@ -270,8 +270,11 @@ are the catalog tables psql reads
        `to_char` of timestamp, timestamptz, interval and the
        numbers is in ty (`ty_tochar.h`, 2026-11-23), and so is
        the reverse parse of a date format (`to_timestamp`,
-       `to_date`, jsonpath's `datetime()`) and `to_number`.
-       **Left: the regular expressions of text**
+       `to_date`, jsonpath's `datetime()`) and `to_number`. The
+       regular expressions of text stay digres's engine, which a
+       caller of ty reaches through the host's hook
+       (`ty_regex.h`, `ty_set_regex`; 2026-11-23). **Left: nothing
+       of this group**
        ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
     3. **Types that read a setting**: what is left of them
        waits for its hooks. The text in takes the date order

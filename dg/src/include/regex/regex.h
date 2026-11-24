@@ -255,6 +255,8 @@ extern size_t pg_regerror(int errcode, const regex_t *preg, char *errbuf,
 
 /* regexp.c */
 extern regex_t *RE_compile_and_cache(text *text_re, int cflags, Oid collation);
+/* Give ty digres's engine, for the whole process (ty_regex.h). */
+extern void regex_install_ty_engine(void);
 extern bool RE_compile_and_execute(text *text_re, char *dat, int dat_len,
                                    int cflags, Oid collation, int nmatch,
                                    regmatch_t *pmatch);

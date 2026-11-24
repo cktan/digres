@@ -36,6 +36,7 @@
 #include "parser/parse_tool.h"
 #include "postmaster/initdb.h"
 #include "postmaster/postmaster.h"
+#include "regex/regex.h"
 #include "utils/control_block.h"
 #include "utils/help_config.h"
 #include "utils/memutils.h"
@@ -117,6 +118,8 @@ int main(int argc, char *argv[]) {
 
   /* ty keeps its alloc per thread: this thread's is palloc. */
   ty_thread_init();
+  /* ty's regular expressions are digres's engine, for every thread */
+  regex_install_ty_engine();
 
   /*
    * Set reference point for stack-depth checking.  (There's no point in

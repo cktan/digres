@@ -37,6 +37,7 @@
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/varlena.h"
+#include "ty_regex.h"
 
 #define PG_GETARG_TEXT_PP_IF_EXISTS(_n) \
 	(PG_NARGS() > (_n) ? PG_GETARG_TEXT_PP(_n) : NULL)
@@ -333,6 +334,52 @@ bool RE_compile_and_execute(text *text_re, char *dat, int dat_len, int cflags,
 
   return RE_execute(re, dat, dat_len, nmatch, pmatch);
 }
+
+/*
+ * ty's regular expression engine (ty_regex.h): this file's, so that a
+ * caller of ty, sm evaluating ~ for an index expression or a check, matches
+ * as digres does, with its collations and its cache of compiled patterns.
+ * 1. Make the pattern a text, and match by REG_ADVANCED, with REG_ICASE
+ *    for ~*.
+ * 2. Catch an error, and give back -1 with its message: ty and its callers
+ *    report errors by their return codes, and an ereport's exception
+ *    (pg_error_t) would cross them unseen, in the middle of their work. A
+ *    cancel that comes during a match comes back so too, and ends the
+ *    statement as an error.
+ */
+static int ty_regex_engine(const char *pat, size_t plen, const char *s,
+                           size_t slen, int flags, uint32_t collation,
+                           int *matched, char *errmsg, size_t errlen) {
+  MemoryContext oldcontext = CurrentMemoryContext;
+  int rc = 0;
+
+  PG_TRY();
+  {
+    // 1. Make the pattern a text, and match.
+    text *re = cstring_to_text_with_len(pat, (int)plen);
+    int cflags = REG_ADVANCED | ((flags & TY_REGEX_ICASE) ? REG_ICASE : 0);
+
+    *matched = RE_compile_and_execute(re, (char *)s, (int)slen, cflags,
+                                      (Oid)collation, 0, NULL);
+  }
+  PG_CATCH();
+  {
+    // 2. Catch an error, and give its message.
+    ErrorData *edata;
+
+    MemoryContextSwitchTo(oldcontext);
+    edata = CopyErrorData();
+    FlushErrorState();
+    strlcpy(errmsg, edata->message ? edata->message : "", errlen);
+    FreeErrorData(edata);
+    rc = -1;
+  }
+  PG_END_TRY();
+  return rc;
+}
+
+/* Give ty this file's engine, for the whole process. */
+void regex_install_ty_engine(void) { ty_set_regex(ty_regex_engine); }
 
 /*
  * parse_re_flags - parse the options argument of regexp_match and friends
