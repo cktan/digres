@@ -236,8 +236,9 @@ are the catalog tables psql reads
        hash of every type, which is PostgreSQL's, in
        `ty_hash.h`; and the rest of their operations, text in
        and out and encode and decode included. Left over in
-       digres: aggregate states (`string_agg` of bytea), and sort
-       support. The states of the bool aggregates, and of avg and
+       digres: sort support. The state of `string_agg`, over
+       text and bytea, is in ty since 2026-11-23
+       (`ty_string_agg_t`). The states of the bool aggregates, and of avg and
        sum over int2 and int4, are in ty since 2026-11-23
        (`ty_bool_agg_t`, `ty_int_avg_t`). Done after that:
        the floats, with their text (`ty_float.h`), and text for
@@ -263,7 +264,7 @@ are the catalog tables psql reads
        ty (`ty_ascii_lower` and the like); the other ctypes,
        ICU and the builtin provider, stay in digres.
        **Left: `to_char`, the regular expressions of text, and
-       the aggregate states and sort support above**
+       the sort support above**
        ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
     3. **Types that read a setting**: what is left of them
        waits for its hooks. The text in takes the date order
@@ -298,8 +299,7 @@ are the catalog tables psql reads
       1% ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
     - **The hash**: every type's is PostgreSQL's, in `ty_hash.h`,
       so no value and no partition changed.
-    - **Left over**: aggregate states (`string_agg` of bytea),
-      sort support.
+    - **Left over**: sort support.
 
     This move is not easy. The code in `utils/adt` does not
     copy over. **Moved code cannot call `palloc()`**: it needs

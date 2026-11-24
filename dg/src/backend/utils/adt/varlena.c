@@ -162,7 +162,19 @@ static void split_text_accum_result(SplitTextOutputData *tstate,
 static text *array_to_text_internal(FunctionCallInfo fcinfo, ArrayType *v,
                                     const char *fldsep,
                                     const char *null_string);
-static StringInfo makeStringAggState(FunctionCallInfo fcinfo);
+/*
+ * The state of string_agg over text and bytea: ty's, and the aggregate's
+ * memory context, where ty allocates its bytes.
+ */
+typedef struct StringAggState {
+  ty_string_agg_t agg;
+  MemoryContext cxt;
+} StringAggState;
+
+static StringAggState *makeStringAggState(FunctionCallInfo fcinfo);
+static void string_agg_add(StringAggState *state, const struct varlena *delim,
+                           const struct varlena *value);
+static pg_noreturn void string_agg_raise(const ty_string_agg_t *st);
 static void text_format_string_conversion(ty_format_t *f, char conversion,
                                           FmgrInfo *typOutputInfo, Datum value,
                                           bool isNull, int minus, int width);
@@ -373,41 +385,18 @@ Datum byteasend(PG_FUNCTION_ARGS) {
 }
 
 Datum bytea_string_agg_transfn(PG_FUNCTION_ARGS) {
-  StringInfo state;
+  StringAggState *state;
 
-  state = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
+  state = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
 
   /* Append the value unless null, preceding it with the delimiter. */
   if (!PG_ARGISNULL(1)) {
     bytea *value = PG_GETARG_BYTEA_PP(1);
-    bool isfirst = false;
+    bytea *delim = PG_ARGISNULL(2) ? NULL : PG_GETARG_BYTEA_PP(2);
 
-    /*
-     * You might think we can just throw away the first delimiter, however
-     * we must keep it as we may be a parallel worker doing partial
-     * aggregation building a state to send to the main process.  We need
-     * to keep the delimiter of every aggregation so that the combine
-     * function can properly join up the strings of two separately
-     * partially aggregated results.  The first delimiter is only stripped
-     * off in the final function.  To know how much to strip off the front
-     * of the string, we store the length of the first delimiter in the
-     * StringInfo's cursor field, which we don't otherwise need here.
-     */
-    if (state == NULL) {
+    if (NULL == state)
       state = makeStringAggState(fcinfo);
-      isfirst = true;
-    }
-
-    if (!PG_ARGISNULL(2)) {
-      bytea *delim = PG_GETARG_BYTEA_PP(2);
-
-      appendBinaryStringInfo(state, VARDATA_ANY(delim),
-                             VARSIZE_ANY_EXHDR(delim));
-      if (isfirst)
-        state->cursor = VARSIZE_ANY_EXHDR(delim);
-    }
-
-    appendBinaryStringInfo(state, VARDATA_ANY(value), VARSIZE_ANY_EXHDR(value));
+    string_agg_add(state, delim, value);
   }
 
   /*
@@ -420,24 +409,19 @@ Datum bytea_string_agg_transfn(PG_FUNCTION_ARGS) {
 }
 
 Datum bytea_string_agg_finalfn(PG_FUNCTION_ARGS) {
-  StringInfo state;
+  StringAggState *state;
+  bytea *result;
 
   /* cannot be called directly because of internal-type argument */
   Assert(AggCheckCallContext(fcinfo, NULL));
 
-  state = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
-
-  if (state != NULL) {
-    /* As per comment in transfn, strip data before the cursor position */
-    bytea *result;
-    int strippedlen = state->len - state->cursor;
-
-    result = (bytea *)palloc(strippedlen + VARHDRSZ);
-    SET_VARSIZE(result, strippedlen + VARHDRSZ);
-    memcpy(VARDATA(result), &state->data[state->cursor], strippedlen);
-    PG_RETURN_BYTEA_P(result);
-  } else
+  state = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
+  if (NULL == state)
     PG_RETURN_NULL();
+  /* ty cuts the first delimiter */
+  if (ty_string_agg_finish(&state->agg, TYVO(&result)))
+    ty_raise_alloc();
+  PG_RETURN_BYTEA_P(result);
 }
 
 /*
@@ -4320,10 +4304,9 @@ Datum pg_column_toast_chunk_id(PG_FUNCTION_ARGS) {
  */
 
 /* subroutine to initialize state */
-static StringInfo makeStringAggState(FunctionCallInfo fcinfo) {
-  StringInfo state;
+static StringAggState *makeStringAggState(FunctionCallInfo fcinfo) {
+  StringAggState *state;
   MemoryContext aggcontext;
-  MemoryContext oldcontext;
 
   if (!AggCheckCallContext(fcinfo, &aggcontext)) {
     /* cannot be called directly because of internal-type argument */
@@ -4334,48 +4317,60 @@ static StringInfo makeStringAggState(FunctionCallInfo fcinfo) {
    * Create state in aggregate context.  It'll stay there across subsequent
    * calls.
    */
-  oldcontext = MemoryContextSwitchTo(aggcontext);
-  state = makeStringInfo();
-  MemoryContextSwitchTo(oldcontext);
-
+  state = (StringAggState *)MemoryContextAllocZero(aggcontext,
+                                                   sizeof(StringAggState));
+  state->cxt = aggcontext;
   return state;
 }
 
-Datum string_agg_transfn(PG_FUNCTION_ARGS) {
-  StringInfo state;
+/*
+ * Add a value after its delimiter, NULL for none. ty's bytes are the
+ * aggregate's, so its context is current for the call.
+ */
+static void string_agg_add(StringAggState *state, const struct varlena *delim,
+                           const struct varlena *value) {
+  MemoryContext oldcontext = MemoryContextSwitchTo(state->cxt);
+  int rc;
 
-  state = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
+  /*
+   * ty keeps the first delimiter, for a parallel aggregate's combine, and
+   * cuts it in the final function.
+   */
+  rc = ty_string_agg_add(&state->agg, delim ? VARDATA_ANY(delim) : NULL,
+                         delim ? VARSIZE_ANY_EXHDR(delim) : 0,
+                         VARDATA_ANY(value), VARSIZE_ANY_EXHDR(value));
+  MemoryContextSwitchTo(oldcontext);
+  if (rc)
+    string_agg_raise(&state->agg);
+}
+
+/*
+ * Raise the error of a call that adds to a state: the detail of a
+ * StringInfo's limit, or an allocation's error.
+ */
+static void string_agg_raise(const ty_string_agg_t *st) {
+  if (0 != st->need)
+    ereport(ERROR,
+            (errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED), errmsg("%s", ty_errmsg()),
+             errdetail("Cannot enlarge string buffer containing %d bytes by "
+                       "%d more bytes.",
+                       (int)st->had, (int)st->need)));
+  ty_raise_alloc();
+}
+
+Datum string_agg_transfn(PG_FUNCTION_ARGS) {
+  StringAggState *state;
+
+  state = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
 
   /* Append the value unless null, preceding it with the delimiter. */
   if (!PG_ARGISNULL(1)) {
     text *value = PG_GETARG_TEXT_PP(1);
-    bool isfirst = false;
+    text *delim = PG_ARGISNULL(2) ? NULL : PG_GETARG_TEXT_PP(2);
 
-    /*
-     * You might think we can just throw away the first delimiter, however
-     * we must keep it as we may be a parallel worker doing partial
-     * aggregation building a state to send to the main process.  We need
-     * to keep the delimiter of every aggregation so that the combine
-     * function can properly join up the strings of two separately
-     * partially aggregated results.  The first delimiter is only stripped
-     * off in the final function.  To know how much to strip off the front
-     * of the string, we store the length of the first delimiter in the
-     * StringInfo's cursor field, which we don't otherwise need here.
-     */
-    if (state == NULL) {
+    if (NULL == state)
       state = makeStringAggState(fcinfo);
-      isfirst = true;
-    }
-
-    if (!PG_ARGISNULL(2)) {
-      text *delim = PG_GETARG_TEXT_PP(2);
-
-      appendStringInfoText(state, delim);
-      if (isfirst)
-        state->cursor = VARSIZE_ANY_EXHDR(delim);
-    }
-
-    appendStringInfoText(state, value);
+    string_agg_add(state, delim, value);
   }
 
   /*
@@ -4393,15 +4388,16 @@ Datum string_agg_transfn(PG_FUNCTION_ARGS) {
  *string_agg(bytea)
  */
 Datum string_agg_combine(PG_FUNCTION_ARGS) {
-  StringInfo state1;
-  StringInfo state2;
-  MemoryContext agg_context;
+  StringAggState *state1;
+  StringAggState *state2;
+  MemoryContext old_context;
+  int rc;
 
-  if (!AggCheckCallContext(fcinfo, &agg_context))
+  if (!AggCheckCallContext(fcinfo, NULL))
     elog(ERROR, "aggregate function called in non-aggregate context");
 
-  state1 = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
-  state2 = PG_ARGISNULL(1) ? NULL : (StringInfo)PG_GETARG_POINTER(1);
+  state1 = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
+  state2 = PG_ARGISNULL(1) ? NULL : (StringAggState *)PG_GETARG_POINTER(1);
 
   if (state2 == NULL) {
     /*
@@ -4413,19 +4409,14 @@ Datum string_agg_combine(PG_FUNCTION_ARGS) {
     PG_RETURN_POINTER(state1);
   }
 
-  if (state1 == NULL) {
-    /* We must copy state2's data into the agg_context */
-    MemoryContext old_context;
-
-    old_context = MemoryContextSwitchTo(agg_context);
+  /* A new state1 takes state2's first delimiter from ty */
+  if (NULL == state1)
     state1 = makeStringAggState(fcinfo);
-    appendBinaryStringInfo(state1, state2->data, state2->len);
-    state1->cursor = state2->cursor;
-    MemoryContextSwitchTo(old_context);
-  } else if (state2->len > 0) {
-    /* Combine ... state1->cursor does not change in this case */
-    appendBinaryStringInfo(state1, state2->data, state2->len);
-  }
+  old_context = MemoryContextSwitchTo(state1->cxt);
+  rc = ty_string_agg_combine(&state1->agg, &state2->agg);
+  MemoryContextSwitchTo(old_context);
+  if (rc)
+    string_agg_raise(&state1->agg);
 
   PG_RETURN_POINTER(state1);
 }
@@ -4438,24 +4429,17 @@ Datum string_agg_combine(PG_FUNCTION_ARGS) {
  * This is strict, so we need not handle NULL input
  */
 Datum string_agg_serialize(PG_FUNCTION_ARGS) {
-  StringInfo state;
-  StringInfoData buf;
+  StringAggState *state;
   bytea *result;
 
   /* cannot be called directly because of internal-type argument */
   Assert(AggCheckCallContext(fcinfo, NULL));
 
-  state = (StringInfo)PG_GETARG_POINTER(0);
+  state = (StringAggState *)PG_GETARG_POINTER(0);
 
-  pq_begintypsend(&buf);
-
-  /* cursor */
-  pq_sendint(&buf, state->cursor, 4);
-
-  /* data */
-  pq_sendbytes(&buf, state->data, state->len);
-
-  result = pq_endtypsend(&buf);
+  /* the first delimiter's length, then the bytes */
+  if (ty_string_agg_serialize(&state->agg, TYVO(&result)))
+    ty_raise_alloc();
 
   PG_RETURN_BYTEA_P(result);
 }
@@ -4469,51 +4453,43 @@ Datum string_agg_serialize(PG_FUNCTION_ARGS) {
  */
 Datum string_agg_deserialize(PG_FUNCTION_ARGS) {
   bytea *sstate;
-  StringInfo result;
-  StringInfoData buf;
-  char *data;
-  int datalen;
+  StringAggState *result;
+  MemoryContext old_context;
+  int rc;
 
   /* cannot be called directly because of internal-type argument */
   Assert(AggCheckCallContext(fcinfo, NULL));
 
   sstate = PG_GETARG_BYTEA_PP(0);
 
-  /*
-   * Initialize a StringInfo so that we can "receive" it using the standard
-   * recv-function infrastructure.
-   */
-  initReadOnlyStringInfo(&buf, VARDATA_ANY(sstate), VARSIZE_ANY_EXHDR(sstate));
-
   result = makeStringAggState(fcinfo);
-
-  /* cursor */
-  result->cursor = pq_getmsgint(&buf, 4);
-
-  /* data */
-  datalen = VARSIZE_ANY_EXHDR(sstate) - 4;
-  data = (char *)pq_getmsgbytes(&buf, datalen);
-  appendBinaryStringInfo(result, data, datalen);
-
-  pq_getmsgend(&buf);
+  old_context = MemoryContextSwitchTo(result->cxt);
+  rc = ty_string_agg_deserialize(&result->agg, VARDATA_ANY(sstate),
+                                 VARSIZE_ANY_EXHDR(sstate));
+  MemoryContextSwitchTo(old_context);
+  if (rc && TY_ERR_INVALID == ty_errnum())
+    ereport(ERROR, (errcode(ERRCODE_PROTOCOL_VIOLATION),
+                    errmsg("%s", ty_errmsg())));
+  if (rc)
+    string_agg_raise(&result->agg);
 
   PG_RETURN_POINTER(result);
 }
 
 Datum string_agg_finalfn(PG_FUNCTION_ARGS) {
-  StringInfo state;
+  StringAggState *state;
+  text *result;
 
   /* cannot be called directly because of internal-type argument */
   Assert(AggCheckCallContext(fcinfo, NULL));
 
-  state = PG_ARGISNULL(0) ? NULL : (StringInfo)PG_GETARG_POINTER(0);
-
-  if (state != NULL) {
-    /* As per comment in transfn, strip data before the cursor position */
-    PG_RETURN_TEXT_P(cstring_to_text_with_len(&state->data[state->cursor],
-                                              state->len - state->cursor));
-  } else
+  state = PG_ARGISNULL(0) ? NULL : (StringAggState *)PG_GETARG_POINTER(0);
+  if (NULL == state)
     PG_RETURN_NULL();
+  /* ty cuts the first delimiter */
+  if (ty_string_agg_finish(&state->agg, TYVO(&result)))
+    ty_raise_alloc();
+  PG_RETURN_TEXT_P(result);
 }
 
 /*

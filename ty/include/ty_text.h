@@ -363,6 +363,80 @@ int ty_format_finish(ty_format_t *f, ty_varlena_t **out);
 void ty_format_abort(ty_format_t *f);
 
 /*
+ * The state of string_agg(value, delimiter), over text and over bytea: the
+ * bytes of the values, each after its delimiter. The state keeps the first
+ * value's delimiter too, so that the states of a parallel aggregate join up;
+ * ty_string_agg_finish cuts it off. A caller zeroes the state, and passes
+ * only the values that are not NULL; a NULL delimiter is d NULL and dlen 0.
+ *
+ * The bytes are the alloc function's. A host whose alloc function is a memory
+ * context's makes the aggregate's context current around each call that adds
+ * to a state.
+ *
+ * The errors: a state of 1073741823 bytes or more is TY_ERR_RANGE ("string
+ * buffer exceeds maximum allowed length (1073741823 bytes)"), PostgreSQL's
+ * StringInfo's, with had and need set for the host's detail; TY_ERR_NOMEM if
+ * the alloc function returns NULL. On an error, the state is as it was.
+ */
+typedef struct ty_string_agg_t {
+  char *buf;    /* the bytes: NULL until the first */
+  size_t len;   /* the bytes in buf */
+  size_t cap;   /* the bytes buf has room for */
+  size_t first; /* the bytes of the first value's delimiter */
+  int started;  /* a value, or a state, has entered */
+  /* On the error of the limit: the bytes there were, and the bytes asked. */
+  size_t had;
+  size_t need;
+} ty_string_agg_t;
+
+/*
+ * Add the delimiter d and the value v. The case of a state that has begun and
+ * has room is in line; ty_string_agg_add_full is the whole of it.
+ */
+int ty_string_agg_add_full(ty_string_agg_t *st, const char *d, size_t dlen,
+                           const char *v, size_t vlen);
+static inline int ty_string_agg_add(ty_string_agg_t *st, const char *d,
+                                    size_t dlen, const char *v, size_t vlen) {
+  if (st->started && st->cap - st->len >= dlen + vlen) {
+    if (0 != dlen) {
+      memcpy(st->buf + st->len, d, dlen);
+    }
+    if (0 != vlen) {
+      memcpy(st->buf + st->len + dlen, v, vlen);
+    }
+    st->len += dlen + vlen;
+    return 0;
+  }
+  return ty_string_agg_add_full(st, d, dlen, v, vlen);
+}
+
+/*
+ * Add the state b after the state a: the parts of a parallel aggregate. A
+ * zeroed a takes b's first delimiter. b must have begun.
+ */
+int ty_string_agg_combine(ty_string_agg_t *a, const ty_string_agg_t *b);
+
+/*
+ * The state as a bytea, for a parallel aggregate's worker: the first
+ * delimiter's length in 4 bytes, most significant first, then the bytes, as
+ * PostgreSQL's string_agg_serialize.
+ */
+int ty_string_agg_serialize(const ty_string_agg_t *st, ty_varlena_t **out);
+
+/*
+ * Make the zeroed state st from the len bytes at p, which
+ * ty_string_agg_serialize made. Fewer than 4 bytes is TY_ERR_INVALID
+ * ("insufficient data left in message").
+ */
+int ty_string_agg_deserialize(ty_string_agg_t *st, const char *p, size_t len);
+
+/*
+ * The result, a text or a bytea: the bytes after the first delimiter. The
+ * state does not change, so a window may call it again.
+ */
+int ty_string_agg_finish(const ty_string_agg_t *st, ty_varlena_t **out);
+
+/*
  * The case of ASCII letters, for the C ctype: only A-Z and a-z change, any
  * other byte (a byte of a multibyte character included) stays. These work
  * on a C string, not a varlena. out may be s. initcap makes the first letter

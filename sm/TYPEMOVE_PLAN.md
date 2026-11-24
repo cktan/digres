@@ -963,6 +963,22 @@ copied from PostgreSQL keeps its copyright notice
        plain `%s`. ty now copies the text in the loop that looks
        for the `%`, takes `%s`, `%I` and `%L` with no parse, and
        adds an argument with no width in line.
+     - The state of `string_agg`, over text and over bytea,
+       moved too (2026-11-23): `ty_string_agg_t`, with its
+       combine, serialize and deserialize. digres keeps the
+       aggregate's memory context beside it, and makes it
+       current around each call that adds. The tests: a ty case
+       for each NULL, the first delimiter, the parts of a
+       parallel aggregate, the limit and the growth; and
+       `dg/test/select_string_agg.sql`, which the digres before
+       the move prints the same. digres has no parallel query and
+       no partitioned table, so the combine functions are tested
+       in ty alone. Measured by callgrind, 2,000 rows,
+       instructions a statement (old, new): `string_agg(c, ',')`
+       4,758,179 and 4,715,173 (-0.90%); `string_agg(c, null)`
+       4,570,195 and 4,606,483 (+0.79%); over bytea 6,767,978 and
+       6,759,987 (-0.12%); in 200 groups 5,786,703 and 5,786,707
+       (+0.00%).
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

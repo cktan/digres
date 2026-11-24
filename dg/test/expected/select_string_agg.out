@@ -1,0 +1,84 @@
+-- Verify string_agg over text and bytea, whose state ty keeps
+-- (ty_string_agg_add, _combine, _finish): NULL values and delimiters, the
+-- first delimiter cut, ORDER BY and DISTINCT, groups, a window that calls the
+-- final function again, and a state that grows. digres has no parallel query
+-- and no partitioned table, so the combine, serialize and deserialize
+-- functions are tested in ty alone (test_string_agg.cc).
+SELECT string_agg(a, ',') AS c, string_agg(a, NULL) AS n FROM (VALUES ('aaaa'), (NULL), ('bbbb'), ('cccc')) g(a);
+       c        |      n       
+----------------+--------------
+ aaaa,bbbb,cccc | aaaabbbbcccc
+(1 row)
+
+SELECT string_agg(a, 'AB') AS ab, string_agg(a, '') AS e FROM (VALUES (NULL), (NULL), ('bbbb'), ('cccc')) g(a);
+     ab     |    e     
+------------+----------
+ bbbbABcccc | bbbbcccc
+(1 row)
+
+SELECT string_agg(a, ',') IS NULL AS allnull FROM (VALUES (NULL::text), (NULL)) g(a);
+ allnull 
+---------
+ t
+(1 row)
+
+SELECT string_agg(a, d) AS vary FROM (VALUES (1, '', NULL), (2, 'a', ','), (3, 'b', NULL), (4, 'c', '--')) g(i, a, d);
+  vary  
+--------
+ ,ab--c
+(1 row)
+
+SELECT string_agg(a, d ORDER BY i) AS firstnull FROM (VALUES (1, 'x', NULL), (2, 'y', ';')) g(i, a, d);
+ firstnull 
+-----------
+ x;y
+(1 row)
+
+SELECT string_agg(a, ',' ORDER BY a DESC) AS ord, string_agg(DISTINCT a, '|' ORDER BY a) AS dist FROM (VALUES ('b'), ('a'), ('c'), ('a')) g(a);
+   ord   | dist  
+---------+-------
+ c,b,a,a | a|b|c
+(1 row)
+
+SELECT string_agg(v, '\x00'::bytea) AS b0, string_agg(v, NULL) AS bn, string_agg(v, '\xff'::bytea ORDER BY v DESC) AS bord FROM (VALUES ('\x01'::bytea), ('\x0203'), (NULL), (''::bytea)) g(v);
+      b0      |    bn    |     bord     
+--------------+----------+--------------
+ \x0203000100 | \x020301 | \x0203ff01ff
+(1 row)
+
+SELECT string_agg(v, ''::bytea) IS NULL AS ballnull FROM (VALUES (NULL::bytea)) g(v);
+ ballnull 
+----------
+ t
+(1 row)
+
+SELECT i % 3 AS k, string_agg(i::text, ',' ORDER BY i) AS t, string_agg(int4send(i), '\x2c'::bytea ORDER BY i) AS b FROM generate_series(1, 12) i GROUP BY k ORDER BY k;
+ k |    t     |                    b                     
+---+----------+------------------------------------------
+ 0 | 3,6,9,12 | \x000000032c000000062c000000092c0000000c
+ 1 | 1,4,7,10 | \x000000012c000000042c000000072c0000000a
+ 2 | 2,5,8,11 | \x000000022c000000052c000000082c0000000b
+(3 rows)
+
+SELECT i, string_agg(i::text, '-') OVER (ORDER BY i ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS w FROM generate_series(1, 5) i;
+ i |     w     
+---+-----------
+ 1 | 1
+ 2 | 1-2
+ 3 | 1-2-3
+ 4 | 1-2-3-4
+ 5 | 1-2-3-4-5
+(5 rows)
+
+SELECT length(s) AS len, md5(s) AS md5, left(s, 20) AS head, right(s, 20) AS tail FROM (SELECT string_agg(i::text, ',' ORDER BY i) AS s FROM generate_series(1, 100000) i) t;
+  len   |               md5                |         head         |         tail         
+--------+----------------------------------+----------------------+----------------------
+ 588894 | 63ce0dadc39034dfd82b3b5979b82fbb | 1,2,3,4,5,6,7,8,9,10 | 7,99998,99999,100000
+(1 row)
+
+SELECT length(b) AS blen, md5(b) AS bmd5 FROM (SELECT string_agg(int8send(i), '\x00ff'::bytea ORDER BY i) AS b FROM generate_series(1, 50000) i) t;
+  blen  |               bmd5               
+--------+----------------------------------
+ 499998 | d35ceafbbead5fa991e837528fe2183a
+(1 row)
+

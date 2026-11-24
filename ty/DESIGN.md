@@ -375,8 +375,8 @@ feed after 76 characters) and escape. `encode` makes a text and
 `decode` a bytea, and a fault is `TY_ERR_INVALID` with
 PostgreSQL's message.
 
-Not here: the `string_agg` state, which is an aggregate's memory
-and stays in digres. The tests are in `test/test_bytea.cc` and
+The state of `string_agg` over bytea is text's, in section 16.
+The tests are in `test/test_bytea.cc` and
 3,522 vectors.
 
 ## 10. The hash
@@ -592,14 +592,27 @@ and gives the host the bytes for the detail, before it allocates
 anything. A width near 1 GB fails at once, where PostgreSQL first
 fills 1 GB with spaces.
 
+`string_agg`, over text and over bytea, keeps its state in ty
+(`ty_string_agg_t`): the bytes of the values, each after its
+delimiter. The first value's delimiter stays in the state, as in
+PostgreSQL, so that the parts of a parallel aggregate join up;
+`ty_string_agg_finish` cuts it off and copies the rest, and
+leaves the state as it was, for a window. The combine, serialize
+and deserialize functions are ty's too, with PostgreSQL's bytes
+for a serialized state. The state's bytes are the alloc
+function's, so digres makes the aggregate's memory context
+current around each call that adds. An add of a state that has
+room is in line.
+
 The regular expressions and the functions on arrays of text stay
 in digres.
 
 The tests: the vectors, from a reference of Python strings, whose
 characters are code points as UTF-8's are (about 51,000); the
-hand tests in `test/test_text.cc`; and
-`dg/test/select_text_ops.sql`, which prints the same as the
-digres before the move.
+hand tests in `test/test_text.cc`, `test/test_format.cc` and
+`test/test_string_agg.cc`; and `dg/test/select_text_ops.sql`,
+`select_format_ops.sql` and `select_string_agg.sql`, which print
+the same as the digres before the move.
 
 
 
