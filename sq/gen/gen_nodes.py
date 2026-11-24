@@ -634,7 +634,7 @@ CHECKS_TOP = """\
 /* The structs derive from sq_node_t: offsetof is GCC's on them. */
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
 
-static_assert(SQ_T_LIST == T_List, "List's tag");
+static_assert((int)SQ_T_LIST == (int)T_List, "List's tag");
 static_assert(sizeof(sq_list_t) == sizeof(List), "List's size");
 static_assert(offsetof(sq_list_t, length) == offsetof(List, length), "List.length");
 static_assert(offsetof(sq_list_t, max_length) == offsetof(List, max_length), "List.max_length");
@@ -663,7 +663,7 @@ def write_checks(model, out):
     w(CHECKS_TOP)
     kept = [s for s in model.structs if s not in REFUSED and s not in UNDER_REFUSED]
     for s in kept:
-        w(f"\nstatic_assert({tag_name(s)} == T_{s}, \"{s}'s tag\");\n")
+        w(f"\nstatic_assert((int){tag_name(s)} == (int)T_{s}, \"{s}'s tag\");\n")
         w(f"static_assert(sizeof({type_name(s)}) == sizeof({s}), \"{s}'s size\");\n")
         if s == "A_Const":
             w('static_assert(offsetof(sq_a_const_t, val) == offsetof(A_Const, val), "A_Const.val");\n')

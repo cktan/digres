@@ -2909,7 +2909,7 @@ static bool d64_of_dec(const ty_dec128_t &a, Datum *out, Node *escontext) {
 
 /* a as a decimal64; more than 17 digits before the point is an error. */
 static Datum d64_from_dec(const ty_dec128_t &a) {
-  Datum d;
+  Datum d = 0;
 
   d64_of_dec(a, &d, NULL);
   return d;

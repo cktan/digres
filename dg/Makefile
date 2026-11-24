@@ -92,7 +92,8 @@ CXX ?= g++
 # Every .c file is compiled as C++ (sm/PGFORK.md section 2), and as
 # strict C++: src/tools/cxx_keywords.py renamed the identifiers that
 # are C++ keywords, and src/tools/cxx_casts.py wrote the casts C does
-# not ask for. -w hides the warnings, which nobody has gone through yet.
+# not ask for. -w hides PostgreSQL's warnings; a new file is compiled
+# with -Wall -Werror instead (NEW_SRCS, below).
 STD := -x c++ -std=gnu++20 -fno-rtti -w
 # What the build says of assertions: Assert() and assert() on, as a
 # debug build has them, or NDEBUG, which compiles both out.
@@ -169,6 +170,18 @@ SKIP := \
 SRCS := $(filter-out $(SKIP),$(sort $(shell find src -name '*.c')))
 OBJS := $(SRCS:src/%.c=$(OBJDIR)/%.o)
 
+# A file with no PostgreSQL copyright is new, digres's own or another
+# project's, and is compiled with -Wall -Werror. PostgreSQL's files keep
+# -w, so that they stay as upstream has them, for an easy diff.
+NEW_SRCS := $(shell grep -LE 'PostgreSQL Global Development Group|Regents of the University of California' $(SRCS))
+$(NEW_SRCS:src/%.c=$(OBJDIR)/%.o): STD := $(filter-out -w,$(STD)) -Wall -Werror
+# Upstream's files among them, which have no copyright line, compare
+# signed with unsigned as upstream does; they are left as upstream has them.
+UPSTREAM_NOCOPY := backend/regex/regcomp backend/regex/regexec \
+    backend/utils/adt/network backend/utils/adt/inet_net_pton \
+    port/qsort port/qsort_arg backend/utils/sort/qsort_interruptible
+$(UPSTREAM_NOCOPY:%=$(OBJDIR)/%.o): STD += -Wno-sign-compare
+
 # The headers gen_node_support.pl reads, in the order it insists on.
 NODE_HEADERS := nodes/nodes.h nodes/primnodes.h nodes/parsenodes.h \
     nodes/pathnodes.h nodes/plannodes.h nodes/execnodes.h access/amapi.h \
@@ -212,7 +225,7 @@ $(SERVER): $(OBJS) $(LIBSQ) $(LIBTY) $(LINK_SM) $(LINK_AA) $(ROCKSDB_LIB)
 	# What it says of the RocksDB it links, for "digres --build"
 	# (src/backend/main/rocksdb_build.cc); compiled at each link, since
 	# the libraries it reports are relinked at each.
-	$(CXX) $(OPT) -I$(ROCKSDB_INC) \
+	$(CXX) $(OPT) -Wall -Werror -I$(ROCKSDB_INC) \
 	    -DDG_ROCKSDB_BUILD="\"static, $$(cat $(dir $(ROCKSDB_LIB))flags)\"" \
 	    -c -o $(OBJDIR)/rocksdb_build.o src/backend/main/rocksdb_build.cc
 	$(CXX) $(OPT) -o $@ $(OBJDIR)/rocksdb_build.o $(OBJS) \

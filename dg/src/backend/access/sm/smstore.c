@@ -8504,7 +8504,7 @@ ObjectAddress smstore_create_index(Oid relid, IndexStmt *stmt) {
     sm_index_key_spec_t key = {};
     bool desc = elem->ordering == SORTBY_DESC;
     Node *expr = elem->expr;
-    Oid typid, collation;
+    Oid typid, collation = InvalidOid;
 
     /* "(column)" is the column, as ComputeIndexAttrs() takes it. */
     while (NULL != expr && IsA(expr, CollateExpr))

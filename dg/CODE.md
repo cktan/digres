@@ -154,6 +154,17 @@ Every `.c` file is compiled as strict C++20 (`g++ -x c++
   compiler refuses the rest.
 - As in PostgreSQL, do not leave a `PG_TRY` block with
   `return`, `break`, `continue` or `goto`.
+- **A new file compiles with `-Wall -Werror`.** A file is new
+  if it has no PostgreSQL copyright: no "PostgreSQL Global
+  Development Group" and no "Regents of the University of
+  California". The Makefile finds them (`NEW_SRCS`). A
+  PostgreSQL file keeps `-w`, so it stays as upstream has it,
+  for an easy diff. Upstream's few files with no copyright
+  line (`UPSTREAM_NOCOPY`: the regex engine, `network.c`,
+  `inet_net_pton.c`, the qsort files) add `-Wno-sign-compare`.
+  The optimized builds (`release`, `tsan`) warn of more than
+  the debug build, `-Wmaybe-uninitialized` most: build them
+  too before a commit that adds code to a new file.
 
 ## 3. Globals
 

@@ -46,16 +46,33 @@ const char *ty_errmsg(void);
 const char *ty_errname(ty_errnum_t code);
 
 /*
- * Record TY_ERR_RANGE, or TY_ERR_DIVZERO, as the thread's error, and
- * return -1. They are out of line: an inline operation calls one on the
- * rare failure, and costs no more.
+ * Record code with msg as the calling thread's error. It is out of line: an
+ * inline operation calls it on the rare failure, and costs no more.
  */
-int ty_err_range(void);
-int ty_err_divzero(void);
-int ty_err_underflow(void);
+void ty_err_record(ty_errnum_t code, const char *msg);
 
-/* Record TY_ERR_INVALID with msg as the thread's error; returns -1. */
-int ty_err_invalid(const char *msg);
+/*
+ * Record TY_ERR_RANGE, TY_ERR_DIVZERO, TY_ERR_UNDERFLOW, or TY_ERR_INVALID
+ * with msg, as the thread's error, and return -1. They are inline so that
+ * a compiler sees the -1: a caller that writes its result only on success
+ * is then not taken to read it unwritten after a failure.
+ */
+static inline int ty_err_range(void) {
+  ty_err_record(TY_ERR_RANGE, "result out of range");
+  return -1;
+}
+static inline int ty_err_divzero(void) {
+  ty_err_record(TY_ERR_DIVZERO, "division by zero");
+  return -1;
+}
+static inline int ty_err_underflow(void) {
+  ty_err_record(TY_ERR_UNDERFLOW, "result underflows");
+  return -1;
+}
+static inline int ty_err_invalid(const char *msg) {
+  ty_err_record(TY_ERR_INVALID, msg);
+  return -1;
+}
 
 /* A branch that is taken on the rare failure. */
 #define TY_UNLIKELY(x) __builtin_expect((x) != 0, 0)

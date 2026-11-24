@@ -63,22 +63,7 @@ int ty_internal::set_error(ty_errnum_t code, const char *msg) {
   return -1;
 }
 
-/* Record the range error that an inline operation found; returns -1. */
-int ty_err_range(void) {
-  return ty_internal::set_error(TY_ERR_RANGE, "result out of range");
-}
-
-/* Record the division by zero that an inline operation found; returns -1. */
-int ty_err_divzero(void) {
-  return ty_internal::set_error(TY_ERR_DIVZERO, "division by zero");
-}
-
-/* Record the invalid argument that an inline operation found; returns -1. */
-int ty_err_invalid(const char *msg) {
-  return ty_internal::set_error(TY_ERR_INVALID, msg);
-}
-
-/* Record the underflow that an inline operation found; returns -1. */
-int ty_err_underflow(void) {
-  return ty_internal::set_error(TY_ERR_UNDERFLOW, "result underflows");
+/* Record the error that an inline operation found (ty.h). */
+void ty_err_record(ty_errnum_t code, const char *msg) {
+  ty_internal::set_error(code, msg);
 }
