@@ -72,7 +72,9 @@ thread_local std::vector<std::function<void()>> committed_fns;
  * with locked (sm1::rmstore), for its entry point to hand to the
  * calling session's sm1::finish_drops.
  */
-thread_local std::vector<uint64_t> committed_drops;
+thread_local std::vector<
+    std::pair<uint64_t, std::shared_ptr<std::atomic<bool>>>>
+    committed_drops;
 
 /* Hand the stores the commit dropped under a lock to session. */
 void take_committed_drops(sm1::session_t *session) {
@@ -1051,16 +1053,20 @@ void publish_commit(sm1::session_t *s, uint64_t commit_ts) noexcept {
   // finds them gone.
   drop_temp_dropped(s);
   lock_release_all(s);
-  // Queue its dropped stores for GC.
-  gc_queue_drops(db, commit_ts, s->dropped);
   // Those dropped under the caller's lock go at once, by the entry
-  // point's session (sm1::finish_drops); the queue is their net.
+  // point's session (sm1::finish_drops); the queue is their net. Each
+  // handle's flag is taken now, while the store is registered: the GC
+  // may drop it first, and finish_drops still waits for its files.
   for (uint64_t storeid : s->dropped) {
     if (std::find(s->dropped_locked.begin(), s->dropped_locked.end(),
                   storeid) != s->dropped_locked.end()) {
-      committed_drops.push_back(storeid);
+      store_t st = db_store(db, storeid);
+
+      committed_drops.emplace_back(storeid, st.hold ? st.hold->gone : nullptr);
     }
   }
+  // Queue its dropped stores for GC.
+  gc_queue_drops(db, commit_ts, s->dropped);
   // Drop each dropped sequence's lease; nothing reads it now
   // that its catalog row is gone.
   for (uint64_t seqid : s->dropped_seqs) {

@@ -265,7 +265,14 @@ int sm1::rmstore(sm1::session_t *session, uint64_t storeid, bool locked) {
 /*
  * Drop the stores the session's commits dropped under a lock, then
  * wait for their files; see sm1.h.
- * 1. Drop each store's column family, and take its handle's flag.
+ * 1. Drop each store's column family under X, and take its handle's
+ *    flag. The commit let go of the drop's X, and the store stays
+ *    registered until now, so a GC run may have taken IX on it to write
+ *    to it (gc_store_try): X waits for that run to end, and a run after
+ *    finds the store gone. A write to a dropped column family fails, and
+ *    RocksDB fails the whole write group with it, a commit record's too.
+ *    The X is taken in a transaction of the session's own for the
+ *    locks, as a session's close does for its temporary stores.
  * 2. Erase the session's own cached handles of them.
  * 3. Wait until each handle's last copy is destroyed: RocksDB deletes
  *    a dropped column family's files then, in that thread.
@@ -274,22 +281,36 @@ int sm1::finish_drops(sm1::session_t *session) {
   if (nullptr == session) {
     return set_error(sm1::SM_ERR_INVALID, "finish_drops: session is NULL");
   }
-  std::vector<uint64_t> due;
+  std::vector<std::pair<uint64_t, std::shared_ptr<std::atomic<bool>>>> due;
   due.swap(session->drops_due);
   int rc = 0;
-  // 1. Drop each one: no transaction reads it, under the caller's lock.
+  // 1. Drop each one under X: no transaction reads it, as the caller's
+  //    lock kept readers out until the commit.
+  bool own = !due.empty() && !session->active &&
+             sm1::begin(session, sm1::xctlevel_t::read_committed, true) == 0;
   std::vector<std::pair<uint64_t, std::shared_ptr<std::atomic<bool>>>> waits;
-  for (uint64_t storeid : due) {
+  for (auto &[storeid, flag] : due) {
     std::shared_ptr<std::atomic<bool>> gone;
+    if (session->active) {
+      lock_store(session, storeid, sm1::SM_LOCKMODE_EX, false);
+    }
     if (db_drop_store_cf(session->db, storeid, &gone) != 0) {
       rc = -1;
+    }
+    // The flag the commit took, if the GC dropped the store first.
+    if (!gone) {
+      gone = std::move(flag);
     }
     if (gone) {
       waits.emplace_back(storeid, std::move(gone));
     }
   }
+  // The locks go before the wait for the files: no one waits on them.
+  if (own) {
+    sm1::abort(session);
+  }
   // 2. The session's own copies.
-  for (uint64_t storeid : due) {
+  for (const auto &[storeid, flag] : due) {
     session->store_handles.erase(storeid);
   }
   // 3. Another copy is held for a moment: a sweep's compaction of the

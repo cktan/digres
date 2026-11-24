@@ -121,8 +121,13 @@ struct sm1::session_t {
    * savepoint leaves an entry here that dropped no longer has.
    */
   std::vector<uint64_t> dropped_locked;
-  /* Committed drops for sm1::finish_drops; no transaction's state. */
-  std::vector<uint64_t> drops_due;
+  /*
+   * Committed drops for sm1::finish_drops, no transaction's state: each
+   * store and the flag its handle sets once its files are deleted,
+   * taken at the commit, before the GC queue may drop the store first.
+   */
+  std::vector<std::pair<uint64_t, std::shared_ptr<std::atomic<bool>>>>
+      drops_due;
   std::vector<uint64_t> dropped_seqs; /* seqids removed by sm1::rmseq */
   /*
    * The temporary stores the session holds, from sm1::mkstore to the

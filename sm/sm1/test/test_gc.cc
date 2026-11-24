@@ -834,6 +834,53 @@ TEST_CASE("an idle session and an old snapshot keep no dropped store's "
   sm1::closedb(s);
 }
 
+TEST_CASE("a drop under the caller's lock waits for the GC's work on the "
+          "store") {
+  // Verify finish_drops drops a store only under X, so a GC run's write
+  // to it never meets a dropped column family. After the commit the
+  // store is still registered until finish_drops drops it; a GC repair or
+  // purge that took IX in that gap wrote to a dropped column family, and
+  // RocksDB failed the whole write group, a commit record's with it.
+  // 1. Make store U; drop it with locked, and commit.
+  // 2. The GC takes IX on U, as a run does before it writes to a store.
+  // 3. finish_drops waits while the GC holds IX: U's CF is still there.
+  // 4. The GC's run ends and lets go; finish_drops then drops U.
+  // 5. A GC try on U now finds it gone.
+  gc_fixture_t f;
+  sm1::session_t *s = f.open();
+
+  // 1. Make store U; drop it with locked, and commit.
+  uint64_t ustoreid = flushed_store(f, s);
+  drop_locked(s, ustoreid);
+
+  // 2. The GC takes IX on U, as a run does before it writes to a store.
+  //    The test is the run: it holds the run's mutex, so the GC worker,
+  //    whose locker it borrows, does not run and let go of the IX.
+  REQUIRE(nullptr != f.db()->gc_locker);
+  std::unique_lock<std::mutex> run(f.db()->gc_run_mu);
+  REQUIRE(0 == gc_store_try(f.db(), ustoreid));
+
+  // 3. finish_drops waits while the GC holds IX: U's CF is still there.
+  std::future<int> done =
+      std::async(std::launch::async, [&] { return sm1::finish_drops(s); });
+  CHECK(done.wait_for(std::chrono::milliseconds(300)) ==
+        std::future_status::timeout);
+  CHECK(db_store(f.db(), ustoreid).cf != nullptr);
+
+  // 4. The GC's run ends and lets go; finish_drops then drops U.
+  lock_release_all(f.db()->gc_locker);
+  run.unlock();
+  CHECK(done.get() == 0);
+  CHECK(db_store(f.db(), ustoreid).cf == nullptr);
+
+  // 5. A GC try on U now finds it gone.
+  run.lock();
+  CHECK(2 == gc_store_try(f.db(), ustoreid));
+  lock_release_all(f.db()->gc_locker);
+  run.unlock();
+  sm1::closedb(s);
+}
+
 TEST_CASE("a drop under the caller's lock rolled back to a savepoint stays") {
   // Verify finish_drops drops only what the commit dropped.
   // 1. Make store U.

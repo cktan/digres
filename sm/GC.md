@@ -437,13 +437,23 @@ until the commit, and a reader after it reads the table's
 definition at the newest state, so it finds no table, or the new
 store (CATALOG.md §2.2). Then:
 
-1. The commit queues the store as any drop, and hands it to the
-   entry point's session (`committed_drops`).
+1. The commit hands the store to the entry point's session
+   (`committed_drops`), with the flag its handle sets once its
+   files are deleted, then queues it as any drop. The flag is
+   taken first: the queue may drop the store before step 3.
 2. sm3 calls `sm1::finish_drops` after the commit, outside the
    catalog's mutex.
-3. `finish_drops` drops the CF, and waits until its handle's last
+3. `finish_drops` takes X on the store, in a transaction of its
+   own for the lock, and drops the CF. The commit let go of the
+   drop's X, and the store is registered until this drop, so a GC
+   run may have taken IX on it to repair or purge a key
+   (`gc_store_try`): X waits for that run to end, and a run after
+   finds the store gone. Without it, the run's write met a dropped
+   CF, and RocksDB failed the whole write group, a commit
+   record's with it, which aborts the process.
+4. `finish_drops` lets go of X, and waits until the handle's last
    copy is destroyed: RocksDB has then deleted its files.
-4. The queue's entry later finds the store gone.
+5. The queue's entry later finds the store gone.
 
 A crash between the commit and step 3 leaves a CF with no
 catalog row, which the orphan sweep drops at the next open: the
