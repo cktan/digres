@@ -268,8 +268,9 @@ static void tfuncFetchRows(TableFuncScanState *tstate, ExprContext *econtext) {
    */
   MemoryContextSwitchTo(tstate->perTableCxt);
 
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     routine->InitOpaque(
         tstate, tstate->ss.ss_ScanTupleSlot->tts_tupleDescriptor->natts);
 
@@ -289,14 +290,11 @@ static void tfuncFetchRows(TableFuncScanState *tstate, ExprContext *econtext) {
       /* Load all rows into the tuplestore, and we're done */
       tfuncLoadRows(tstate, econtext);
     }
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     if (tstate->opaque != NULL)
       routine->DestroyOpaque(tstate);
-    PG_RE_THROW();
+    pg_re_throw();
   }
-  PG_END_TRY();
 
   /* clean up and return to original memory context */
 

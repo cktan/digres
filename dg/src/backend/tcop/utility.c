@@ -912,8 +912,11 @@ static void ProcessUtilitySlow(ParseState *pstate, PlannedStmt *pstmt,
   needCleanup = isCompleteQuery && EventTriggerBeginCompleteQuery();
 
   /* PG_TRY block is to ensure we call EventTriggerEndCompleteQuery */
-  PG_TRY();
-  {
+  bool failed = false;
+
+  try {
+    pg_try_scope_t scope;
+
     if (isCompleteQuery)
       EventTriggerDDLCommandStart(parsetree);
 
@@ -1390,14 +1393,21 @@ static void ProcessUtilitySlow(ParseState *pstate, PlannedStmt *pstmt,
        * command itself is queued, which is enough.
        */
       EventTriggerInhibitCommandCollection();
-      PG_TRY(2);
       {
-        address = ExecRefreshMatView((RefreshMatViewStmt *)parsetree,
-                                     queryString, qc);
+        bool failed2 = false;
+
+        try {
+          pg_try_scope_t scope;
+
+          address = ExecRefreshMatView((RefreshMatViewStmt *)parsetree,
+                                       queryString, qc);
+        } catch (const pg_error_t &) {
+          failed2 = true;
+        }
+        EventTriggerUndoInhibitCommandCollection();
+        if (failed2)
+          pg_re_throw();
       }
-      PG_FINALLY(2);
-      { EventTriggerUndoInhibitCommandCollection(); }
-      PG_END_TRY(2);
       break;
 
     case T_CreateTrigStmt:
@@ -1599,13 +1609,13 @@ static void ProcessUtilitySlow(ParseState *pstate, PlannedStmt *pstmt,
       EventTriggerSQLDrop(parsetree);
       EventTriggerDDLCommandEnd(parsetree);
     }
+  } catch (const pg_error_t &) {
+    failed = true;
   }
-  PG_FINALLY();
-  {
-    if (needCleanup)
-      EventTriggerEndCompleteQuery();
-  }
-  PG_END_TRY();
+  if (needCleanup)
+    EventTriggerEndCompleteQuery();
+  if (failed)
+    pg_re_throw();
 }
 
 /*

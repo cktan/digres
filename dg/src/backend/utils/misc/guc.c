@@ -4093,8 +4093,9 @@ void AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt) {
   /*
    * Use a TRY block to clean up the file if we fail.
    */
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     /* Write and sync the new contents to the temporary file */
     write_auto_conf_file(Tmpfd, AutoConfTmpFileName, head);
 
@@ -4108,9 +4109,7 @@ void AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt) {
      * command.
      */
     durable_rename(AutoConfTmpFileName, AutoConfFileName, ERROR);
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     /* Close file first, else unlink might fail on some platforms */
     if (Tmpfd >= 0)
       CloseTransientFile(Tmpfd);
@@ -4118,9 +4117,8 @@ void AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt) {
     /* Unlink, but ignore any error */
     (void)unlink(AutoConfTmpFileName);
 
-    PG_RE_THROW();
+    pg_re_throw();
   }
-  PG_END_TRY();
 
   FreeConfigVariables(head);
 }

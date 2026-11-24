@@ -240,7 +240,7 @@ A PostgreSQL error is a C++ exception in digres
 §2), which must not cross sm's frames: the evaluator is
 `noexcept`.
 
-- The call is wrapped in `PG_TRY()`. A caught error is copied
+- The call is wrapped in a `try`. A caught error is copied
   (`CopyErrorData()`), flushed, kept in the thread's control
   block, and the call returns `sm_seterr(SM_ERR_INVALID,
   message)`.

@@ -390,8 +390,9 @@ void PortalStart(Portal portal, ParamListInfo params, int eflags,
   saveActivePortal = ActivePortal;
   saveResourceOwner = CurrentResourceOwner;
   savePortalContext = PortalContext;
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     ActivePortal = portal;
     if (portal->resowner)
       CurrentResourceOwner = portal->resowner;
@@ -527,9 +528,7 @@ void PortalStart(Portal portal, ParamListInfo params, int eflags,
       portal->tupDesc = NULL;
       break;
     }
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     /* Uncaught error while executing portal: mark it dead */
     MarkPortalFailed(portal);
 
@@ -538,9 +537,8 @@ void PortalStart(Portal portal, ParamListInfo params, int eflags,
     CurrentResourceOwner = saveResourceOwner;
     PortalContext = savePortalContext;
 
-    PG_RE_THROW();
+    pg_re_throw();
   }
-  PG_END_TRY();
 
   MemoryContextSwitchTo(oldContext);
 
@@ -665,8 +663,9 @@ bool PortalRun(Portal portal, long count, bool isTopLevel, DestReceiver *dest,
   saveResourceOwner = CurrentResourceOwner;
   savePortalContext = PortalContext;
   saveMemoryContext = CurrentMemoryContext;
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     ActivePortal = portal;
     if (portal->resowner)
       CurrentResourceOwner = portal->resowner;
@@ -727,9 +726,7 @@ bool PortalRun(Portal portal, long count, bool isTopLevel, DestReceiver *dest,
       result = false; /* keep compiler quiet */
       break;
     }
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     /* Uncaught error while executing portal: mark it dead */
     MarkPortalFailed(portal);
 
@@ -745,9 +742,8 @@ bool PortalRun(Portal portal, long count, bool isTopLevel, DestReceiver *dest,
       CurrentResourceOwner = saveResourceOwner;
     PortalContext = savePortalContext;
 
-    PG_RE_THROW();
+    pg_re_throw();
   }
-  PG_END_TRY();
 
   if (saveMemoryContext == saveTopTransactionContext)
     MemoryContextSwitchTo(TopTransactionContext);
@@ -1245,8 +1241,9 @@ uint64 PortalRunFetch(Portal portal, FetchDirection fdirection, long count,
   saveActivePortal = ActivePortal;
   saveResourceOwner = CurrentResourceOwner;
   savePortalContext = PortalContext;
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     ActivePortal = portal;
     if (portal->resowner)
       CurrentResourceOwner = portal->resowner;
@@ -1281,9 +1278,7 @@ uint64 PortalRunFetch(Portal portal, FetchDirection fdirection, long count,
       result = 0; /* keep compiler quiet */
       break;
     }
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     /* Uncaught error while executing portal: mark it dead */
     MarkPortalFailed(portal);
 
@@ -1292,9 +1287,8 @@ uint64 PortalRunFetch(Portal portal, FetchDirection fdirection, long count,
     CurrentResourceOwner = saveResourceOwner;
     PortalContext = savePortalContext;
 
-    PG_RE_THROW();
+    pg_re_throw();
   }
-  PG_END_TRY();
 
   MemoryContextSwitchTo(oldContext);
 

@@ -542,20 +542,18 @@ recheck:
      * we just allocated it: otherwise there are probably fn_extra
      * pointers to it.
      */
-    PG_TRY();
-    {
+    try {
+      pg_try_scope_t scope;
+
       /*
        * Do the hard, language-specific part.
        */
       ccallback(fcinfo, procTup, &hashkey, function, forValidator);
-    }
-    PG_CATCH();
-    {
+    } catch (const pg_error_t &) {
       if (new_function)
         pfree(function);
-      PG_RE_THROW();
+      pg_re_throw();
     }
-    PG_END_TRY();
 
     /*
      * Fill in the CachedFunction part.  (We do this last to prevent the

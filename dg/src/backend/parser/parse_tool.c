@@ -113,8 +113,9 @@ static void run_session(tool_session_t *s) {
   database_ctype_is_c = true;
   init_database_collation();
 
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     List *trees = raw_parser(s->sql, s->type_name ? RAW_PARSE_TYPE_NAME
                                                   : RAW_PARSE_DEFAULT);
     ListCell *lc;
@@ -137,13 +138,10 @@ static void run_session(tool_session_t *s) {
         fprintf(s->out, "%s\n", nodeToString(node));
       }
     }
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     print_error(s->out);
     s->status = 1;
   }
-  PG_END_TRY();
 }
 
 /* Parse standard input and print it: see the head of this file. */

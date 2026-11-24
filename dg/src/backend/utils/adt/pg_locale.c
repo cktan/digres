@@ -577,8 +577,9 @@ struct lconv *PGLC_localeconv(void) {
   if (!struct_lconv_is_valid(&worklconv))
     ereport(ERROR, (errcode(ERRCODE_OUT_OF_MEMORY), errmsg("out of memory")));
 
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     int encoding;
 
     /*
@@ -609,13 +610,10 @@ struct lconv *PGLC_localeconv(void) {
     /* mon_grouping is not text and does not require conversion */
     db_encoding_convert(encoding, &worklconv.positive_sign);
     db_encoding_convert(encoding, &worklconv.negative_sign);
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     free_struct_lconv(&worklconv);
-    PG_RE_THROW();
+    pg_re_throw();
   }
-  PG_END_TRY();
 
   /*
    * Everything is good, so save the results.

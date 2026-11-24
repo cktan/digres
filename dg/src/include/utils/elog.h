@@ -319,162 +319,6 @@ typedef struct ErrorContextCallback {
 extern thread_local /*LOCAL*/ PGDLLIMPORT ErrorContextCallback
     *error_context_stack;
 
-/*----------
- * API for catching ereport(ERROR) exits.  Use these macros like so:
- *
- *		PG_TRY();
- *		{
- *			... code that might throw ereport(ERROR) ...
- *		}
- *		PG_CATCH();
- *		{
- *			... error recovery code ...
- *		}
- *		PG_END_TRY();
- *
- * (The braces are not actually necessary, but are recommended so that
- * pgindent will indent the construct nicely.)  The error recovery code
- * can either do PG_RE_THROW to propagate the error outwards, or do a
- * (sub)transaction abort. Failure to do so may leave the system in an
- * inconsistent state for further processing.
- *
- * For the common case that the error recovery code and the cleanup in the
- * normal code path are identical, the following can be used instead:
- *
- *		PG_TRY();
- *		{
- *			... code that might throw ereport(ERROR) ...
- *		}
- *		PG_FINALLY();
- *		{
- *			... cleanup code ...
- *		}
- *      PG_END_TRY();
- *
- * The cleanup code will be run in either case, and any error will be rethrown
- * afterwards.
- *
- * You cannot use both PG_CATCH() and PG_FINALLY() in the same
- * PG_TRY()/PG_END_TRY() block.
- *
- * Note: while the system will correctly propagate any new ereport(ERROR)
- * occurring in the recovery section, there is a small limit on the number
- * of levels this will work for.  It's best to keep the error recovery
- * section simple enough that it can't generate any new errors, at least
- * not before popping the error stack.
- *
- * Note: an ereport(FATAL) will not be caught by this construct; control will
- * exit straight through proc_exit().  Therefore, do NOT put any cleanup
- * of non-process-local resources into the error recovery section, at least
- * not without taking thought for what will happen during ereport(FATAL).
- * The PG_ENSURE_ERROR_CLEANUP macros provided by storage/ipc.h may be
- * helpful in such cases.
- *
- * Note: digres raises ereport(ERROR) as a C++ exception, pg_error_t, where
- * PostgreSQL jumps with siglongjmp (sm/PGFORK.md section 2).  These macros
- * are a try and a catch of it.  So a local variable modified in the PG_TRY
- * section and used in the PG_CATCH section need not be "volatile", as
- * PostgreSQL requires, and the destructors of whatever is between the
- * error and its handler run.  The exception carries nothing: the error is
- * where it always was, on elog.c's own stack, for CopyErrorData() and
- * the rest to read.
- *
- * Note: as in PostgreSQL, do not leave a PG_TRY section with return, break,
- * continue or goto: what PG_END_TRY restores would be skipped.
- *
- * Each of these macros accepts an optional argument which can be specified
- * to apply a suffix to the variables declared within the macros.  This suffix
- * can be used to avoid the compiler emitting warnings about shadowed
- * variables when compiling with -Wshadow in situations where nested PG_TRY()
- * statements are required.  The optional suffix may contain any character
- * that's allowed in a variable name.  The suffix, if specified, must be the
- * same within each component macro of the given PG_TRY() statement.
- *----------
- */
-#define PG_TRY(...)  \
-	do { \
-		bool _save_exception_handled##__VA_ARGS__ = PG_exception_handled; \
-		ErrorContextCallback *_save_context_stack##__VA_ARGS__ = error_context_stack; \
-		bool _do_rethrow##__VA_ARGS__ = false; \
-		try \
-		{ \
-			PG_exception_handled = true
-
-#define PG_CATCH(...)	\
-		} \
-		catch (const pg_error_t &) \
-		{ \
-			PG_exception_handled = _save_exception_handled##__VA_ARGS__; \
-			error_context_stack = _save_context_stack##__VA_ARGS__
-
-#define PG_FINALLY(...) \
-		} \
-		catch (const pg_error_t &) \
-		{ \
-			_do_rethrow##__VA_ARGS__ = true; \
-		} \
-		{ \
-			PG_exception_handled = _save_exception_handled##__VA_ARGS__; \
-			error_context_stack = _save_context_stack##__VA_ARGS__
-
-#define PG_END_TRY(...)  \
-		} \
-		if (_do_rethrow##__VA_ARGS__) \
-				PG_RE_THROW(); \
-		PG_exception_handled = _save_exception_handled##__VA_ARGS__; \
-		error_context_stack = _save_context_stack##__VA_ARGS__; \
-	} while (0)
-
-#define PG_RE_THROW()  \
-	pg_re_throw()
-
-/*
- * A function that goes on after an ERROR, as the loop at the top of a session
- * does: PostgreSQL's
- *
- *		if (sigsetjmp(local_sigjmp_buf, 1) != 0)
- *		{
- *			... error recovery ...
- *		}
- *		PG_exception_stack = &local_sigjmp_buf;
- *		... the rest of the function ...
- *
- * is, here,
- *
- *		PG_ERROR_LOOP_BEGIN()
- *		{
- *			... error recovery ...
- *		}
- *		PG_exception_handled = true;
- *		... the rest of the function ...
- *		PG_ERROR_LOOP_END();
- *
- * An ERROR in the rest of the function runs the recovery and then the rest of
- * the function again from its top, as the jump back to the sigsetjmp did.
- * The signal mask is put back to what it was at PG_ERROR_LOOP_BEGIN, as
- * sigsetjmp(..., 1) and siglongjmp did.  PG_ERROR_LOOP_END goes just before
- * the function's closing brace.
- */
-#define PG_ERROR_LOOP_BEGIN() \
-	sigset_t _error_loop_sigmask; \
-	bool _error_loop_caught = false; \
-	pthread_sigmask(SIG_SETMASK, NULL, &_error_loop_sigmask); \
-	for (;;) \
-	{ \
-		try \
-		{ \
-			if (_error_loop_caught && !(_error_loop_caught = false))
-
-#define PG_ERROR_LOOP_END() \
-			break; \
-		} \
-		catch (const pg_error_t &) \
-		{ \
-			pthread_sigmask(SIG_SETMASK, &_error_loop_sigmask, NULL); \
-			_error_loop_caught = true; \
-		} \
-	}
-
 /*
  * What ereport(ERROR) throws.  It is empty: the error itself is on elog.c's
  * stack.
@@ -482,11 +326,86 @@ extern thread_local /*LOCAL*/ PGDLLIMPORT ErrorContextCallback
 struct pg_error_t {};
 
 /*
- * Whether an ERROR has a handler to go to: a PG_TRY, or the loop at the top
- * of a session.  With none, an ERROR is promoted to FATAL, as it is in
+ * Whether an ERROR has a handler to go to: a try block with a
+ * pg_try_scope_t, or the loop at the top of a session.  With none, an ERROR is promoted to FATAL, as it is in
  * PostgreSQL when its PG_exception_stack is NULL.
  */
 extern thread_local /*LOCAL*/ PGDLLIMPORT bool PG_exception_handled;
+
+/*
+ * Catching ereport(ERROR), which throws pg_error_t (sm/PGFORK.md section 2),
+ * is a try and a catch of it, with a pg_try_scope_t first in the try block:
+ *
+ *		try
+ *		{
+ *			pg_try_scope_t scope;
+ *
+ *			... code that might throw ereport(ERROR) ...
+ *		}
+ *		catch (const pg_error_t &)
+ *		{
+ *			... error recovery code ...
+ *		}
+ *
+ * The recovery code either calls pg_re_throw() to propagate the error
+ * outwards, or does a (sub)transaction abort, as in PostgreSQL.  Rethrow by
+ * pg_re_throw(), not by "throw;": with no handler outside, it makes the error
+ * FATAL.
+ *
+ * A cleanup that runs on either path, with the error rethrown after it, is
+ * PostgreSQL's PG_FINALLY:
+ *
+ *		bool failed = false;
+ *
+ *		try
+ *		{
+ *			pg_try_scope_t scope;
+ *
+ *			... code that might throw ereport(ERROR) ...
+ *		}
+ *		catch (const pg_error_t &)
+ *		{
+ *			failed = true;
+ *		}
+ *		... cleanup code ...
+ *		if (failed)
+ *			pg_re_throw();
+ *
+ * Catch pg_error_t only: proc_exit()'s proc_exit_t and std::bad_alloc go
+ * past, as an ereport(FATAL) goes past PostgreSQL's PG_TRY.  The error
+ * itself is on elog.c's stack, for CopyErrorData() and the rest to read.
+ *
+ * Note: while the system will correctly propagate any new ereport(ERROR)
+ * occurring in the recovery section, there is a small limit on the number
+ * of levels this will work for.  It's best to keep the error recovery
+ * section simple enough that it can't generate any new errors, at least
+ * not before popping the error stack.
+ */
+
+/*
+ * What a try block of ereport(ERROR) saves as it starts, and puts back as it
+ * ends, by its end, a return or an exception:
+ * 1. Whether an ERROR has a handler: within the block, it has.
+ * 2. The error context stack: a callback the block pushes does not outlive
+ *    it.
+ */
+class pg_try_scope_t {
+public:
+  pg_try_scope_t()
+      : m_handled(PG_exception_handled), m_context(error_context_stack) {
+    PG_exception_handled = true;
+  }
+  ~pg_try_scope_t() {
+    PG_exception_handled = m_handled;
+    error_context_stack = m_context;
+  }
+  pg_try_scope_t(const pg_try_scope_t &) = delete;
+  pg_try_scope_t &operator=(const pg_try_scope_t &) = delete;
+
+private:
+  bool m_handled;
+  ErrorContextCallback *m_context;
+};
 
 /* Stuff that error handlers might want to use */
 

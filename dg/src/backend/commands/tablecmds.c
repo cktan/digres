@@ -2145,8 +2145,11 @@ void ExecuteTruncateGuts(List *explicit_rels, List *relids,
 
     hash_seq_init(&seq, ft_htab);
 
-    PG_TRY();
-    {
+    bool failed = false;
+
+    try {
+      pg_try_scope_t scope;
+
       while ((ft_info = (ForeignTruncateInfo *)hash_seq_search(&seq)) != NULL) {
         FdwRoutine *routine = GetFdwRoutineByServerId(ft_info->serverid);
 
@@ -2155,10 +2158,12 @@ void ExecuteTruncateGuts(List *explicit_rels, List *relids,
 
         routine->ExecForeignTruncate(ft_info->rels, behavior, restart_seqs);
       }
+    } catch (const pg_error_t &) {
+      failed = true;
     }
-    PG_FINALLY();
-    { hash_destroy(ft_htab); }
-    PG_END_TRY();
+    hash_destroy(ft_htab);
+    if (failed)
+      pg_re_throw();
   }
 
   /*

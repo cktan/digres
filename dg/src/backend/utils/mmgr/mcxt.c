@@ -1201,8 +1201,11 @@ void ProcessLogMemoryContextInterrupt(void) {
     return;
   LogMemoryContextInProgress = true;
 
-  PG_TRY();
-  {
+  bool failed = false;
+
+  try {
+    pg_try_scope_t scope;
+
     /*
      * Use LOG_SERVER_ONLY to prevent this message from being sent to the
      * connected client.
@@ -1224,10 +1227,12 @@ void ProcessLogMemoryContextInterrupt(void) {
      * large.
      */
     MemoryContextStatsDetail(TopMemoryContext, 100, 100, false);
+  } catch (const pg_error_t &) {
+    failed = true;
   }
-  PG_FINALLY();
-  { LogMemoryContextInProgress = false; }
-  PG_END_TRY();
+  LogMemoryContextInProgress = false;
+  if (failed)
+    pg_re_throw();
 }
 
 void *palloc(Size size) {

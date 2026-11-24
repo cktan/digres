@@ -183,8 +183,8 @@ Do not reopen these without the owner.
   arenas, and they make an exception cheap to recover from. RAII
   is for new code, and for guards around contexts.
 - **No object with a destructor in `palloc`'d memory.**
-- **`ereport(ERROR)` throws `pg_error_t`**, and `PG_TRY` is a
-  `try`.
+- **`ereport(ERROR)` throws `pg_error_t`**, which a `try`
+  with a `pg_try_scope_t` catches.
 - **sm's callbacks are `noexcept`.** Four C++ types cross
   `sm.h`: `std::string`, `std::vector`, `std::string_view` and
   `std::shared_ptr`. `sm_sys.h` adds the types that a wait is

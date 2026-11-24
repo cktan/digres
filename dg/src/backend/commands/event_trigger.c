@@ -801,11 +801,18 @@ void EventTriggerSQLDrop(Node *parsetree) {
   currentEventTriggerState->in_sql_drop = true;
 
   /* Run the triggers. */
-  PG_TRY();
-  { EventTriggerInvoke(runlist, &trigdata); }
-  PG_FINALLY();
-  { currentEventTriggerState->in_sql_drop = false; }
-  PG_END_TRY();
+  bool failed = false;
+
+  try {
+    pg_try_scope_t scope;
+
+    EventTriggerInvoke(runlist, &trigdata);
+  } catch (const pg_error_t &) {
+    failed = true;
+  }
+  currentEventTriggerState->in_sql_drop = false;
+  if (failed)
+    pg_re_throw();
 
   /* Cleanup. */
   list_free(runlist);
@@ -952,14 +959,19 @@ void EventTriggerTableRewrite(Node *parsetree, Oid tableOid, int reason) {
   currentEventTriggerState->table_rewrite_reason = reason;
 
   /* Run the triggers. */
-  PG_TRY();
-  { EventTriggerInvoke(runlist, &trigdata); }
-  PG_FINALLY();
-  {
-    currentEventTriggerState->table_rewrite_oid = InvalidOid;
-    currentEventTriggerState->table_rewrite_reason = 0;
+  bool failed = false;
+
+  try {
+    pg_try_scope_t scope;
+
+    EventTriggerInvoke(runlist, &trigdata);
+  } catch (const pg_error_t &) {
+    failed = true;
   }
-  PG_END_TRY();
+  currentEventTriggerState->table_rewrite_oid = InvalidOid;
+  currentEventTriggerState->table_rewrite_reason = 0;
+  if (failed)
+    pg_re_throw();
 
   /* Cleanup. */
   list_free(runlist);

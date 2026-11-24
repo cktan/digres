@@ -655,20 +655,18 @@ extern Datum fmgr_security_definer(PG_FUNCTION_ARGS) {
    */
   save_flinfo = fcinfo->flinfo;
 
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     fcinfo->flinfo = &fcache->flinfo;
 
     result = FunctionCallInvoke(fcinfo);
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     fcinfo->flinfo = save_flinfo;
     if (tcb->hooks->fmgr_hook)
       (*tcb->hooks->fmgr_hook)(FHET_ABORT, &fcache->flinfo, &fcache->arg);
-    PG_RE_THROW();
+    pg_re_throw();
   }
-  PG_END_TRY();
 
   fcinfo->flinfo = save_flinfo;
 

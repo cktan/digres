@@ -139,10 +139,18 @@ Every `.c` file is compiled as strict C++20 (`g++ -x c++
   `std::unique_ptr`, `std::atomic` and the rest. Include
   `postgres.h` first, as always, then the standard headers.
 - **Errors are exceptions.** `ereport(ERROR)` throws
-  `pg_error_t`; `PG_TRY` and `PG_CATCH` are a `try` and a
-  `catch` of it. `proc_exit()` in a session thread throws
+  `pg_error_t`. `proc_exit()` in a session thread throws
   `proc_exit_t`, which the thread's top catches. So
   destructors run as an error unwinds: RAII is safe.
+- **Catch an error with `try` and `catch (const pg_error_t
+  &)`**, and a `pg_try_scope_t` first in the `try` block
+  (`utils/elog.h`). The guard keeps the error context stack
+  and tells `elog.c` that the error has a handler. Rethrow
+  with `pg_re_throw()`, not `throw;`. PostgreSQL's
+  `PG_FINALLY` is a flag set in the catch, the cleanup after
+  the `catch`, then `pg_re_throw()` if the flag is set. digres
+  has no `PG_TRY` macros: a fix ported from `REL_18_STABLE`
+  that uses them is written so.
 - **Never `catch (...)` without rethrowing.** It would swallow
   an error or a session's exit.
 - **No RTTI.** No `dynamic_cast`, `typeid`, `std::type_info`,
@@ -152,8 +160,6 @@ Every `.c` file is compiled as strict C++20 (`g++ -x c++
   a virtual call. Catching an exception by its type is not this
   rule's concern. The Makefile compiles with `-fno-rtti`, so the
   compiler refuses the rest.
-- As in PostgreSQL, do not leave a `PG_TRY` block with
-  `return`, `break`, `continue` or `goto`.
 - **A new file compiles with `-Wall -Werror`.** A file is new
   if it has no PostgreSQL copyright: no "PostgreSQL Global
   Development Group" and no "Regents of the University of

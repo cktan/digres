@@ -1183,8 +1183,11 @@ static void execute_extension_script(Oid extensionOid,
    */
   creating_extension = true;
   CurrentExtensionObject = extensionOid;
-  PG_TRY();
-  {
+  bool failed = false;
+
+  try {
+    pg_try_scope_t scope;
+
     char *c_sql = read_extension_script_file(control, filename);
     Datum t_sql;
 
@@ -1289,13 +1292,13 @@ static void execute_extension_script(Oid extensionOid,
     c_sql = text_to_cstring(DatumGetTextPP(t_sql));
 
     execute_sql_string(c_sql, filename);
+  } catch (const pg_error_t &) {
+    failed = true;
   }
-  PG_FINALLY();
-  {
-    creating_extension = false;
-    CurrentExtensionObject = InvalidOid;
-  }
-  PG_END_TRY();
+  creating_extension = false;
+  CurrentExtensionObject = InvalidOid;
+  if (failed)
+    pg_re_throw();
 
   /*
    * Restore the GUC variables we set above.

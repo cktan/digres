@@ -2031,11 +2031,18 @@ static HeapTuple ExecCallTriggerFunc(TriggerData *trigdata, int tgindx,
                            NULL);
 
   MyTriggerDepth++;
-  PG_TRY();
-  { result = FunctionCallInvoke(fcinfo); }
-  PG_FINALLY();
-  { MyTriggerDepth--; }
-  PG_END_TRY();
+  bool failed = false;
+
+  try {
+    pg_try_scope_t scope;
+
+    result = FunctionCallInvoke(fcinfo);
+  } catch (const pg_error_t &) {
+    failed = true;
+  }
+  MyTriggerDepth--;
+  if (failed)
+    pg_re_throw();
 
   MemoryContextSwitchTo(oldContext);
 

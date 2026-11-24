@@ -353,17 +353,16 @@ static int ty_regex_engine(const char *pat, size_t plen, const char *s,
   MemoryContext oldcontext = CurrentMemoryContext;
   int rc = 0;
 
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     // 1. Make the pattern a text, and match.
     text *re = cstring_to_text_with_len(pat, (int)plen);
     int cflags = REG_ADVANCED | ((flags & TY_REGEX_ICASE) ? REG_ICASE : 0);
 
     *matched = RE_compile_and_execute(re, (char *)s, (int)slen, cflags,
                                       (Oid)collation, 0, NULL);
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     // 2. Catch an error, and give its message.
     ErrorData *edata;
 
@@ -374,7 +373,6 @@ static int ty_regex_engine(const char *pat, size_t plen, const char *s,
     FreeErrorData(edata);
     rc = -1;
   }
-  PG_END_TRY();
   return rc;
 }
 

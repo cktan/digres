@@ -339,8 +339,9 @@ void PersistHoldablePortal(Portal portal) {
   saveActivePortal = ActivePortal;
   saveResourceOwner = CurrentResourceOwner;
   savePortalContext = PortalContext;
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     ScanDirection direction = ForwardScanDirection;
 
     ActivePortal = portal;
@@ -430,9 +431,7 @@ void PersistHoldablePortal(Portal portal) {
           elog(ERROR, "unexpected end of tuple stream");
       }
     }
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     /* Uncaught error while executing portal: mark it dead */
     MarkPortalFailed(portal);
 
@@ -441,9 +440,8 @@ void PersistHoldablePortal(Portal portal) {
     CurrentResourceOwner = saveResourceOwner;
     PortalContext = savePortalContext;
 
-    PG_RE_THROW();
+    pg_re_throw();
   }
-  PG_END_TRY();
 
   MemoryContextSwitchTo(oldcxt);
 

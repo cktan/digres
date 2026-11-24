@@ -237,8 +237,9 @@ static void _SPI_commit(bool chain) {
     SaveTransactionCharacteristics(&savetc);
 
   /* Catch any error occurring during the COMMIT */
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     /* Protect current SPI stack entry against deletion */
     _SPI_current->internal_xact = true;
 
@@ -263,9 +264,7 @@ static void _SPI_commit(bool chain) {
     MemoryContextSwitchTo(oldcontext);
 
     _SPI_current->internal_xact = false;
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     ErrorData *edata;
 
     /* Save error info in caller's context */
@@ -291,7 +290,6 @@ static void _SPI_commit(bool chain) {
     /* Now that we've cleaned up the transaction, re-throw the error */
     ReThrowError(edata);
   }
-  PG_END_TRY();
 }
 
 void SPI_commit(void) { _SPI_commit(false); }
@@ -317,8 +315,9 @@ static void _SPI_rollback(bool chain) {
     SaveTransactionCharacteristics(&savetc);
 
   /* Catch any error occurring during the ROLLBACK */
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     /* Protect current SPI stack entry against deletion */
     _SPI_current->internal_xact = true;
 
@@ -344,9 +343,7 @@ static void _SPI_rollback(bool chain) {
     MemoryContextSwitchTo(oldcontext);
 
     _SPI_current->internal_xact = false;
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     ErrorData *edata;
 
     /* Save error info in caller's context */
@@ -373,7 +370,6 @@ static void _SPI_rollback(bool chain) {
     /* Now that we've cleaned up the transaction, re-throw the error */
     ReThrowError(edata);
   }
-  PG_END_TRY();
 }
 
 void SPI_rollback(void) { _SPI_rollback(false); }

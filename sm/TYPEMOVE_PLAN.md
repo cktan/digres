@@ -164,8 +164,8 @@ to report.
 
 digres's `alloc` calls
 `MemoryContextAllocExtended(CurrentMemoryContext, size,
-MCXT_ALLOC_NO_OOM | MCXT_ALLOC_HUGE)`. It wraps the call in
-`PG_TRY`, as the allocator of sq does, because a request over
+MCXT_ALLOC_NO_OOM | MCXT_ALLOC_HUGE)`. It wraps the call in a
+`try`, as the allocator of sq does, because a request over
 the 1 GB limit raises an ERROR even with `MCXT_ALLOC_NO_OOM`.
 The wrapper flushes the error and returns NULL. digres's `free`
 calls `pfree()`. A result goes into the memory context that is

@@ -490,7 +490,7 @@ void errfinish(const char *filename, int lineno, const char *funcname) {
      */
 
     recursion_depth--;
-    PG_RE_THROW();
+    pg_re_throw();
   }
 
   /* Emit the message to the right places */
@@ -1833,11 +1833,11 @@ void ReThrowError(ErrorData *edata) {
   newedata->assoc_context = ErrorContext;
 
   recursion_depth--;
-  PG_RE_THROW();
+  pg_re_throw();
 }
 
 /*
- * pg_re_throw --- out-of-line implementation of PG_RE_THROW() macro
+ * pg_re_throw --- rethrow the current error, to the next handler out
  */
 void pg_re_throw(void) {
   /* If possible, throw the error to the next outer handler */

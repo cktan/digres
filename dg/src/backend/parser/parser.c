@@ -128,14 +128,14 @@ List *raw_parser(const char *str, RawParseMode mode) {
   auto sq_alloc = [](size_t size) -> void * {
     void *p = NULL;
 
-    PG_TRY();
-    { p = palloc_extended(size, MCXT_ALLOC_NO_OOM); }
-    PG_CATCH();
-    {
+    try {
+      pg_try_scope_t scope;
+
+      p = palloc_extended(size, MCXT_ALLOC_NO_OOM);
+    } catch (const pg_error_t &) {
       /* sq reports the error as its own: this one leaves the stack. */
       FlushErrorState();
     }
-    PG_END_TRY();
     return p;
   };
   sq_allocator_t allocator = {sq_alloc, pfree};

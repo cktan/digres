@@ -1633,8 +1633,9 @@ CatCList *SearchCatCacheList(CatCache *cache, int nkeys, Datum v1, Datum v2,
   in_progress_ent.dead = false;
   catcache_in_progress_stack = &in_progress_ent;
 
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     ScanKeyData cur_skey[CATCACHE_MAXKEYS];
     Relation relation;
     SysScanDesc scandesc;
@@ -1777,9 +1778,7 @@ CatCList *SearchCatCacheList(CatCache *cache, int nkeys, Datum v1, Datum v2,
      * we'd better do so before we start marking the members as belonging
      * to the list.
      */
-  }
-  PG_CATCH();
-  {
+  } catch (const pg_error_t &) {
     Assert(catcache_in_progress_stack == &in_progress_ent);
     catcache_in_progress_stack = save_in_progress;
 
@@ -1797,9 +1796,8 @@ CatCList *SearchCatCacheList(CatCache *cache, int nkeys, Datum v1, Datum v2,
         CatCacheRemoveCTup(cache, ct);
     }
 
-    PG_RE_THROW();
+    pg_re_throw();
   }
-  PG_END_TRY();
   Assert(catcache_in_progress_stack == &in_progress_ent);
   catcache_in_progress_stack = save_in_progress;
 
@@ -1931,14 +1929,19 @@ static CatCTup *CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp,
       in_progress_ent.dead = false;
       catcache_in_progress_stack = &in_progress_ent;
 
-      PG_TRY();
-      { dtp = toast_flatten_tuple(ntp, cache->cc_tupdesc); }
-      PG_FINALLY();
-      {
-        Assert(catcache_in_progress_stack == &in_progress_ent);
-        catcache_in_progress_stack = save_in_progress;
+      bool failed = false;
+
+      try {
+        pg_try_scope_t scope;
+
+        dtp = toast_flatten_tuple(ntp, cache->cc_tupdesc);
+      } catch (const pg_error_t &) {
+        failed = true;
       }
-      PG_END_TRY();
+      Assert(catcache_in_progress_stack == &in_progress_ent);
+      catcache_in_progress_stack = save_in_progress;
+      if (failed)
+        pg_re_throw();
 
       if (in_progress_ent.dead) {
         heap_freetuple(dtp);

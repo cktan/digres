@@ -250,16 +250,16 @@ static void make_storage(const char *username, const char *secret) {
 static char *build_secret(const char *password) {
   char *secret = NULL;
 
-  PG_TRY();
-  { secret = pg_be_scram_build_secret(password); }
-  PG_CATCH();
-  {
+  try {
+    pg_try_scope_t scope;
+
+    secret = pg_be_scram_build_secret(password);
+  } catch (const pg_error_t &) {
     ErrorData *err = CopyErrorData();
 
     FlushErrorState();
     fatal("could not build the password's SCRAM secret: %s", err->message);
   }
-  PG_END_TRY();
   return secret;
 }
 

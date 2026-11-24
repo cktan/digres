@@ -1115,19 +1115,19 @@ int pq_getmessage(StringInfo s, int maxlen) {
      * large message), we will elog(ERROR), but we want to discard the
      * message body so as not to lose communication sync.
      */
-    PG_TRY();
-    { enlargeStringInfo(s, len); }
-    PG_CATCH();
-    {
+    try {
+      pg_try_scope_t scope;
+
+      enlargeStringInfo(s, len);
+    } catch (const pg_error_t &) {
       if (pq_discardbytes(len) == EOF)
         ereport(COMMERROR, (errcode(ERRCODE_PROTOCOL_VIOLATION),
                             errmsg("incomplete message from client")));
 
       /* we discarded the rest of the message so we're back in sync. */
       PqCommReadingMsg = false;
-      PG_RE_THROW();
+      pg_re_throw();
     }
-    PG_END_TRY();
 
     /* And grab the message */
     if (pq_getbytes(s->data, len) == EOF) {

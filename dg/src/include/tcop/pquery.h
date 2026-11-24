@@ -59,15 +59,18 @@ template <typename F> static inline void PortalRunInView(Portal portal, F run) {
     return;
   }
   outer = smstore_view_resume(portal->smView);
-  PG_TRY();
-  {
+  bool failed = false;
+
+  try {
+    pg_try_scope_t scope;
+
     run();
+  } catch (const pg_error_t &) {
+    failed = true;
   }
-  PG_FINALLY();
-  {
-    smstore_view_end(outer);
-  }
-  PG_END_TRY();
+  smstore_view_end(outer);
+  if (failed)
+    pg_re_throw();
 }
 
 #endif /* PQUERY_H */

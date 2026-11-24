@@ -7735,8 +7735,9 @@ static int smstore_index_eval(void *ctx, uint64_t table, uint64_t index,
    */
   session_thread_adopt();
   old = CurrentMemoryContext;
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     index_eval_t *e = index_eval_ready(index, eval, n);
     ExprContext *econtext = GetPerTupleExprContext(e->estate);
     TupleTableSlot *slot = e->slot;
@@ -7757,10 +7758,9 @@ static int smstore_index_eval(void *ctx, uint64_t table, uint64_t index,
         out[k] = key_value_bytes(value, e->typlens[k], e->typbyvals[k]);
     }
     ResetExprContext(econtext);
+  } catch (const pg_error_t &) {
+    rc = keep_eval_error();
   }
-  PG_CATCH();
-  { rc = keep_eval_error(); }
-  PG_END_TRY();
   MemoryContextSwitchTo(old);
   return rc;
 }
@@ -8115,8 +8115,9 @@ static int alter_conv(void *ctx, const sm_datum_t *values, const bool *isnull,
       n != (size_t)c->slot->tts_tupleDescriptor->natts)
     return sm_seterr(SM_ERR_INVALID, "ALTER COLUMN TYPE: sm's row is not "
                                      "the width of the table's descriptor");
-  PG_TRY();
-  {
+  try {
+    pg_try_scope_t scope;
+
     CHECK_FOR_INTERRUPTS();
     ExprContext *econtext = GetPerTupleExprContext(c->estate);
     TupleTableSlot *slot = c->slot;
@@ -8134,10 +8135,9 @@ static int alter_conv(void *ctx, const sm_datum_t *values, const bool *isnull,
     if (!*out_isnull)
       out = key_value_bytes(value, c->typlen, c->typbyval);
     ResetExprContext(econtext);
+  } catch (const pg_error_t &) {
+    rc = keep_eval_error();
   }
-  PG_CATCH();
-  { rc = keep_eval_error(); }
-  PG_END_TRY();
   MemoryContextSwitchTo(old);
   return rc;
 }
