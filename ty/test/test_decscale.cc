@@ -76,7 +76,8 @@ std::string variance(const ty_dec128_t &a, const ty_dec128_t &b) {
 // Verify the scales, the power, a typmod and the casts by hand.
 // 1. The scale of a quotient, a root and a logarithm: 16 digits, and not
 //    below the arguments' scales.
-// 2. The power: zero's, a whole one, a real one, and its errors.
+// 2. The power: zero's, a whole one, 1 and -1 to a large one (at once, not
+//    by a billion products), a real one, and its errors.
 // 3. A typmod rounds, and refuses too many digits.
 // 4. The casts round, and refuse what does not fit; the digits of a value.
 TEST_CASE("a decimal's scales, power, typmod and casts") {
@@ -101,6 +102,10 @@ TEST_CASE("a decimal's scales, power, typmod and casts") {
         "zero raised to a negative power is undefined");
   a = dec("2"), b = dec("10");
   CHECK(result(ty_dec128_power(&a, &b, &r), r) == "1024.0000000000000");
+  a = dec("1"), b = dec("999999999");
+  CHECK(result(ty_dec128_power(&a, &b, &r), r) == "1.0000000000000000");
+  a = dec("-1");
+  CHECK(result(ty_dec128_power(&a, &b, &r), r) == "-1.0000000000000000");
   a = dec("-2"), b = dec("0.5");
   CHECK(-1 == ty_dec128_power(&a, &b, &r));
   CHECK(TY_ERR_INVALID == ty_errnum());

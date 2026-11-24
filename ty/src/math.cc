@@ -318,7 +318,8 @@ int ty_dec128_pow_int(const ty_dec128_t *base, int64_t n, int rscale,
   if ((double)k * (double)base->scale > TY_DEC128_MAX_SCALE * 1.0) {
     fits = false;
   }
-  for (uint64_t i = 0; fits && i < k; i++) {
+  /* 1 to any power is 1; any other b soon does not fit */
+  for (uint64_t i = 0; fits && b != 1 && i < k; i++) {
     if (__builtin_mul_overflow(m, b, &m) || (double)m > scale_limit) {
       fits = false;
     }

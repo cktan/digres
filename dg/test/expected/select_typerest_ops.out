@@ -111,12 +111,18 @@ SELECT 2::numeric(30,0) ^ 10 AS p, 2::numeric(30,0) ^ 0.5 AS r, 0::numeric(30,0)
  1024.0000000000000 | 1.4142135623730949 | 1.0000000000000000 | -8.0000000000000000
 (1 row)
 
+SELECT 1::numeric(30,0) ^ 999999999 AS one, (-1)::numeric(30,0) ^ 999999999 AS minus;
+        one         |        minus        
+--------------------+---------------------
+ 1.0000000000000000 | -1.0000000000000000
+(1 row)
+
 SELECT 0::numeric(30,0) ^ (-1);
-psql:test/select_typerest_ops.sql:31: ERROR:  zero raised to a negative power is undefined
+psql:test/select_typerest_ops.sql:32: ERROR:  zero raised to a negative power is undefined
 SELECT (-2)::numeric(30,0) ^ 0.5;
-psql:test/select_typerest_ops.sql:32: ERROR:  a negative number raised to a non-integer power yields a complex result
+psql:test/select_typerest_ops.sql:33: ERROR:  a negative number raised to a non-integer power yields a complex result
 SELECT 10::numeric(30,0) ^ 40;
-psql:test/select_typerest_ops.sql:33: ERROR:  value overflows numeric format
+psql:test/select_typerest_ops.sql:34: ERROR:  value overflows numeric format
 SELECT 2.5::numeric(30,2)::int2 AS i2, (-2.5)::numeric(30,2)::int4 AS i4, 9223372036854775807.4::numeric(30,2)::int8 AS i8, 9.994::numeric(30,5)::numeric(3,2) AS t;
  i2 | i4 |         i8          |  t   
 ----+----+---------------------+------
@@ -124,9 +130,9 @@ SELECT 2.5::numeric(30,2)::int2 AS i2, (-2.5)::numeric(30,2)::int4 AS i4, 922337
 (1 row)
 
 SELECT 32767.5::numeric(30,2)::int2;
-psql:test/select_typerest_ops.sql:35: ERROR:  smallint out of range
+psql:test/select_typerest_ops.sql:36: ERROR:  smallint out of range
 SELECT 9.995::numeric(30,5)::numeric(3,2);
-psql:test/select_typerest_ops.sql:36: ERROR:  numeric field overflow
+psql:test/select_typerest_ops.sql:37: ERROR:  numeric field overflow
 DETAIL:  A field with precision 3, scale 2 must round to an absolute value less than 10^1.
 SELECT var_samp(x) AS v, stddev_pop(x) AS s, avg(x) AS a FROM (VALUES (1.5::numeric(30,10)), (2.25), (7)) t(x);
            v            |           s            |         a          

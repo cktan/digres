@@ -28,6 +28,7 @@ SELECT unistr('\x');
 SELECT unistr('\0000');
 SELECT 1::numeric(30,0) / 3 AS div, 1::numeric(5,0) / 3 AS div64, sqrt(2::numeric(30,5)) AS sqrt, ln(10::numeric(30,0)) AS ln, log(2::numeric(30,0), 8) AS log, exp(1::numeric(30,0)) AS exp;
 SELECT 2::numeric(30,0) ^ 10 AS p, 2::numeric(30,0) ^ 0.5 AS r, 0::numeric(30,0) ^ 0 AS z, (-2)::numeric(30,0) ^ 3 AS n;
+SELECT 1::numeric(30,0) ^ 999999999 AS one, (-1)::numeric(30,0) ^ 999999999 AS minus;
 SELECT 0::numeric(30,0) ^ (-1);
 SELECT (-2)::numeric(30,0) ^ 0.5;
 SELECT 10::numeric(30,0) ^ 40;
