@@ -44,6 +44,7 @@
 #include "ty_abbrev.h"
 #include "ty_text.h"
 #include "ty_bytea.h"
+#include "ty_int.h"
 #include "utils/ty_glue.h"
 #include "utils/control_block.h"
 
@@ -3997,26 +3998,14 @@ static text *array_to_text_internal(FunctionCallInfo fcinfo, ArrayType *v,
 }
 
 /*
- * Workhorse for to_bin, to_oct, and to_hex.  Note that base must be > 1 and <=
+ * Workhorse for to_bin, to_oct, and to_hex.  Note that base must be 2, 8 or
  * 16.
  */
 static inline text *convert_to_base(uint64 value, int base) {
-  const char *digits = "0123456789abcdef";
-
-  /* We size the buffer for to_bin's longest possible return value. */
   char buf[sizeof(uint64) * BITS_PER_BYTE];
-  char *const end = buf + sizeof(buf);
-  char *ptr = end;
 
-  Assert(base > 1);
-  Assert(base <= 16);
-
-  do {
-    *--ptr = digits[value % base];
-    value /= base;
-  } while (ptr > buf && value);
-
-  return cstring_to_text_with_len(ptr, end - ptr);
+  /* ty writes the digits */
+  return cstring_to_text_with_len(buf, ty_uint64_to_base(value, base, buf));
 }
 
 /*

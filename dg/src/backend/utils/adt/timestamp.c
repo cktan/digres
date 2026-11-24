@@ -1579,7 +1579,7 @@ Timestamp SetEpochTimestamp(void) {
  *		timestamp_relop - is timestamp1 relop timestamp2
  */
 int timestamp_cmp_internal(Timestamp dt1, Timestamp dt2) {
-  return (dt1 < dt2) ? -1 : ((dt1 > dt2) ? 1 : 0);
+  return ty_timestamp_cmp(dt1, dt2);
 }
 
 Datum timestamp_eq(PG_FUNCTION_ARGS) {

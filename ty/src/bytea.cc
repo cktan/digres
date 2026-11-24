@@ -458,6 +458,82 @@ int64_t tyr_bytea_position(const uint8_t *a, size_t na, const uint8_t *b,
   return 0;
 }
 
+namespace {
+
+/* Whether the byte c is one of the m bytes at set. */
+inline bool in_short_set(uint8_t c, const uint8_t *set, size_t m) {
+  for (size_t i = 0; i < m; i++) {
+    if (set[i] == c) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+/*
+ * The part of a that trim leaves.
+ * 1. With one byte in the set, compare to it; with a short set, look each
+ *    byte up in it; with a longer one, mark its bytes in a table of 256.
+ * 2. Step over bytes of the set from the start, if left.
+ * 3. Step back over bytes of the set from the end, if right, not past the
+ *    start.
+ */
+void tyr_bytea_trim(const uint8_t *a, size_t n, const uint8_t *set, size_t m,
+                    int left, int right, size_t *off, size_t *len) {
+  size_t b = 0, e = n;
+
+  if (1 == m) {
+    // 2. and 3., with one byte in the set: compare to it.
+    uint8_t c = set[0];
+
+    if (left) {
+      while (b < e && a[b] == c) {
+        b++;
+      }
+    }
+    if (right) {
+      while (e > b && a[e - 1] == c) {
+        e--;
+      }
+    }
+  } else if (m <= 16) {
+    // 2. Step over bytes of the set from the start.
+    if (left) {
+      while (b < e && in_short_set(a[b], set, m)) {
+        b++;
+      }
+    }
+
+    // 3. Step back over bytes of the set from the end.
+    if (right) {
+      while (e > b && in_short_set(a[e - 1], set, m)) {
+        e--;
+      }
+    }
+  } else {
+    // 1. Mark the bytes of a longer set.
+    bool in[256] = {};
+
+    for (size_t i = 0; i < m; i++) {
+      in[set[i]] = true;
+    }
+    if (left) {
+      while (b < e && in[a[b]]) {
+        b++;
+      }
+    }
+    if (right) {
+      while (e > b && in[a[e - 1]]) {
+        e--;
+      }
+    }
+  }
+  *off = b;
+  *len = e - b;
+}
+
 /* Add up the set bits of the bytes: 8 bytes at a time, then the rest. */
 int64_t tyr_bytea_bit_count(const uint8_t *a, size_t n) {
   int64_t count = 0;
@@ -821,6 +897,13 @@ int64_t ty_bytea_bit_count(const ty_varlena_t *a) {
   bytes_t x(a);
 
   return tyr_bytea_bit_count(x.p, x.n);
+}
+
+void ty_bytea_trim_range(const ty_varlena_t *a, const ty_varlena_t *set,
+                         int left, int right, size_t *off, size_t *len) {
+  bytes_t x(a), y(set);
+
+  tyr_bytea_trim(x.p, x.n, y.p, y.n, left, right, off, len);
 }
 
 /* A copy of a, for the functions that change a byte or a bit of it. */

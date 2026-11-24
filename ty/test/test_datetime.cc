@@ -460,3 +460,25 @@ TEST_CASE("ty_timestamp_make puts the fields together, with its messages") {
   CHECK(std::string("date field value out of range: -2147483648-01-01") ==
         ty_errmsg());
 }
+
+// Verify the order of dates, times and timestamps, the infinities of a
+// date and a timestamp among them.
+// 1. Less, equal and greater, each way.
+// 2. A date's and a timestamp's -infinity and infinity are the least and
+//    the greatest of their integers, so they sort first and last.
+TEST_CASE("dates, times and timestamps order as their integers") {
+  // 1. Less, equal and greater, each way.
+  CHECK(-1 == ty_date_cmp(1, 2));
+  CHECK(0 == ty_date_cmp(2, 2));
+  CHECK(1 == ty_date_cmp(2, 1));
+  CHECK(-1 == ty_time_cmp(0, 86400000000LL));
+  CHECK(1 == ty_time_cmp(86400000000LL, 0));
+  CHECK(0 == ty_timestamp_cmp(-5, -5));
+  CHECK(-1 == ty_timestamp_cmp(-6, -5));
+
+  // 2. The infinities sort first and last.
+  CHECK(-1 == ty_date_cmp(INT32_MIN, -1000000));
+  CHECK(1 == ty_date_cmp(INT32_MAX, 1000000));
+  CHECK(-1 == ty_timestamp_cmp(INT64_MIN, 0));
+  CHECK(1 == ty_timestamp_cmp(INT64_MAX, 0));
+}

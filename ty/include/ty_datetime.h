@@ -212,6 +212,24 @@ typedef struct ty_timetz_t {
 } ty_timetz_t;
 
 /*
+ * The order of two dates, two times or two timestamps: -1, 0 or 1. Each is
+ * an integer (days, microseconds of the day, microseconds since 2000), and
+ * the infinities of a date and a timestamp are its least and greatest
+ * values, so they order as the integers do.
+ */
+static inline int ty_date_cmp(int32_t a, int32_t b) {
+  return (a > b) - (a < b);
+}
+
+static inline int ty_time_cmp(int64_t a, int64_t b) {
+  return (a > b) - (a < b);
+}
+
+static inline int ty_timestamp_cmp(int64_t a, int64_t b) {
+  return (a > b) - (a < b);
+}
+
+/*
  * The order of two timetz: by the time in UTC, then by the zone, so that
  * two are equal only if the time and the zone are.
  */

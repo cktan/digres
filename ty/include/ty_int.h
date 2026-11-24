@@ -93,6 +93,11 @@
  *   ty_uint32_format_n, ty_uint64_format_n (v, out)
  *                             the digits of an unsigned value, with no NUL;
  *                             returns how many (at most 10, and 20).
+ *   ty_uint64_to_base(v, base, out)
+ *                             the digits of v in base 2, 8 or 16, with
+ *                             lower-case letters and no NUL, as to_bin,
+ *                             to_oct and to_hex give them; returns how
+ *                             many (at most 64).
  *
  * And the hash:
  *
@@ -127,6 +132,26 @@ size_t ty_int32_format(int32_t a, char *out);
 size_t ty_int64_format(int64_t a, char *out);
 size_t ty_uint32_format_n(uint32_t v, char *out);
 size_t ty_uint64_format_n(uint64_t v, char *out);
+
+/*
+ * The digits of v in base 2, 8 or 16, which are powers of two, so a digit
+ * is the low bits. Inline, so a constant base folds.
+ * 1. Count the digits from the significant bits; zero has one.
+ * 2. Write them from the last, a digit from the low bits, then shift.
+ */
+static inline size_t ty_uint64_to_base(uint64_t v, int base, char *out) {
+  static const char digits[] = "0123456789abcdef";
+  int shift = 16 == base ? 4 : 8 == base ? 3 : 1;
+  int bits = 0 == v ? 1 : 64 - __builtin_clzll(v);
+  size_t n = (size_t)((bits + shift - 1) / shift);
+
+  // 2. Write them from the last.
+  for (size_t i = n; i > 0; i--) {
+    out[i - 1] = digits[v & (uint64_t)(base - 1)];
+    v >>= shift;
+  }
+  return n;
+}
 
 /* The hash of an int64, and so of every width: out of line. */
 uint64_t ty_int64_hash(int64_t a, uint64_t seed);

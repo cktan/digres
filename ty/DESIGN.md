@@ -276,7 +276,9 @@ operand to the wider function.
   and `ty_uint32_format_n` and `ty_uint64_format_n` the digits of
   an unsigned value. digres's `pg_strtoint*`, `pg_itoa`,
   `pg_ltoa`, `pg_lltoa`, `pg_ultoa_n` and `pg_ulltoa_n` call
-  them. - **The small functions are in line**: `add`, `sub`,
+  them. `ty_uint64_to_base` writes the digits of `to_bin`,
+  `to_oct` and `to_hex`, in line so a constant base folds.
+- **The small functions are in line**: `add`, `sub`,
   `mul`, `div`, `mod`, `neg`, `abs`, the bit operations and the
   shifts. Only `gcd`, `lcm` and the double conversion are out of
   line, in `src/int.cc`.
@@ -375,9 +377,18 @@ feed after 76 characters) and escape. `encode` makes a text and
 `decode` a bytea, and a fault is `TY_ERR_INVALID` with
 PostgreSQL's message.
 
+`ty_bytea_trim_range` is `btrim`, `ltrim` and `rtrim`: it gives
+the place and the length of the part left, and the host copies
+it, as for the other results of bytea. A set of one byte is
+compared to, a set of up to 16 looked through, a longer one put
+in a table of 256.
+
 The state of `string_agg` over bytea is text's, in section 16.
 The tests are in `test/test_bytea.cc` and
-3,522 vectors.
+3,522 vectors; `to_bin`, `to_oct`, `to_hex` and the trims in
+`test/test_trimbase.cc`, by hand and by 274 lines of
+`test/trimbase_known.txt`, which `test/gen_trimbase.py` took from
+a digres built before they moved.
 
 ## 10. The hash
 
@@ -741,9 +752,15 @@ the host passes in: the date style, the date order and the
 interval style, with PostgreSQL's values. For a timestamptz the
 host finds the broken-down time in its zone and the name of the
 zone, and passes them. The special values, infinity, are written
-by the host. Everything with a time zone stays in digres for now:
-the text in of timestamptz and timetz, `AT TIME ZONE` and the
-casts that need a zone.
+by the host. The text in of timestamptz and timetz, `AT TIME
+ZONE` and the casts that need a zone are ty's too, given the zone
+(section 20); digres keeps the lookup of a zone by its name.
+
+`ty_date_cmp`, `ty_time_cmp` and `ty_timestamp_cmp` order two
+values as their integers, in line: the infinities of a date and a
+timestamp are the least and the greatest integer, so they order
+first and last. digres's compares, `larger` and `smaller` of the
+three, and `timestamp_cmp_internal`, call them.
 
 The text in of date, time and timestamp is `ty_date_parse`,
 `ty_time_parse` and `ty_timestamp_parse` (`src/dtparse.cc`, with

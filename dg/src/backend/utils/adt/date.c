@@ -257,53 +257,49 @@ Datum date_eq(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
 
-  PG_RETURN_BOOL(dateVal1 == dateVal2);
+  PG_RETURN_BOOL(ty_date_cmp(dateVal1, dateVal2) == 0);
 }
 
 Datum date_ne(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
 
-  PG_RETURN_BOOL(dateVal1 != dateVal2);
+  PG_RETURN_BOOL(ty_date_cmp(dateVal1, dateVal2) != 0);
 }
 
 Datum date_lt(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
 
-  PG_RETURN_BOOL(dateVal1 < dateVal2);
+  PG_RETURN_BOOL(ty_date_cmp(dateVal1, dateVal2) < 0);
 }
 
 Datum date_le(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
 
-  PG_RETURN_BOOL(dateVal1 <= dateVal2);
+  PG_RETURN_BOOL(ty_date_cmp(dateVal1, dateVal2) <= 0);
 }
 
 Datum date_gt(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
 
-  PG_RETURN_BOOL(dateVal1 > dateVal2);
+  PG_RETURN_BOOL(ty_date_cmp(dateVal1, dateVal2) > 0);
 }
 
 Datum date_ge(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
 
-  PG_RETURN_BOOL(dateVal1 >= dateVal2);
+  PG_RETURN_BOOL(ty_date_cmp(dateVal1, dateVal2) >= 0);
 }
 
 Datum date_cmp(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
 
-  if (dateVal1 < dateVal2)
-    PG_RETURN_INT32(-1);
-  else if (dateVal1 > dateVal2)
-    PG_RETURN_INT32(1);
-  PG_RETURN_INT32(0);
+  PG_RETURN_INT32(ty_date_cmp(dateVal1, dateVal2));
 }
 
 Datum date_sortsupport(PG_FUNCTION_ARGS) {
@@ -366,14 +362,16 @@ Datum date_larger(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
 
-  PG_RETURN_DATEADT((dateVal1 > dateVal2) ? dateVal1 : dateVal2);
+  PG_RETURN_DATEADT((ty_date_cmp(dateVal1, dateVal2) > 0) ? dateVal1
+                                                          : dateVal2);
 }
 
 Datum date_smaller(PG_FUNCTION_ARGS) {
   DateADT dateVal1 = PG_GETARG_DATEADT(0);
   DateADT dateVal2 = PG_GETARG_DATEADT(1);
 
-  PG_RETURN_DATEADT((dateVal1 < dateVal2) ? dateVal1 : dateVal2);
+  PG_RETURN_DATEADT((ty_date_cmp(dateVal1, dateVal2) < 0) ? dateVal1
+                                                          : dateVal2);
 }
 
 /* Compute difference between two dates in days.
@@ -1140,53 +1138,49 @@ Datum time_eq(PG_FUNCTION_ARGS) {
   TimeADT time1 = PG_GETARG_TIMEADT(0);
   TimeADT time2 = PG_GETARG_TIMEADT(1);
 
-  PG_RETURN_BOOL(time1 == time2);
+  PG_RETURN_BOOL(ty_time_cmp(time1, time2) == 0);
 }
 
 Datum time_ne(PG_FUNCTION_ARGS) {
   TimeADT time1 = PG_GETARG_TIMEADT(0);
   TimeADT time2 = PG_GETARG_TIMEADT(1);
 
-  PG_RETURN_BOOL(time1 != time2);
+  PG_RETURN_BOOL(ty_time_cmp(time1, time2) != 0);
 }
 
 Datum time_lt(PG_FUNCTION_ARGS) {
   TimeADT time1 = PG_GETARG_TIMEADT(0);
   TimeADT time2 = PG_GETARG_TIMEADT(1);
 
-  PG_RETURN_BOOL(time1 < time2);
+  PG_RETURN_BOOL(ty_time_cmp(time1, time2) < 0);
 }
 
 Datum time_le(PG_FUNCTION_ARGS) {
   TimeADT time1 = PG_GETARG_TIMEADT(0);
   TimeADT time2 = PG_GETARG_TIMEADT(1);
 
-  PG_RETURN_BOOL(time1 <= time2);
+  PG_RETURN_BOOL(ty_time_cmp(time1, time2) <= 0);
 }
 
 Datum time_gt(PG_FUNCTION_ARGS) {
   TimeADT time1 = PG_GETARG_TIMEADT(0);
   TimeADT time2 = PG_GETARG_TIMEADT(1);
 
-  PG_RETURN_BOOL(time1 > time2);
+  PG_RETURN_BOOL(ty_time_cmp(time1, time2) > 0);
 }
 
 Datum time_ge(PG_FUNCTION_ARGS) {
   TimeADT time1 = PG_GETARG_TIMEADT(0);
   TimeADT time2 = PG_GETARG_TIMEADT(1);
 
-  PG_RETURN_BOOL(time1 >= time2);
+  PG_RETURN_BOOL(ty_time_cmp(time1, time2) >= 0);
 }
 
 Datum time_cmp(PG_FUNCTION_ARGS) {
   TimeADT time1 = PG_GETARG_TIMEADT(0);
   TimeADT time2 = PG_GETARG_TIMEADT(1);
 
-  if (time1 < time2)
-    PG_RETURN_INT32(-1);
-  if (time1 > time2)
-    PG_RETURN_INT32(1);
-  PG_RETURN_INT32(0);
+  PG_RETURN_INT32(ty_time_cmp(time1, time2));
 }
 
 Datum time_hash(PG_FUNCTION_ARGS) { return hashint8(fcinfo); }
@@ -1197,14 +1191,14 @@ Datum time_larger(PG_FUNCTION_ARGS) {
   TimeADT time1 = PG_GETARG_TIMEADT(0);
   TimeADT time2 = PG_GETARG_TIMEADT(1);
 
-  PG_RETURN_TIMEADT((time1 > time2) ? time1 : time2);
+  PG_RETURN_TIMEADT((ty_time_cmp(time1, time2) > 0) ? time1 : time2);
 }
 
 Datum time_smaller(PG_FUNCTION_ARGS) {
   TimeADT time1 = PG_GETARG_TIMEADT(0);
   TimeADT time2 = PG_GETARG_TIMEADT(1);
 
-  PG_RETURN_TIMEADT((time1 < time2) ? time1 : time2);
+  PG_RETURN_TIMEADT((ty_time_cmp(time1, time2) < 0) ? time1 : time2);
 }
 
 /* overlaps_time() --- implements the SQL OVERLAPS operator.

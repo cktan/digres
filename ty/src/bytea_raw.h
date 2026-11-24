@@ -185,6 +185,14 @@ int64_t tyr_bytea_position(const uint8_t *a, size_t na, const uint8_t *b,
 /* How many bits of the bytes are set. */
 int64_t tyr_bytea_bit_count(const uint8_t *a, size_t n);
 
+/*
+ * btrim, ltrim and rtrim: the part of the n bytes at a that is left when
+ * the bytes in the m bytes at set are taken from its start (left) and its
+ * end (right): its place *off and its length *len.
+ */
+void tyr_bytea_trim(const uint8_t *a, size_t n, const uint8_t *set, size_t m,
+                    int left, int right, size_t *off, size_t *len);
+
 /* get_byte and get_bit are in ty_bytea.h. */
 
 /*

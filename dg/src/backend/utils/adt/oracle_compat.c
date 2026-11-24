@@ -22,6 +22,7 @@
 #include "utils/formatting.h"
 #include "utils/memutils.h"
 #include "varatt.h"
+#include "ty_bytea.h"
 #include "ty_text.h"
 #include "utils/ty_glue.h"
 
@@ -253,54 +254,13 @@ static text *dotrim(text *string, text *set, bool doltrim, bool dortrim) {
  */
 bytea *dobyteatrim(bytea *string, bytea *set, bool doltrim, bool dortrim) {
   bytea *ret;
-  char *ptr, *end, *ptr2, *ptr2start, *end2;
-  int m, stringlen, setlen;
+  size_t off, len;
 
-  stringlen = VARSIZE_ANY_EXHDR(string);
-  setlen = VARSIZE_ANY_EXHDR(set);
-
-  if (stringlen <= 0 || setlen <= 0)
-    return string;
-
-  m = stringlen;
-  ptr = VARDATA_ANY(string);
-  end = ptr + stringlen - 1;
-  ptr2start = VARDATA_ANY(set);
-  end2 = ptr2start + setlen - 1;
-
-  if (doltrim) {
-    while (m > 0) {
-      ptr2 = ptr2start;
-      while (ptr2 <= end2) {
-        if (*ptr == *ptr2)
-          break;
-        ++ptr2;
-      }
-      if (ptr2 > end2)
-        break;
-      ptr++;
-      m--;
-    }
-  }
-
-  if (dortrim) {
-    while (m > 0) {
-      ptr2 = ptr2start;
-      while (ptr2 <= end2) {
-        if (*end == *ptr2)
-          break;
-        ++ptr2;
-      }
-      if (ptr2 > end2)
-        break;
-      end--;
-      m--;
-    }
-  }
-
-  ret = (bytea *)palloc(VARHDRSZ + m);
-  SET_VARSIZE(ret, VARHDRSZ + m);
-  memcpy(VARDATA(ret), ptr, m);
+  /* ty finds the part that is left; it is copied here */
+  ty_bytea_trim_range(TYV(string), TYV(set), doltrim, dortrim, &off, &len);
+  ret = (bytea *)palloc(VARHDRSZ + len);
+  SET_VARSIZE(ret, VARHDRSZ + len);
+  memcpy(VARDATA(ret), VARDATA_ANY(string) + off, len);
   return ret;
 }
 

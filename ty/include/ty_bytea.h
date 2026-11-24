@@ -238,6 +238,15 @@ int64_t ty_bytea_position(const ty_varlena_t *a, const ty_varlena_t *b);
 int64_t ty_bytea_bit_count(const ty_varlena_t *a);
 
 /*
+ * btrim, ltrim and rtrim: the part of a that is left when the bytes in set
+ * are taken from its start (left) and its end (right), as its place *off
+ * and its length *len in a's bytes. The host copies it where it keeps its
+ * own. It cannot fail.
+ */
+void ty_bytea_trim_range(const ty_varlena_t *a, const ty_varlena_t *set,
+                         int left, int right, size_t *off, size_t *len);
+
+/*
  * The byte at index (from 0), or the bit at index (from 0, the least
  * significant of byte 0 first). TY_ERR_RANGE if the index is outside; the
  * message names the valid range.

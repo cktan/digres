@@ -234,11 +234,11 @@ session lookup, and a statement's instructions do not move.
 | --- | --- | --- | --- |
 | 1 | decimal | arithmetic, rounding, compare, hash, `sqrt`, `ln`, `exp`, `log`, power, no 512-bit magnitude (dropped) | wrappers, aggregates, series, planner support, typmod, error text |
 | 2 | integers, bool, uuid, bytea | the same shape: pure functions | wrappers, error text |
-| 3 | date, time, interval, float text, text | hold: they read `DateStyle`, `TimeZone`, `extra_float_digits` and collation | until the hooks are settled |
+| 3 | date, time, interval, float text, text | all, a setting passed as an argument or read through the host's hooks | the lookup of a zone by name, a collation that is not C, the regular expressions' engine |
 
-Step 3 is a separate note. Its hooks are the hard part. Code
-copied from PostgreSQL keeps its copyright notice
-([`../CLAUDE.md`](../CLAUDE.md)).
+The hooks of step 3 are in [`../ty/DESIGN.md`](../ty/DESIGN.md)
+§3.2 and §20. Code copied from PostgreSQL keeps its copyright
+notice ([`../CLAUDE.md`](../CLAUDE.md)).
 
 ## 7. Steps
 
@@ -1109,6 +1109,23 @@ copied from PostgreSQL keeps its copyright notice
        5,646,795 (-3.99%); `n::float8` 7,857,708 and 7,259,788
        (-7.61%); `f::numeric(30,6)` -0.14%; `min_scale` +0.02%.
        The text out divides in 64 bits when the value fits.
+     - **The last of the move (2026-11-24).** `to_bin`, `to_oct`
+       and `to_hex` (`ty_uint64_to_base`, in line), bytea's
+       `btrim`, `ltrim` and `rtrim` (`ty_bytea_trim_range`, whose
+       part digres copies), and the order of date, time and
+       timestamp (`ty_date_cmp`, `ty_time_cmp`,
+       `ty_timestamp_cmp`, in line), with `larger` and `smaller`.
+       Tested by 274 vectors of the digres before, by hand in ty,
+       and by `dg/test/select_trimbase_ops.sql`. Measured by
+       callgrind, 2,000 rows (old, new): the three bases of a row
+       6,696,427 and 6,739,739 (+0.65%); `btrim` of a bytea
+       5,116,901 and 5,088,180 (-0.56%); the order of date,
+       time and timestamp +0.13% to +0.28%. What stays in digres
+       for good: the binary forms, typmods, planner support,
+       aggregates' glue, a collation that is not C, the
+       regular expressions' engine, the lookup of a zone by
+       name, and the types out of sm's scope (`money`,
+       `"char"`, `name`'s catalog functions, arrays, `jsonb`).
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

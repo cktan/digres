@@ -203,146 +203,6 @@ are the catalog tables psql reads
     pages with the rows
     ([`BTREEINDEX.md`](BTREEINDEX.md#67-a-bulk-load-builds-the-tree-whole)
     §6.7, [`BTREELOAD_PLAN.md`](BTREELOAD_PLAN.md)).
-11. **Types move into sm, with their ADT operations and
-    functions.** Decided 2026-11-09. Decimal is done
-    (2026-11-21):
-    its operations are in `ty/`, a library of its own that sm and
-    digres call, under the rule that `decimal64` and `decimal128`
-    work as `int32` and `int64` do ([`TYPEMOVE_PLAN.md`](
-    TYPEMOVE_PLAN.md) §7, [`../ty/DESIGN.md`](../ty/DESIGN.md)).
-    What is left is the other types, below. Two reasons:
-    - sm evaluates expressions without digres: an index
-      expression, a partial index, a check.
-    - sm plugs into another SQL system, not digres alone.
-
-    Today sm2 holds a type's storage: its datum, text, order and
-    key ([`sm2/TYPE.md`](sm2/TYPE.md)). digres holds the rest, in
-    PostgreSQL's `utils/adt`: the operators, casts, aggregates
-    and functions of a type. For `decimal64` and `decimal128`
-    that is arithmetic, rounding, `sqrt`, `ln` and the rest
-    ([`../dg/DECIMAL.md`](../dg/DECIMAL.md#25-arithmetic) §2.5).
-
-    The scope is the types of
-    [`sm2/TYPE.md`](sm2/TYPE.md#3-the-types) §3: bool, integers,
-    floats, decimal, text, bytea, date and time, interval, uuid.
-    Types that need a session or the catalog (`regclass`, enums,
-    ranges, arrays, `jsonb`, text search) stay in digres. In
-    order:
-    1. **decimal**: done (2026-11-21), as above.
-    2. **Types with no session state**: integers, bool, uuid
-       and bytea: done, 2026-11-21 (`ty_int.h`, `ty_bool.h`,
-       `ty_uuid.h`, `ty_bytea.h`;
-       [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7), with the
-       hash of every type, which is PostgreSQL's, in
-       `ty_hash.h`; and the rest of their operations, text in
-       and out and encode and decode included. The state of
-       `string_agg`, over text and bytea, is in ty since
-       2026-11-23 (`ty_string_agg_t`); so are the abbreviated
-       keys of a sort, of uuid and of bytes in the C collation,
-       with their rules (`ty_abbrev.h`), and HyperLogLog, which
-       the rules judge by (`ty_hll.h`). digres keeps the
-       `SortSupport` wiring and the `strxfrm` keys of the other
-       collations. The states of the bool aggregates, and of avg
-       and sum over int2 and int4, are in ty since 2026-11-23
-       (`ty_bool_agg_t`, `ty_int_avg_t`). Done after that:
-       the floats, with their text (`ty_float.h`), and text for
-       the C collation, with varchar, bpchar and name
-       (`ty_text.h`), and the arithmetic of interval
-       (`ty_interval.h`), and the arithmetic of date, time and
-       timestamp (`ty_datetime.h`). The text out of date, time,
-       timestamp and interval is in ty, and the text in of
-       interval. So are the typmod of interval, timestamp and
-       time, `make_interval`, `date_trunc` of timestamp and
-       interval, `age`, `date_bin`, `extract` and `date_part`
-       of timestamp, date, time and interval, OVERLAPS, and the
-       order, hash and RANGE offsets of timetz. So are, since
-       2026-11-22, the text in of date, time, timestamp,
-       timestamptz and timetz (`ty/src/dtparse.cc`), the time
-       zone rules with their data (`ty_timezone.h`), and the
-       casts, arithmetic, trunc, parts and age of timestamptz.
-       The transaction's clock is sm's, and ty reads it
-       (2026-11-23). So is `format`: ty reads the format
-       string and makes the result, and digres gives each
-       argument's text (`ty_format_next`, `ty_format_put`;
-       2026-11-23). The case functions of the C ctype are in
-       ty (`ty_ascii_lower` and the like); the other ctypes,
-       ICU and the builtin provider, stay in digres.
-       `to_char` of timestamp, timestamptz, interval and the
-       numbers is in ty (`ty_tochar.h`, 2026-11-23), and so is
-       the reverse parse of a date format (`to_timestamp`,
-       `to_date`, jsonpath's `datetime()`) and `to_number`. The
-       regular expressions of text stay digres's engine, which a
-       caller of ty reaches through the host's hook
-       (`ty_regex.h`, `ty_set_regex`; 2026-11-23). **Left: nothing
-       of this group**
-       ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
-    3. **Types that read a setting**: what is left of them
-       waits for its hooks. The text in takes the date order
-       as an argument, and a zone through the host's hooks
-       (`ty_dtzone_t`).
-
-    **The group of integers, bool, uuid and bytea: done
-    (2026-11-21).** What was in `utils/adt` (grep, before the
-    move) and how it went:
-
-    | Type | File | Lines | Entry points |
-    | --- | --- | --- | --- |
-    | `int2`, `int4` | `int.c` | 1,412 | 92 |
-    | `int8` | `int8.c` | 1,287 | 88 |
-    | `bool` | `bool.c` | 356 | 19 |
-    | `uuid` | `uuid.c` | 737 | 20 |
-    | `bytea` | `varlena.c`, 32 of its 120 | in 6,144 | 32 |
-
-    - **Written new for ty, no PostgreSQL code.** So no
-      copyright notice came with it. The cases and the error
-      texts are PostgreSQL's.
-    - **The rule of decimal holds**: an operation of one width
-      is exact or an error.
-    - **bytea takes a buffer from the caller**, not ty's alloc
-      function: every result's size is known before the call
-      ([`../ty/DESIGN.md`](../ty/DESIGN.md) §9).
-    - **Tested in ty** by hand and by vectors of a Python
-      reference, and in digres by `dg/test/select_int.sql`,
-      `select_bool_uuid.sql`, `select_bytea.sql` and the error
-      loops of `server.sh`.
-    - **Measured by callgrind**: no statement rose by more than
-      1% ([`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7).
-    - **The hash**: every type's is PostgreSQL's, in `ty_hash.h`,
-      so no value and no partition changed.
-
-    This move is not easy. The code in `utils/adt` does not
-    copy over. **Moved code cannot call `palloc()`**: it needs
-    PostgreSQL's `CurrentMemoryContext`, a session's state, and
-    sm must run without digres.
-
-    To settle:
-    - where a result of variable size gets its memory (text,
-      bytea, concatenation, `replace`): settled. Each thread
-      sets its own alloc and free functions in ty
-      (`ty_set_alloc`), `malloc()` and `free()` if it sets
-      none. The host sets them on its threads, and sm sets an
-      arena's on its own. `alloc` returns NULL on failure and
-      never throws. The caller frees what ty returns; ty
-      frees only what it keeps. The design is in
-      [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §3 and
-      [`../ty/DESIGN.md`](../ty/DESIGN.md) §3;
-    - the hooks for what a session sets: settled for the date
-      order and the zone, which the text in takes as an
-      argument and through `ty_dtzone_t`. Open for a collation
-      that is not C, which keeps digres's path, and the
-      locale;
-    - the errors: settled. ty keeps its own error state and
-      codes; a host maps them to its own codes and text;
-    - the interface of an operation in `sm.h`. digres calls it
-      as a plain C call, with no handle or session lookup, so
-      the instruction counts of a statement do not move;
-    - what stays in digres: the SQL names, the typmod rules and
-      PostgreSQL's error text;
-    - moved code that is PostgreSQL's own (timestamp, interval,
-      float text, string functions) keeps its copyright notice
-      ([`../CLAUDE.md`](../CLAUDE.md)), and the 231 regression
-      files must pass unchanged.
-
 Low priority:
 
 1. **Bulk load, the rest of it.** File mode into an empty table
@@ -671,6 +531,17 @@ item points.
    some ([`BTREEINDEX.md`](BTREEINDEX.md#92-vacuum) §9.2 gives
    the cases and why that is enough). A temporary table's trees
    are still walked.
+11. **Types move into sm, with their ADT operations and
+    functions**: done (2026-11-24). The operations of bool, the
+    integers, the floats, decimal, text, bytea, date and time,
+    interval and uuid are in `ty/`, a library that sm and digres
+    call ([`../ty/DESIGN.md`](../ty/DESIGN.md)); the steps and
+    their callgrind numbers are in
+    [`TYPEMOVE_PLAN.md`](TYPEMOVE_PLAN.md) §7. digres keeps its
+    glue, and what is out of sm's scope or a session's: the
+    binary forms, typmods, planner support, a collation that is
+    not C, the regular expressions' engine, which ty reaches by
+    a hook (`ty_regex.h`), and the lookup of a zone by name.
 
 ---
 
