@@ -950,3 +950,41 @@ loop's blocks; the lowest failing row among several, one past
 the last whole vector, and one in a row not valid and one in a
 null row, which are no error; and the results written over the
 inputs.
+
+## 22. to_char
+
+`ty_tochar.h` writes `to_char` of a timestamp, a timestamptz
+and an interval by a format: keywords (`YYYY`, `MM`, `HH24`,
+`Month`, `TZ` and the others), a prefix `FM` or `TM` before one
+and a suffix `TH`, `th` or `SP` after it, and text, quoted or
+not. The code is new. The keywords, the output and the errors
+are those of PostgreSQL's `formatting.c`, byte for byte.
+
+1. `ty_dch_compile` reads the format once into nodes, as
+   PostgreSQL's `parse_format` does: the first keyword that
+   matches wins, so `HH24` is read before `HH`.
+2. `ty_timestamp_to_char`, `ty_timestamptz_to_char` and
+   `ty_interval_to_char` take a value's fields and write each
+   node.
+
+A timestamptz takes its zone, and ty finds the zone's
+abbreviation and offset (`ty_tz_t`). `TM` takes the localized
+names from the host, through a function in a
+`ty_tochar_locale_t`: the host has the names of its `lc_time`
+and cases them under its collation. With no host locale, `TM`
+writes the C locale's English names. The result is a text of
+room for 12 bytes a byte of format, as PostgreSQL allots, and
+no field writes more.
+
+digres compiles a call site's format once and keeps it in the
+call's `fn_extra`, with the format's text, so a format that is
+the same for each row is read once. The number formats and the
+reverse parse (`to_timestamp`, `to_date`, `to_number`) stay in
+digres for now.
+
+The tests: `test/tochar_known.txt`, 18,484 lines that the digres
+before the move printed (`test/gen_tochar.py`), of timestamps,
+timestamptz in 11 zones and intervals, each keyword with each
+prefix and suffix, and mixed formats; `test/test_tochar.cc` for
+the errors, the host's names and the edges; and
+`dg/test/select_tochar_ops.sql`.

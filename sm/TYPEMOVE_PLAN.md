@@ -1011,6 +1011,27 @@ copied from PostgreSQL keeps its copyright notice
        and 10,393,400 (-0.08%); bytea 9,012,082 and 9,015,957
        (+0.04%); text descending 6,854,693 and 6,854,848
        (+0.00%). Two runs of one binary differ by up to 0.4%.
+     - `to_char` of timestamp, timestamptz and interval moved
+       too (2026-11-23): `ty_tochar.h`, new code with
+       PostgreSQL's keywords, output and errors. ty compiles a
+       format once; digres keeps it in the call site's
+       `fn_extra`, gives `TM` its localized names through a
+       `ty_tochar_locale_t`, and gives the session's zone. The
+       tests: 18,484 lines the digres before the move printed
+       (`ty/test/tochar_known.txt`), which the new digres prints
+       the same, with the same 320 errors; ty cases for the
+       errors, the host's names and the edges; and
+       `dg/test/select_tochar_ops.sql`. Measured by callgrind,
+       2,000 rows, instructions a statement (old, new):
+       `'YYYY-MM-DD HH24.MI.SS'` 13,085,690 and 8,308,534
+       (-36.51%); a timestamptz with `TZ` 13,905,276 and
+       9,317,546 (-32.99%); `'FMDay, FMDDth FMMonth YYYY'`
+       11,751,572 and 9,190,402 (-21.79%); an interval by
+       `'HH24.MI.SS.US'` 10,471,196 and 7,186,992 (-31.36%).
+       PostgreSQL wrote each field by `sprintf` and looked the
+       format up in a cache of 20; ty writes the digits itself.
+       The numbers' `to_char` and the reverse parse
+       (`to_timestamp`, `to_date`, `to_number`) are left.
 6. **Tests at every layer** the change reaches: ty unit tests
    for each moved function (new), sm2 unit tests where sm2
    calls it, `rel` if an expression index uses one, and

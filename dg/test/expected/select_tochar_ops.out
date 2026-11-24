@@ -1,0 +1,68 @@
+-- Verify to_char of timestamp, timestamptz and interval, which ty writes
+-- (ty_tochar.h): a format that changes from row to row, so the call site
+-- compiles it again; TM's names under a collation; NULL and infinite
+-- values; the session's zone; and each error. A refusal is what is tested,
+-- so an error goes on to the next statement.
+\set ON_ERROR_STOP off
+SELECT f, to_char(timestamp '2024-02-29 13:05:09.123456', f) FROM (VALUES ('YYYY-MM-DD'), ('HH24:MI:SS.US'), ('YYYY-MM-DD'), ('Day, DD Month YYYY'), ('FMDay FMDDth'), (''), (NULL)) v(f);
+         f          |           to_char            
+--------------------+------------------------------
+ YYYY-MM-DD         | 2024-02-29
+ HH24:MI:SS.US      | 13:05:09.123456
+ YYYY-MM-DD         | 2024-02-29
+ Day, DD Month YYYY | Thursday , 29 February  2024
+ FMDay FMDDth       | Thursday 29th
+                    | 
+                    | 
+(7 rows)
+
+SELECT to_char(timestamp '2024-02-29 13:05:09', 'TMDay TMMonth TMmon' COLLATE "unicode") AS icu, to_char(timestamp '2024-02-29 13:05:09', 'TMDAY TMMONTH') AS c;
+          icu          |         c         
+-----------------------+-------------------
+ Thursday February feb | THURSDAY FEBRUARY
+(1 row)
+
+SELECT to_char(timestamp 'infinity', 'YYYY') IS NULL AS inf, to_char(timestamptz '-infinity', 'YYYY') IS NULL AS ninf, to_char(interval 'infinity', 'HH24') IS NULL AS iinf, to_char(NULL::timestamp, 'YYYY') IS NULL AS n;
+ inf | ninf | iinf | n 
+-----+------+------+---
+ t   | t    | t    | t
+(1 row)
+
+SET timezone = 'America/St_Johns';
+SELECT to_char(timestamptz '2024-07-01 12:00:00+00', 'YYYY-MM-DD HH24:MI TZ OF TZH:TZM tz') AS stjohns;
+                stjohns                 
+----------------------------------------
+ 2024-07-01 09:30 NDT -02:30 -02:30 ndt
+(1 row)
+
+SET timezone = 'Asia/Kathmandu';
+SELECT to_char(timestamptz '2024-07-01 12:00:00+00', 'HH12:MI AM TZ OF FMOF') AS kathmandu;
+          kathmandu          
+-----------------------------
+ 05:45 PM +0545 +05:45 +5:45
+(1 row)
+
+RESET timezone;
+SELECT to_char(interval '1 year 2 mons 3 days 04:05:06.789', 'YYYY MM DD HH24 MI SS MS US DDD WW J RM') AS iv, to_char(interval '-25 hours', 'HH HH12 HH24 SSSS AM') AS neg;
+                         iv                         |          neg          
+----------------------------------------------------+-----------------------
+ 0001 02 03 04 05 06 789 789000 423 61 1721459 II   | -01 -01 -25 -90000 AM
+(1 row)
+
+SELECT to_char(i, 'FMYYYY "years" FMMM "months"') FROM (VALUES (interval '12 mons'), (interval '-12 mons'), (interval '178000000 years')) v(i);
+         to_char          
+--------------------------
+ 1 years 0 months
+ -1 years 0 months
+ 178000000 years 0 months
+(3 rows)
+
+SELECT to_char(interval '1 day', 'Day');
+psql:test/select_tochar_ops.sql:17: ERROR:  invalid format specification for an interval value
+HINT:  Intervals are not tied to specific calendar dates.
+SELECT to_char(interval '1 day', 'TZ');
+psql:test/select_tochar_ops.sql:18: ERROR:  invalid format specification for an interval value
+HINT:  Intervals are not tied to specific calendar dates.
+SELECT to_char(interval '1 day', 'YYYY AD');
+psql:test/select_tochar_ops.sql:19: ERROR:  invalid format specification for an interval value
+HINT:  Intervals are not tied to specific calendar dates.

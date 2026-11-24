@@ -92,6 +92,8 @@
 #include "utils/numeric.h"
 #include "utils/pg_locale.h"
 #include "ty_text.h"
+#include "ty_tochar.h"
+#include "utils/ty_glue.h"
 #include "varatt.h"
 
 /* ----------
@@ -470,75 +472,11 @@ struct fmt_tz /* do_to_timestamp's timezone info output */
 #define DEBUG_TM(_X)
 #endif
 
-/* ----------
- * Datetime to char conversion
- *
- * To support intervals as well as timestamps, we use a custom "tm" struct
- * that is almost like struct pg_tm, but has a 64-bit tm_hour field.
- * We omit the tm_isdst and tm_zone fields, which are not used here.
- * ----------
- */
-struct fmt_tm {
-  int tm_sec;
-  int tm_min;
-  int64 tm_hour;
-  int tm_mday;
-  int tm_mon;
-  int tm_year;
-  int tm_wday;
-  int tm_yday;
-  long int tm_gmtoff;
-};
-
-typedef struct TmToChar {
-  struct fmt_tm tm; /* almost the classic 'tm' struct */
-  fsec_t fsec;      /* fractional seconds */
-  const char *tzn;  /* timezone */
-} TmToChar;
-
-#define tmtcTm(_X)	(&(_X)->tm)
-#define tmtcTzn(_X) ((_X)->tzn)
-#define tmtcFsec(_X)	((_X)->fsec)
-
-/* Note: this is used to copy pg_tm to fmt_tm, so not quite a bitwise copy */
-#define COPY_tm(_DST, _SRC) \
-do {	\
-	(_DST)->tm_sec = (_SRC)->tm_sec; \
-	(_DST)->tm_min = (_SRC)->tm_min; \
-	(_DST)->tm_hour = (_SRC)->tm_hour; \
-	(_DST)->tm_mday = (_SRC)->tm_mday; \
-	(_DST)->tm_mon = (_SRC)->tm_mon; \
-	(_DST)->tm_year = (_SRC)->tm_year; \
-	(_DST)->tm_wday = (_SRC)->tm_wday; \
-	(_DST)->tm_yday = (_SRC)->tm_yday; \
-	(_DST)->tm_gmtoff = (_SRC)->tm_gmtoff; \
-} while(0)
-
-/* Caution: this is used to zero both pg_tm and fmt_tm structs */
+/* Zero a pg_tm, with day and month 1 */
 #define ZERO_tm(_X) \
 do {	\
 	memset(_X, 0, sizeof(*(_X))); \
 	(_X)->tm_mday = (_X)->tm_mon = 1; \
-} while(0)
-
-#define ZERO_tmtc(_X) \
-do { \
-	ZERO_tm( tmtcTm(_X) ); \
-	tmtcFsec(_X) = 0; \
-	tmtcTzn(_X) = NULL; \
-} while(0)
-
-/*
- *	to_char(time) appears to to_char() as an interval, so this check
- *	is really for interval and time data types.
- */
-#define INVALID_FOR_INTERVAL  \
-do { \
-	if (is_interval) \
-		ereport(ERROR, \
-				(errcode(ERRCODE_INVALID_DATETIME_FORMAT), \
-				 errmsg("invalid format specification for an interval value"), \
-				 errhint("Intervals are not tied to specific calendar dates."))); \
 } while(0)
 
 /*****************************************************************************
@@ -1053,8 +991,6 @@ static void parse_format(FormatNode *node, const char *str, const KeyWord *kw,
                          const KeySuffix *suf, const int *index, uint32 flags,
                          NUMDesc *Num);
 
-static void DCH_to_char(FormatNode *node, bool is_interval, TmToChar *in,
-                        char *out, Oid collid);
 static void DCH_from_char(FormatNode *node, const char *in, TmFromChar *out,
                           Oid collid, bool std, Node *escontext);
 
@@ -2414,623 +2350,6 @@ static bool from_char_seq_search(int *dest, const char **src,
   return true;
 }
 
-/* ----------
- * Process a TmToChar struct as denoted by a list of FormatNodes.
- * The formatted data is written to the string pointed to by 'out'.
- * ----------
- */
-static void DCH_to_char(FormatNode *node, bool is_interval, TmToChar *in,
-                        char *out, Oid collid) {
-  FormatNode *n;
-  char *s;
-  struct fmt_tm *tm = &in->tm;
-  int i;
-
-  /* cache localized days and months */
-  cache_locale_time();
-
-  s = out;
-  for (n = node; n->type != NODE_TYPE_END; n++) {
-    if (n->type != NODE_TYPE_ACTION) {
-      strcpy(s, n->character);
-      s += strlen(s);
-      continue;
-    }
-
-    switch (n->key->id) {
-    case DCH_A_M:
-    case DCH_P_M:
-      strcpy(s, (tm->tm_hour % HOURS_PER_DAY >= HOURS_PER_DAY / 2) ? P_M_STR
-                                                                   : A_M_STR);
-      s += strlen(s);
-      break;
-    case DCH_AM:
-    case DCH_PM:
-      strcpy(s, (tm->tm_hour % HOURS_PER_DAY >= HOURS_PER_DAY / 2) ? PM_STR
-                                                                   : AM_STR);
-      s += strlen(s);
-      break;
-    case DCH_a_m:
-    case DCH_p_m:
-      strcpy(s, (tm->tm_hour % HOURS_PER_DAY >= HOURS_PER_DAY / 2) ? p_m_STR
-                                                                   : a_m_STR);
-      s += strlen(s);
-      break;
-    case DCH_am:
-    case DCH_pm:
-      strcpy(s, (tm->tm_hour % HOURS_PER_DAY >= HOURS_PER_DAY / 2) ? pm_STR
-                                                                   : am_STR);
-      s += strlen(s);
-      break;
-    case DCH_HH:
-    case DCH_HH12:
-
-      /*
-       * display time as shown on a 12-hour clock, even for
-       * intervals
-       */
-      sprintf(s, "%0*lld",
-              S_FM(n->suffix)      ? 0
-              : (tm->tm_hour >= 0) ? 2
-                                   : 3,
-              tm->tm_hour % (HOURS_PER_DAY / 2) == 0
-                  ? (long long)(HOURS_PER_DAY / 2)
-                  : (long long)(tm->tm_hour % (HOURS_PER_DAY / 2)));
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_HH24:
-      sprintf(s, "%0*lld",
-              S_FM(n->suffix)      ? 0
-              : (tm->tm_hour >= 0) ? 2
-                                   : 3,
-              (long long)tm->tm_hour);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_MI:
-      sprintf(s, "%0*d",
-              S_FM(n->suffix)     ? 0
-              : (tm->tm_min >= 0) ? 2
-                                  : 3,
-              tm->tm_min);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_SS:
-      sprintf(s, "%0*d",
-              S_FM(n->suffix)     ? 0
-              : (tm->tm_sec >= 0) ? 2
-                                  : 3,
-              tm->tm_sec);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-
-#define DCH_to_char_fsec(frac_fmt, frac_val) \
-				sprintf(s, frac_fmt, (int) (frac_val)); \
-				if (S_THth(n->suffix)) \
-					str_numth(s, s, S_TH_TYPE(n->suffix)); \
-				s += strlen(s)
-
-    case DCH_FF1: /* tenth of second */
-      DCH_to_char_fsec("%01d", in->fsec / 100000);
-      break;
-    case DCH_FF2: /* hundredth of second */
-      DCH_to_char_fsec("%02d", in->fsec / 10000);
-      break;
-    case DCH_FF3:
-    case DCH_MS: /* millisecond */
-      DCH_to_char_fsec("%03d", in->fsec / 1000);
-      break;
-    case DCH_FF4: /* tenth of a millisecond */
-      DCH_to_char_fsec("%04d", in->fsec / 100);
-      break;
-    case DCH_FF5: /* hundredth of a millisecond */
-      DCH_to_char_fsec("%05d", in->fsec / 10);
-      break;
-    case DCH_FF6:
-    case DCH_US: /* microsecond */
-      DCH_to_char_fsec("%06d", in->fsec);
-      break;
-#undef DCH_to_char_fsec
-    case DCH_SSSS:
-      sprintf(s, "%lld",
-              (long long)(tm->tm_hour * SECS_PER_HOUR +
-                          tm->tm_min * SECS_PER_MINUTE + tm->tm_sec));
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_tz:
-      INVALID_FOR_INTERVAL;
-      if (tmtcTzn(in)) {
-        /*
-         * We assume here that timezone abbreviations aren't
-         * localized, so ASCII-only downcasing is sufficient.
-         */
-        char *p = asc_tolower_z(tmtcTzn(in));
-
-        if (strlen(p) <= n->key->len * DCH_MAX_ITEM_SIZ)
-          strcpy(s, p);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("time zone format value too long")));
-        pfree(p);
-        s += strlen(s);
-      }
-      break;
-    case DCH_TZ:
-      INVALID_FOR_INTERVAL;
-      if (tmtcTzn(in)) {
-        const char *p = tmtcTzn(in);
-
-        if (strlen(p) <= n->key->len * DCH_MAX_ITEM_SIZ)
-          strcpy(s, p);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("time zone format value too long")));
-        s += strlen(s);
-      }
-      break;
-    case DCH_TZH:
-      INVALID_FOR_INTERVAL;
-      sprintf(s, "%c%02d", (tm->tm_gmtoff >= 0) ? '+' : '-',
-              abs((int)tm->tm_gmtoff) / SECS_PER_HOUR);
-      s += strlen(s);
-      break;
-    case DCH_TZM:
-      INVALID_FOR_INTERVAL;
-      sprintf(s, "%02d",
-              (abs((int)tm->tm_gmtoff) % SECS_PER_HOUR) / SECS_PER_MINUTE);
-      s += strlen(s);
-      break;
-    case DCH_OF:
-      INVALID_FOR_INTERVAL;
-      sprintf(s, "%c%0*d", (tm->tm_gmtoff >= 0) ? '+' : '-',
-              S_FM(n->suffix) ? 0 : 2, abs((int)tm->tm_gmtoff) / SECS_PER_HOUR);
-      s += strlen(s);
-      if (abs((int)tm->tm_gmtoff) % SECS_PER_HOUR != 0) {
-        sprintf(s, ":%02d",
-                (abs((int)tm->tm_gmtoff) % SECS_PER_HOUR) / SECS_PER_MINUTE);
-        s += strlen(s);
-      }
-      break;
-    case DCH_A_D:
-    case DCH_B_C:
-      INVALID_FOR_INTERVAL;
-      strcpy(s, (tm->tm_year <= 0 ? B_C_STR : A_D_STR));
-      s += strlen(s);
-      break;
-    case DCH_AD:
-    case DCH_BC:
-      INVALID_FOR_INTERVAL;
-      strcpy(s, (tm->tm_year <= 0 ? BC_STR : AD_STR));
-      s += strlen(s);
-      break;
-    case DCH_a_d:
-    case DCH_b_c:
-      INVALID_FOR_INTERVAL;
-      strcpy(s, (tm->tm_year <= 0 ? b_c_STR : a_d_STR));
-      s += strlen(s);
-      break;
-    case DCH_ad:
-    case DCH_bc:
-      INVALID_FOR_INTERVAL;
-      strcpy(s, (tm->tm_year <= 0 ? bc_STR : ad_STR));
-      s += strlen(s);
-      break;
-    case DCH_MONTH:
-      INVALID_FOR_INTERVAL;
-      if (!tm->tm_mon)
-        break;
-      if (S_TM(n->suffix)) {
-        char *str =
-            str_toupper_z(localized_full_months[tm->tm_mon - 1], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        sprintf(s, "%*s", S_FM(n->suffix) ? 0 : -9,
-                asc_toupper_z(months_full[tm->tm_mon - 1]));
-      s += strlen(s);
-      break;
-    case DCH_Month:
-      INVALID_FOR_INTERVAL;
-      if (!tm->tm_mon)
-        break;
-      if (S_TM(n->suffix)) {
-        char *str =
-            str_initcap_z(localized_full_months[tm->tm_mon - 1], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        sprintf(s, "%*s", S_FM(n->suffix) ? 0 : -9,
-                months_full[tm->tm_mon - 1]);
-      s += strlen(s);
-      break;
-    case DCH_month:
-      INVALID_FOR_INTERVAL;
-      if (!tm->tm_mon)
-        break;
-      if (S_TM(n->suffix)) {
-        char *str =
-            str_tolower_z(localized_full_months[tm->tm_mon - 1], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        sprintf(s, "%*s", S_FM(n->suffix) ? 0 : -9,
-                asc_tolower_z(months_full[tm->tm_mon - 1]));
-      s += strlen(s);
-      break;
-    case DCH_MON:
-      INVALID_FOR_INTERVAL;
-      if (!tm->tm_mon)
-        break;
-      if (S_TM(n->suffix)) {
-        char *str =
-            str_toupper_z(localized_abbrev_months[tm->tm_mon - 1], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        strcpy(s, asc_toupper_z(months[tm->tm_mon - 1]));
-      s += strlen(s);
-      break;
-    case DCH_Mon:
-      INVALID_FOR_INTERVAL;
-      if (!tm->tm_mon)
-        break;
-      if (S_TM(n->suffix)) {
-        char *str =
-            str_initcap_z(localized_abbrev_months[tm->tm_mon - 1], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        strcpy(s, months[tm->tm_mon - 1]);
-      s += strlen(s);
-      break;
-    case DCH_mon:
-      INVALID_FOR_INTERVAL;
-      if (!tm->tm_mon)
-        break;
-      if (S_TM(n->suffix)) {
-        char *str =
-            str_tolower_z(localized_abbrev_months[tm->tm_mon - 1], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        strcpy(s, asc_tolower_z(months[tm->tm_mon - 1]));
-      s += strlen(s);
-      break;
-    case DCH_MM:
-      sprintf(s, "%0*d",
-              S_FM(n->suffix)     ? 0
-              : (tm->tm_mon >= 0) ? 2
-                                  : 3,
-              tm->tm_mon);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_DAY:
-      INVALID_FOR_INTERVAL;
-      if (S_TM(n->suffix)) {
-        char *str = str_toupper_z(localized_full_days[tm->tm_wday], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        sprintf(s, "%*s", S_FM(n->suffix) ? 0 : -9,
-                asc_toupper_z(days[tm->tm_wday]));
-      s += strlen(s);
-      break;
-    case DCH_Day:
-      INVALID_FOR_INTERVAL;
-      if (S_TM(n->suffix)) {
-        char *str = str_initcap_z(localized_full_days[tm->tm_wday], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        sprintf(s, "%*s", S_FM(n->suffix) ? 0 : -9, days[tm->tm_wday]);
-      s += strlen(s);
-      break;
-    case DCH_day:
-      INVALID_FOR_INTERVAL;
-      if (S_TM(n->suffix)) {
-        char *str = str_tolower_z(localized_full_days[tm->tm_wday], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        sprintf(s, "%*s", S_FM(n->suffix) ? 0 : -9,
-                asc_tolower_z(days[tm->tm_wday]));
-      s += strlen(s);
-      break;
-    case DCH_DY:
-      INVALID_FOR_INTERVAL;
-      if (S_TM(n->suffix)) {
-        char *str = str_toupper_z(localized_abbrev_days[tm->tm_wday], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        strcpy(s, asc_toupper_z(days_short[tm->tm_wday]));
-      s += strlen(s);
-      break;
-    case DCH_Dy:
-      INVALID_FOR_INTERVAL;
-      if (S_TM(n->suffix)) {
-        char *str = str_initcap_z(localized_abbrev_days[tm->tm_wday], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        strcpy(s, days_short[tm->tm_wday]);
-      s += strlen(s);
-      break;
-    case DCH_dy:
-      INVALID_FOR_INTERVAL;
-      if (S_TM(n->suffix)) {
-        char *str = str_tolower_z(localized_abbrev_days[tm->tm_wday], collid);
-
-        if (strlen(str) <= (n->key->len + TM_SUFFIX_LEN) * DCH_MAX_ITEM_SIZ)
-          strcpy(s, str);
-        else
-          ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                          errmsg("localized string format value too long")));
-      } else
-        strcpy(s, asc_tolower_z(days_short[tm->tm_wday]));
-      s += strlen(s);
-      break;
-    case DCH_DDD:
-    case DCH_IDDD:
-      sprintf(s, "%0*d", S_FM(n->suffix) ? 0 : 3,
-              (n->key->id == DCH_DDD)
-                  ? tm->tm_yday
-                  : date2isoyearday(tm->tm_year, tm->tm_mon, tm->tm_mday));
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_DD:
-      sprintf(s, "%0*d", S_FM(n->suffix) ? 0 : 2, tm->tm_mday);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_D:
-      INVALID_FOR_INTERVAL;
-      sprintf(s, "%d", tm->tm_wday + 1);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_ID:
-      INVALID_FOR_INTERVAL;
-      sprintf(s, "%d", (tm->tm_wday == 0) ? 7 : tm->tm_wday);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_WW:
-      sprintf(s, "%0*d", S_FM(n->suffix) ? 0 : 2, (tm->tm_yday - 1) / 7 + 1);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_IW:
-      sprintf(s, "%0*d", S_FM(n->suffix) ? 0 : 2,
-              date2isoweek(tm->tm_year, tm->tm_mon, tm->tm_mday));
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_Q:
-      if (!tm->tm_mon)
-        break;
-      sprintf(s, "%d", (tm->tm_mon - 1) / 3 + 1);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_CC:
-      if (is_interval) /* straight calculation */
-        i = tm->tm_year / 100;
-      else {
-        if (tm->tm_year > 0)
-          /* Century 20 == 1901 - 2000 */
-          i = (tm->tm_year - 1) / 100 + 1;
-        else
-          /* Century 6BC == 600BC - 501BC */
-          i = tm->tm_year / 100 - 1;
-      }
-      if (i <= 99 && i >= -99)
-        sprintf(s, "%0*d", S_FM(n->suffix) ? 0 : (i >= 0) ? 2 : 3, i);
-      else
-        sprintf(s, "%d", i);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_Y_YYY:
-      i = ADJUST_YEAR(tm->tm_year, is_interval) / 1000;
-      sprintf(s, "%d,%03d", i,
-              ADJUST_YEAR(tm->tm_year, is_interval) - (i * 1000));
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_YYYY:
-    case DCH_IYYY:
-      sprintf(
-          s, "%0*d",
-          S_FM(n->suffix)                                ? 0
-          : (ADJUST_YEAR(tm->tm_year, is_interval) >= 0) ? 4
-                                                         : 5,
-          (n->key->id == DCH_YYYY
-               ? ADJUST_YEAR(tm->tm_year, is_interval)
-               : ADJUST_YEAR(date2isoyear(tm->tm_year, tm->tm_mon, tm->tm_mday),
-                             is_interval)));
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_YYY:
-    case DCH_IYY:
-      sprintf(
-          s, "%0*d",
-          S_FM(n->suffix)                                ? 0
-          : (ADJUST_YEAR(tm->tm_year, is_interval) >= 0) ? 3
-                                                         : 4,
-          (n->key->id == DCH_YYY
-               ? ADJUST_YEAR(tm->tm_year, is_interval)
-               : ADJUST_YEAR(date2isoyear(tm->tm_year, tm->tm_mon, tm->tm_mday),
-                             is_interval)) %
-              1000);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_YY:
-    case DCH_IY:
-      sprintf(
-          s, "%0*d",
-          S_FM(n->suffix)                                ? 0
-          : (ADJUST_YEAR(tm->tm_year, is_interval) >= 0) ? 2
-                                                         : 3,
-          (n->key->id == DCH_YY
-               ? ADJUST_YEAR(tm->tm_year, is_interval)
-               : ADJUST_YEAR(date2isoyear(tm->tm_year, tm->tm_mon, tm->tm_mday),
-                             is_interval)) %
-              100);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_Y:
-    case DCH_I:
-      sprintf(
-          s, "%1d",
-          (n->key->id == DCH_Y
-               ? ADJUST_YEAR(tm->tm_year, is_interval)
-               : ADJUST_YEAR(date2isoyear(tm->tm_year, tm->tm_mon, tm->tm_mday),
-                             is_interval)) %
-              10);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_RM:
-      /* FALLTHROUGH */
-    case DCH_rm:
-
-      /*
-       * For intervals, values like '12 month' will be reduced to 0
-       * month and some years.  These should be processed.
-       */
-      if (!tm->tm_mon && !tm->tm_year)
-        break;
-      else {
-        int mon = 0;
-        const char *const *months;
-
-        if (n->key->id == DCH_RM)
-          months = rm_months_upper;
-        else
-          months = rm_months_lower;
-
-        /*
-         * Compute the position in the roman-numeral array.  Note
-         * that the contents of the array are reversed, December
-         * being first and January last.
-         */
-        if (tm->tm_mon == 0) {
-          /*
-           * This case is special, and tracks the case of full
-           * interval years.
-           */
-          mon = tm->tm_year >= 0 ? 0 : MONTHS_PER_YEAR - 1;
-        } else if (tm->tm_mon < 0) {
-          /*
-           * Negative case.  In this case, the calculation is
-           * reversed, where -1 means December, -2 November,
-           * etc.
-           */
-          mon = -1 * (tm->tm_mon + 1);
-        } else {
-          /*
-           * Common case, with a strictly positive value.  The
-           * position in the array matches with the value of
-           * tm_mon.
-           */
-          mon = MONTHS_PER_YEAR - tm->tm_mon;
-        }
-
-        sprintf(s, "%*s", S_FM(n->suffix) ? 0 : -4, months[mon]);
-        s += strlen(s);
-      }
-      break;
-    case DCH_W:
-      sprintf(s, "%d", (tm->tm_mday - 1) / 7 + 1);
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    case DCH_J:
-      sprintf(s, "%d", date2j(tm->tm_year, tm->tm_mon, tm->tm_mday));
-      if (S_THth(n->suffix))
-        str_numth(s, s, S_TH_TYPE(n->suffix));
-      s += strlen(s);
-      break;
-    }
-  }
-
-  *s = '\0';
-}
-
 /*
  * Process the string 'in' as denoted by the array of FormatNodes 'node[]'.
  * The TmFromChar struct pointed to by 'out' is populated with the results.
@@ -3744,64 +3063,90 @@ static DCHCacheEntry *DCH_cache_fetch(const char *str, bool std) {
 }
 
 /*
- * Format a date/time or interval into a string according to fmt.
- * We parse fmt into a list of FormatNodes.  This is then passed to DCH_to_char
- * for formatting.
+ * The format of a to_char call site, compiled by ty and kept in its
+ * fn_extra, with the format's text to tell it is the same next time.
  */
-static text *datetime_to_char_body(TmToChar *tmtc, text *fmt, bool is_interval,
-                                   Oid collid) {
-  FormatNode *format;
-  char *fmt_str, *result;
-  bool incache;
-  int fmt_len;
-  text *res;
+typedef struct DCHFormat {
+  ty_dch_format_t *format;
+  int len;
+  char text[FLEXIBLE_ARRAY_MEMBER];
+} DCHFormat;
 
-  /*
-   * Convert fmt to C string
-   */
-  fmt_str = text_to_cstring(fmt);
-  fmt_len = strlen(fmt_str);
+/*
+ * The compiled format fmt: the call site's, if it is the same text, else
+ * compiled anew in the call site's memory. A call with no FmgrInfo compiles
+ * into the current context.
+ */
+static const ty_dch_format_t *dch_format(FunctionCallInfo fcinfo, text *fmt) {
+  FmgrInfo *flinfo = fcinfo->flinfo;
+  DCHFormat *cache = flinfo ? (DCHFormat *)flinfo->fn_extra : NULL;
+  int len = VARSIZE_ANY_EXHDR(fmt);
+  MemoryContext oldcontext;
 
-  /*
-   * Allocate workspace for result as C string
-   */
-  result = (char *)palloc(mul_size(fmt_len, DCH_MAX_ITEM_SIZ) + 1);
-  *result = '\0';
+  if (NULL != cache && cache->len == len &&
+      0 == memcmp(cache->text, VARDATA_ANY(fmt), len))
+    return cache->format;
 
-  if (fmt_len > DCH_CACHE_SIZE) {
-    /*
-     * Allocate new memory if format picture is bigger than static cache
-     * and do not use cache (call parser always)
-     */
-    incache = false;
-
-    format = palloc_array(FormatNode, fmt_len + 1);
-
-    parse_format(format, fmt_str, DCH_keywords, DCH_suff, DCH_index, DCH_FLAG,
-                 NULL);
-  } else {
-    /*
-     * Use cache buffers
-     */
-    DCHCacheEntry *ent = DCH_cache_fetch(fmt_str, false);
-
-    incache = true;
-    format = ent->format;
+  /* the compiled format lives as long as the call site */
+  oldcontext = MemoryContextSwitchTo(flinfo ? flinfo->fn_mcxt
+                                            : CurrentMemoryContext);
+  if (NULL != cache) {
+    ty_free(cache->format);
+    pfree(cache);
   }
+  cache = (DCHFormat *)palloc(offsetof(DCHFormat, text) + len);
+  cache->len = len;
+  memcpy(cache->text, VARDATA_ANY(fmt), len);
+  if (ty_dch_compile(VARDATA_ANY(fmt), len, &cache->format))
+    ty_raise_alloc();
+  MemoryContextSwitchTo(oldcontext);
+  if (flinfo)
+    flinfo->fn_extra = cache;
+  return cache->format;
+}
 
-  /* The real work is here */
-  DCH_to_char(format, is_interval, tmtc, result, collid);
+/*
+ * TM's names, for ty: the localized names of lc_time, cased under the
+ * collation ctx points to.
+ */
+static int dch_tm_name(void *ctx, int kind, int i, int c, const char **name,
+                       size_t *len) {
+  Oid collid = *(Oid *)ctx;
+  const char *src;
+  char *str;
 
-  if (!incache)
-    pfree(format);
+  /* cache localized days and months */
+  cache_locale_time();
+  src = TY_TOCHAR_FULL_MONTH == kind     ? localized_full_months[i]
+        : TY_TOCHAR_ABBREV_MONTH == kind ? localized_abbrev_months[i]
+        : TY_TOCHAR_FULL_DAY == kind     ? localized_full_days[i]
+                                         : localized_abbrev_days[i];
+  str = TY_TOCHAR_UPPER == c     ? str_toupper_z(src, collid)
+        : TY_TOCHAR_INITCAP == c ? str_initcap_z(src, collid)
+                                 : str_tolower_z(src, collid);
+  *name = str;
+  *len = strlen(str);
+  return 0;
+}
 
-  pfree(fmt_str);
-
-  /* convert C-string result to TEXT format */
-  res = cstring_to_text(result);
-
-  pfree(result);
-  return res;
+/*
+ * Finish a to_char by ty: NULL for no result, the text, or ty's error with
+ * PostgreSQL's code and hint.
+ */
+static Datum dch_result(FunctionCallInfo fcinfo, int rc, text *res) {
+  if (1 == rc)
+    PG_RETURN_NULL();
+  if (0 == rc)
+    PG_RETURN_TEXT_P(res);
+  if (TY_ERR_INVALID == ty_errnum())
+    ereport(ERROR, (errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+                    errmsg("%s", ty_errmsg()),
+                    errhint("Intervals are not tied to specific calendar "
+                            "dates.")));
+  if (TY_ERR_RANGE == ty_errnum())
+    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+                    errmsg("%s", ty_errmsg())));
+  ty_raise_alloc();
 }
 
 /****************************************************************************
@@ -3809,70 +3154,35 @@ static text *datetime_to_char_body(TmToChar *tmtc, text *fmt, bool is_interval,
  ***************************************************************************/
 
 /* -------------------
- * TIMESTAMP to_char()
+ * TIMESTAMP to_char(): ty writes it (ty_tochar.h)
  * -------------------
  */
 Datum timestamp_to_char(PG_FUNCTION_ARGS) {
   Timestamp dt = PG_GETARG_TIMESTAMP(0);
   text *fmt = PG_GETARG_TEXT_PP(1), *res;
-  TmToChar tmtc;
-  struct pg_tm tt;
-  struct fmt_tm *tm;
-  int thisdate;
+  Oid collid = PG_GET_COLLATION();
+  ty_tochar_locale_t loc = {&collid, dch_tm_name};
+  int rc;
 
   if (VARSIZE_ANY_EXHDR(fmt) <= 0 || TIMESTAMP_NOT_FINITE(dt))
     PG_RETURN_NULL();
-
-  ZERO_tmtc(&tmtc);
-  tm = tmtcTm(&tmtc);
-
-  if (timestamp2tm(dt, NULL, &tt, &tmtcFsec(&tmtc), NULL, NULL) != 0)
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("timestamp out of range")));
-
-  /* calculate wday and yday, because timestamp2tm doesn't */
-  thisdate = date2j(tt.tm_year, tt.tm_mon, tt.tm_mday);
-  tt.tm_wday = (thisdate + 1) % 7;
-  tt.tm_yday = thisdate - date2j(tt.tm_year, 1, 1) + 1;
-
-  COPY_tm(tm, &tt);
-
-  if (!(res = datetime_to_char_body(&tmtc, fmt, false, PG_GET_COLLATION())))
-    PG_RETURN_NULL();
-
-  PG_RETURN_TEXT_P(res);
+  rc = ty_timestamp_to_char(dt, dch_format(fcinfo, fmt), &loc, TYVO(&res));
+  return dch_result(fcinfo, rc, res);
 }
 
+/* TIMESTAMPTZ to_char(), in the session's time zone */
 Datum timestamptz_to_char(PG_FUNCTION_ARGS) {
   TimestampTz dt = PG_GETARG_TIMESTAMP(0);
   text *fmt = PG_GETARG_TEXT_PP(1), *res;
-  TmToChar tmtc;
-  int tz;
-  struct pg_tm tt;
-  struct fmt_tm *tm;
-  int thisdate;
+  Oid collid = PG_GET_COLLATION();
+  ty_tochar_locale_t loc = {&collid, dch_tm_name};
+  int rc;
 
   if (VARSIZE_ANY_EXHDR(fmt) <= 0 || TIMESTAMP_NOT_FINITE(dt))
     PG_RETURN_NULL();
-
-  ZERO_tmtc(&tmtc);
-  tm = tmtcTm(&tmtc);
-
-  if (timestamp2tm(dt, &tz, &tt, &tmtcFsec(&tmtc), &tmtcTzn(&tmtc), NULL) != 0)
-    ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-                    errmsg("timestamp out of range")));
-
-  /* calculate wday and yday, because timestamp2tm doesn't */
-  thisdate = date2j(tt.tm_year, tt.tm_mon, tt.tm_mday);
-  tt.tm_wday = (thisdate + 1) % 7;
-  tt.tm_yday = thisdate - date2j(tt.tm_year, 1, 1) + 1;
-
-  COPY_tm(tm, &tt);
-
-  if (!(res = datetime_to_char_body(&tmtc, fmt, false, PG_GET_COLLATION())))
-    PG_RETURN_NULL();
-
-  PG_RETURN_TEXT_P(res);
+  rc = ty_timestamptz_to_char(dt, session_timezone, dch_format(fcinfo, fmt),
+                              &loc, TYVO(&res));
+  return dch_result(fcinfo, rc, res);
 }
 
 /* -------------------
@@ -3882,33 +3192,15 @@ Datum timestamptz_to_char(PG_FUNCTION_ARGS) {
 Datum interval_to_char(PG_FUNCTION_ARGS) {
   Interval *it = PG_GETARG_INTERVAL_P(0);
   text *fmt = PG_GETARG_TEXT_PP(1), *res;
-  TmToChar tmtc;
-  struct fmt_tm *tm;
-  struct pg_itm tt, *itm = &tt;
+  Oid collid = PG_GET_COLLATION();
+  ty_tochar_locale_t loc = {&collid, dch_tm_name};
+  int rc;
 
   if (VARSIZE_ANY_EXHDR(fmt) <= 0 || INTERVAL_NOT_FINITE(it))
     PG_RETURN_NULL();
-
-  ZERO_tmtc(&tmtc);
-  tm = tmtcTm(&tmtc);
-
-  interval2itm(*it, itm);
-  tmtc.fsec = itm->tm_usec;
-  tm->tm_sec = itm->tm_sec;
-  tm->tm_min = itm->tm_min;
-  tm->tm_hour = itm->tm_hour;
-  tm->tm_mday = itm->tm_mday;
-  tm->tm_mon = itm->tm_mon;
-  tm->tm_year = itm->tm_year;
-
-  /* wday is meaningless, yday approximates the total span in days */
-  tm->tm_yday = (tm->tm_year * MONTHS_PER_YEAR + tm->tm_mon) * DAYS_PER_MONTH +
-                tm->tm_mday;
-
-  if (!(res = datetime_to_char_body(&tmtc, fmt, true, PG_GET_COLLATION())))
-    PG_RETURN_NULL();
-
-  PG_RETURN_TEXT_P(res);
+  rc = ty_interval_to_char((const ty_interval_t *)it, dch_format(fcinfo, fmt),
+                           &loc, TYVO(&res));
+  return dch_result(fcinfo, rc, res);
 }
 
 /* ---------------------
