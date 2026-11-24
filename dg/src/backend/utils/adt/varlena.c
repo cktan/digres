@@ -23,18 +23,15 @@
 #include "access/toast_compression.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
-#include "common/hashfn.h"
 #include "common/int.h"
 #include "common/unicode_category.h"
 #include "common/unicode_norm.h"
 #include "common/unicode_version.h"
 #include "funcapi.h"
-#include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "nodes/execnodes.h"
 #include "parser/scansup.h"
-#include "port/pg_bswap.h"
 #include "regex/regex.h"
 #include "utils/builtins.h"
 #include "utils/bytea.h"
@@ -44,6 +41,7 @@
 #include "utils/pg_locale.h"
 #include "utils/sortsupport.h"
 #include "utils/varlena.h"
+#include "ty_abbrev.h"
 #include "ty_text.h"
 #include "ty_bytea.h"
 #include "utils/ty_glue.h"
@@ -100,9 +98,7 @@ typedef struct {
   bool cache_blob;   /* Does buf2 contain strxfrm() blob, etc? */
   bool collate_c;
   Oid typid;                  /* Actual datatype (text/bpchar/bytea/name) */
-  hyperLogLogState abbr_card; /* Abbreviated key cardinality state */
-  hyperLogLogState full_card; /* Full key cardinality state */
-  double prop_card;           /* Required cardinality proportion */
+  ty_abbrev_bytes_t abbrev;   /* ty's estimates of keys and values */
   pg_locale_t locale;
 } VarStringSortSupport;
 
@@ -1583,9 +1579,9 @@ void varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid) {
      * abbreviation be aborted.
      */
     if (abbreviate) {
-      sss->prop_card = 0.20;
-      initHyperLogLog(&sss->abbr_card, 10);
-      initHyperLogLog(&sss->full_card, 10);
+      /* ty's estimators, in the context the sort calls this in */
+      if (ty_abbrev_bytes_init(&sss->abbrev))
+        ty_raise_alloc();
       ssup->abbrev_full_comparator = ssup->comparator;
       ssup->comparator = ssup_datum_unsigned_cmp;
       ssup->abbrev_converter = varstr_abbrev_convert;
@@ -1796,7 +1792,6 @@ static Datum varstr_abbrev_convert(Datum original, SortSupport ssup) {
   Datum res;
   char *pres;
   int len;
-  uint32 hash;
 
   pres = (char *)&res;
   /* memset(), so any non-overwritten bytes are NUL */
@@ -1834,9 +1829,12 @@ static Datum varstr_abbrev_convert(Datum original, SortSupport ssup) {
    * -- then an authoritative tie-breaker will happen, and do the right
    * thing: explicitly consider string length.
    */
-  if (sss->collate_c)
-    memcpy(pres, authoritative_data, Min(len, max_prefix_bytes));
-  else {
+  if (sss->collate_c) {
+    /* ty makes the key, and counts it and the value */
+    res = (Datum)ty_abbrev_bytes(&sss->abbrev, authoritative_data, len);
+    sss->cache_blob = true;
+    goto out;
+  } else {
     Size bsize;
 
     /*
@@ -1913,52 +1911,22 @@ static Datum varstr_abbrev_convert(Datum original, SortSupport ssup) {
 
   /*
    * Maintain approximate cardinality of both abbreviated keys and original,
-   * authoritative keys using HyperLogLog.  Used as cheap insurance against
-   * the worst case, where we do many string transformations for no saving
-   * in full strcoll()-based comparisons.  These statistics are used by
-   * varstr_abbrev_abort().
-   *
-   * First, Hash key proper, or a significant fraction of it.  Mix in length
-   * in order to compensate for cases where differences are past
-   * PG_CACHE_LINE_SIZE bytes, so as to limit the overhead of hashing.
+   * authoritative keys using HyperLogLog, which varstr_abbrev_abort() judges
+   * by: ty counts the two, and gives the key in the order
+   * ssup_datum_unsigned_cmp() compares.
    */
-  hash = DatumGetUInt32(hash_any((unsigned char *)authoritative_data,
-                                 Min(len, PG_CACHE_LINE_SIZE)));
-
-  if (len > PG_CACHE_LINE_SIZE)
-    hash ^= DatumGetUInt32(hash_uint32((uint32)len));
-
-  addHyperLogLog(&sss->full_card, hash);
-
-  /* Hash abbreviated key */
-#if SIZEOF_DATUM == 8
-  {
-    uint32 lohalf, hihalf;
-
-    lohalf = (uint32)res;
-    hihalf = (uint32)(res >> 32);
-    hash = DatumGetUInt32(hash_uint32(lohalf ^ hihalf));
-  }
-#else /* SIZEOF_DATUM != 8 */
-  hash = DatumGetUInt32(hash_uint32((uint32)res));
-#endif
-
-  addHyperLogLog(&sss->abbr_card, hash);
+  res = (Datum)ty_abbrev_bytes_count(&sss->abbrev, authoritative_data, len,
+                                     (uint64)res);
 
   /* Cache result, perhaps saving an expensive strxfrm() call next time */
   sss->cache_blob = true;
+  goto out;
+
 done:
+  /* the cached blob's key, with no change to the counts */
+  res = (Datum)ty_abbrev_order((uint64)res);
 
-  /*
-   * Byteswap on little-endian machines.
-   *
-   * This is needed so that ssup_datum_unsigned_cmp() (an unsigned integer
-   * 3-way comparator) works correctly on all platforms.  If we didn't do
-   * this, the comparator would have to call memcmp() with a pair of
-   * pointers to the first byte of each abbreviated key, which is slower.
-   */
-  res = DatumBigEndianToNative(res);
-
+out:
   /* Don't leak memory here */
   if (PointerGetDatum(authoritative) != original)
     pfree(authoritative);
@@ -1973,33 +1941,17 @@ done:
  */
 static bool varstr_abbrev_abort(int memtupcount, SortSupport ssup) {
   VarStringSortSupport *sss = (VarStringSortSupport *)ssup->ssup_extra;
-  double abbrev_distinct, key_distinct;
+  double abbrev_distinct, key_distinct, prop_card;
+  int rc;
 
   Assert(ssup->abbreviate);
 
-  /* Have a little patience */
-  if (memtupcount < 100)
+  /* ty judges, by PostgreSQL's rule; the log is digres's */
+  rc = ty_abbrev_bytes_abort(&sss->abbrev, memtupcount, &abbrev_distinct,
+                             &key_distinct, &prop_card);
+  if (TY_ABBREV_WAIT == rc)
     return false;
 
-  abbrev_distinct = estimateHyperLogLog(&sss->abbr_card);
-  key_distinct = estimateHyperLogLog(&sss->full_card);
-
-  /*
-   * Clamp cardinality estimates to at least one distinct value.  While
-   * NULLs are generally disregarded, if only NULL values were seen so far,
-   * that might misrepresent costs if we failed to clamp.
-   */
-  if (abbrev_distinct <= 1.0)
-    abbrev_distinct = 1.0;
-
-  if (key_distinct <= 1.0)
-    key_distinct = 1.0;
-
-  /*
-   * In the worst case all abbreviated keys are identical, while at the same
-   * time there are differences within full key strings not captured in
-   * abbreviations.
-   */
   if (tcb->guc.trace_sort) {
     double norm_abbrev_card = abbrev_distinct / (double)memtupcount;
 
@@ -2007,73 +1959,16 @@ static bool varstr_abbrev_abort(int memtupcount, SortSupport ssup) {
          "varstr_abbrev: abbrev_distinct after %d: %f "
          "(key_distinct: %f, norm_abbrev_card: %f, prop_card: %f)",
          memtupcount, abbrev_distinct, key_distinct, norm_abbrev_card,
-         sss->prop_card);
+         prop_card);
   }
-
-  /*
-   * If the number of distinct abbreviated keys approximately matches the
-   * number of distinct authoritative original keys, that's reason enough to
-   * proceed.  We can win even with a very low cardinality set if most
-   * tie-breakers only memcmp().  This is by far the most important
-   * consideration.
-   *
-   * While comparisons that are resolved at the abbreviated key level are
-   * considerably cheaper than tie-breakers resolved with memcmp(), both of
-   * those two outcomes are so much cheaper than a full strcoll() once
-   * sorting is underway that it doesn't seem worth it to weigh abbreviated
-   * cardinality against the overall size of the set in order to more
-   * accurately model costs.  Assume that an abbreviated comparison, and an
-   * abbreviated comparison with a cheap memcmp()-based authoritative
-   * resolution are equivalent.
-   */
-  if (abbrev_distinct > key_distinct * sss->prop_card) {
-    /*
-     * When we have exceeded 10,000 tuples, decay required cardinality
-     * aggressively for next call.
-     *
-     * This is useful because the number of comparisons required on
-     * average increases at a linearithmic rate, and at roughly 10,000
-     * tuples that factor will start to dominate over the linear costs of
-     * string transformation (this is a conservative estimate).  The decay
-     * rate is chosen to be a little less aggressive than halving -- which
-     * (since we're called at points at which memtupcount has doubled)
-     * would never see the cost model actually abort past the first call
-     * following a decay.  This decay rate is mostly a precaution against
-     * a sudden, violent swing in how well abbreviated cardinality tracks
-     * full key cardinality.  The decay also serves to prevent a marginal
-     * case from being aborted too late, when too much has already been
-     * invested in string transformation.
-     *
-     * It's possible for sets of several million distinct strings with
-     * mere tens of thousands of distinct abbreviated keys to still
-     * benefit very significantly.  This will generally occur provided
-     * each abbreviated key is a proxy for a roughly uniform number of the
-     * set's full keys. If it isn't so, we hope to catch that early and
-     * abort.  If it isn't caught early, by the time the problem is
-     * apparent it's probably not worth aborting.
-     */
-    if (memtupcount > 10000)
-      sss->prop_card *= 0.65;
-
+  if (TY_ABBREV_GO_ON == rc)
     return false;
-  }
 
-  /*
-   * Abort abbreviation strategy.
-   *
-   * The worst case, where all abbreviated keys are identical while all
-   * original strings differ will typically only see a regression of about
-   * 10% in execution time for small to medium sized lists of strings.
-   * Whereas on modern CPUs where cache stalls are the dominant cost, we can
-   * often expect very large improvements, particularly with sets of strings
-   * of moderately high to high abbreviated cardinality.  There is little to
-   * lose but much to gain, which our strategy reflects.
-   */
   if (tcb->guc.trace_sort)
     elog(LOG,
          "varstr_abbrev: aborted abbreviation at %d "
          "(abbrev_distinct: %f, key_distinct: %f, prop_card: %f)",
-         memtupcount, abbrev_distinct, key_distinct, sss->prop_card);
+         memtupcount, abbrev_distinct, key_distinct, prop_card);
 
   return true;
 }

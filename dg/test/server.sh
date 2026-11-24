@@ -258,18 +258,26 @@ grep -q "division by zero" "$work/error.out" || fail "error reported"
 grep -qx 5 "$work/error.out" || fail "statement after an error"
 
 # Verify that a sort's abbreviated keys go on, end their count and abort at
-# the rows PostgreSQL's do: ty's HyperLogLog (ty_hll.h) estimates as
-# PostgreSQL's did, bit for bit, and trace_sort logs the estimates.
+# the rows PostgreSQL's do: ty makes the keys and judges them (ty_abbrev.h),
+# its HyperLogLog (ty_hll.h) estimates as PostgreSQL's did, bit for bit, and
+# trace_sort logs the estimates.
 # 1. Sort 200,000 md5 texts, of distinct abbreviated keys.
 # 2. Sort 200,000 texts that share their first 8 bytes: abbreviation aborts.
 # 3. Sort 200,000 uuids: the count of distinct keys ends past 100,000.
-# 4. Confirm each estimate is the one the digres before the move logged.
+# 4. Sort 30,000 uuids of one first 8 bytes: abbreviation aborts.
+# 5. Sort 200,000 bytea: the share of distinct keys falls past 10,000 rows.
+# 6. Confirm each estimate is the one the digres before the move logged.
 local_psql -c 'set trace_sort = on' -c 'set client_min_messages = log' \
   -c "select count(*) from (select md5(i::text) from
       generate_series(1, 200000) i order by 1) s" \
   -c "select count(*) from (select 'same prefix ' || (i % 50000) from
       generate_series(1, 200000) i order by 1) s" \
   -c "select count(*) from (select md5(i::text)::uuid from
+      generate_series(1, 200000) i order by 1) s" \
+  -c "select count(*) from (select ('00000000-0000-0000-0000-' ||
+      lpad((i % 9)::text, 12, '0'))::uuid from
+      generate_series(1, 30000) i order by 1) s" \
+  -c "select count(*) from (select decode(md5(i::text), 'hex') from
       generate_series(1, 200000) i order by 1) s" > "$work/hll.out" 2>&1
 grep -qF "varstr_abbrev: abbrev_distinct after 160: 161.021869 (key_distinct: 164.538759," \
   "$work/hll.out" || fail "hll: text keys go on"
@@ -277,6 +285,10 @@ grep -qF "varstr_abbrev: aborted abbreviation at 160 (abbrev_distinct: 1.000489,
   "$work/hll.out" || fail "hll: text keys abort"
 grep -qF "uuid_abbrev: estimation ends at cardinality 164607.133876 after 163840 values" \
   "$work/hll.out" || fail "hll: uuid count ends"
+grep -qF "uuid_abbrev: aborting abbreviation at cardinality 1.000489 below threshold 5.620000 after 10240 values" \
+  "$work/hll.out" || fail "hll: uuid keys abort"
+grep -qF "varstr_abbrev: abbrev_distinct after 163840: 164607.133876 (key_distinct: 167524.673144, norm_abbrev_card: 1.004682, prop_card: 0.035701)" \
+  "$work/hll.out" || fail "hll: bytea keys go on, at a falling share"
 
 # Verify that the local socket admits a role that is not the OS user's
 # name only by password, and only to a database that exists.

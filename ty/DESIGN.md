@@ -504,7 +504,7 @@ their inverses, erf, erfc, gamma or lgamma correctly, so another
 machine may give the next float: the test takes one float apart
 as the same for those, and needs the same bits for the rest.
 
-## 12. HyperLogLog
+## 12. HyperLogLog and abbreviated keys
 
 `ty_hll.h` estimates the number of distinct values in a set from
 a 32-bit hash of each, in 2^4 to 2^16 registers of a byte. A sort
@@ -525,12 +525,42 @@ abbreviated keys at the row PostgreSQL's would:
 registers are the alloc function's. digres's `hyperloglog.c`
 keeps PostgreSQL's names and errors, and calls ty.
 
+`ty_abbrev.h` holds the abbreviated keys of a sort, which are
+built on it. A key is the first 8 bytes of a value as an unsigned
+integer in the machine's order, so a sort compares two integers
+and reads the values only on a tie. There are two kinds:
+
+- **uuid**: the first 8 of its 16 bytes. The state counts the
+  values and estimates their distinct keys, until there are more
+  than 100,000.
+- **bytes in the C collation**: text, varchar, bpchar without its
+  trailing spaces, and bytea. The key is the first 8 bytes, and 0
+  after a shorter value. The state estimates both the distinct
+  keys and the distinct values, the value by its first 128 bytes
+  and its length. A host whose keys come from `strxfrm`, as
+  digres's ICU collations do, makes the key and gives it to
+  `ty_abbrev_bytes_count`.
+
+Each kind has a rule, which the sort calls each time its rows
+double: `ty_abbrev_uuid_abort` and `ty_abbrev_bytes_abort`. A
+rule gives what it decided (wait, go on, end the count, abort)
+and the numbers it judged by, so the host logs them as
+PostgreSQL does (`trace_sort`). The keys, the hashes and the
+rules are PostgreSQL's, so a sort aborts at the row PostgreSQL's
+does. digres keeps the `SortSupport` wiring, the comparators of
+the keys, and the `strxfrm` path of the collations that are not
+C.
+
 The tests: `test/test_hll.cc` compares 45 estimates, of 5 widths
 and of 0 to 1,000,000 values, with those that PostgreSQL's file,
 built alone, printed for the same hashes, and checks the
-correction for a large number and the widths by error. digres's
-`server.sh` checks that a sort logs the estimates of the digres
-before the move (`trace_sort`).
+correction for a large number and the widths by error.
+`test/test_abbrev.cc` checks that keys order as their bytes, and
+each rule's decisions, with numbers PostgreSQL logged for the same
+values. digres's `server.sh` checks that a sort logs the
+estimates of the digres before the move (`trace_sort`), and
+`dg/test/select_sort_abbrev.sql` that sorts by the keys, aborted
+or not, in the C collation and in ICU's, give the same order.
 
 ## 16. text
 

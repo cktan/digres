@@ -1,0 +1,72 @@
+-- Verify that sorts by abbreviated keys, which ty makes and judges
+-- (ty_abbrev.h), give the order of the values: text and bytea in the C
+-- collation, char(n) without its trailing spaces, values longer than 128
+-- bytes, uuid, text in an ICU collation, whose keys come from strxfrm, and
+-- sorts that abort their keys. Each result is a digest of
+-- the sorted values, which the digres before the move prints the same.
+SELECT md5(string_agg(t, ',')) FROM (SELECT md5(i::text) AS t FROM generate_series(1, 200000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ 93b07c48950dd3a3cc17c8672f1223c2
+(1 row)
+
+SELECT md5(string_agg(t, ',')) FROM (SELECT 'same prefix ' || (i % 50000) AS t FROM generate_series(1, 200000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ 72fa63819677658111ae97fad82862c1
+(1 row)
+
+SELECT md5(string_agg(u::text, ',')) FROM (SELECT md5(i::text)::uuid AS u FROM generate_series(1, 200000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ 2ad03a0b850fb0158f34fd501e5ebe4b
+(1 row)
+
+SELECT md5(string_agg(u::text, ',')) FROM (SELECT ('00000000-0000-0000-0000-' || lpad((i % 9)::text, 12, '0'))::uuid AS u FROM generate_series(1, 30000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ 86d90f4778574e81600c6deb5b2b737e
+(1 row)
+
+SELECT md5(string_agg(b, '\x2c'::bytea)) FROM (SELECT decode(md5(i::text), 'hex') AS b FROM generate_series(1, 200000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ e3bc1e6de7cad3092cefb24fda4bcb26
+(1 row)
+
+SELECT md5(string_agg(b, '\x2c'::bytea)) FROM (SELECT '\x00000000'::bytea || int4send(i % 7) AS b FROM generate_series(1, 200000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ 0949eedaf384abb6fe6e78177f3e16b6
+(1 row)
+
+SELECT md5(string_agg(t, ',')) FROM (SELECT substr(md5(i::text), 1, (i % 12)) AS t FROM generate_series(1, 50000) i ORDER BY 1 DESC) s;
+               md5                
+----------------------------------
+ 7f80422b188122add29f3ac41bb809c9
+(1 row)
+
+SELECT md5(string_agg(t::text, ',')) FROM (SELECT (substr(md5(i::text), 1, (i % 12)))::char(10) AS t FROM generate_series(1, 50000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ 95de03cba213b47b9ae5e0d87c67e570
+(1 row)
+
+SELECT md5(string_agg(t, ',')) FROM (SELECT repeat('x', 130 + i % 3) || i AS t FROM generate_series(1, 20000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ 1fd06169cac7c125f1425f4f5129443e
+(1 row)
+
+SELECT md5(string_agg(t, ',')) FROM (SELECT md5((i / 3)::text) COLLATE "unicode" AS t FROM generate_series(1, 60000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ 98263dc84c675833a2949ad8dcd45cb0
+(1 row)
+
+SELECT md5(string_agg(t, ',')) FROM (SELECT ('Same Prefix ' || (i % 500)) COLLATE "unicode" AS t FROM generate_series(1, 30000) i ORDER BY 1) s;
+               md5                
+----------------------------------
+ 779d482ead556d418a5f506f5a7fec48
+(1 row)
+
