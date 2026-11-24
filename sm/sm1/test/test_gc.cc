@@ -849,15 +849,16 @@ TEST_CASE("a drop under the caller's lock waits for the GC's work on the "
   gc_fixture_t f;
   sm1::session_t *s = f.open();
 
-  // 1. Make store U; drop it with locked, and commit.
+  // 1. Make store U; drop it with locked, and commit. The test is the GC's
+  //    run from here: it holds the run's mutex, so the GC worker, whose
+  //    locker it borrows, neither drops U from its queue first nor lets
+  //    go of the IX below.
   uint64_t ustoreid = flushed_store(f, s);
+  std::unique_lock<std::mutex> run(f.db()->gc_run_mu);
   drop_locked(s, ustoreid);
 
   // 2. The GC takes IX on U, as a run does before it writes to a store.
-  //    The test is the run: it holds the run's mutex, so the GC worker,
-  //    whose locker it borrows, does not run and let go of the IX.
   REQUIRE(nullptr != f.db()->gc_locker);
-  std::unique_lock<std::mutex> run(f.db()->gc_run_mu);
   REQUIRE(0 == gc_store_try(f.db(), ustoreid));
 
   // 3. finish_drops waits while the GC holds IX: U's CF is still there.
