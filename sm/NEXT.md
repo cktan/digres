@@ -235,6 +235,7 @@ the full list and the steps behind each entry).
 | Code in the server: no PL/pgSQL, no `sql` functions, no `DO`, so no triggers | 820, triggers 48, rules 132 | stored procedures, audit and `updated_at` triggers | large: waits for the scripting language SPI is kept for |
 | CREATE TABLE beyond columns, NOT NULL, PRIMARY KEY, UNIQUE, CHECK, generated columns and TEMPORARY: `OF type`, UNLOGGED; ADD COLUMN of a generated column, SET and DROP EXPRESSION | not counted yet | computed columns added to a table | small: ADD COLUMN computes each row's value from its own columns; CHECK and generated columns are built ([`CHECK.md`](CHECK.md), [`GENERATED.md`](GENERATED.md)) |
 | ALTER TABLE: `SET SCHEMA`, `ADD CONSTRAINT ... USING INDEX`, `SET STATISTICS`, storage, replica identity | 180 | schema migrations | small a subcommand; PRIMARY KEY, CHECK, ALTER COLUMN TYPE, SET/DROP NOT NULL and SET/DROP DEFAULT are built (§4, item 1) |
+| Make `pg_dump` run: PostgreSQL's own `pg_dump` fails as it connects, on `pg_is_in_recovery()`. After it come the catalogs digres lacks, such as `pg_tablespace`, `pg_default_acl` and `pg_init_privs`, and a dump of what is digres's own: `storage = columnar` and `DEFAULT ... ON UPDATE`. A parallel dump, `-j`, also needs an exported snapshot (§3) | none: no regression file runs it | backups, and data moved in and out | unknown: first list every query of `pg_dump` that fails |
 | Partitioning | refused | large time-series tables | large |
 
 - **Largest for adoption:** users and the scripting language;
