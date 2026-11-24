@@ -6,6 +6,8 @@ a type, and none of what a host adds: no session, no catalog, no
 `palloc()`, no `ereport()`.
 
 - [`README.md`](README.md) says how to build and test it.
+- [`CODE.md`](CODE.md) holds the rules for code in ty, those of
+  a simple vector operation among them.
 - `include/ty.h` is the interface.
 - This document says how ty is put together, and why.
 - [`../sm/TYPEMOVE_PLAN.md`](../sm/TYPEMOVE_PLAN.md) says what

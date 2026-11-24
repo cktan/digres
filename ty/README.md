@@ -68,6 +68,7 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `test/known.txt` | about 10,200 texts, with what the old digres printed for them |
 
 `ty/` follows [`../sm/CODE.md`](../sm/CODE.md).
+[`CODE.md`](CODE.md) adds ty's own rules.
 
 ## Tests
 
