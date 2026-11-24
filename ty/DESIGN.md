@@ -52,8 +52,10 @@ The interface is C in style and compiled as C++, as `sm.h` is.
   words itself, as digres does: it costs a sort less than
   unpacking both (`../sm/TYPEMOVE_PLAN.md`, step 3).
 - The error state is per thread: `ty_errnum()`, `ty_errmsg()`,
-  `ty_errname()`. A message is copied into a buffer of the
-  thread, so an error can be recorded when memory has run out.
+  `ty_erridx()`, `ty_errname()`. A message is copied into a
+  buffer of the thread, so an error can be recorded when memory
+  has run out. `ty_erridx()` is the row an operation on vectors
+  failed on (§21), and 0 for any other error.
 - No exception crosses the interface, in either direction.
 
 ## 3. Memory
@@ -954,8 +956,8 @@ given a pack of the host.
 
 `ty_vec.h` holds the operations on vectors: one call on the n
 values of a column at once, for a columnar executor
-([`../REPORT.md`](../REPORT.md) §9). Only the integers' add is
-built.
+([`../REPORT.md`](../REPORT.md) §9). The integers' add and
+`IS NULL` are built.
 
 - **A vector is an array of n values and an array of n flags**,
   a byte a row. Bit 0, `TY_VEC_NOTVALID`, is 1 for a row that is
@@ -963,30 +965,43 @@ built.
   `TY_VEC_NULL`, is 1 for a null. The other bits are 0 for now.
   One flag array serves both inputs: a row is null if one of its
   inputs is.
-- **The call**: `ty_intN_add_vec(n, inflag, a, b, out, outflag,
-  &bad)`. `inflag` is the flags of both inputs. `out` gets the
-  sums, and `outflag` the flags of the results, of the same
-  shape as `inflag`; for add, a copy of it, so a null input gives
-  a null sum.
+- **The call**: `ty_intN_add_vec(n, flag, a, b, out)`. `out`
+  gets the sums. `flag` is the flags of both inputs, and then of
+  the results: an operation writes the results' flags over the
+  inputs'. Add leaves them as they are, so a null input gives a
+  null sum.
 - **A row not valid, or null, is never computed into an error.**
   Its result means nothing.
 - **An overflow fails the call at once**, with `TY_ERR_RANGE`
-  and `*bad` the index of the lowest row computed that overflows:
-  the row PostgreSQL, going row by row, would fail on.
+  and `ty_erridx()` the index of the lowest row computed that
+  overflows: the row PostgreSQL, going row by row, would fail on.
 - **The additions run on vector instructions** (`src/vec.cc`):
   GCC's vector types of 16 bytes, which the compiler turns into
   NEON on aarch64 and SSE on x86-64. A loop adds with
   wrap-around and gathers the overflow bits of the rows computed,
   with no branch a row; it tests them once a block of 256 rows,
   and only then looks for the row, one at a time.
-- **`out` may be an input, and `outflag` may be `inflag`.**
+- **An operation that cannot fail may compute every row**, valid
+  or not, as that is cheaper.
+- **`IS NULL` is `ty_flag_isnull(n, flag, out)`**: `out[i]` is 1
+  if row i is null, or else 0, for every row, so `out` is a
+  vector of bool. Its result is never null: it sets each
+  `TY_VEC_NULL` to 0, and leaves the other bits. A caller that
+  needs the input's nulls afterwards, as in
+  `WHERE x IS NULL OR x > 3`, copies the flags first. `flag` and
+  `out` may not overlap.
+- **`out` of add may be `a` or `b`, but not both at once.** When
+  a block overflows, its sums are already over that input; the
+  search for the row takes the input back as the sum less the
+  other input. With both the same array, there is no other.
 
 The tests are `test/test_vec.cc`: each row against the scalar
 `ty_intN_add`, at sizes around the vector's lanes and the
 loop's blocks; the lowest failing row among several, one past
 the last whole vector, and one in a row not valid and one in a
-null row, which are no error; and the results written over the
-inputs.
+null row, which are no error; and the results written over an
+input, with and without an overflow. `IS NULL` is tested on every
+value of a flag.
 
 ## 22. to_char and its reverse
 

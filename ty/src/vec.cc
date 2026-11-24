@@ -12,6 +12,8 @@
 
 #include <string.h>
 
+#include "error.h"
+
 namespace {
 
 /* Rows in a block: the loop tests for an overflow once a block. */
@@ -20,45 +22,49 @@ constexpr uint32_t block_rows = 256;
 /*
  * The vector add of one width: T the type, U its unsigned type, which
  * adds with wrap-around, as C defines for it.
- * 1. Copy the flags: a row's result is valid if its inputs are, and null
- *    if one of them is.
- * 2. For each block of rows, 16 bytes at a time: add a and b with
+ * 1. For each block of rows, 16 bytes at a time: add a and b with
  *    wrap-around, store the sum, and gather into ovf the overflow bits of
  *    the rows computed, neither not valid nor null. A sum overflowed if its
  * sign differs from both operands' signs: the top bit of (a ^ r) & (b ^ r).
- * 3. At the block's end, if a row computed overflowed, find the lowest
- *    one, row by row, and fail with its index.
- * 4. The rows past the last 16 bytes, one at a time, by the same rule.
+ * 2. At the block's end, if a row computed overflowed, find the lowest
+ *    one, row by row, and fail with its index. If out is a or b, the
+ *    block's sums are over that input: it is the sum less the other one,
+ *    exactly, as the sum wrapped around.
+ * 3. The rows past the last 16 bytes, one at a time, by the same rule.
+ * The flags stay as they are: a row's result is valid if its inputs are,
+ * and null if one of them is.
  */
 template <typename T, typename U>
-int add_vec(uint32_t n, const uint8_t *inflag, const T *a, const T *b, T *out,
-            uint8_t *outflag, uint32_t *bad) {
+int add_vec(uint32_t n, uint8_t *flag, const T *a, const T *b, T *out) {
   // L lanes of U in 16 bytes, and L flags of a row each.
   constexpr uint32_t L = 16 / sizeof(T);
   typedef U vec_t __attribute__((vector_size(16)));
   typedef uint8_t flags_t __attribute__((vector_size(L)));
   constexpr U top = U(1) << (8 * sizeof(T) - 1);
-  // The overflow of row i: its sign bit, and whether it is computed.
-  auto overflowed = [&](uint32_t i) {
-    U r = U(a[i]) + U(b[i]);
-    return 0 == (inflag[i] & TY_VEC_SKIP) &&
-           0 != ((U(a[i]) ^ r) & (U(b[i]) ^ r) & top);
+  // Fail with row i.
+  auto fail_at = [](uint32_t i) {
+    return ty_internal::set_error(TY_ERR_RANGE, "result out of range", i);
   };
-  // The lowest valid row of [from, to) that overflows: fail with it.
+  // The overflow of row i, x + y: its sign bit, and whether it is computed.
+  auto overflowed = [&](uint32_t i, U x, U y) {
+    U r = x + y;
+    return 0 == (flag[i] & TY_VEC_SKIP) && 0 != ((x ^ r) & (y ^ r) & top);
+  };
+  // Fail with the lowest row computed of [from, to), whose sums are in out,
+  // that overflows; there is one.
   auto fail_in = [&](uint32_t from, uint32_t to) {
-    for (uint32_t i = from; i < to; i++) {
-      if (overflowed(i)) {
-        *bad = i;
+    uint32_t i = from;
+    for (; i + 1 < to; i++) {
+      U r = U(out[i]);
+      U x = out == a ? U(r - U(b[i])) : U(a[i]);
+      U y = out == b ? U(r - U(a[i])) : U(b[i]);
+      if (overflowed(i, x, y)) {
         break;
       }
     }
-    return ty_err_range();
+    return fail_at(i);
   };
-  // 1. The flags.
-  if (outflag != inflag) {
-    memmove(outflag, inflag, n);
-  }
-  // 2. and 3. Whole blocks of whole vectors.
+  // 1. and 2. Whole blocks of whole vectors.
   uint32_t i = 0;
   const uint32_t whole = n - n % L;
   while (i < whole) {
@@ -70,7 +76,7 @@ int add_vec(uint32_t n, const uint8_t *inflag, const T *a, const T *b, T *out,
       flags_t f;
       memcpy(&va, a + i, 16);
       memcpy(&vb, b + i, 16);
-      memcpy(&f, inflag + i, L);
+      memcpy(&f, flag + i, L);
       vec_t vr = va + vb;
       memcpy(out + i, &vr, 16);
       // All ones in the lane of a row computed, zero in another.
@@ -86,11 +92,10 @@ int add_vec(uint32_t n, const uint8_t *inflag, const T *a, const T *b, T *out,
       return fail_in(from, to);
     }
   }
-  // 4. The rest, one row at a time.
+  // 3. The rest, one row at a time.
   for (; i < n; i++) {
-    if (TY_UNLIKELY(overflowed(i))) {
-      *bad = i;
-      return ty_err_range();
+    if (TY_UNLIKELY(overflowed(i, U(a[i]), U(b[i])))) {
+      return fail_at(i);
     }
     out[i] = T(U(a[i]) + U(b[i]));
   }
@@ -100,22 +105,49 @@ int add_vec(uint32_t n, const uint8_t *inflag, const T *a, const T *b, T *out,
 } // namespace
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int ty_int16_add_vec(uint32_t n, const uint8_t *inflag, const int16_t *a,
-                     const int16_t *b, int16_t *out, uint8_t *outflag,
-                     uint32_t *bad) {
-  return add_vec<int16_t, uint16_t>(n, inflag, a, b, out, outflag, bad);
+int ty_int16_add_vec(uint32_t n, uint8_t *flag, const int16_t *a,
+                     const int16_t *b, int16_t *out) {
+  return add_vec<int16_t, uint16_t>(n, flag, a, b, out);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int ty_int32_add_vec(uint32_t n, const uint8_t *inflag, const int32_t *a,
-                     const int32_t *b, int32_t *out, uint8_t *outflag,
-                     uint32_t *bad) {
-  return add_vec<int32_t, uint32_t>(n, inflag, a, b, out, outflag, bad);
+int ty_int32_add_vec(uint32_t n, uint8_t *flag, const int32_t *a,
+                     const int32_t *b, int32_t *out) {
+  return add_vec<int32_t, uint32_t>(n, flag, a, b, out);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int ty_int64_add_vec(uint32_t n, const uint8_t *inflag, const int64_t *a,
-                     const int64_t *b, int64_t *out, uint8_t *outflag,
-                     uint32_t *bad) {
-  return add_vec<int64_t, uint64_t>(n, inflag, a, b, out, outflag, bad);
+int ty_int64_add_vec(uint32_t n, uint8_t *flag, const int64_t *a,
+                     const int64_t *b, int64_t *out) {
+  return add_vec<int64_t, uint64_t>(n, flag, a, b, out);
+}
+
+/*
+ * out = 1 for each null row, and 0 for another; see ty_vec.h. It computes
+ * every row, valid or not.
+ * 1. 16 rows at a time: out is 1 where the null bit is set, and the null
+ *    bit becomes 0.
+ * 2. The rows past the last 16, one at a time, by the same rule.
+ */
+int ty_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out) {
+  typedef uint8_t vec_t __attribute__((vector_size(16)));
+  constexpr uint8_t keep = uint8_t(~TY_VEC_NULL);
+  const uint32_t whole = n - n % 16;
+  uint32_t i = 0;
+  // 1. Whole vectors.
+  for (; i < whole; i += 16) {
+    vec_t f;
+    memcpy(&f, flag + i, 16);
+    // All ones in the lane of a null row, zero in another; then 1 and 0.
+    vec_t r = (vec_t)((f & TY_VEC_NULL) != 0) & 1;
+    f &= keep;
+    memcpy(out + i, &r, 16);
+    memcpy(flag + i, &f, 16);
+  }
+  // 2. The rest, one row at a time.
+  for (; i < n; i++) {
+    out[i] = 0 != (flag[i] & TY_VEC_NULL);
+    flag[i] &= keep;
+  }
+  return 0;
 }

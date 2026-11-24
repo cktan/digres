@@ -13,7 +13,8 @@
  *
  *   - A function returning int returns 0 on success and -1 on
  *     error; the code and message are then read with ty_errnum()
- *     and ty_errmsg(). The error state is per thread.
+ *     and ty_errmsg(), and the row of a vector, with
+ *     ty_erridx(). The error state is per thread.
  *   - A call that yields a value hands it back through its last
  *     parameter, set only on success. A call that cannot fail
  *     returns its result.
@@ -41,6 +42,12 @@ ty_errnum_t ty_errnum(void);
 
 /* The calling thread's last error message; "no error" if none. */
 const char *ty_errmsg(void);
+
+/*
+ * The index of the row that the calling thread's last error is of, if an
+ * operation on vectors raised it (ty_vec.h); 0 for any other error.
+ */
+uint32_t ty_erridx(void);
 
 /* The name of code, such as "TY_ERR_NOMEM". */
 const char *ty_errname(ty_errnum_t code);

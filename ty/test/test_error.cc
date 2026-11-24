@@ -4,7 +4,8 @@
  */
 
 /*
- * Tests of the error state: ty_errnum(), ty_errmsg(), ty_errname().
+ * Tests of the error state: ty_errnum(), ty_errmsg(), ty_erridx(),
+ * ty_errname().
  */
 #include <string.h>
 
@@ -28,6 +29,23 @@ TEST_CASE("the error state belongs to one thread") {
   std::thread t([&] { other = ty_errnum(); });
   t.join();
   CHECK(TY_OK == other);
+}
+
+// Verify that an error's row is kept, and belongs to one thread.
+// 1. Set an error of row 7, and read the row here, and on a second thread
+//    read 0.
+// 2. Set an error of no row: the row is 0.
+TEST_CASE("an error has a row") {
+  // 1. Set an error of row 7, and read it on two threads.
+  CHECK(-1 == ty_internal::set_error(TY_ERR_RANGE, "out of range", 7));
+  CHECK(7 == ty_erridx());
+  uint32_t other = 1;
+  std::thread t([&] { other = ty_erridx(); });
+  t.join();
+  CHECK(0 == other);
+  // 2. Set an error of no row.
+  ty_err_range();
+  CHECK(0 == ty_erridx());
 }
 
 // Verify that a message too long is cut, and the code has a name.

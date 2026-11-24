@@ -13,8 +13,11 @@
 
 namespace ty_internal {
 
-/* Record code and msg as the calling thread's error; returns -1. */
-int set_error(ty_errnum_t code, const char *msg);
+/*
+ * Record code and msg as the calling thread's error; returns -1. idx is
+ * the row an operation on vectors failed on, 0 for any other operation.
+ */
+int set_error(ty_errnum_t code, const char *msg, uint32_t idx = 0);
 
 } // namespace ty_internal
 

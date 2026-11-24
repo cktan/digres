@@ -31,17 +31,17 @@ int scalar_add(int64_t a, int64_t b, int64_t *r) {
 }
 
 /* The vector add of each width. */
-int vec_add(uint32_t n, const uint8_t *f, const int16_t *a, const int16_t *b,
-            int16_t *out, uint8_t *of, uint32_t *bad) {
-  return ty_int16_add_vec(n, f, a, b, out, of, bad);
+int vec_add(uint32_t n, uint8_t *f, const int16_t *a, const int16_t *b,
+            int16_t *out) {
+  return ty_int16_add_vec(n, f, a, b, out);
 }
-int vec_add(uint32_t n, const uint8_t *f, const int32_t *a, const int32_t *b,
-            int32_t *out, uint8_t *of, uint32_t *bad) {
-  return ty_int32_add_vec(n, f, a, b, out, of, bad);
+int vec_add(uint32_t n, uint8_t *f, const int32_t *a, const int32_t *b,
+            int32_t *out) {
+  return ty_int32_add_vec(n, f, a, b, out);
 }
-int vec_add(uint32_t n, const uint8_t *f, const int64_t *a, const int64_t *b,
-            int64_t *out, uint8_t *of, uint32_t *bad) {
-  return ty_int64_add_vec(n, f, a, b, out, of, bad);
+int vec_add(uint32_t n, uint8_t *f, const int64_t *a, const int64_t *b,
+            int64_t *out) {
+  return ty_int64_add_vec(n, f, a, b, out);
 }
 
 /* Columns of n rows of T: a, b and their flags. */
@@ -80,17 +80,15 @@ cols_t<T> random_cols(std::mt19937_64 &rng, uint32_t n, uint32_t invalid_in) {
  * vector's lanes and the loop's blocks of 256 rows.
  * 1. For each size, random rows and flags.
  * 2. The vector add succeeds; each computed row's sum is the scalar add's,
- *    and outflag is inflag.
+ *    and the flags are as they were.
  */
 template <typename T> void check_agrees() {
   std::mt19937_64 rng(7);
   for (uint32_t n : {0u, 1u, 3u, 7u, 8u, 9u, 255u, 256u, 257u, 1000u, 10000u}) {
     cols_t<T> c = random_cols<T>(rng, n, 5);
     std::vector<T> out(n);
-    std::vector<uint8_t> of(n, 0xff);
-    uint32_t bad = UINT32_MAX;
-    REQUIRE(0 == vec_add(n, c.flag.data(), c.a.data(), c.b.data(), out.data(),
-                         of.data(), &bad));
+    std::vector<uint8_t> of = c.flag;
+    REQUIRE(0 == vec_add(n, of.data(), c.a.data(), c.b.data(), out.data()));
     for (uint32_t i = 0; i < n; i++) {
       CHECK(of[i] == c.flag[i]);
       if (0 == (c.flag[i] & TY_VEC_SKIP)) {
@@ -107,7 +105,7 @@ template <typename T> void check_agrees() {
  * and one in a row not valid, or null, is no error.
  * 1. Rows that overflow at 600 and 40, at 5 in a row not valid, and at 7
  *    in a null row: the
- *    add fails with RANGE, bad = 40.
+ *    add fails with RANGE, ty_erridx() = 40.
  * 2. Only the invalid row 5 and the null row 7 overflow: no error.
  * 3. Rows that overflow in the last rows past the whole vectors, and
  *    below by MIN + -1: the lowest is reported.
@@ -120,50 +118,41 @@ template <typename T> void check_overflow() {
   const uint32_t n = 1003; // not a multiple of any lane count
   cols_t<T> c = random_cols<T>(rng, n, 1000000);
   std::vector<T> out(n);
-  std::vector<uint8_t> of(n);
-  uint32_t bad = UINT32_MAX;
   // 1. Three overflows, the lowest in a row not valid.
   cols_t<T> d = c;
   d.a[600] = max, d.b[600] = 1;
   d.a[40] = min, d.b[40] = -1;
   d.a[5] = max, d.b[5] = max, d.flag[5] = TY_VEC_NOTVALID;
   d.a[7] = max, d.b[7] = max, d.flag[7] = TY_VEC_NULL;
-  CHECK(-1 == vec_add(n, d.flag.data(), d.a.data(), d.b.data(), out.data(),
-                      of.data(), &bad));
+  CHECK(-1 == vec_add(n, d.flag.data(), d.a.data(), d.b.data(), out.data()));
   CHECK(TY_ERR_RANGE == ty_errnum());
-  CHECK(40u == bad);
+  CHECK(40u == ty_erridx());
   // 2. Only the invalid row and the null row.
   cols_t<T> e = c;
   e.a[5] = max, e.b[5] = max, e.flag[5] = TY_VEC_NOTVALID;
   e.a[7] = max, e.b[7] = max, e.flag[7] = TY_VEC_NULL;
-  bad = UINT32_MAX;
-  CHECK(0 == vec_add(n, e.flag.data(), e.a.data(), e.b.data(), out.data(),
-                     of.data(), &bad));
-  CHECK(UINT32_MAX == bad);
+  CHECK(0 == vec_add(n, e.flag.data(), e.a.data(), e.b.data(), out.data()));
   // 3. The last row, and one before it.
   cols_t<T> g = c;
   g.a[n - 1] = max, g.b[n - 1] = max;
-  CHECK(-1 == vec_add(n, g.flag.data(), g.a.data(), g.b.data(), out.data(),
-                      of.data(), &bad));
-  CHECK(n - 1 == bad);
+  CHECK(-1 == vec_add(n, g.flag.data(), g.a.data(), g.b.data(), out.data()));
+  CHECK(n - 1 == ty_erridx());
   g.a[n - 2] = min, g.b[n - 2] = -1;
-  CHECK(-1 == vec_add(n, g.flag.data(), g.a.data(), g.b.data(), out.data(),
-                      of.data(), &bad));
-  CHECK(n - 2 == bad);
+  CHECK(-1 == vec_add(n, g.flag.data(), g.a.data(), g.b.data(), out.data()));
+  CHECK(n - 2 == ty_erridx());
   // 4. The edges.
   T a4[3] = {max, min, max}, b4[3] = {0, max, 1}, o4[3];
-  uint8_t f4[3] = {0, 0, 0}, of4[3];
-  CHECK(-1 == vec_add(3, f4, a4, b4, o4, of4, &bad));
-  CHECK(2u == bad);
-  CHECK(0 == vec_add(2, f4, a4, b4, o4, of4, &bad));
+  uint8_t f4[3] = {0, 0, 0};
+  CHECK(-1 == vec_add(3, f4, a4, b4, o4));
+  CHECK(2u == ty_erridx());
+  CHECK(0 == vec_add(2, f4, a4, b4, o4));
   CHECK(o4[0] == max);
   CHECK(o4[1] == T(-1));
 }
 
 /*
- * The results may be written over an input: out is a, and outflag is
- * inflag.
- * 1. Random rows; the add with out = a and outflag = inflag.
+ * The results may be written over an input: out is a.
+ * 1. Random rows; the add with out = a.
  * 2. a holds the sums, and the flags are as they were.
  */
 template <typename T> void check_in_place() {
@@ -171,9 +160,7 @@ template <typename T> void check_in_place() {
   const uint32_t n = 777;
   cols_t<T> c = random_cols<T>(rng, n, 3);
   cols_t<T> was = c;
-  uint32_t bad = UINT32_MAX;
-  REQUIRE(0 == vec_add(n, c.flag.data(), c.a.data(), c.b.data(), c.a.data(),
-                       c.flag.data(), &bad));
+  REQUIRE(0 == vec_add(n, c.flag.data(), c.a.data(), c.b.data(), c.a.data()));
   for (uint32_t i = 0; i < n; i++) {
     CHECK(c.flag[i] == was.flag[i]);
     if (0 == (was.flag[i] & TY_VEC_SKIP)) {
@@ -182,7 +169,70 @@ template <typename T> void check_in_place() {
   }
 }
 
+/*
+ * An overflow is reported at its row when the results are written over
+ * an input.
+ * 1. Rows that overflow at 300 and 400, in the second block, and one in a
+ *    row not valid at 290.
+ * 2. With out = a, and then with out = b, the add fails at 300.
+ * 3. The same at the last row of the block, and at its first.
+ */
+template <typename T> void check_overflow_in_place() {
+  const T max = std::numeric_limits<T>::max();
+  const T min = std::numeric_limits<T>::min();
+  std::mt19937_64 rng(17);
+  const uint32_t n = 777;
+  // 1. Rows that overflow at 300 and 400, and at 290, not valid.
+  cols_t<T> c = random_cols<T>(rng, n, 1000000);
+  c.a[290] = max, c.b[290] = 1, c.flag[290] = TY_VEC_NOTVALID;
+  c.a[300] = max, c.b[300] = 1;
+  c.a[400] = min, c.b[400] = min;
+  // 2. out = a, then out = b.
+  cols_t<T> d = c;
+  CHECK(-1 == vec_add(n, d.flag.data(), d.a.data(), d.b.data(), d.a.data()));
+  CHECK(TY_ERR_RANGE == ty_errnum());
+  CHECK(300u == ty_erridx());
+  d = c;
+  CHECK(-1 == vec_add(n, d.flag.data(), d.a.data(), d.b.data(), d.b.data()));
+  CHECK(300u == ty_erridx());
+  // 3. The last row of the block, and its first.
+  for (uint32_t row : {511u, 256u}) {
+    d = random_cols<T>(rng, n, 1000000);
+    d.flag.assign(n, 0);
+    d.a[row] = min, d.b[row] = -1;
+    CHECK(-1 == vec_add(n, d.flag.data(), d.a.data(), d.b.data(), d.a.data()));
+    CHECK(row == ty_erridx());
+  }
+}
+
 } // namespace
+
+// Verify that IS NULL of a vector is the null bit of each row, and that no
+// result is null.
+// 1. For each size around the 16 bytes of a vector instruction, and one
+//    past all 256 values of a flag, rows whose flags are 0, 1, 2 and on.
+// 2. out is 1 for a null row, valid or not, and 0 for another; the null
+//    bit is 0 after, and each other bit is as it was.
+// 3. Nothing is written past the n rows.
+TEST_CASE("IS NULL of a vector is each row's null bit") {
+  for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 31u, 33u, 256u, 1003u}) {
+    // 1. Rows of every flag; one more row, to see it is not written.
+    std::vector<uint8_t> flag(n + 1), out(n + 1, 0xaa);
+    for (uint32_t i = 0; i <= n; i++) {
+      flag[i] = uint8_t(i);
+    }
+    flag[n] = 0xff;
+    REQUIRE(0 == ty_flag_isnull(n, flag.data(), out.data()));
+    // 2. The null bit of each row, and the flags after.
+    for (uint32_t i = 0; i < n; i++) {
+      CHECK(out[i] == (uint8_t(i) & TY_VEC_NULL ? 1 : 0));
+      CHECK(flag[i] == (uint8_t(i) & 0xfd));
+    }
+    // 3. Nothing past the n rows.
+    CHECK(0xaa == out[n]);
+    CHECK(0xff == flag[n]);
+  }
+}
 
 TEST_CASE("a vector add agrees with the scalar add, row by row") {
   check_agrees<int16_t>();
@@ -200,4 +250,10 @@ TEST_CASE("a vector add writes its results over its inputs") {
   check_in_place<int16_t>();
   check_in_place<int32_t>();
   check_in_place<int64_t>();
+}
+
+TEST_CASE("a vector add over its input fails at the right row") {
+  check_overflow_in_place<int16_t>();
+  check_overflow_in_place<int32_t>();
+  check_overflow_in_place<int64_t>();
 }

@@ -5,7 +5,7 @@
 
 /*
  * error.cc -- the per-thread error state behind ty_errnum(),
- * ty_errmsg() and ty_errname().
+ * ty_errmsg(), ty_erridx() and ty_errname().
  *
  * The message is copied into a thread-local buffer: nothing is
  * allocated, so an error can be recorded when memory has run out.
@@ -21,6 +21,7 @@ constexpr size_t errmsg_size = 256;
 
 thread_local ty_errnum_t t_errnum = TY_OK;
 thread_local char t_errmsg[errmsg_size] = "no error";
+thread_local uint32_t t_erridx = 0;
 
 } // namespace
 
@@ -29,6 +30,9 @@ ty_errnum_t ty_errnum(void) { return t_errnum; }
 
 /* The calling thread's last error message. */
 const char *ty_errmsg(void) { return t_errmsg; }
+
+/* The row of the calling thread's last error. */
+uint32_t ty_erridx(void) { return t_erridx; }
 
 /* The name of code, or "TY_ERR_UNKNOWN" for one not in the list. */
 const char *ty_errname(ty_errnum_t code) {
@@ -51,13 +55,14 @@ const char *ty_errname(ty_errnum_t code) {
   return "TY_ERR_UNKNOWN";
 }
 
-/* Record code and msg, cut to fit, as the thread's error. */
-int ty_internal::set_error(ty_errnum_t code, const char *msg) {
+/* Record code and msg, cut to fit, and row idx, as the thread's error. */
+int ty_internal::set_error(ty_errnum_t code, const char *msg, uint32_t idx) {
   size_t n = strlen(msg);
   if (n > errmsg_size - 1) {
     n = errmsg_size - 1;
   }
   t_errnum = code;
+  t_erridx = idx;
   memcpy(t_errmsg, msg, n);
   t_errmsg[n] = '\0';
   return -1;
