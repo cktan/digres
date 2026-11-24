@@ -946,58 +946,6 @@ int tm2time(struct pg_tm *tm, fsec_t fsec, TimeADT *result) {
   return 0;
 }
 
-/* time_overflows()
- * Check to see if a broken-down time-of-day is out of range.
- */
-bool time_overflows(int hour, int min, int sec, fsec_t fsec) {
-  /* Range-check the fields individually. */
-  if (hour < 0 || hour > HOURS_PER_DAY || min < 0 || min >= MINS_PER_HOUR ||
-      sec < 0 || sec > SECS_PER_MINUTE || fsec < 0 || fsec > USECS_PER_SEC)
-    return true;
-
-  /*
-   * Because we allow, eg, hour = 24 or sec = 60, we must check separately
-   * that the total time value doesn't exceed 24:00:00.
-   */
-  if ((((((hour * MINS_PER_HOUR + min) * SECS_PER_MINUTE) + sec) *
-        USECS_PER_SEC) +
-       fsec) > USECS_PER_DAY)
-    return true;
-
-  return false;
-}
-
-/* float_time_overflows()
- * Same, when we have seconds + fractional seconds as one "double" value.
- */
-bool float_time_overflows(int hour, int min, double sec) {
-  /* Range-check the fields individually. */
-  if (hour < 0 || hour > HOURS_PER_DAY || min < 0 || min >= MINS_PER_HOUR)
-    return true;
-
-  /*
-   * "sec", being double, requires extra care.  Cope with NaN, and round off
-   * before applying the range check to avoid unexpected errors due to
-   * imprecise input.  (We assume rint() behaves sanely with infinities.)
-   */
-  if (isnan(sec))
-    return true;
-  sec = rint(sec * USECS_PER_SEC);
-  if (sec < 0 || sec > SECS_PER_MINUTE * USECS_PER_SEC)
-    return true;
-
-  /*
-   * Because we allow, eg, hour = 24 or sec = 60, we must check separately
-   * that the total time value doesn't exceed 24:00:00.  This must match the
-   * way that callers will convert the fields to a time.
-   */
-  if (((((hour * MINS_PER_HOUR + min) * SECS_PER_MINUTE) * USECS_PER_SEC) +
-       (int64)sec) > USECS_PER_DAY)
-    return true;
-
-  return false;
-}
-
 /* time2tm()
  * Convert time data type to POSIX time structure.
  *

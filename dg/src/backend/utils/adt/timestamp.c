@@ -1326,19 +1326,6 @@ const char *timestamptz_to_str(TimestampTz t) {
   return buf;
 }
 
-void dt2time(Timestamp jd, int *hour, int *min, int *sec, fsec_t *fsec) {
-  TimeOffset time;
-
-  time = jd;
-
-  *hour = time / USECS_PER_HOUR;
-  time -= (*hour) * USECS_PER_HOUR;
-  *min = time / USECS_PER_MINUTE;
-  time -= (*min) * USECS_PER_MINUTE;
-  *sec = time / USECS_PER_SEC;
-  *fsec = time - (*sec * USECS_PER_SEC);
-} /* dt2time() */
-
 /*
  * timestamp2tm() - Convert timestamp data type to POSIX time structure.
  *
@@ -1464,35 +1451,6 @@ void interval2itm(Interval span, struct pg_itm *itm) {
   time -= tfrac * USECS_PER_SEC;
   itm->tm_sec = (int)tfrac;
   itm->tm_usec = (int)time;
-}
-
-/* itm2interval()
- * Convert a pg_itm structure to an Interval.
- * Returns 0 if OK, -1 on overflow.
- *
- * This is for use in computations expected to produce finite results.  Any
- * inputs that lead to infinite results are treated as overflows.
- */
-int itm2interval(struct pg_itm *itm, Interval *span) {
-  int64 total_months = (int64)itm->tm_year * MONTHS_PER_YEAR + itm->tm_mon;
-
-  if (total_months > INT_MAX || total_months < INT_MIN)
-    return -1;
-  span->month = (int32)total_months;
-  span->day = itm->tm_mday;
-  if (pg_mul_s64_overflow(itm->tm_hour, USECS_PER_HOUR, &span->time))
-    return -1;
-  /* tm_min, tm_sec are 32 bits, so intermediate products can't overflow */
-  if (pg_add_s64_overflow(span->time, itm->tm_min * USECS_PER_MINUTE,
-                          &span->time))
-    return -1;
-  if (pg_add_s64_overflow(span->time, itm->tm_sec * USECS_PER_SEC, &span->time))
-    return -1;
-  if (pg_add_s64_overflow(span->time, itm->tm_usec, &span->time))
-    return -1;
-  if (INTERVAL_NOT_FINITE(span))
-    return -1;
-  return 0;
 }
 
 /* itmin2interval()
@@ -2961,72 +2919,6 @@ Datum interval_trunc(PG_FUNCTION_ARGS) {
   }
 
   PG_RETURN_INTERVAL_P(result);
-}
-
-/* isoweek2j()
- *
- *	Return the Julian day which corresponds to the first day (Monday) of the
- *given ISO 8601 year and week. Julian days are used to convert between ISO week
- *dates and Gregorian dates.
- *
- *	XXX: This function has integer overflow hazards, but restructuring it to
- *	work with the soft-error handling that its callers do is likely more
- *	trouble than it's worth.
- */
-int isoweek2j(int year, int week) { return ty_isoweek2j(year, week); }
-
-/* isoweek2date()
- * Convert ISO week of year number to date.
- * The year field must be specified with the ISO year!
- * karel 2000/08/07
- */
-void isoweek2date(int woy, int *year, int *mon, int *mday) {
-  ty_isoweek2date(woy, year, mon, mday);
-}
-
-/* isoweekdate2date()
- *
- *	Convert an ISO 8601 week date (ISO year, ISO week) into a Gregorian
- *date. Gregorian day of week sent so weekday strings can be supplied. Populates
- *year, mon, and mday with the correct Gregorian values. year must be passed in
- *as the ISO year.
- */
-void isoweekdate2date(int isoweek, int wday, int *year, int *mon, int *mday) {
-  int jday;
-
-  jday = isoweek2j(*year, isoweek);
-  /* convert Gregorian week start (Sunday=1) to ISO week start (Monday=1) */
-  if (wday > 1)
-    jday += wday - 2;
-  else
-    jday += 6;
-  j2date(jday, year, mon, mday);
-}
-
-/* date2isoweek()
- *
- *	Returns ISO week number of year.
- */
-int date2isoweek(int year, int mon, int mday) {
-  return ty_date2isoweek(year, mon, mday);
-}
-
-/* date2isoyear()
- *
- *	Returns ISO 8601 year number.
- *	Note: zero or negative results follow the year-zero-exists convention.
- */
-int date2isoyear(int year, int mon, int mday) {
-  return ty_date2isoyear(year, mon, mday);
-}
-
-/* date2isoyearday()
- *
- *	Returns the ISO 8601 day-of-year, given a Gregorian year, month and day.
- *	Possible return values are 1 through 371 (364 in non-leap years).
- */
-int date2isoyearday(int year, int mon, int mday) {
-  return ty_date2isoyearday(year, mon, mday);
 }
 
 /*

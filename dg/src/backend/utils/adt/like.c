@@ -34,11 +34,9 @@
 
 static int SB_MatchText(const char *t, int tlen, const char *p, int plen,
                         pg_locale_t locale);
-static text *SB_do_like_escape(text *pat, text *esc);
 
 static int MB_MatchText(const char *t, int tlen, const char *p, int plen,
                         pg_locale_t locale);
-static text *MB_do_like_escape(text *pat, text *esc);
 
 static int UTF8_MatchText(const char *t, int tlen, const char *p, int plen,
                           pg_locale_t locale);
@@ -49,31 +47,6 @@ static int SB_IMatchText(const char *t, int tlen, const char *p, int plen,
 static int GenericMatchText(const char *s, int slen, const char *p, int plen,
                             Oid collation);
 static int Generic_Text_IC_like(text *str, text *pat, Oid collation);
-
-/*--------------------
- * Support routine for MatchText. Compares given multibyte streams
- * as wide characters. If they match, returns 1 otherwise returns 0.
- *--------------------
- */
-static inline int wchareq(const char *p1, int p1len, const char *p2,
-                          int p2len) {
-  int p1clen;
-
-  /* Optimization:  quickly compare the first byte. */
-  if (*p1 != *p2)
-    return 0;
-
-  p1clen = pg_mblen_with_len(p1, p1len);
-  if (pg_mblen_with_len(p2, p2len) != p1clen)
-    return 0;
-
-  /* They are the same length */
-  while (p1clen--) {
-    if (*p1++ != *p2++)
-      return 0;
-  }
-  return 1;
-}
 
 /*
  * Formerly we had a routine iwchareq() here that tried to do case-insensitive
@@ -101,28 +74,17 @@ static char SB_lower_char(unsigned char c, pg_locale_t locale) {
 #define NextByte(p, plen)	((p)++, (plen)--)
 
 /* Set up to compile like_match.c for multibyte characters */
-#define CHAREQ(p1, p1len, p2, p2len) wchareq((p1), (p1len), (p2), (p2len))
 #define NextChar(p, plen) \
 	do { int __l = pg_mblen_with_len((p), (plen)); (p) +=__l; (plen) -=__l; } while (0)
-#define CopyAdvChar(dst, src, srclen) \
-	do { int __l = pg_mblen_with_len((src), (srclen)); \
-		 (srclen) -= __l; \
-		 while (__l-- > 0) \
-			 *(dst)++ = *(src)++; \
-	   } while (0)
 
 #define MatchText	MB_MatchText
-#define do_like_escape	MB_do_like_escape
 
 #include "like_match.c"
 
 /* Set up to compile like_match.c for single-byte characters */
-#define CHAREQ(p1, p1len, p2, p2len) (*(p1) == *(p2))
 #define NextChar(p, plen) NextByte((p), (plen))
-#define CopyAdvChar(dst, src, srclen) (*(dst)++ = *(src)++, (srclen)--)
 
 #define MatchText	SB_MatchText
-#define do_like_escape	SB_do_like_escape
 
 #include "like_match.c"
 

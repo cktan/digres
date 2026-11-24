@@ -36,12 +36,6 @@ extern bool domain_check_safe(Datum value, bool isnull, Oid domainType,
 extern int errdatatype(Oid datatypeOid);
 extern int errdomainconstraint(Oid datatypeOid, const char *conname);
 
-/* encode.c */
-extern uint64 hex_encode(const char *src, size_t len, char *dst);
-extern uint64 hex_decode(const char *src, size_t len, char *dst);
-extern uint64 hex_decode_safe(const char *src, size_t len, char *dst,
-                              Node *escontext);
-
 /* int.c */
 extern int2vector *buildint2vector(const int16 *int2s, int n);
 
@@ -61,12 +55,9 @@ extern uint32 uint32in_subr(const char *s, char **endloc, const char *typname,
 extern uint64 uint64in_subr(const char *s, char **endloc, const char *typname,
                             Node *escontext);
 extern int pg_itoa(int16 i, char *a);
-extern int pg_ultoa_n(uint32 value, char *a);
 extern int pg_ulltoa_n(uint64 value, char *a);
 extern int pg_ltoa(int32 value, char *a);
 extern int pg_lltoa(int64 value, char *a);
-extern char *pg_ultostr_zeropad(char *str, uint32 value, int32 minwidth);
-extern char *pg_ultostr(char *str, uint32 value);
 
 /* oid.c */
 extern oidvector *buildoidvector(const Oid *oids, int n);
