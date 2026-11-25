@@ -92,13 +92,14 @@ FORMAT_FILES := $(wildcard src/*.cc src/*.h test/*.cc test/*.h mvcc/*.cc \
                           example/*.cc bench/*.cc include/sm1_*.h)
 
 .PHONY: all test tsan scenarios accept format clean FORCE
-# A target that is never up to date, for the libraries of other parts.
-FORCE:
 
 # Keep the example objects: make deletes chained intermediates.
 .SECONDARY: $(EX_OBJS)
 
 all: $(LIB) $(TEST_BIN) $(MVCC_BIN) $(DRIVER) $(EX_BINS) $(BENCH_BIN)
+
+# A target that is never up to date, for the libraries of other parts.
+FORCE:
 
 # Rebuilt from scratch, so an object whose source is gone leaves it.
 $(LIB): $(LIB_OBJS)

@@ -79,10 +79,11 @@ FORMAT_FILES := $(filter-out test/pg_fixtures.h src/ryu/%, \
     $(wildcard src/*/*.cc src/*/*.h test/*.cc test/*.h))
 
 .PHONY: all test tsan format clean FORCE
-# A target that is never up to date, for the libraries of other parts.
-FORCE:
 
 all: $(LIB) $(TEST_BIN)
+
+# A target that is never up to date, for the libraries of other parts.
+FORCE:
 
 # Rebuilt from scratch, so an object whose source is gone leaves it.
 $(LIB): $(LIB_OBJS)
