@@ -13719,3 +13719,242 @@ A check hook took the new value as a `char **`, to change it with
 - **Test**: `test/server.sh`'s check of the space a DROP TABLE
   and a TRUNCATE free measures with it, and checks it by name
   and by oid.
+
+## Step 458: decimal's operations move into ty
+
+Steps 458 to 473 were written on 2026-11-25, for the work of
+2026-11-20 to 2026-11-25, which had gone unnoted. Some of it is
+older than step 457.
+[`../sm/TYPEMOVE_PLAN.md`](../sm/TYPEMOVE_PLAN.md) §7 has the
+measures of the moves into ty, steps 458 to 464.
+
+- **What it was**: `decimal.c` held the arithmetic of
+  `decimal64` and `decimal128`, some of it on a 512-bit
+  magnitude (`mag_t`, `wide_t`). sm could not call it.
+- **Now**: ty (`../ty/include/ty_decimal.h`) has the arithmetic,
+  rounding, compares, `sqrt`, the functions of the exponent, the
+  text in and out, the scales of inexact results, the typmod and
+  the hash. `decimal.c` is glue: 3,580 lines to 2,800.
+- **A change of results**: a decimal works as `int4` and `int8`
+  do. A result is the operands' type, exact, or an error; only a
+  quotient is rounded. `decimal64 + decimal64` is a `decimal64`,
+  by value, and an error past 17 digits; a cast of one side to
+  `decimal128` gives more. A value past 36 digits is an error.
+- **`exp`, `ln`, `log`, the powers, and the variances are in
+  `double`**, some 15 digits: the soft `long double` of aarch64
+  cost too much. A result that underflows is an error, where
+  PostgreSQL gives 0. pgregress's `--dg-approx: N` marker holds
+  such a statement to N digits.
+- **What went with it**: the 512-bit magnitude and its helpers.
+- **Left on purpose**: the aggregates' states, the series, the
+  planner's support, the binary form, and PostgreSQL's error
+  text.
+- **Tests**: ty's, with a reference in Python;
+  `select_decimal64.sql`, `select_numeric.sql` and
+  `select_decin_ops.sql`.
+
+## Step 459: the operations of the other types move into ty
+
+- **What moved**: the integers, bool, uuid, bytea, the floats,
+  text, `character(n)`, `varchar(n)`, `name`, LIKE, interval,
+  date, time, timestamp, and the zoned forms of the last two;
+  their text in and out, compares, hashes, casts, `extract`,
+  `date_trunc`, `age`, `OVERLAPS`, and `make_timestamp`.
+  PostgreSQL's hash (`hashfn.c`) and its Ryu printers moved with
+  their notices, so each hash value and each float's text is as
+  before. digres's entry points are wrappers.
+- **The rule**: when a type's operations move, all of them do.
+- **A change of results**: a shift count that is not 0 to the
+  width less one is an error, where PostgreSQL leaves it to the
+  machine.
+- **Moved, then moved back**: the geometric types, macaddr, bit,
+  inet, tid, pg_lsn, `"char"` and money. sm2 has no code for
+  them, so no table of digres stores them.
+- **Left on purpose**: what depends on a collation that is not
+  C or not deterministic, the sort supports' wiring, and the
+  error text.
+- **Cost**: no statement over 1% more instructions, but for a
+  query of ten math functions, 1.4%, and those the user
+  accepted: statements that make a string, 0.9% to 4.7%, and
+  timetz's text in, 2.2%.
+- **Tests**: ty's, with vectors that a digres built before each
+  move printed; a `select_*_ops.sql` for each group, which that
+  digres prints the same.
+
+## Step 460: ty allocates by palloc, and raises by digres
+
+- **`ty_thread_init()`** (`utils/init/ty_glue.c`) sets ty's alloc
+  and free of a thread to palloc's, without its error, and
+  pfree. The main thread, each session's and each adopted thread
+  call it. It was in `MemoryContextInit()` at first; `mcxt.c` is
+  as it was before.
+- **`utils/ty_glue.h`** has what a wrapper needs: a varlena given
+  to ty, a result taken from it, and ty's error raised as
+  PostgreSQL's. `utils/ty_int_glue.h` has the integers'.
+- **A varlena is detoasted first**: ty reads no TOAST pointer.
+
+## Step 461: the time zones are ty's
+
+- **What it was**: digres read `/usr/share/zoneinfo` with its
+  copy of the IANA library (step 1).
+- **Now**: a `pg_tz` is a `ty_tz_t`, and the calls of `pgtime.h`
+  are in line calls into ty, which carries its own zone data:
+  tzdata 2026c, as PostgreSQL 18.6's. A machine's newer zones do
+  not change digres's answers.
+- **Gone**: `src/timezone/localtime.c`, `pgtz.h`, `tzfile.h`, and
+  the file reader and directory scan of `pgtz.c`.
+- **Left**: `strftime.c`, the abbreviation files, and the search
+  for a name by a setting.
+- **Test**: `select_timezone_ops.sql`, whose expected output is
+  from before the change.
+
+## Step 462: sm owns a transaction's start time
+
+- **What it was**: `xactStartTimestamp` in `xact.c`, and a hook
+  by which ty asked digres for the time.
+- **Now**: sm reads the clock and keeps the time in its session.
+  `StartTransaction()` starts it, with no sm transaction and no
+  snapshot. `now()` and the like read the session's variable, and
+  ty reads the same one: `CURRENT_DATE`, `CURRENT_TIME` and
+  `LOCALTIME` come from ty.
+- **A session with no sm session yet** takes the wall clock.
+- **Test**: `select_current_ops.sql`, and sm's.
+
+## Step 463: formatting.c's engines are gone
+
+- **What moved to ty**: `to_char` of the dates and the numbers,
+  `to_timestamp`, `to_date`, jsonpath's `datetime()`, and
+  `to_number`. The code is new, with PostgreSQL's keywords,
+  output and errors. `formatting.c` went from 6,373 lines to
+  1,567.
+- **Left in digres**: the names of the months by locale, the
+  `lconv` symbols, the session's zone and its abbreviations,
+  given to ty by structs of functions; and a call site's
+  compiled format, in its `fn_extra`.
+- **A fix on the way**: the format cache forgets a freed format
+  before it compiles the next, so a format that fails leaves no
+  dangling `fn_extra`.
+- **Also moved, from other files**: `format()`'s reading of its
+  format string; `string_agg`'s state, and that of `EVERY`,
+  `bool_and`, `bool_or`, and of `avg` and `sum` over `int2` and
+  `int4`; HyperLogLog; and a sort's abbreviated keys of uuid and
+  of bytes in the C collation.
+- **Tests**: ty's, with lines that a digres built before each
+  move printed, and a `select_*.sql` for each; `server.sh`
+  checks the estimates a sort logs.
+
+## Step 464: the last of the types move, and what they leave
+
+- **Moved**: Unicode (normalization, `unistr`, the properties of
+  a character, with PostgreSQL's tables), which SASLprep, the
+  regex engine and the builtin collations now take from ty; the
+  bases of `to_hex`, bytea's trims, and a few casts.
+- **Gone for want of a caller**: the parser of dates and times
+  (`ParseDateTime()`, `DecodeDateTime()`, `DecodeTimeOnly()` and
+  their helpers), the ISO week wrappers, the hex codec, the
+  zero-padded digits and `do_like_escape()`. With the Unicode
+  tables, some 29,000 lines left digres. What had no caller
+  before the moves stays.
+- **Regular expressions stay digres's**: they are Henry Spencer's
+  library, whose classes are the collation's. ty matches `~` by
+  a hook, `ty_set_regex()`, which digres sets at startup
+  (`regex_install_ty_engine()` in `regexp.c`). It catches an
+  `ereport`, so no exception crosses ty. digres's own `~` calls
+  its engine, as before.
+- **Tests**: `select_trimbase_ops.sql`,
+  `select_typerest_ops.sql`, and a normalized SCRAM password in
+  `server.sh`.
+
+## Step 465: sq's allocator has malloc's and free's signatures
+
+- **What it is**: the alloc that `parser.c` gives sq wraps
+  palloc. An error, for a request past `MaxAllocSize`, becomes
+  NULL, so no exception crosses sq. free is pfree.
+
+## Step 466: a row of a row group is named by its place
+
+- **What it was**: a write of a column store row named it by its
+  row group.
+- **Now**: by its place, `(fsid, rno)`
+  ([`../sm/COLSTORE.md`](../sm/COLSTORE.md) §8): `smstore.c`
+  takes the place from the scan (`sm_row_scan_place()`), and
+  deletes and updates at it. A row group has versions, so a place
+  of an old one is followed by sm.
+- **Test**: `columnar_jobs.sql`, deletes and updates while the
+  sealer compacts and eliminates.
+
+## Step 467: xml.c without libxml's code
+
+- **What it was**: the parts of `xml.c` under `USE_LIBXML`, which
+  digres never sets: 2,643 lines.
+- **Why they go**: digres has no XML, and 42 of the uses of
+  `PG_TRY` were there (step 468).
+- **Left on purpose**: the type and its functions, as the stubs
+  that report a server built without libxml.
+
+## Step 468: no PG_TRY macros
+
+- **What it was**: `PG_TRY`, `PG_CATCH`, `PG_FINALLY`,
+  `PG_END_TRY`, `PG_RE_THROW` and `PG_ERROR_LOOP_BEGIN/END`, and
+  `PG_ENSURE_ERROR_CLEANUP`, which had no use left.
+- **Now**: a `try`, with a `pg_try_scope_t` first in it, and a
+  `catch (const pg_error_t &)`
+  ([`CODE.md`](CODE.md)). The scope puts back
+  `error_context_stack` and `PG_exception_handled` however the
+  block ends, so a `return` out of it is safe.
+- **How**: 29 blocks in 21 files, by a script. The session's loop
+  in `postgres.c` is written out.
+- **Left on purpose**: only `pg_error_t` is caught, as before;
+  `proc_exit_t` goes past.
+
+## Step 469: a notice lost for want of memory is an error
+
+- **What it was**: `keep_notice()` in `parser.c` caught
+  everything, and dropped the notice.
+- **Now**: it catches `std::bad_alloc` alone, and `raw_parser()`
+  raises "out of memory" after the parse, behind sq's own error.
+
+## Step 470: a new file compiles with -Wall
+
+- **What it is**: a file with no PostgreSQL copyright is new
+  (`NEW_SRCS` in the Makefile), and compiles with `-Wall`.
+  PostgreSQL's files keep `-w`, as upstream has them. `-Werror`
+  came with it at first, and went: a compiler's new warning is
+  not to stop the build ([`CODE.md`](CODE.md) says to fix one
+  before a commit).
+
+## Step 471: what the tests' logs say
+
+- **pgregress** moves a server's `log` to `log.old` when a run
+  starts. It was appended to across runs, so an error of an old
+  run read as one of today's.
+- **`server.sh`** names each check as it starts, and keeps the
+  name in `build/test/server.active`.
+- **`select_float.sql`** prints the hyperbolics, erf and gamma at
+  fewer digits, as PostgreSQL's float8 test does: libms differ in
+  the last.
+- **`server.sh`** also tests `numeric_recv`'s typmod, and that a
+  `DROP TABLE` and a `TRUNCATE` free their files before they
+  return, which sm does now.
+
+## Step 472: ty's scalar float functions are ty_fp32_ and ty_fp64_
+
+- **What it is**: a rename, from `ty_float32_` and
+  `ty_float64_`, which the vector operations' short names set.
+  `float.c`, `utils/float.h`, `decimal.c`, `hashfunc.c`,
+  `formatting.c` and `d2s.c` follow.
+- **Left on purpose**: names with no width, such as
+  `ty_float_var_*`.
+
+## Step 473: three rounding bugs of decimals
+
+- **What it is**: fixes in ty, which digres reaches.
+  `round(1.5, -2147483648)` gave 15, and `round` to a scale near
+  it failed with "value overflows numeric format"; both give 0,
+  as in PostgreSQL. A variance that is a tie at its scale rounds
+  away from zero, as `var_pop` does in PostgreSQL. The third is
+  of `sqrt`, and no SQL is known to reach it.
+- **Before it**: `1::numeric(20,0) ^ 999999999` took 15 seconds,
+  as ty multiplied by 1 each time. It takes none.
+- **Test**: `select_numeric.sql`, whose new rows print as
+  PostgreSQL 18.6 prints them; `select_typerest_ops.sql`.
