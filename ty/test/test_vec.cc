@@ -822,49 +822,111 @@ TEST_CASE("IS NOT NULL, IS TRUE, IS FALSE and NOT of a vector") {
   }
 }
 
-// Verify that AND and OR of two vectors are right in each computed row, and
-// change no flag.
-// 1. For each size around the 16 bytes of a vector instruction, rows of
-//    each flag with each pair of bools. A row not computed holds bytes that
-//    are no bool.
+// Verify that AND and OR of two vectors give SQL's answer for each pair of
+// true, false and null, whatever byte a null row holds.
+// 1. For each size around the 16 bytes of a vector instruction, rows of each
+//    pair of flags, all 8 bits of a's and some of b's, with each pair of
+//    bools. A null row holds a byte that is no bool, with the low bit of the
+//    bool.
 // 2. Each operation, into an array of its own, into a, into b, and with a, b
-//    and out one array.
-// 3. out is a AND b, or a OR b, of each computed row.
-// 4. The flags are as they were, and nothing is written past the n rows.
-TEST_CASE("AND and OR of two vectors") {
+//    and out one array, and one flag array.
+// 3. The row's result, null or a bool, by SQL's table.
+// 4. Only a's null bit changes, b's flags stay, and nothing is written past
+//    the n rows.
+TEST_CASE("AND and OR of two vectors are SQL's") {
   enum { OWN, INTO_A, INTO_B, ONE, NPLACES };
-  for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 31u, 33u, 256u, 2003u}) {
+  // SQL's answers, at [a][b], each 0, 1 or null, as 2.
+  static const uint8_t sql_and[3][3] = {{0, 0, 0}, {0, 1, 2}, {0, 2, 2}};
+  static const uint8_t sql_or[3][3] = {{0, 1, 2}, {1, 1, 1}, {2, 1, 2}};
+  for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 31u, 33u, 256u, 8209u}) {
     for (bool is_and : {true, false}) {
       for (int place = OWN; place < NPLACES; place++) {
-        // 1. Rows of each flag with each pair of bools.
-        std::vector<uint8_t> was(n + 1, 0xff), wa(n + 1, 0xaa), wb = wa;
+        // 1. Rows of each pair of flags with each pair of bools.
+        std::vector<uint8_t> wfa(n + 1, 0xff), wfb = wfa;
+        std::vector<uint8_t> wa(n + 1, 0xaa), wb = wa;
         for (uint32_t i = 0; i < n; i++) {
-          const bool skip = (i / 4) & TY_VEC_SKIP;
-          was[i] = uint8_t(i / 4);
-          wa[i] = skip ? uint8_t(0x54 + i) : uint8_t(i & 1);
-          wb[i] = skip ? uint8_t(0x73 + i) : uint8_t((i >> 1) & 1);
+          wa[i] = uint8_t(i & 1);
+          wb[i] = uint8_t((i >> 1) & 1);
+          wfb[i] = uint8_t(((i >> 2) & TY_VEC_SKIP) | ((i * 7) & 0xfc));
+          wfa[i] = uint8_t(i >> 4);
+          if (wfa[i] & TY_VEC_NULL) {
+            wa[i] |= uint8_t(0x54 + 2 * i);
+          }
+          if (wfb[i] & TY_VEC_NULL) {
+            wb[i] |= uint8_t(0x72 + 2 * i);
+          }
         }
         if (ONE == place) {
           wb = wa;
+          wfb = wfa;
         }
-        std::vector<uint8_t> flag = was, a = wa, b = wb, own(n + 1, 0xaa);
+        std::vector<uint8_t> fa = wfa, fb = wfb, a = wa, b = wb;
+        std::vector<uint8_t> own(n + 1, 0xaa);
         const uint8_t *y = ONE == place ? a.data() : b.data();
+        const uint8_t *g = ONE == place ? fa.data() : fb.data();
         uint8_t *out = OWN == place      ? own.data()
                        : INTO_B == place ? b.data()
                                          : a.data();
         // 2. The operation.
         REQUIRE(0 == (is_and
-                          ? tyvec_bool_and(n, flag.data(), a.data(), y, out)
-                          : tyvec_bool_or(n, flag.data(), a.data(), y, out)));
-        // 3. Each computed row.
+                          ? tyvec_bool_and(n, fa.data(), g, a.data(), y, out)
+                          : tyvec_bool_or(n, fa.data(), g, a.data(), y, out)));
         for (uint32_t i = 0; i < n; i++) {
-          if (0 == (was[i] & TY_VEC_SKIP)) {
-            CHECK(out[i] == (is_and ? wa[i] && wb[i] : wa[i] || wb[i]));
-          }
+          // 3. SQL's answer.
+          const int p = wfa[i] & TY_VEC_NULL ? 2 : wa[i];
+          const int q = wfb[i] & TY_VEC_NULL ? 2 : wb[i];
+          const uint8_t want = is_and ? sql_and[p][q] : sql_or[p][q];
+          CHECK((2 == want || out[i] == want));
+          // 4. The flags.
+          CHECK(fa[i] == ((wfa[i] & 0xfd) | (2 == want ? TY_VEC_NULL : 0)));
         }
-        // 4. The flags, and past the n rows.
-        CHECK(flag == was);
+        CHECK(fb == wfb);
+        CHECK(0xff == fa[n]);
         CHECK(0xaa == out[n]);
+      }
+    }
+  }
+}
+
+// Verify that a filter's OR and AND need b only in the rows a leaves open.
+// 1. A column x with nulls; a is x IS NULL.
+// 2. b is x > 3, whose flags are x's own, taken before.
+// 3. x IS NULL OR x > 3 is true for a null and for 4, and false for 2.
+// 4. The same with b's rows that a settles not valid and null, and holding
+//    any byte.
+// 5. x IS NOT NULL AND x > 3, in both ways, the same.
+TEST_CASE("x IS NULL OR x > 3, and x IS NOT NULL AND x > 3") {
+  const uint32_t n = 40;
+  for (bool narrow : {false, true}) {
+    // 1. A column x with nulls: 2, 4, null, 2, 4, null ...
+    std::vector<int32_t> x(n), three(n, 3);
+    std::vector<uint8_t> fx(n);
+    for (uint32_t i = 0; i < n; i++) {
+      x[i] = 0 == i % 3 ? 2 : 4;
+      fx[i] = 2 == i % 3 ? TY_VEC_NULL : 0;
+    }
+    for (bool is_or : {true, false}) {
+      std::vector<uint8_t> fa = fx, fb = fx, a(n), b(n);
+      REQUIRE(0 == (is_or ? tyvec_flag_isnull(n, fa.data(), a.data())
+                          : tyvec_flag_isnotnull(n, fa.data(), a.data())));
+      // 2. b is x > 3.
+      REQUIRE(0 ==
+              tyvec_int32_gt(n, fb.data(), x.data(), three.data(), b.data()));
+      // 4. The rows that a settles.
+      for (uint32_t i = 0; narrow && i < n; i++) {
+        if (a[i] == is_or) {
+          fb[i] = TY_VEC_SKIP;
+          b[i] = uint8_t(0x54 + i);
+        }
+      }
+      // 3, 5. No row is null, and each is SQL's answer.
+      REQUIRE(0 == (is_or ? tyvec_bool_or(n, fa.data(), fb.data(), a.data(),
+                                          b.data(), a.data())
+                          : tyvec_bool_and(n, fa.data(), fb.data(), a.data(),
+                                           b.data(), a.data())));
+      for (uint32_t i = 0; i < n; i++) {
+        CHECK(0 == fa[i]);
+        CHECK(a[i] == (0 == i % 3 ? 0 : 1 == i % 3 ? 1 : is_or));
       }
     }
   }

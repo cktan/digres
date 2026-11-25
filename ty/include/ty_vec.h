@@ -12,7 +12,8 @@
  * row is not valid, such as a row a filter dropped; bit 1, TY_VEC_NULL,
  * is 1 if it is null. The other bits are 0 for now. An operation's
  * inputs share one flag array, flag: a row is null if one of its inputs
- * is. A caller ORs the flags of two inputs into it before the call.
+ * is. A caller ORs the flags of two inputs into it before the call. AND
+ * and OR are the exception: they take the flags of each input.
  *
  * An operation computes each row with neither bit set, as the scalar
  * operation of ty_int.h or ty_float.h would, and writes:
@@ -71,16 +72,20 @@
  *       SQL's NOT: out[i] = 1 if vec[i] is 0, and 0 if it is 1. NOT of a
  *       null is null: flag stays as it is.
  *
- *   tyvec_bool_and(n, flag, a, b, out)
- *   tyvec_bool_or(n, flag, a, b, out)
- *       out[i] = a[i] AND b[i], or OR, of bools that are 0 or 1 in each row
- *       computed. flag stays as it is. A row with a null input is null,
- *       which is not SQL's answer for false AND null, which is false, and
- *       for true OR null, which is true: flag does not say which input is
- *       null. out may be a, b or both.
+ *   tyvec_bool_and(n, flag_a, flag_b, a, b, out)
+ *   tyvec_bool_or(n, flag_a, flag_b, a, b, out)
+ *       SQL's AND and OR of bools that are 0 or 1 in each row not null:
+ *       out[i] = a[i] AND b[i], or OR. flag_a is the flags of a, and then
+ *       of the result; flag_b is those of b, and stays. A row is null if an
+ *       input is, but false AND null is false, and true OR null is true.
+ *       Only flag_a's TY_VEC_NULL changes, and flag_b's other bits are not
+ *       read. An input that settles a row alone, a false of AND or a true
+ *       of OR, makes the other's byte and flag in that row mean nothing: a
+ *       caller need not compute b there. out may be a, b or both, and
+ *       flag_b may be flag_a.
  *
  * The flag and bool operations cannot fail: they return 0. out may be vec;
- * flag may not overlap an input or out.
+ * a flag array may not overlap an input or out.
  */
 #ifndef TY_VEC_H
 #define TY_VEC_H
@@ -149,10 +154,10 @@ int tyvec_bool_istrue(uint32_t n, uint8_t *flag, const uint8_t *vec,
 int tyvec_bool_isfalse(uint32_t n, uint8_t *flag, const uint8_t *vec,
                        uint8_t *out);
 int tyvec_bool_not(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out);
-int tyvec_bool_and(uint32_t n, uint8_t *flag, const uint8_t *a,
-                   const uint8_t *b, uint8_t *out);
-int tyvec_bool_or(uint32_t n, uint8_t *flag, const uint8_t *a, const uint8_t *b,
-                  uint8_t *out);
+int tyvec_bool_and(uint32_t n, uint8_t *flag_a, const uint8_t *flag_b,
+                   const uint8_t *a, const uint8_t *b, uint8_t *out);
+int tyvec_bool_or(uint32_t n, uint8_t *flag_a, const uint8_t *flag_b,
+                  const uint8_t *a, const uint8_t *b, uint8_t *out);
 
 /* The six compares of a type. */
 #define TYVEC_CMP_FN(TYPE, T, NAME)                                            \
