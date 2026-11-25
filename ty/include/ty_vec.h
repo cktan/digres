@@ -30,14 +30,14 @@
  * its result is written. The additions run on the machine's vector instructions
  * (src/vec.cc).
  *
- *   ty_intN_add_vec(n, flag, a, b, out)
+ *   tyvec_intN_add(n, flag, a, b, out)
  *       out[i] = a[i] + b[i]. RANGE on the first row computed that
  *       overflows.
  *
- *   ty_flag_isnull(n, flag, out)
- *   ty_flag_isnotnull(n, flag, out)
- *   ty_flag_istrue(n, flag, vec, out)
- *   ty_flag_isfalse(n, flag, vec, out)
+ *   tyvec_flag_isnull(n, flag, out)
+ *   tyvec_flag_isnotnull(n, flag, out)
+ *   tyvec_bool_istrue(n, flag, vec, out)
+ *   tyvec_bool_isfalse(n, flag, vec, out)
  *       SQL's IS NULL, IS NOT NULL, and IS TRUE and IS FALSE of the bools
  *       of vec, which are 0 or 1 in each row computed: out[i] = 1 if it is
  *       so, or else 0, so out is a vector of bool. A null row is neither
@@ -45,12 +45,12 @@
  *       the other bits stay. A caller that needs the input's nulls
  *       afterwards copies flag first.
  *
- *   ty_flag_not(n, flag, vec, out)
+ *   tyvec_bool_not(n, flag, vec, out)
  *       SQL's NOT: out[i] = 1 if vec[i] is 0, and 0 if it is 1. NOT of a
  *       null is null: flag stays as it is.
  *
- * The flag operations cannot fail: they return 0. out may be vec; flag may
- * not overlap either.
+ * The flag and bool operations cannot fail: they return 0. out may be vec;
+ * flag may not overlap either.
  */
 #ifndef TY_VEC_H
 #define TY_VEC_H
@@ -66,17 +66,18 @@
 /* The bits of a row that is not computed: not valid, or null. */
 #define TY_VEC_SKIP (TY_VEC_NOTVALID | TY_VEC_NULL)
 
-int ty_int16_add_vec(uint32_t n, uint8_t *flag, const int16_t *a,
-                     const int16_t *b, int16_t *out);
-int ty_int32_add_vec(uint32_t n, uint8_t *flag, const int32_t *a,
-                     const int32_t *b, int32_t *out);
-int ty_int64_add_vec(uint32_t n, uint8_t *flag, const int64_t *a,
-                     const int64_t *b, int64_t *out);
-int ty_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out);
-int ty_flag_isnotnull(uint32_t n, uint8_t *flag, uint8_t *out);
-int ty_flag_istrue(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out);
-int ty_flag_isfalse(uint32_t n, uint8_t *flag, const uint8_t *vec,
-                    uint8_t *out);
-int ty_flag_not(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out);
+int tyvec_int16_add(uint32_t n, uint8_t *flag, const int16_t *a,
+                    const int16_t *b, int16_t *out);
+int tyvec_int32_add(uint32_t n, uint8_t *flag, const int32_t *a,
+                    const int32_t *b, int32_t *out);
+int tyvec_int64_add(uint32_t n, uint8_t *flag, const int64_t *a,
+                    const int64_t *b, int64_t *out);
+int tyvec_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out);
+int tyvec_flag_isnotnull(uint32_t n, uint8_t *flag, uint8_t *out);
+int tyvec_bool_istrue(uint32_t n, uint8_t *flag, const uint8_t *vec,
+                      uint8_t *out);
+int tyvec_bool_isfalse(uint32_t n, uint8_t *flag, const uint8_t *vec,
+                       uint8_t *out);
+int tyvec_bool_not(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out);
 
 #endif

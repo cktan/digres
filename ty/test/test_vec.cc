@@ -33,15 +33,15 @@ int scalar_add(int64_t a, int64_t b, int64_t *r) {
 /* The vector add of each width. */
 int vec_add(uint32_t n, uint8_t *f, const int16_t *a, const int16_t *b,
             int16_t *out) {
-  return ty_int16_add_vec(n, f, a, b, out);
+  return tyvec_int16_add(n, f, a, b, out);
 }
 int vec_add(uint32_t n, uint8_t *f, const int32_t *a, const int32_t *b,
             int32_t *out) {
-  return ty_int32_add_vec(n, f, a, b, out);
+  return tyvec_int32_add(n, f, a, b, out);
 }
 int vec_add(uint32_t n, uint8_t *f, const int64_t *a, const int64_t *b,
             int64_t *out) {
-  return ty_int64_add_vec(n, f, a, b, out);
+  return tyvec_int64_add(n, f, a, b, out);
 }
 
 /* Columns of n rows of T: a, b and their flags. */
@@ -222,7 +222,7 @@ TEST_CASE("IS NULL of a vector is each row's null bit") {
       flag[i] = uint8_t(i);
     }
     flag[n] = 0xff;
-    REQUIRE(0 == ty_flag_isnull(n, flag.data(), out.data()));
+    REQUIRE(0 == tyvec_flag_isnull(n, flag.data(), out.data()));
     // 2. The null bit of each row, and the flags after.
     for (uint32_t i = 0; i < n; i++) {
       CHECK(out[i] == (uint8_t(i) & TY_VEC_NULL ? 1 : 0));
@@ -262,16 +262,16 @@ TEST_CASE("IS NOT NULL, IS TRUE, IS FALSE and NOT of a vector") {
         int rc = -1;
         switch (op) {
         case NOTNULL:
-          rc = ty_flag_isnotnull(n, flag.data(), out);
+          rc = tyvec_flag_isnotnull(n, flag.data(), out);
           break;
         case ISTRUE:
-          rc = ty_flag_istrue(n, flag.data(), b.data(), out);
+          rc = tyvec_bool_istrue(n, flag.data(), b.data(), out);
           break;
         case ISFALSE:
-          rc = ty_flag_isfalse(n, flag.data(), b.data(), out);
+          rc = tyvec_bool_isfalse(n, flag.data(), b.data(), out);
           break;
         case NOT:
-          rc = ty_flag_not(n, flag.data(), b.data(), out);
+          rc = tyvec_bool_not(n, flag.data(), b.data(), out);
           break;
         }
         REQUIRE(0 == rc);

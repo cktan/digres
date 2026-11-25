@@ -144,50 +144,51 @@ int flag_op(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out,
 } // namespace
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int ty_int16_add_vec(uint32_t n, uint8_t *flag, const int16_t *a,
-                     const int16_t *b, int16_t *out) {
+int tyvec_int16_add(uint32_t n, uint8_t *flag, const int16_t *a,
+                    const int16_t *b, int16_t *out) {
   return add_vec<int16_t, uint16_t>(n, flag, a, b, out);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int ty_int32_add_vec(uint32_t n, uint8_t *flag, const int32_t *a,
-                     const int32_t *b, int32_t *out) {
+int tyvec_int32_add(uint32_t n, uint8_t *flag, const int32_t *a,
+                    const int32_t *b, int32_t *out) {
   return add_vec<int32_t, uint32_t>(n, flag, a, b, out);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int ty_int64_add_vec(uint32_t n, uint8_t *flag, const int64_t *a,
-                     const int64_t *b, int64_t *out) {
+int tyvec_int64_add(uint32_t n, uint8_t *flag, const int64_t *a,
+                    const int64_t *b, int64_t *out) {
   return add_vec<int64_t, uint64_t>(n, flag, a, b, out);
 }
 
 /* out = 1 for each null row, and 0 for another; see ty_vec.h. */
-int ty_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out) {
+int tyvec_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out) {
   return flag_op<true>(n, flag, flag, out,
                        [](auto f, auto) { return (f >> 1) & 1; });
 }
 
 /* out = 0 for each null row, and 1 for another; see ty_vec.h. */
-int ty_flag_isnotnull(uint32_t n, uint8_t *flag, uint8_t *out) {
+int tyvec_flag_isnotnull(uint32_t n, uint8_t *flag, uint8_t *out) {
   return flag_op<true>(n, flag, flag, out,
                        [](auto f, auto) { return ~(f >> 1) & 1; });
 }
 
 /* out = 1 for each row true and not null, and 0 for another. */
-int ty_flag_istrue(uint32_t n, uint8_t *flag, const uint8_t *vec,
-                   uint8_t *out) {
+int tyvec_bool_istrue(uint32_t n, uint8_t *flag, const uint8_t *vec,
+                      uint8_t *out) {
   return flag_op<true>(n, flag, vec, out,
                        [](auto f, auto v) { return v & ~(f >> 1) & 1; });
 }
 
 /* out = 1 for each row false and not null, and 0 for another. */
-int ty_flag_isfalse(uint32_t n, uint8_t *flag, const uint8_t *vec,
-                    uint8_t *out) {
+int tyvec_bool_isfalse(uint32_t n, uint8_t *flag, const uint8_t *vec,
+                       uint8_t *out) {
   return flag_op<true>(n, flag, vec, out,
                        [](auto f, auto v) { return ~(v | (f >> 1)) & 1; });
 }
 
 /* out = NOT vec; a null row stays null. See ty_vec.h. */
-int ty_flag_not(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out) {
+int tyvec_bool_not(uint32_t n, uint8_t *flag, const uint8_t *vec,
+                   uint8_t *out) {
   return flag_op<false>(n, flag, vec, out, [](auto, auto v) { return v ^ 1; });
 }

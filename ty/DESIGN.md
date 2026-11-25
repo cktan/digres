@@ -959,7 +959,7 @@ given a pack of the host.
 `ty_vec.h` holds the operations on vectors: one call on the n
 values of a column at once, for a columnar executor
 ([`../REPORT.md`](../REPORT.md) §9). The integers' add and
-the flag operations are built.
+the flag and bool operations are built.
 
 - **A vector is an array of n values and an array of n flags**,
   a byte a row. Bit 0, `TY_VEC_NOTVALID`, is 1 for a row that is
@@ -967,7 +967,7 @@ the flag operations are built.
   `TY_VEC_NULL`, is 1 for a null. The other bits are 0 for now.
   One flag array serves both inputs: a row is null if one of its
   inputs is.
-- **The call**: `ty_intN_add_vec(n, flag, a, b, out)`. `out`
+- **The call**: `tyvec_intN_add(n, flag, a, b, out)`. `out`
   gets the sums. `flag` is the flags of both inputs, and then of
   the results: an operation writes the results' flags over the
   inputs'. Add leaves them as they are, so a null input gives a
@@ -985,22 +985,22 @@ the flag operations are built.
   and only then looks for the row, one at a time.
 - **An operation that cannot fail may compute every row**, valid
   or not, as that is cheaper.
-- **`IS NULL` is `ty_flag_isnull(n, flag, out)`**: `out[i]` is 1
-  if row i is null, or else 0, for every row, so `out` is a
+- **`IS NULL` is `tyvec_flag_isnull(n, flag, out)`**: `out[i]`
+  is 1 if row i is null, or else 0, for every row, so `out` is a
   vector of bool. Its result is never null: it sets each
   `TY_VEC_NULL` to 0, and leaves the other bits. A caller that
   needs the input's nulls afterwards, as in
   `WHERE x IS NULL OR x > 3`, copies the flags first.
-- **`IS NOT NULL` is `ty_flag_isnotnull`**, with the same
+- **`IS NOT NULL` is `tyvec_flag_isnotnull`**, with the same
   parameters and the same change to `flag`.
-- **`IS TRUE` and `IS FALSE` are `ty_flag_istrue` and
-  `ty_flag_isfalse`**, `(n, flag, vec, out)`, of the bools of
+- **`IS TRUE` and `IS FALSE` are `tyvec_bool_istrue` and
+  `tyvec_bool_isfalse`**, `(n, flag, vec, out)`, of the bools of
   `vec`. A null row is neither, and `flag` changes in the same
   way.
-- **`NOT` is `ty_flag_not(n, flag, vec, out)`**. `NOT` of a null
-  is null, so `flag` stays as it is.
-- **`out` of a flag operation may be `vec`.** `flag` may not
-  overlap either.
+- **`NOT` is `tyvec_bool_not(n, flag, vec, out)`**. `NOT` of a
+  null is null, so `flag` stays as it is.
+- **`out` of a bool operation may be `vec`.** `flag` may not
+  overlap `out` or `vec`.
 - **`out` of add may be `a` or `b`, but not both at once.** When
   a block overflows, its sums are already over that input; the
   search for the row takes the input back as the sum less the
@@ -1011,8 +1011,8 @@ The tests are `test/test_vec.cc`: each row against the scalar
 loop's blocks; the lowest failing row among several, one past
 the last whole vector, and one in a row not valid and one in a
 null row, which are no error; and the results written over an
-input, with and without an overflow. The flag operations are
-tested on every value of a flag.
+input, with and without an overflow. The flag and bool
+operations are tested on every value of a flag.
 
 ## 22. to_char and its reverse
 
