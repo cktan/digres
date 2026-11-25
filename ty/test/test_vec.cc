@@ -5,14 +5,16 @@
 
 /*
  * test_vec.cc -- the vector operations of ty_vec.h, each row against the
- * scalar operation of ty_int.h.
+ * scalar operation of ty_int.h or ty_float.h.
  */
 #include "doctest.h"
 #include "ty_error.h"
+#include "ty_float.h"
 #include "ty_int.h"
 #include "ty_vec.h"
 
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <random>
 #include <string>
@@ -239,6 +241,35 @@ INT_OP(mul)
 INT_OP(div)
 INT_OP(mod)
 
+/* The same of floats. */
+#define FP_OP(NAME)                                                            \
+  struct fp_##NAME##_op {                                                      \
+    static int vec(uint32_t n, uint8_t *f, const float *a, const float *b,     \
+                   float *out) {                                               \
+      return tyvec_fp32_##NAME(n, f, a, b, out);                               \
+    }                                                                          \
+    static int vec(uint32_t n, uint8_t *f, const double *a, const double *b,   \
+                   double *out) {                                              \
+      return tyvec_fp64_##NAME(n, f, a, b, out);                               \
+    }                                                                          \
+    static int one(float a, float b, float *r) {                               \
+      return ty_float32_##NAME(a, b, r);                                       \
+    }                                                                          \
+    static int one(double a, double b, double *r) {                            \
+      return ty_float64_##NAME(a, b, r);                                       \
+    }                                                                          \
+  };
+FP_OP(add)
+FP_OP(sub)
+FP_OP(mul)
+FP_OP(div)
+
+/* Whether a and b are the same value: of two floats, both NaN, or the same
+   bits, so 0 is not -0. */
+template <typename T> bool same(T a, T b) {
+  return (a != a && b != b) || 0 == memcmp(&a, &b, sizeof a);
+}
+
 /* Where an operation's results go: an array of its own, a, b, or one array
    that is a, b and out. */
 enum place_t { OWN, INTO_A, INTO_B, ONE };
@@ -282,7 +313,7 @@ int64_t check_rows(const std::vector<T> &a, const std::vector<T> &b,
   } else {
     for (uint32_t i = 0; i < n; i++) {
       if (0 == (flag[i] & TY_VEC_SKIP)) {
-        CHECK(out[i] == want[i]);
+        CHECK(same(out[i], want[i]));
       }
       CHECK(f[i] == flag[i]);
     }
@@ -331,12 +362,14 @@ template <typename OP, typename T> void check_random() {
 }
 
 /*
- * One pair of values at each place of two 16 rows and their rest: it fails
- * at its row, or fits, and is no error if its row is not valid or null.
+ * One pair of values at each place of two 16 rows and their rest, or at
+ * every step-th from first: it fails at its row, or fits, and is no error if
+ * its row is not valid or null.
  */
-template <typename OP, typename T> void check_pair(T x, T y, bool fits) {
+template <typename OP, typename T>
+void check_pair(T x, T y, bool fits, uint32_t first = 0, uint32_t step = 1) {
   const uint32_t n = 37;
-  for (uint32_t at = 0; at < n; at++) {
+  for (uint32_t at = first; at < n; at += step) {
     std::vector<T> a(n, T(3)), b(n, T(2));
     std::vector<uint8_t> flag(n, 0);
     a[at] = x, b[at] = y;
@@ -489,6 +522,97 @@ template <typename OP, typename T> void check_div_exact() {
   // 2. Check the rows.
   CHECK((check_rows<OP, T>(a, b, std::vector<uint8_t>(a.size(), 0), OWN)) ==
         -1);
+}
+
+/*
+ * OP agrees with the scalar operation on pairs of every two of a list of
+ * floats: infinities, NaN, both zeros, the largest, the smallest and the
+ * smallest normal ones, and others.
+ * 1. Each pair alone, at some places of two 16 rows and their rest, which
+ *    are others for the next pair.
+ * 2. The pairs that fit, all in one vector, with some rows not computed that
+ *    hold a pair that fails.
+ * 3. The same with one pair that fails, at the end.
+ */
+template <typename OP, typename T> void check_fp() {
+  typedef std::numeric_limits<T> lim;
+  const T list[] = {0,
+                    T(-0.0),
+                    1,
+                    -1,
+                    T(0.5),
+                    3,
+                    T(-7.25),
+                    lim::infinity(),
+                    -lim::infinity(),
+                    lim::quiet_NaN(),
+                    lim::max(),
+                    lim::lowest(),
+                    lim::max() / 2,
+                    lim::min(),
+                    -lim::min(),
+                    lim::denorm_min(),
+                    -lim::denorm_min(),
+                    lim::epsilon(),
+                    T(1e-30),
+                    T(1e30)};
+  std::vector<T> good_a, good_b, bad_a, bad_b;
+  // 1. Each pair alone.
+  uint32_t pair = 0;
+  for (T x : list) {
+    for (T y : list) {
+      T r;
+      const bool fits = 0 == OP::one(x, y, &r);
+      (fits ? good_a : bad_a).push_back(x);
+      (fits ? good_b : bad_b).push_back(y);
+      check_pair<OP, T>(x, y, fits, pair++ % 13, 13);
+    }
+  }
+  REQUIRE(good_a.size() > 100);
+  REQUIRE(bad_a.size() > 1);
+  // 2. The pairs that fit, with others not computed.
+  std::vector<T> a, b;
+  std::vector<uint8_t> flag;
+  for (size_t i = 0; i < good_a.size(); i++) {
+    a.push_back(good_a[i]), b.push_back(good_b[i]), flag.push_back(0);
+    if (0 == i % 3) {
+      a.push_back(bad_a[i % bad_a.size()]);
+      b.push_back(bad_b[i % bad_b.size()]);
+      flag.push_back(i % 2 ? TY_VEC_NOTVALID : TY_VEC_NULL);
+    }
+  }
+  for (place_t place : {OWN, INTO_A, INTO_B}) {
+    CHECK((check_rows<OP, T>(a, b, flag, place)) == -1);
+  }
+  check_rows<OP, T>(a, b, flag, ONE);
+  // 3. One that fails, at the end.
+  for (size_t i = 0; i < bad_a.size(); i++) {
+    a.push_back(bad_a[i]), b.push_back(bad_b[i]), flag.push_back(0);
+    for (place_t place : {OWN, INTO_A, INTO_B}) {
+      CHECK((check_rows<OP, T>(a, b, flag, place)) == int64_t(a.size() - 1));
+    }
+    a.pop_back(), b.pop_back(), flag.pop_back();
+  }
+}
+
+/*
+ * OP agrees with the scalar operation on random bits, which are floats of
+ * every size.
+ */
+template <typename OP, typename T, typename U> void check_fp_random() {
+  std::mt19937_64 rng(31);
+  for (int k = 0; k < 2000; k++) {
+    const uint32_t n = 1 + uint32_t(rng() % 40);
+    std::vector<T> a(n), b(n);
+    std::vector<uint8_t> flag(n);
+    for (uint32_t i = 0; i < n; i++) {
+      const U x = U(rng()), y = U(rng());
+      memcpy(&a[i], &x, sizeof x);
+      memcpy(&b[i], &y, sizeof y);
+      flag[i] = uint8_t(rng() % 8 < 3 ? 1 + rng() % 3 : 0);
+    }
+    check_rows<OP, T>(a, b, flag, place_t(k % 4));
+  }
 }
 
 } // namespace
@@ -693,4 +817,23 @@ TEST_CASE("a vector div and mod are exact around a multiple of the divisor") {
   check_div_exact<mod_op, int32_t>();
   check_div_exact<div_op, int64_t>();
   check_div_exact<mod_op, int64_t>();
+}
+
+TEST_CASE("a vector add, sub, mul and div of floats agree with the scalar's") {
+  check_fp<fp_add_op, float>();
+  check_fp_random<fp_add_op, float, uint32_t>();
+  check_fp<fp_add_op, double>();
+  check_fp_random<fp_add_op, double, uint64_t>();
+  check_fp<fp_sub_op, float>();
+  check_fp_random<fp_sub_op, float, uint32_t>();
+  check_fp<fp_sub_op, double>();
+  check_fp_random<fp_sub_op, double, uint64_t>();
+  check_fp<fp_mul_op, float>();
+  check_fp_random<fp_mul_op, float, uint32_t>();
+  check_fp<fp_mul_op, double>();
+  check_fp_random<fp_mul_op, double, uint64_t>();
+  check_fp<fp_div_op, float>();
+  check_fp_random<fp_div_op, float, uint32_t>();
+  check_fp<fp_div_op, double>();
+  check_fp_random<fp_div_op, double, uint64_t>();
 }

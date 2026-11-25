@@ -15,18 +15,18 @@
  * is. A caller ORs the flags of two inputs into it before the call.
  *
  * An operation computes each row with neither bit set, as the scalar
- * operation of ty_int.h would, and writes:
+ * operation of ty_int.h or ty_float.h would, and writes:
  *   - out, the n results. A row not valid, or null, gets a value that
  *     means nothing; it is never an error. (An IS test has a result for a
  *     null row.) An operation that cannot fail may compute every row, as that
  *     is cheaper.
  *   - flag, the flags of the results, over those of the inputs. An
- *     operation on integers leaves each as it is: a null input gives a null
+ *     operation on numbers leaves each as it is: a null input gives a null
  *     result.
  * It returns 0, or -1 at once on the first row computed, by index, that
- * fails: the thread's error is TY_ERR_RANGE if the result does not fit, or
- * TY_ERR_DIVZERO; ty_erridx() is that row's index; and out and flag mean
- * nothing.
+ * fails: the thread's error is TY_ERR_RANGE if the result does not fit,
+ * TY_ERR_DIVZERO, or TY_ERR_UNDERFLOW; ty_erridx() is that row's index; and
+ * out and flag mean nothing.
  *
  * The operations run on the machine's vector instructions (src/vec.cc).
  *
@@ -41,6 +41,13 @@
  *       one divided by 0; a row not computed may have a b of 0. out may be
  *       a or b, as a row's inputs are read before its result is written;
  *       add does not allow that it is both.
+ *
+ *   tyvec_fpN_add(n, flag, a, b, out), and _sub, _mul, _div
+ *       The same of float (fp32) and double (fp64). RANGE on a row computed
+ *       whose result is infinite when no input is; UNDERFLOW on a product
+ *       that is 0 when neither factor is, or a quotient that is 0 when the
+ *       dividend is not and the divisor is finite; DIVZERO on one divided
+ *       by 0, unless a[i] is NaN. out may be a, b or both.
  *
  *   tyvec_flag_isnull(n, flag, out)
  *   tyvec_flag_isnotnull(n, flag, out)
@@ -112,6 +119,22 @@ int tyvec_int32_mod(uint32_t n, uint8_t *flag, const int32_t *a,
                     const int32_t *b, int32_t *out);
 int tyvec_int64_mod(uint32_t n, uint8_t *flag, const int64_t *a,
                     const int64_t *b, int64_t *out);
+int tyvec_fp32_add(uint32_t n, uint8_t *flag, const float *a, const float *b,
+                   float *out);
+int tyvec_fp64_add(uint32_t n, uint8_t *flag, const double *a, const double *b,
+                   double *out);
+int tyvec_fp32_sub(uint32_t n, uint8_t *flag, const float *a, const float *b,
+                   float *out);
+int tyvec_fp64_sub(uint32_t n, uint8_t *flag, const double *a, const double *b,
+                   double *out);
+int tyvec_fp32_mul(uint32_t n, uint8_t *flag, const float *a, const float *b,
+                   float *out);
+int tyvec_fp64_mul(uint32_t n, uint8_t *flag, const double *a, const double *b,
+                   double *out);
+int tyvec_fp32_div(uint32_t n, uint8_t *flag, const float *a, const float *b,
+                   float *out);
+int tyvec_fp64_div(uint32_t n, uint8_t *flag, const double *a, const double *b,
+                   double *out);
 int tyvec_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out);
 int tyvec_flag_isnotnull(uint32_t n, uint8_t *flag, uint8_t *out);
 int tyvec_bool_istrue(uint32_t n, uint8_t *flag, const uint8_t *vec,

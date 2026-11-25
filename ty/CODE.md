@@ -22,7 +22,8 @@ nor `TY_VEC_NULL`.
 ### 1.1 The call
 
 - **The name is `tyvec_<type>_<operation>`**, such as
-  `tyvec_int32_add` and `tyvec_bool_not`. The type is `flag` if
+  `tyvec_int32_add` and `tyvec_bool_not`. A float's type is
+  `fp32` or `fp64`, not `float32`. The type is `flag` if
   the operation reads only the flags: `tyvec_flag_isnull`. The
   prefix keeps it apart from the scalar `ty_int32_add`.
 - **The return is `int`**: 0, or -1 with the thread's error. An

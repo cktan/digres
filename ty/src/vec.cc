@@ -26,8 +26,8 @@ namespace {
 constexpr uint32_t block_rows = 256;
 
 /*
- * The vector types of T, an integer of U's width: L lanes in 16 bytes. An
- * operation adds with wrap-around, so it computes in U.
+ * The vector types of T, an integer or a float of U's width: L lanes in 16
+ * bytes. An integer operation adds with wrap-around, so it computes in U.
  */
 template <typename T, typename U> struct lanes_t {
   static constexpr uint32_t L = 16 / sizeof(T);
@@ -242,6 +242,92 @@ template <typename T, typename U> struct mod_op_t : lanes_t<T, U> {
   }
 };
 
+/*
+ * The operations of floats, with PostgreSQL's errors (ty_float.h): a result
+ * that is infinite when no input was overflows, RANGE; one that is 0 when no
+ * input was is an underflow, UNDERFLOW. A NaN or an infinity that comes in
+ * goes through.
+ */
+template <typename T, typename U> struct fp_op_t : lanes_t<T, U> {
+  typedef typename lanes_t<T, U>::vec_t vec_t;
+  typedef typename lanes_t<T, U>::svec_t fvec_t;
+  static constexpr U bad_bits = U(-1);
+  static constexpr bool undoes = false;
+  static constexpr T inf = std::numeric_limits<T>::infinity();
+  /* The lanes of x that are infinite. */
+  static vec_t is_inf(fvec_t x) {
+    return (vec_t)((fvec_t)((vec_t)x & U(~lanes_t<T, U>::top)) == inf);
+  }
+  static bool is_inf(T x) { return inf == x || -inf == x; }
+};
+
+/* a + b, or with SUB, a - b. */
+template <typename T, typename U, bool SUB> struct fp_add_op_t : fp_op_t<T, U> {
+  typedef typename lanes_t<T, U>::vec_t vec_t;
+  typedef typename lanes_t<T, U>::svec_t fvec_t;
+  using fp_op_t<T, U>::is_inf;
+  static vec_t vec(vec_t a, vec_t b, vec_t *bad) {
+    fvec_t x = (fvec_t)a, y = (fvec_t)b;
+    fvec_t r = SUB ? x - y : x + y;
+    *bad = is_inf(r) & ~(is_inf(x) | is_inf(y));
+    return (vec_t)r;
+  }
+  static ty_errnum_t one(T a, T b, T *r) {
+    *r = SUB ? a - b : a + b;
+    return is_inf(*r) && !is_inf(a) && !is_inf(b) ? TY_ERR_RANGE : TY_OK;
+  }
+};
+
+/* a * b. */
+template <typename T, typename U> struct fp_mul_op_t : fp_op_t<T, U> {
+  typedef typename lanes_t<T, U>::vec_t vec_t;
+  typedef typename lanes_t<T, U>::svec_t fvec_t;
+  using fp_op_t<T, U>::is_inf;
+  static vec_t vec(vec_t a, vec_t b, vec_t *bad) {
+    fvec_t x = (fvec_t)a, y = (fvec_t)b;
+    fvec_t r = x * y;
+    *bad = (is_inf(r) & ~(is_inf(x) | is_inf(y))) |
+           (vec_t)((r == 0) & ~((x == 0) | (y == 0)));
+    return (vec_t)r;
+  }
+  static ty_errnum_t one(T a, T b, T *r) {
+    *r = a * b;
+    if (is_inf(*r) && !is_inf(a) && !is_inf(b)) {
+      return TY_ERR_RANGE;
+    }
+    return 0 == *r && 0 != a && 0 != b ? TY_ERR_UNDERFLOW : TY_OK;
+  }
+};
+
+/*
+ * a / b. A divisor of 0 is DIVZERO, unless a is NaN. A divisor that is
+ * infinite gives 0 with no underflow.
+ */
+template <typename T, typename U> struct fp_div_op_t : fp_op_t<T, U> {
+  typedef typename lanes_t<T, U>::vec_t vec_t;
+  typedef typename lanes_t<T, U>::svec_t fvec_t;
+  using fp_op_t<T, U>::is_inf;
+  static vec_t vec(vec_t a, vec_t b, vec_t *bad) {
+    fvec_t x = (fvec_t)a, y = (fvec_t)b;
+    fvec_t r = x / y;
+    // A NaN is not equal to itself.
+    *bad = (vec_t)((y == 0) & (x == x)) | (is_inf(r) & ~is_inf(x)) |
+           ((vec_t)((r == 0) & (x != 0)) & ~is_inf(y));
+    return (vec_t)r;
+  }
+  static ty_errnum_t one(T a, T b, T *r) {
+    *r = 0;
+    if (0 == b && a == a) {
+      return TY_ERR_DIVZERO;
+    }
+    *r = 0 == b ? a : a / b;
+    if (is_inf(*r) && !is_inf(a)) {
+      return TY_ERR_RANGE;
+    }
+    return 0 == *r && 0 != a && !is_inf(b) ? TY_ERR_UNDERFLOW : TY_OK;
+  }
+};
+
 /* 16 rows' bytes in a vector. */
 typedef uint8_t bytes_t __attribute__((vector_size(16)));
 
@@ -267,7 +353,7 @@ inline void for_lanes(bytes_t m, size_t row, FN &&fn) {
 }
 
 /*
- * An operation OP on two vectors of integers, which may fail.
+ * An operation OP on two vectors of numbers, which may fail.
  * 1. For each block of rows, 16 rows at a time, and 16 bytes of them at a
  *    time: compute, store the results, and gather into bad the failures
  *    of the rows computed, neither not valid nor null. If out is a or
@@ -290,9 +376,10 @@ int arith_vec(uint32_t n, uint8_t *flag, const typename OP::elem_t *a,
   T saved[OP::undoes ? 1 : block_rows];
   // Fail with row i, for why.
   auto fail_at = [](size_t i, ty_errnum_t why) {
-    return ty_internal::set_error(
-        why, TY_ERR_DIVZERO == why ? "division by zero" : "result out of range",
-        uint32_t(i));
+    const char *msg = TY_ERR_DIVZERO == why     ? "division by zero"
+                      : TY_ERR_UNDERFLOW == why ? "result underflows"
+                                                : "result out of range";
+    return ty_internal::set_error(why, msg, uint32_t(i));
   };
   // Whether row i is computed.
   auto is_computed = [&](size_t i) { return 0 == (flag[i] & TY_VEC_SKIP); };
@@ -518,6 +605,54 @@ int tyvec_int32_mod(uint32_t n, uint8_t *flag, const int32_t *a,
 int tyvec_int64_mod(uint32_t n, uint8_t *flag, const int64_t *a,
                     const int64_t *b, int64_t *out) {
   return arith_vec<mod_op_t<int64_t, uint64_t>>(n, flag, a, b, out);
+}
+
+/* out = a + b of each row computed; see ty_vec.h. */
+int tyvec_fp32_add(uint32_t n, uint8_t *flag, const float *a, const float *b,
+                   float *out) {
+  return arith_vec<fp_add_op_t<float, uint32_t, false>>(n, flag, a, b, out);
+}
+
+/* out = a + b of each row computed; see ty_vec.h. */
+int tyvec_fp64_add(uint32_t n, uint8_t *flag, const double *a, const double *b,
+                   double *out) {
+  return arith_vec<fp_add_op_t<double, uint64_t, false>>(n, flag, a, b, out);
+}
+
+/* out = a - b of each row computed; see ty_vec.h. */
+int tyvec_fp32_sub(uint32_t n, uint8_t *flag, const float *a, const float *b,
+                   float *out) {
+  return arith_vec<fp_add_op_t<float, uint32_t, true>>(n, flag, a, b, out);
+}
+
+/* out = a - b of each row computed; see ty_vec.h. */
+int tyvec_fp64_sub(uint32_t n, uint8_t *flag, const double *a, const double *b,
+                   double *out) {
+  return arith_vec<fp_add_op_t<double, uint64_t, true>>(n, flag, a, b, out);
+}
+
+/* out = a * b of each row computed; see ty_vec.h. */
+int tyvec_fp32_mul(uint32_t n, uint8_t *flag, const float *a, const float *b,
+                   float *out) {
+  return arith_vec<fp_mul_op_t<float, uint32_t>>(n, flag, a, b, out);
+}
+
+/* out = a * b of each row computed; see ty_vec.h. */
+int tyvec_fp64_mul(uint32_t n, uint8_t *flag, const double *a, const double *b,
+                   double *out) {
+  return arith_vec<fp_mul_op_t<double, uint64_t>>(n, flag, a, b, out);
+}
+
+/* out = a / b of each row computed; see ty_vec.h. */
+int tyvec_fp32_div(uint32_t n, uint8_t *flag, const float *a, const float *b,
+                   float *out) {
+  return arith_vec<fp_div_op_t<float, uint32_t>>(n, flag, a, b, out);
+}
+
+/* out = a / b of each row computed; see ty_vec.h. */
+int tyvec_fp64_div(uint32_t n, uint8_t *flag, const double *a, const double *b,
+                   double *out) {
+  return arith_vec<fp_div_op_t<double, uint64_t>>(n, flag, a, b, out);
 }
 
 /* out = 1 for each null row, and 0 for another; see ty_vec.h. */

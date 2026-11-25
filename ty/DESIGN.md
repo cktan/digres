@@ -959,7 +959,8 @@ given a pack of the host.
 `ty_vec.h` holds the operations on vectors: one call on the n
 values of a column at once, for a columnar executor
 ([`../REPORT.md`](../REPORT.md) §9). The integers' add, sub,
-mul, div and mod, and the flag and bool operations are built.
+mul, div and mod, the floats' add, sub, mul and div, and the flag
+and bool operations are built.
 
 - **A vector is an array of n values and an array of n flags**,
   a byte a row. Bit 0, `TY_VEC_NOTVALID`, is 1 for a row that is
@@ -1003,6 +1004,12 @@ mul, div and mod, and the flag and bool operations are built.
   less the quotient times the divisor. A divisor of 0 or -1 is
   taken as 1, as the machine may trap on it, and any `a % -1` is
   0.
+- **The floats' are `tyvec_fp32_add` and `tyvec_fp64_add`**, and
+  the same for `_sub`, `_mul` and `_div`, with the call of the
+  integers'. Their errors are PostgreSQL's, as in §11's scalars:
+  a result that is infinite when no input is, RANGE; one that is
+  0 when no input is, `TY_ERR_UNDERFLOW`; and a divisor of 0.
+  Their `out` may be `a`, `b` or both, and is saved as mul's.
 - **Two multiplications are not plain vector types.** int32's
   takes NEON's intrinsics on aarch64, as GCC 13 makes scalar ones
   of the vector types'. int64's is one row at a time: neither
@@ -1050,7 +1057,8 @@ not valid and one in a null row, which are no error; and the
 results written over an input, with and without an overflow. The
 flag and bool operations are tested on every value of a flag. Div
 and mod are tested around multiples of the divisor, where a
-float's rounding would show.
+float's rounding would show. The floats are tested on every pair
+of a list of special values, at each lane, and on random bits.
 
 ## 22. to_char and its reverse
 
