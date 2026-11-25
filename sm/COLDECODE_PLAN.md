@@ -1,7 +1,7 @@
 # COLDECODE_PLAN: a CG decodes into arrays
 
-Status: a design, agreed. Nothing is built. §9 lists what the
-user decided.
+Status: a design, agreed but for one question. Nothing is built.
+§9 lists what the user decided, and what is open.
 
 Today `cg_open` (`sm2/src/col/cg.cc`) decodes a CG into one
 `std::string` a row. This plan makes it decode into arrays: the
@@ -45,11 +45,23 @@ dict_n   2
 flags    uint8_t[4]       { 0, 0, 2, 0 }
 ```
 
-TODO: the above is not clear; need elaboraation. code 1 means values[1] or 'view'.
-      - dict_n of 2 means there are 2 items in values[].
-      - flags[] remain the same
-Row 2 of `kind` is null. Its code is 0, which is in the
-dictionary but means nothing.
+How to read it:
+
+- **`values` holds each distinct value once.** `values[0]` is
+  `click`, and `values[1]` is `view`.
+- **`dict_n` is the count of `values`**, here 2. It is not the
+  count of rows, which is `n`, here 4.
+- **`codes` has one entry a row: an index into `values`.** The
+  value of row i is `values[codes[i]]`.
+- **`flags` has one entry a row**, as for `amount`. A dictionary
+  changes `values` alone, and adds `codes`.
+
+| row | `flags[i]` | `codes[i]` | `values[codes[i]]` | the row's value |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | 0 | `click` | `click` |
+| 1 | 0 | 1 | `view` | `view` |
+| 2 | 2 | 0 | `click` | null: the flag decides, and the code means nothing |
+| 3 | 0 | 1 | `view` | `view` |
 
 Then `amount > 5` is one call, on a copy of the flags and a
 vector of fives:
@@ -199,10 +211,9 @@ in.
 
 1. Check the tail, the CRC32C and the sizes, and decompress, as
    today.
-2. Expand the null bitmap, if there is one, to flag bytes. 
-   TODO: the null bitmap should be stored as an array of flag bytes
-      so we can avoid this step at read. The compression would have
-      squeezed out repeated values.
+2. Expand the null bitmap, if there is one, to flag bytes, 16
+   rows at a time with SIMD. §9 has the open question of a file
+   that stores flag bytes.
 3. Decode the values:
    1. **plain, fixed:** read each length, which must be the
       type's, and copy the value to its slot. A null's length
@@ -323,7 +334,7 @@ the cheapest of these to build, and should be next.
 
 ---
 
-## 9. Decided
+## 9. Decided, and open
 
 By the user, on 2026-11-25.
 
@@ -333,3 +344,25 @@ By the user, on 2026-11-25.
 | 2 | what is a string in an array? | a pointer to its varlena: 8 bytes, no copy, and what ty's text functions and PostgreSQL take | `sm_str_t` of [`../REPORT.md`](../REPORT.md) §8.2: 16 bytes, with its first bytes in line, so many compares need no second read, and DuckDB takes it with no conversion. The batch scan can make it from the pointers, if DuckDB is chosen |
 | 3 | does a dictionary stay as codes? | yes: a `GROUP BY` or a filter may work on the codes | expand to flat always: a simpler reader, but a code of 2 bits becomes 16 bytes of `decimal128`, and a filter or a `GROUP BY` sees no dictionary |
 | 4 | does the file format change? | no (§8) | yes, at once: §8's new layout |
+
+**Open: does the file store nulls as flag bytes, not as a
+bitmap?** Then a read has no bitmap to expand. Measured on a
+plain `int4` CG of 10,000 rows, at `-O3`. The cost is of the
+nulls alone, in instructions a row. For the bitmap it is zstd and
+the SIMD expand, and for flag bytes zstd, a check and a copy:
+
+| Nulls | file, no nulls stored | bitmap | flag bytes | cost, bitmap | cost, flag bytes |
+| --- | --- | --- | --- | --- | --- |
+| one | 42,062 | 42,075 | 42,065 | 1.1 | 1.0 |
+| all | 22 | 26 | 26 | 1.0 | 0.9 |
+| 10%, in runs of 100 | 37,930 | 37,958 | 38,017 | 1.1 | 1.2 |
+| 1%, at random | 42,240 | 42,699 | 42,968 | 2.3 | 3.0 |
+| 10%, at random | 41,609 | 42,841 | 44,025 | 1.3 | 10.8 |
+| 50%, at random | 28,560 | 29,833 | 31,107 | 3.1 | 12.9 |
+
+- **zstd squeezes runs, and then the two are equal.** It does not
+  squeeze nulls at random: the flag bytes are up to 1.3 KB more,
+  and zstd takes 10 instructions a row to write them out.
+- **The expand costs about 1 instruction a row.** There is little
+  to avoid.
+- **Recommended: keep the bitmap.**
