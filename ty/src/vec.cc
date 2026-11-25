@@ -449,6 +449,57 @@ int arith_vec(uint32_t n, uint8_t *flag, const typename OP::elem_t *a,
 }
 
 /*
+ * The masks of 16 rows from row on, a byte a row: fn(row) gives those of
+ * one vector, a lane of W bytes a row, of all ones or zeros. It is the
+ * reverse of for_lanes().
+ * 1. Take the masks of the first half of the rows, and of the second.
+ * 2. Keep every other byte of the two: a lane is half as wide.
+ */
+template <uint32_t W, uint32_t ROWS = 16, typename FN>
+inline bytes_t narrow_masks(size_t row, FN &&fn) {
+  if constexpr (1 == W) {
+    return fn(row);
+  } else {
+    const bytes_t even = {0,  2,  4,  6,  8,  10, 12, 14,
+                          16, 18, 20, 22, 24, 26, 28, 30};
+    const bytes_t first = narrow_masks<W / 2, ROWS / 2>(row, fn);
+    const bytes_t second = narrow_masks<W / 2, ROWS / 2>(row + ROWS / 2, fn);
+    return __builtin_shuffle(first, second, even);
+  }
+}
+
+/*
+ * A compare of two vectors of T: out = op(a, b), a bool, in every row, valid
+ * or not. op is called with a vector of each, for its masks, and with one
+ * value of each.
+ * 1. 16 rows at a time.
+ * 2. The rows past the last 16, one at a time, by the same rule.
+ */
+template <typename T, typename OP>
+int cmp_vec(uint32_t n, const T *a, const T *b, uint8_t *out, OP op) {
+  typedef T vec_t __attribute__((vector_size(16)));
+  size_t i = 0;
+  const size_t whole = n - n % 16;
+  // 1. 16 rows at a time.
+  for (; i < whole; i += 16) {
+    bytes_t r = narrow_masks<sizeof(T)>(
+        i, [&](size_t row) __attribute__((always_inline)) {
+          vec_t x, y;
+          memcpy(&x, a + row, 16);
+          memcpy(&y, b + row, 16);
+          return (bytes_t)op(x, y);
+        });
+    r &= 1;
+    memcpy(out + i, &r, 16);
+  }
+  // 2. The rest, one row at a time.
+  for (; i < n; i++) {
+    out[i] = uint8_t(op(a[i], b[i]));
+  }
+  return 0;
+}
+
+/*
  * An operation on flags and bools, a byte each: out = op(flag, vec), by the
  * bits of a byte, in every row, valid or not. An operation that takes no
  * bools passes flag as vec. With CLEAR, the result is never null. op is
@@ -698,3 +749,35 @@ int tyvec_bool_or(uint32_t n, uint8_t * /* flag */, const uint8_t *a,
                   const uint8_t *b, uint8_t *out) {
   return bool_op(n, a, b, out, [](auto x, auto y) { return x | y; });
 }
+
+/*
+ * The six compares of a type, out = a op b of each row; see ty_vec.h. Each
+ * OP is an expression of x and y, which are two vectors or two values.
+ */
+#define CMP_FN(TYPE, T, NAME, OP)                                              \
+  int tyvec_##TYPE##_##NAME(uint32_t n, uint8_t * /* flag */, const T *a,      \
+                            const T *b, uint8_t *out) {                        \
+    return cmp_vec<T>(n, a, b, out, [](auto x, auto y) { return OP; });        \
+  }
+#define CMP_FNS(TYPE, T)                                                       \
+  CMP_FN(TYPE, T, eq, x == y)                                                  \
+  CMP_FN(TYPE, T, ne, x != y)                                                  \
+  CMP_FN(TYPE, T, lt, x < y)                                                   \
+  CMP_FN(TYPE, T, le, x <= y)                                                  \
+  CMP_FN(TYPE, T, gt, x > y)                                                   \
+  CMP_FN(TYPE, T, ge, x >= y)
+/* All NaNs are equal, and above every number; a NaN is not equal to itself. */
+#define CMP_FNS_FP(TYPE, T)                                                    \
+  CMP_FN(TYPE, T, eq, (x == y) | ((x != x) & (y != y)))                        \
+  CMP_FN(TYPE, T, ne, (x != y) & ((x == x) | (y == y)))                        \
+  CMP_FN(TYPE, T, lt, (x == x) & !(x >= y))                                    \
+  CMP_FN(TYPE, T, le, (y != y) | (x <= y))                                     \
+  CMP_FN(TYPE, T, gt, (y == y) & !(x <= y))                                    \
+  CMP_FN(TYPE, T, ge, (x != x) | (x >= y))
+
+CMP_FNS(int16, int16_t)
+CMP_FNS(int32, int32_t)
+CMP_FNS(int64, int64_t)
+CMP_FNS(bool, uint8_t)
+CMP_FNS_FP(fp32, float)
+CMP_FNS_FP(fp64, double)

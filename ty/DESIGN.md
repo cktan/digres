@@ -959,8 +959,8 @@ given a pack of the host.
 `ty_vec.h` holds the operations on vectors: one call on the n
 values of a column at once, for a columnar executor
 ([`../REPORT.md`](../REPORT.md) §9). The integers' add, sub,
-mul, div and mod, the floats' add, sub, mul and div, and the flag
-and bool operations are built.
+mul, div and mod, the floats' add, sub, mul and div, the
+compares, and the flag and bool operations are built.
 
 - **A vector is an array of n values and an array of n flags**,
   a byte a row. Bit 0, `TY_VEC_NOTVALID`, is 1 for a row that is
@@ -1010,6 +1010,13 @@ and bool operations are built.
   a result that is infinite when no input is, RANGE; one that is
   0 when no input is, `TY_ERR_UNDERFLOW`; and a divisor of 0.
   Their `out` may be `a`, `b` or both, and is saved as mul's.
+- **The compares are `tyvec_int32_eq`**, and `_ne`, `_lt`, `_le`,
+  `_gt` and `_ge`, `(n, flag, a, b, out)`, for int16, int32,
+  int64, fp32, fp64 and bool. `out` is a vector of bool, and
+  `flag` stays as it is. The masks of 16 rows are narrowed to
+  their bytes by shuffles. All NaNs are equal and above every
+  number, as in §11's scalars. `out` may be `a` or `b` if the
+  type is bool only.
 - **Two multiplications are not plain vector types.** int32's
   takes NEON's intrinsics on aarch64, as GCC 13 makes scalar ones
   of the vector types'. int64's is one row at a time: neither
@@ -1059,6 +1066,8 @@ flag and bool operations are tested on every value of a flag. Div
 and mod are tested around multiples of the divisor, where a
 float's rounding would show. The floats are tested on every pair
 of a list of special values, at each lane, and on random bits.
+The compares are tested on every pair of a list of values, at
+each lane.
 
 ## 22. to_char and its reverse
 

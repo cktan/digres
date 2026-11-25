@@ -49,6 +49,13 @@
  *       dividend is not and the divisor is finite; DIVZERO on one divided
  *       by 0, unless a[i] is NaN. out may be a, b or both.
  *
+ *   tyvec_T_eq(n, flag, a, b, out), and _ne, _lt, _le, _gt, _ge
+ *       out[i] = a[i] = b[i], <>, <, <=, > or >=, a bool. T is int16, int32,
+ *       int64, fp32, fp64 or bool. All NaNs are equal, and above every
+ *       number; false is below true. They cannot fail: they return 0. flag
+ *       stays as it is: a null input gives a null result. out may be a or b
+ *       if T is bool, and may not overlap them if not.
+ *
  *   tyvec_flag_isnull(n, flag, out)
  *   tyvec_flag_isnotnull(n, flag, out)
  *   tyvec_bool_istrue(n, flag, vec, out)
@@ -146,5 +153,27 @@ int tyvec_bool_and(uint32_t n, uint8_t *flag, const uint8_t *a,
                    const uint8_t *b, uint8_t *out);
 int tyvec_bool_or(uint32_t n, uint8_t *flag, const uint8_t *a, const uint8_t *b,
                   uint8_t *out);
+
+/* The six compares of a type. */
+#define TYVEC_CMP_FN(TYPE, T, NAME)                                            \
+  int tyvec_##TYPE##_##NAME(uint32_t n, uint8_t *flag, const T *a, const T *b, \
+                            uint8_t *out);
+#define TYVEC_CMP_FNS(TYPE, T)                                                 \
+  TYVEC_CMP_FN(TYPE, T, eq)                                                    \
+  TYVEC_CMP_FN(TYPE, T, ne)                                                    \
+  TYVEC_CMP_FN(TYPE, T, lt)                                                    \
+  TYVEC_CMP_FN(TYPE, T, le)                                                    \
+  TYVEC_CMP_FN(TYPE, T, gt)                                                    \
+  TYVEC_CMP_FN(TYPE, T, ge)
+
+TYVEC_CMP_FNS(int16, int16_t)
+TYVEC_CMP_FNS(int32, int32_t)
+TYVEC_CMP_FNS(int64, int64_t)
+TYVEC_CMP_FNS(fp32, float)
+TYVEC_CMP_FNS(fp64, double)
+TYVEC_CMP_FNS(bool, uint8_t)
+
+#undef TYVEC_CMP_FNS
+#undef TYVEC_CMP_FN
 
 #endif

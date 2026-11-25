@@ -8,11 +8,13 @@
  * scalar operation of ty_int.h or ty_float.h.
  */
 #include "doctest.h"
+#include "ty_bool.h"
 #include "ty_error.h"
 #include "ty_float.h"
 #include "ty_int.h"
 #include "ty_vec.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -615,6 +617,118 @@ template <typename OP, typename T, typename U> void check_fp_random() {
   }
 }
 
+/* A compare of a type: the vector's, the scalar's and its name. */
+template <typename T> struct cmp_fns_t {
+  const char *name;
+  int (*vec)(uint32_t n, uint8_t *flag, const T *a, const T *b, uint8_t *out);
+  int (*one)(T a, T b);
+};
+#define CMP_ROW(TYPE, T, NAME)                                                 \
+  {#TYPE "_" #NAME, tyvec_##TYPE##_##NAME,                                     \
+   [](T a, T b) { return (int)ty_##TYPE##_##NAME(a, b); }}
+#define CMP_ROWS(TYPE, T)                                                      \
+  {                                                                            \
+    CMP_ROW(TYPE, T, eq), CMP_ROW(TYPE, T, ne), CMP_ROW(TYPE, T, lt),          \
+        CMP_ROW(TYPE, T, le), CMP_ROW(TYPE, T, gt), CMP_ROW(TYPE, T, ge)       \
+  }
+
+/*
+ * A compare of two vectors agrees with the scalar's in each computed row,
+ * and changes no flag.
+ * 1. For each compare, and sizes around 16 rows, every two of a list of
+ *    values and of random ones; each lane gets each pair, as the pairs are
+ *    shifted by a row each time. Flags are random.
+ * 2. Each computed row is the scalar's answer, 1 or 0; a row not computed
+ *    has any answer.
+ * 3. The flags are as they were, and nothing is written past the rows.
+ */
+template <typename T>
+void check_cmp(const std::vector<cmp_fns_t<T>> &fns, std::vector<T> list) {
+  std::mt19937_64 rng(37);
+  std::vector<T> a0, b0;
+  for (T x : list) {
+    for (T y : list) {
+      a0.push_back(x), b0.push_back(y);
+    }
+  }
+  for (const cmp_fns_t<T> &fn : fns) {
+    INFO(fn.name);
+    std::vector<T> a = a0, b = b0;
+    for (uint32_t shift = 0; shift < 33; shift++) {
+      // 1. The rows.
+      const uint32_t n = uint32_t(a.size());
+      std::vector<uint8_t> flag(n + 1, 0xff), out(n + 1, 0xaa);
+      for (uint32_t i = 0; i < n; i++) {
+        flag[i] = uint8_t(rng() % 8 < 3 ? 1 + rng() % 3 : 0);
+      }
+      const std::vector<uint8_t> was = flag;
+      REQUIRE(0 == fn.vec(n, flag.data(), a.data(), b.data(), out.data()));
+      // 2. The scalar's answers.
+      uint32_t wrong = 0;
+      for (uint32_t i = 0; i < n; i++) {
+        wrong += 0 == (was[i] & TY_VEC_SKIP) && out[i] != fn.one(a[i], b[i]);
+      }
+      CHECK(0 == wrong);
+      // 3. The flags, and past the rows.
+      CHECK(flag == was);
+      CHECK(0xaa == out[n]);
+      a.insert(a.begin(), list[shift % list.size()]);
+      b.insert(b.begin(), list[rng() % list.size()]);
+    }
+    // 1. to 3. again, for the small sizes, of the rows as shifted.
+    for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 31u}) {
+      REQUIRE(n <= a.size());
+      std::vector<uint8_t> flag(n + 1, 0), out(n + 1, 0xaa);
+      REQUIRE(0 == fn.vec(n, flag.data(), a.data(), b.data(), out.data()));
+      for (uint32_t i = 0; i < n; i++) {
+        CHECK(out[i] == fn.one(a[i], b[i]));
+      }
+      CHECK(0xaa == out[n]);
+    }
+  }
+}
+
+/* The values an integer compare is tested on. */
+template <typename T> std::vector<T> int_list() {
+  typedef std::numeric_limits<T> lim;
+  return {0,
+          1,
+          -1,
+          2,
+          -2,
+          127,
+          -128,
+          255,
+          256,
+          -256,
+          lim::max(),
+          T(lim::max() - 1),
+          lim::min(),
+          T(lim::min() + 1),
+          T(lim::max() / 2),
+          T(lim::max() / 256),
+          T(lim::min() / 256)};
+}
+
+/* The values a float compare is tested on; two NaNs of other bits. */
+template <typename T> std::vector<T> fp_list() {
+  typedef std::numeric_limits<T> lim;
+  return {0,
+          T(-0.0),
+          1,
+          -1,
+          T(1) + lim::epsilon(),
+          lim::infinity(),
+          -lim::infinity(),
+          lim::quiet_NaN(),
+          std::copysign(lim::quiet_NaN(), T(-1)),
+          lim::max(),
+          lim::lowest(),
+          lim::min(),
+          lim::denorm_min(),
+          -lim::denorm_min()};
+}
+
 } // namespace
 
 // Verify that IS NULL of a vector is the null bit of each row, and that no
@@ -836,4 +950,40 @@ TEST_CASE("a vector add, sub, mul and div of floats agree with the scalar's") {
   check_fp_random<fp_div_op, float, uint32_t>();
   check_fp<fp_div_op, double>();
   check_fp_random<fp_div_op, double, uint64_t>();
+}
+
+TEST_CASE("a vector compare agrees with the scalar's") {
+  check_cmp<int16_t>(CMP_ROWS(int16, int16_t), int_list<int16_t>());
+  check_cmp<int32_t>(CMP_ROWS(int32, int32_t), int_list<int32_t>());
+  check_cmp<int64_t>(CMP_ROWS(int64, int64_t), int_list<int64_t>());
+  check_cmp<float>(CMP_ROWS(fp32, float), fp_list<float>());
+  check_cmp<double>(CMP_ROWS(fp64, double), fp_list<double>());
+  check_cmp<uint8_t>(CMP_ROWS(bool, uint8_t), {0, 1});
+}
+
+// Verify that a compare of bools may write its answer over an input.
+// 1. Rows of each pair of bools.
+// 2. Each compare, over a, and over b.
+// 3. The answers are the scalar's.
+TEST_CASE("a vector compare of bools over its input") {
+  const std::vector<cmp_fns_t<uint8_t>> fns = CMP_ROWS(bool, uint8_t);
+  const uint32_t n = 77;
+  for (const cmp_fns_t<uint8_t> &fn : fns) {
+    for (bool over_a : {true, false}) {
+      // 1. Rows of each pair.
+      std::vector<uint8_t> a(n), b(n), flag(n, 0);
+      for (uint32_t i = 0; i < n; i++) {
+        a[i] = uint8_t(i & 1);
+        b[i] = uint8_t((i >> 1) & 1);
+      }
+      const std::vector<uint8_t> x = a, y = b;
+      // 2. The compare.
+      std::vector<uint8_t> &out = over_a ? a : b;
+      REQUIRE(0 == fn.vec(n, flag.data(), a.data(), b.data(), out.data()));
+      // 3. The answers.
+      for (uint32_t i = 0; i < n; i++) {
+        CHECK(out[i] == fn.one(x[i], y[i]));
+      }
+    }
+  }
 }
