@@ -9,8 +9,10 @@
 
 #include "doctest.h"
 
+#include "crc.h"
 #include "sm0_crc.h"
 
+#include <random>
 #include <string>
 
 // Verify that crc32c gives the published check values, and extends.
@@ -31,4 +33,40 @@ TEST_CASE("crc32c gives the check values and extends") {
   uint32_t part = sm0::crc32c(0, s.data(), 10);
   part = sm0::crc32c(part, s.data() + 10, s.size() - 10);
   CHECK(part == whole);
+}
+
+// Verify that the machine's instruction gives what the table gives.
+// 1. Skip it where the machine has none: the table is then crc32c.
+// 2. Each length from 0 to 64 at each alignment of 8, from 0 and from
+//    another CRC.
+// 3. A large buffer, whole, and extended at each of its first cuts.
+TEST_CASE("crc32c by the machine is crc32c by the table") {
+  // 1. The machine's.
+  const sm0_internal::crc32c_fn by_cpu = sm0_internal::crc32c_by_cpu();
+  if (nullptr == by_cpu) {
+    MESSAGE("no CRC32C instruction: the table alone is tested");
+    return;
+  }
+  std::mt19937 rng(3);
+  std::string s;
+  for (int i = 0; i < 100003; i++) {
+    s.push_back(static_cast<char>(rng()));
+  }
+  // 2. Lengths and alignments.
+  for (size_t at = 0; at < 8; at++) {
+    for (size_t n = 0; n <= 64; n++) {
+      for (uint32_t crc : {0u, 1u, 0xE3069283u, 0xFFFFFFFFu}) {
+        CHECK(by_cpu(crc, s.data() + at, n) ==
+              sm0_internal::crc32c_by_table(crc, s.data() + at, n));
+      }
+    }
+  }
+  // 3. A large buffer.
+  const uint32_t whole = sm0_internal::crc32c_by_table(0, s.data(), s.size());
+  CHECK(by_cpu(0, s.data(), s.size()) == whole);
+  CHECK(sm0::crc32c(s) == whole);
+  for (size_t cut = 0; cut < 40; cut++) {
+    const uint32_t part = by_cpu(0, s.data(), cut);
+    CHECK(by_cpu(part, s.data() + cut, s.size() - cut) == whole);
+  }
 }

@@ -119,8 +119,9 @@ of the same files, but without §5.3's checks.
   one bit at a time.
 - **After it, zstd and CRC32C are the cost.** sm3 computes the
   CRC32C once more than the table shows, over the whole file, to
-  compare it with the RG key's. It is made a byte at a time from
-  a table, 7 instructions a byte. §8 has both.
+  compare it with the RG key's. It was made a byte at a time from
+  a table, 7 instructions a byte; §10 has the one that replaced
+  it.
 - **Memory falls too.** A decoded `int8` CG of 10,000 rows is
   320 KB of `std::string` before, and 80 KB as an array.
 
@@ -326,13 +327,8 @@ tests and `dg/test/columnar.sql` run through the new decode.
 | the batch scan in `sm.h` ([`../REPORT.md`](../REPORT.md) §8) | a step of its own | the flags' copy with `TY_VEC_NOTVALID`, and a hold on a `cg_t` |
 | flat values of a dictionary CG, for arithmetic | only an executor needs them: TPC-H's `quantity` and `discount` are dictionaries | one gather operation, in ty or in the batch scan |
 | a new body layout: a fixed type as an aligned array, varlenas end to end with no length | this decode is needed first, and the gain is small | measured: 7% smaller in sum, though the `shipdate` dictionary is 24% larger. Decode takes 96 instructions, not 130, and zstd 679, not 748 |
-| a faster CRC32C | it changes sm0, not the decode | the machine's CRC32C instruction, where it has one: this ARM machine does. It takes 8 bytes at a time |
 | one CRC32C a read, not two | it changes a decision in [`COLSTORE.md`](COLSTORE.md) §5.3 | a decision on which of the two checks to keep |
 | a cache of decoded CGs | nothing shows it is needed | a measure |
-
-Once decode is built, the two CRC32Cs are a third of what a read
-of a CG costs: 450 of 1,328 in the sums of §3. A faster CRC32C is
-the cheapest of these to build, and should be next.
 
 ---
 
@@ -390,9 +386,15 @@ files are §3's, but the `int4` one has flag bytes.
   and the varlena's header. Both calls together cost less for
   every CG.
 
-A scan in digres, instructions a row, of a column store table of
-100,000 rows on the optimized build (the slope of 10 and 40
-prepared statements, under `perf stat`):
+**The CRC32C is now by the machine's instruction**
+(`sm0/src/crc.cc`): 0.5 instructions a byte, and 0.38 cycles for
+8.0. The eight CGs' CRC32C goes from 225 to 16, and their
+`cg_open` from 1,140 to 930. zstd is the rest, but for the
+decode.
+
+A scan in digres, with the table's CRC32C, instructions a row, of
+a column store table of 100,000 rows on the optimized build (the
+slope of 10 and 40 prepared statements, under `perf stat`):
 
 | Query | before | after | change |
 | --- | --- | --- | --- |
