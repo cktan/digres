@@ -959,7 +959,7 @@ given a pack of the host.
 `ty_vec.h` holds the operations on vectors: one call on the n
 values of a column at once, for a columnar executor
 ([`../REPORT.md`](../REPORT.md) §9). The integers' add, sub,
-mul and div, and the flag and bool operations are built.
+mul, div and mod, and the flag and bool operations are built.
 
 - **A vector is an array of n values and an array of n flags**,
   a byte a row. Bit 0, `TY_VEC_NOTVALID`, is 1 for a row that is
@@ -969,10 +969,11 @@ mul and div, and the flag and bool operations are built.
   inputs is. A caller ORs the flags of two inputs into it before
   the call.
 - **The call**: `tyvec_intN_add(n, flag, a, b, out)`, and the
-  same for `_sub`, `_mul` and `_div`. `out` gets the results.
-  `flag` is the flags of both inputs, and then of the results: an
-  operation writes the results' flags over the inputs'. These
-  leave them as they are, so a null input gives a null result.
+  same for `_sub`, `_mul`, `_div` and `_mod`. `out` gets the
+  results. `flag` is the flags of both inputs, and then of the
+  results: an operation writes the results' flags over the
+  inputs'. These leave them as they are, so a null input gives a
+  null result.
 - **A row not valid, or null, is never computed into an error.**
   Its result means nothing.
 - **A failing row fails the call at once**: `TY_ERR_RANGE` if it
@@ -998,6 +999,10 @@ mul and div, and the flag and bool operations are built.
   that is no integer is 1 / |b| or more from the next integer,
   and the rounding error is less. 64 bits are divided one row at
   a time.
+- **A remainder fails for a divisor of 0.** It is the dividend
+  less the quotient times the divisor. A divisor of 0 or -1 is
+  taken as 1, as the machine may trap on it, and any `a % -1` is
+  0.
 - **Two multiplications are not plain vector types.** int32's
   takes NEON's intrinsics on aarch64, as GCC 13 makes scalar ones
   of the vector types'. int64's is one row at a time: neither
@@ -1029,22 +1034,22 @@ mul and div, and the flag and bool operations are built.
 - **`out` of `AND` and `OR` may be `a`, `b` or both.**
 - **`out` of another bool operation may be `vec`.** `flag` may
   not overlap an input or `out`.
-- **`out` of add, sub, mul and div may be `a` or `b`.** When a
-  block fails, its results are already over that input. Add and
+- **`out` of add, sub, mul, div and mod may be `a` or `b`.** When
+  a block fails, its results are already over that input. Add and
   sub take the input back from the result and the other input.
-  Mul and div cannot, so they save each block of that input
-  first, which costs a copy of 256 rows. Add does not allow `a`,
-  `b` and `out` to be one array, as it has no other input then.
-  Sub does, as `a - a` never overflows, and so do mul and div.
+  The others cannot, so they save each block of that input first,
+  which costs a copy of 256 rows. Add does not allow `a`, `b` and
+  `out` to be one array, as it has no other input then. Sub does,
+  as `a - a` never overflows, and so do the others.
 
 The tests are `test/test_vec.cc`: each row against the scalar
-`ty_intN_add`, `_sub`, `_mul` and `_div`, at sizes around the
-vector's lanes and the loop's blocks; the lowest failing row
+`ty_intN_add`, `_sub`, `_mul`, `_div` and `_mod`, at sizes around
+the vector's lanes and the loop's blocks; the lowest failing row
 among several, one past the last whole vector, and one in a row
 not valid and one in a null row, which are no error; and the
 results written over an input, with and without an overflow. The
-flag and bool operations are tested on every value of a flag.
-Division is tested around multiples of the divisor, where a
+flag and bool operations are tested on every value of a flag. Div
+and mod are tested around multiples of the divisor, where a
 float's rounding would show.
 
 ## 22. to_char and its reverse

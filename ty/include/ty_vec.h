@@ -34,11 +34,13 @@
  *   tyvec_intN_sub(n, flag, a, b, out)
  *   tyvec_intN_mul(n, flag, a, b, out)
  *   tyvec_intN_div(n, flag, a, b, out)
- *       out[i] = a[i] + b[i], a[i] - b[i], a[i] * b[i], or a[i] / b[i], to
- *       zero. RANGE on a row computed that overflows, as MIN / -1 does, and
- *       DIVZERO on one divided by 0; a row not computed may have a b of 0.
- *       out may be a or b, as a row's inputs are read before its result is
- *       written; add does not allow that it is both.
+ *   tyvec_intN_mod(n, flag, a, b, out)
+ *       out[i] = a[i] + b[i], a[i] - b[i], a[i] * b[i], a[i] / b[i], to
+ *       zero, or a[i] % b[i], with the sign of a[i]; MIN % -1 is 0. RANGE
+ *       on a row computed that overflows, as MIN / -1 does, and DIVZERO on
+ *       one divided by 0; a row not computed may have a b of 0. out may be
+ *       a or b, as a row's inputs are read before its result is written;
+ *       add does not allow that it is both.
  *
  *   tyvec_flag_isnull(n, flag, out)
  *   tyvec_flag_isnotnull(n, flag, out)
@@ -103,6 +105,12 @@ int tyvec_int16_div(uint32_t n, uint8_t *flag, const int16_t *a,
 int tyvec_int32_div(uint32_t n, uint8_t *flag, const int32_t *a,
                     const int32_t *b, int32_t *out);
 int tyvec_int64_div(uint32_t n, uint8_t *flag, const int64_t *a,
+                    const int64_t *b, int64_t *out);
+int tyvec_int16_mod(uint32_t n, uint8_t *flag, const int16_t *a,
+                    const int16_t *b, int16_t *out);
+int tyvec_int32_mod(uint32_t n, uint8_t *flag, const int32_t *a,
+                    const int32_t *b, int32_t *out);
+int tyvec_int64_mod(uint32_t n, uint8_t *flag, const int64_t *a,
                     const int64_t *b, int64_t *out);
 int tyvec_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out);
 int tyvec_flag_isnotnull(uint32_t n, uint8_t *flag, uint8_t *out);

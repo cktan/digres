@@ -237,6 +237,7 @@ INT_OP(add)
 INT_OP(sub)
 INT_OP(mul)
 INT_OP(div)
+INT_OP(mod)
 
 /* Where an operation's results go: an array of its own, a, b, or one array
    that is a, b and out. */
@@ -361,6 +362,8 @@ template <typename OP, typename T> void check_pair(T x, T y, bool fits) {
  *    largest values whose product fits, and one more does not.
  * 4. div: anything / 0, and MIN / -1, fail; MAX / -1, MIN / 1, MIN / MIN
  *    and a quotient of each sign, cut to zero, are right.
+ * 5. mod: anything % 0 fails; anything % -1 is 0, MIN too, and each sign is
+ *    right.
  */
 template <typename T> void check_edges() {
   const T max = std::numeric_limits<T>::max();
@@ -403,6 +406,19 @@ template <typename T> void check_edges() {
   check_pair<div_op, T>(-7, 2, true);
   check_pair<div_op, T>(7, -2, true);
   check_pair<div_op, T>(-7, -2, true);
+  // 5. mod.
+  check_pair<mod_op, T>(1, 0, false);
+  check_pair<mod_op, T>(0, 0, false);
+  check_pair<mod_op, T>(min, 0, false);
+  check_pair<mod_op, T>(min, -1, true);
+  check_pair<mod_op, T>(max, -1, true);
+  check_pair<mod_op, T>(min, 1, true);
+  check_pair<mod_op, T>(min, min, true);
+  check_pair<mod_op, T>(min, max, true);
+  check_pair<mod_op, T>(max, min, true);
+  check_pair<mod_op, T>(-7, 2, true);
+  check_pair<mod_op, T>(7, -2, true);
+  check_pair<mod_op, T>(-7, -2, true);
 }
 
 /*
@@ -450,12 +466,13 @@ template <typename T> void check_div_errors() {
 }
 
 /*
- * A quotient is exact: the dividends around a multiple of the divisor.
+ * A quotient, or a remainder, is exact: the dividends around a multiple of the
+ * divisor.
  * 1. Random divisors, and a multiple of each that fits, less 1, itself,
  *    and 1 more.
  * 2. Check the rows.
  */
-template <typename T> void check_div_exact() {
+template <typename OP, typename T> void check_div_exact() {
   std::mt19937_64 rng(29);
   const T max = std::numeric_limits<T>::max();
   std::vector<T> a, b;
@@ -470,7 +487,7 @@ template <typename T> void check_div_exact() {
     }
   }
   // 2. Check the rows.
-  CHECK((check_rows<div_op, T>(a, b, std::vector<uint8_t>(a.size(), 0), OWN)) ==
+  CHECK((check_rows<OP, T>(a, b, std::vector<uint8_t>(a.size(), 0), OWN)) ==
         -1);
 }
 
@@ -639,7 +656,7 @@ TEST_CASE("a vector add over its input fails at the right row") {
   check_overflow_in_place<int64_t>();
 }
 
-TEST_CASE("a vector add, sub, mul and div agree with the scalar's") {
+TEST_CASE("a vector add, sub, mul, div and mod agree with the scalar's") {
   check_random<add_op, int16_t>();
   check_random<add_op, int32_t>();
   check_random<add_op, int64_t>();
@@ -650,11 +667,14 @@ TEST_CASE("a vector add, sub, mul and div agree with the scalar's") {
   check_random<mul_op, int32_t>();
   check_random<mul_op, int64_t>();
   check_random<div_op, int16_t>();
+  check_random<mod_op, int16_t>();
   check_random<div_op, int32_t>();
+  check_random<mod_op, int32_t>();
   check_random<div_op, int64_t>();
+  check_random<mod_op, int64_t>();
 }
 
-TEST_CASE("a vector add, sub, mul and div at their edges") {
+TEST_CASE("a vector add, sub, mul, div and mod at their edges") {
   check_edges<int16_t>();
   check_edges<int32_t>();
   check_edges<int64_t>();
@@ -666,8 +686,11 @@ TEST_CASE("a vector div fails with the error of its lowest failing row") {
   check_div_errors<int64_t>();
 }
 
-TEST_CASE("a vector div is exact around a multiple of the divisor") {
-  check_div_exact<int16_t>();
-  check_div_exact<int32_t>();
-  check_div_exact<int64_t>();
+TEST_CASE("a vector div and mod are exact around a multiple of the divisor") {
+  check_div_exact<div_op, int16_t>();
+  check_div_exact<mod_op, int16_t>();
+  check_div_exact<div_op, int32_t>();
+  check_div_exact<mod_op, int32_t>();
+  check_div_exact<div_op, int64_t>();
+  check_div_exact<mod_op, int64_t>();
 }

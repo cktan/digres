@@ -143,13 +143,46 @@ struct mul64_op_t : lanes_t<int64_t, uint64_t> {
 };
 
 /*
- * a / b, to zero. It fails for a b of 0, and for MIN / -1, which does not
- * fit. Such a row, which may be one not computed, is divided by 1: the
- * machine may trap on it. Neither NEON nor SSE divides integers.
+ * The quotients of x and y, cut to zero; no y is 0, and no row MIN / -1.
+ * Neither NEON nor SSE divides integers.
  *   - 16 bits: in float, and 32 bits: in double. The quotient cut to an
  *     integer is exact: one that is no integer is 1 / |b| or more from the
  *     next, and the rounding error is less than that.
  *   - 64 bits: one lane at a time.
+ */
+template <typename T, typename svec_t> svec_t quotients(svec_t x, svec_t y) {
+  if constexpr (2 == sizeof(T)) {
+    typedef int32_t wide_t __attribute__((vector_size(32)));
+    typedef float float_t __attribute__((vector_size(32)));
+    float_t q =
+        __builtin_convertvector(__builtin_convertvector(x, wide_t), float_t) /
+        __builtin_convertvector(__builtin_convertvector(y, wide_t), float_t);
+    return __builtin_convertvector(__builtin_convertvector(q, wide_t), svec_t);
+  } else if constexpr (4 == sizeof(T)) {
+#ifdef __aarch64__
+    // GCC 13 makes scalar conversions of the vector types' below.
+    int32x4_t a = (int32x4_t)x, b = (int32x4_t)y;
+    float64x2_t lo = vdivq_f64(vcvtq_f64_s64(vmovl_s32(vget_low_s32(a))),
+                               vcvtq_f64_s64(vmovl_s32(vget_low_s32(b))));
+    float64x2_t hi = vdivq_f64(vcvtq_f64_s64(vmovl_high_s32(a)),
+                               vcvtq_f64_s64(vmovl_high_s32(b)));
+    return (svec_t)vuzp1q_s32(vreinterpretq_s32_s64(vcvtq_s64_f64(lo)),
+                              vreinterpretq_s32_s64(vcvtq_s64_f64(hi)));
+#else
+    typedef double double_t __attribute__((vector_size(32)));
+    return __builtin_convertvector(__builtin_convertvector(x, double_t) /
+                                       __builtin_convertvector(y, double_t),
+                                   svec_t);
+#endif
+  } else {
+    return svec_t{x[0] / y[0], x[1] / y[1]};
+  }
+}
+
+/*
+ * a / b, to zero. It fails for a b of 0, and for MIN / -1, which does not
+ * fit. Such a row, which may be one not computed, is divided by 1: the
+ * machine may trap on it.
  */
 template <typename T, typename U> struct div_op_t : lanes_t<T, U> {
   typedef typename lanes_t<T, U>::vec_t vec_t;
@@ -157,41 +190,11 @@ template <typename T, typename U> struct div_op_t : lanes_t<T, U> {
   static constexpr U bad_bits = U(-1);
   static constexpr bool undoes = false;
   static constexpr T min = std::numeric_limits<T>::min();
-  /* The quotients of x and y; no y is 0, and none is MIN / -1. */
-  static svec_t quotients(svec_t x, svec_t y) {
-    if constexpr (2 == sizeof(T)) {
-      typedef int32_t wide_t __attribute__((vector_size(32)));
-      typedef float float_t __attribute__((vector_size(32)));
-      float_t q =
-          __builtin_convertvector(__builtin_convertvector(x, wide_t), float_t) /
-          __builtin_convertvector(__builtin_convertvector(y, wide_t), float_t);
-      return __builtin_convertvector(__builtin_convertvector(q, wide_t),
-                                     svec_t);
-    } else if constexpr (4 == sizeof(T)) {
-#ifdef __aarch64__
-      // GCC 13 makes scalar conversions of the vector types' below.
-      int32x4_t a = (int32x4_t)x, b = (int32x4_t)y;
-      float64x2_t lo = vdivq_f64(vcvtq_f64_s64(vmovl_s32(vget_low_s32(a))),
-                                 vcvtq_f64_s64(vmovl_s32(vget_low_s32(b))));
-      float64x2_t hi = vdivq_f64(vcvtq_f64_s64(vmovl_high_s32(a)),
-                                 vcvtq_f64_s64(vmovl_high_s32(b)));
-      return (svec_t)vuzp1q_s32(vreinterpretq_s32_s64(vcvtq_s64_f64(lo)),
-                                vreinterpretq_s32_s64(vcvtq_s64_f64(hi)));
-#else
-      typedef double double_t __attribute__((vector_size(32)));
-      return __builtin_convertvector(__builtin_convertvector(x, double_t) /
-                                         __builtin_convertvector(y, double_t),
-                                     svec_t);
-#endif
-    } else {
-      return svec_t{x[0] / y[0], x[1] / y[1]};
-    }
-  }
   static vec_t vec(vec_t a, vec_t b, vec_t *bad) {
     svec_t x = (svec_t)a, y = (svec_t)b;
     svec_t fails = (y == 0) | ((x == min) & (y == T(-1)));
     *bad = (vec_t)fails;
-    return (vec_t)quotients(x, (y & ~fails) | (fails & 1));
+    return (vec_t)quotients<T>(x, (y & ~fails) | (fails & 1));
   }
   static ty_errnum_t one(T a, T b, T *r) {
     *r = 0;
@@ -202,6 +205,39 @@ template <typename T, typename U> struct div_op_t : lanes_t<T, U> {
       return TY_ERR_RANGE;
     }
     *r = T(a / b);
+    return TY_OK;
+  }
+};
+
+/*
+ * a % b, with the sign of a. It fails for a b of 0. A row with a b of 0, or
+ * of -1, is divided by 1: the machine may trap on both, and any a % -1 is 0.
+ */
+template <typename T, typename U> struct mod_op_t : lanes_t<T, U> {
+  typedef typename lanes_t<T, U>::vec_t vec_t;
+  typedef typename lanes_t<T, U>::svec_t svec_t;
+  static constexpr U bad_bits = U(-1);
+  static constexpr bool undoes = false;
+  static vec_t vec(vec_t a, vec_t b, vec_t *bad) {
+    svec_t x = (svec_t)a, y = (svec_t)b;
+    svec_t fails = y == 0;
+    svec_t by_one = fails | (y == T(-1));
+    *bad = (vec_t)fails;
+    y = (y & ~by_one) | (by_one & 1);
+    if constexpr (8 == sizeof(T)) {
+      return (vec_t)svec_t{x[0] % y[0], x[1] % y[1]};
+    } else {
+      return a - (vec_t)quotients<T>(x, y) * (vec_t)y;
+    }
+  }
+  static ty_errnum_t one(T a, T b, T *r) {
+    *r = 0;
+    if (0 == b) {
+      return TY_ERR_DIVZERO;
+    }
+    if (-1 != b) {
+      *r = T(a % b);
+    }
     return TY_OK;
   }
 };
@@ -464,6 +500,24 @@ int tyvec_int32_div(uint32_t n, uint8_t *flag, const int32_t *a,
 int tyvec_int64_div(uint32_t n, uint8_t *flag, const int64_t *a,
                     const int64_t *b, int64_t *out) {
   return arith_vec<div_op_t<int64_t, uint64_t>>(n, flag, a, b, out);
+}
+
+/* out = a % b of each row computed; see ty_vec.h. */
+int tyvec_int16_mod(uint32_t n, uint8_t *flag, const int16_t *a,
+                    const int16_t *b, int16_t *out) {
+  return arith_vec<mod_op_t<int16_t, uint16_t>>(n, flag, a, b, out);
+}
+
+/* out = a % b of each row computed; see ty_vec.h. */
+int tyvec_int32_mod(uint32_t n, uint8_t *flag, const int32_t *a,
+                    const int32_t *b, int32_t *out) {
+  return arith_vec<mod_op_t<int32_t, uint32_t>>(n, flag, a, b, out);
+}
+
+/* out = a % b of each row computed; see ty_vec.h. */
+int tyvec_int64_mod(uint32_t n, uint8_t *flag, const int64_t *a,
+                    const int64_t *b, int64_t *out) {
+  return arith_vec<mod_op_t<int64_t, uint64_t>>(n, flag, a, b, out);
 }
 
 /* out = 1 for each null row, and 0 for another; see ty_vec.h. */
