@@ -298,6 +298,54 @@ TEST_CASE("IS NOT NULL, IS TRUE, IS FALSE and NOT of a vector") {
   }
 }
 
+// Verify that AND and OR of two vectors are right in each computed row, and
+// change no flag.
+// 1. For each size around the 16 bytes of a vector instruction, rows of
+//    each flag with each pair of bools. A row not computed holds bytes that
+//    are no bool.
+// 2. Each operation, into an array of its own, into a, into b, and with a, b
+//    and out one array.
+// 3. out is a AND b, or a OR b, of each computed row.
+// 4. The flags are as they were, and nothing is written past the n rows.
+TEST_CASE("AND and OR of two vectors") {
+  enum { OWN, INTO_A, INTO_B, ONE, NPLACES };
+  for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 31u, 33u, 256u, 2003u}) {
+    for (bool is_and : {true, false}) {
+      for (int place = OWN; place < NPLACES; place++) {
+        // 1. Rows of each flag with each pair of bools.
+        std::vector<uint8_t> was(n + 1, 0xff), wa(n + 1, 0xaa), wb = wa;
+        for (uint32_t i = 0; i < n; i++) {
+          const bool skip = (i / 4) & TY_VEC_SKIP;
+          was[i] = uint8_t(i / 4);
+          wa[i] = skip ? uint8_t(0x54 + i) : uint8_t(i & 1);
+          wb[i] = skip ? uint8_t(0x73 + i) : uint8_t((i >> 1) & 1);
+        }
+        if (ONE == place) {
+          wb = wa;
+        }
+        std::vector<uint8_t> flag = was, a = wa, b = wb, own(n + 1, 0xaa);
+        const uint8_t *y = ONE == place ? a.data() : b.data();
+        uint8_t *out = OWN == place      ? own.data()
+                       : INTO_B == place ? b.data()
+                                         : a.data();
+        // 2. The operation.
+        REQUIRE(0 == (is_and
+                          ? tyvec_bool_and(n, flag.data(), a.data(), y, out)
+                          : tyvec_bool_or(n, flag.data(), a.data(), y, out)));
+        // 3. Each computed row.
+        for (uint32_t i = 0; i < n; i++) {
+          if (0 == (was[i] & TY_VEC_SKIP)) {
+            CHECK(out[i] == (is_and ? wa[i] && wb[i] : wa[i] || wb[i]));
+          }
+        }
+        // 4. The flags, and past the n rows.
+        CHECK(flag == was);
+        CHECK(0xaa == out[n]);
+      }
+    }
+  }
+}
+
 TEST_CASE("a vector add agrees with the scalar add, row by row") {
   check_agrees<int16_t>();
   check_agrees<int32_t>();

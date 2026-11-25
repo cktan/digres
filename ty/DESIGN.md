@@ -966,7 +966,8 @@ the flag and bool operations are built.
   not valid, such as a row a filter dropped; bit 1,
   `TY_VEC_NULL`, is 1 for a null. The other bits are 0 for now.
   One flag array serves both inputs: a row is null if one of its
-  inputs is.
+  inputs is. A caller ORs the flags of two inputs into it before
+  the call.
 - **The call**: `tyvec_intN_add(n, flag, a, b, out)`. `out`
   gets the sums. `flag` is the flags of both inputs, and then of
   the results: an operation writes the results' flags over the
@@ -999,8 +1000,14 @@ the flag and bool operations are built.
   way.
 - **`NOT` is `tyvec_bool_not(n, flag, vec, out)`**. `NOT` of a
   null is null, so `flag` stays as it is.
-- **`out` of a bool operation may be `vec`.** `flag` may not
-  overlap `out` or `vec`.
+- **`AND` and `OR` are `tyvec_bool_and` and `tyvec_bool_or`**,
+  `(n, flag, a, b, out)`. `flag` stays as it is, so a row with a
+  null input is null. That is not SQL's answer for
+  `false AND null`, which is false, and for `true OR null`, which
+  is true: one flag does not say which input is null.
+- **`out` of `AND` and `OR` may be `a`, `b` or both.**
+- **`out` of another bool operation may be `vec`.** `flag` may
+  not overlap an input or `out`.
 - **`out` of add may be `a` or `b`, but not both at once.** When
   a block overflows, its sums are already over that input; the
   search for the row takes the input back as the sum less the

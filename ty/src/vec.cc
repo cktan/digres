@@ -141,6 +141,34 @@ int flag_op(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out,
   return 0;
 }
 
+/*
+ * An operation on two vectors of bool: out = op(a, b), by the bits of a
+ * byte, in every row, valid or not. op is called with 16 rows in a vector,
+ * and with one row's two bytes.
+ * 1. 16 rows at a time.
+ * 2. The rows past the last 16, one at a time, by the same rule.
+ */
+template <typename OP>
+int bool_op(uint32_t n, const uint8_t *a, const uint8_t *b, uint8_t *out,
+            OP op) {
+  typedef uint8_t vec_t __attribute__((vector_size(16)));
+  const uint32_t whole = n - n % 16;
+  uint32_t i = 0;
+  // 1. Whole vectors.
+  for (; i < whole; i += 16) {
+    vec_t va, vb;
+    memcpy(&va, a + i, 16);
+    memcpy(&vb, b + i, 16);
+    vec_t r = op(va, vb);
+    memcpy(out + i, &r, 16);
+  }
+  // 2. The rest, one row at a time.
+  for (; i < n; i++) {
+    out[i] = uint8_t(op(a[i], b[i]));
+  }
+  return 0;
+}
+
 } // namespace
 
 /* out = a + b of each row computed; see ty_vec.h. */
@@ -191,4 +219,16 @@ int tyvec_bool_isfalse(uint32_t n, uint8_t *flag, const uint8_t *vec,
 int tyvec_bool_not(uint32_t n, uint8_t *flag, const uint8_t *vec,
                    uint8_t *out) {
   return flag_op<false>(n, flag, vec, out, [](auto, auto v) { return v ^ 1; });
+}
+
+/* out = a AND b; a row with a null input stays null. See ty_vec.h. */
+int tyvec_bool_and(uint32_t n, uint8_t * /* flag */, const uint8_t *a,
+                   const uint8_t *b, uint8_t *out) {
+  return bool_op(n, a, b, out, [](auto x, auto y) { return x & y; });
+}
+
+/* out = a OR b; a row with a null input stays null. See ty_vec.h. */
+int tyvec_bool_or(uint32_t n, uint8_t * /* flag */, const uint8_t *a,
+                  const uint8_t *b, uint8_t *out) {
+  return bool_op(n, a, b, out, [](auto x, auto y) { return x | y; });
 }

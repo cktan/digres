@@ -30,7 +30,8 @@ nor `TY_VEC_NULL`.
   that all operations have one shape.
 - **`flag` is one in/out parameter, `uint8_t *flag`, with no
   `const`.** It holds the flags of the inputs, and after the
-  call those of the results. Do not add a second flag array.
+  call those of the results. Do not add a second flag array: a
+  caller ORs the flags of two inputs before the call.
 - **Keep the parameters few.** The order is `n`, `flag`, the
   inputs, `out`. What describes an error goes in the thread's
   error state, not in a parameter: the failing row is
