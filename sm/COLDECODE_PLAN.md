@@ -45,6 +45,9 @@ dict_n   2
 flags    uint8_t[4]       { 0, 0, 2, 0 }
 ```
 
+TODO: the above is not clear; need elaboraation. code 1 means values[1] or 'view'.
+      - dict_n of 2 means there are 2 items in values[].
+      - flags[] remain the same
 Row 2 of `kind` is null. Its code is 0, which is in the
 dictionary but means nothing.
 
@@ -196,7 +199,10 @@ in.
 
 1. Check the tail, the CRC32C and the sizes, and decompress, as
    today.
-2. Expand the null bitmap, if there is one, to flag bytes.
+2. Expand the null bitmap, if there is one, to flag bytes. 
+   TODO: the null bitmap should be stored as an array of flag bytes
+      so we can avoid this step at read. The compression would have
+      squeezed out repeated values.
 3. Decode the values:
    1. **plain, fixed:** read each length, which must be the
       type's, and copy the value to its slot. A null's length
