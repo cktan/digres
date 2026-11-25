@@ -15,7 +15,9 @@
 #include <cstdint>
 #include <limits>
 #include <random>
+#include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -208,7 +210,7 @@ template <typename T> void check_overflow_in_place() {
 
 /* An operation on integers: the vector's of each width, and the scalar's. */
 #define INT_OP(NAME)                                                           \
-  struct NAME##_t {                                                            \
+  struct NAME##_op {                                                           \
     static int vec(uint32_t n, uint8_t *f, const int16_t *a, const int16_t *b, \
                    int16_t *out) {                                             \
       return tyvec_int16_##NAME(n, f, a, b, out);                              \
@@ -234,6 +236,7 @@ template <typename T> void check_overflow_in_place() {
 INT_OP(add)
 INT_OP(sub)
 INT_OP(mul)
+INT_OP(div)
 
 /* Where an operation's results go: an array of its own, a, b, or one array
    that is a, b and out. */
@@ -245,8 +248,8 @@ enum place_t { OWN, INTO_A, INTO_B, ONE };
  * or -1.
  * 1. The scalar operation of each computed row, up to one that fails.
  * 2. The vector operation, on copies of the rows with one more at the end.
- * 3. It fails at the scalar's row, or gives the scalar's results and leaves
- *    the flags; nothing is written past the rows.
+ * 3. It fails at the scalar's row, with its error, or gives the scalar's
+ * results and leaves the flags; nothing is written past the rows.
  */
 template <typename OP, typename T>
 int64_t check_rows(const std::vector<T> &a, const std::vector<T> &b,
@@ -262,6 +265,7 @@ int64_t check_rows(const std::vector<T> &a, const std::vector<T> &b,
       fails = i;
     }
   }
+  const ty_errnum_t why = ty_errnum();
   // 2. The vector operation.
   std::vector<T> x = a, y = b, own(n + 1, T(77));
   std::vector<uint8_t> f = flag;
@@ -272,7 +276,7 @@ int64_t check_rows(const std::vector<T> &a, const std::vector<T> &b,
   // 3. The same row fails, or the same results.
   CHECK(rc == (fails < 0 ? 0 : -1));
   if (0 != rc) {
-    CHECK(TY_ERR_RANGE == ty_errnum());
+    CHECK(why == ty_errnum());
     CHECK(fails == int64_t(ty_erridx()));
   } else {
     for (uint32_t i = 0; i < n; i++) {
@@ -288,14 +292,13 @@ int64_t check_rows(const std::vector<T> &a, const std::vector<T> &b,
 }
 
 /*
- * OP agrees with the scalar operation on random rows, some of which
- * overflow.
+ * OP agrees with the scalar operation on random rows, some of which fail.
  * 1. For sizes around 16 rows and the blocks of 256, rows of small values,
  *    and, at one in every wild, of any value; a row in five is not valid,
  *    and another in five null, with any value.
  * 2. Check the rows, with the results at each place; with one array for
  *    all, if OP is not add, as add does not allow it.
- * 3. Some runs overflowed, and some did not.
+ * 3. Some runs failed, and some did not.
  */
 template <typename OP, typename T> void check_random() {
   std::mt19937_64 rng(23);
@@ -314,7 +317,7 @@ template <typename OP, typename T> void check_random() {
       }
       // 2. Check them at each place.
       for (place_t place : {OWN, INTO_A, INTO_B, ONE}) {
-        if (ONE == place && std::is_same_v<OP, add_t>) {
+        if (ONE == place && std::is_same_v<OP, add_op>) {
           continue;
         }
         (check_rows<OP, T>(a, b, flag, place) < 0 ? passed : failed)++;
@@ -356,35 +359,119 @@ template <typename OP, typename T> void check_pair(T x, T y, bool fits) {
  * 3. mul: MIN * -1, MIN * MIN and half of MAX + 1 times 2 overflow;
  *    MAX * -1, half of MIN times 2, MIN * 1 and MIN * 0 fit. So do the
  *    largest values whose product fits, and one more does not.
+ * 4. div: anything / 0, and MIN / -1, fail; MAX / -1, MIN / 1, MIN / MIN
+ *    and a quotient of each sign, cut to zero, are right.
  */
 template <typename T> void check_edges() {
   const T max = std::numeric_limits<T>::max();
   const T min = std::numeric_limits<T>::min();
   // 1. add.
-  check_pair<add_t, T>(max, 1, false);
-  check_pair<add_t, T>(min, -1, false);
-  check_pair<add_t, T>(min, max, true);
+  check_pair<add_op, T>(max, 1, false);
+  check_pair<add_op, T>(min, -1, false);
+  check_pair<add_op, T>(min, max, true);
   // 2. sub.
-  check_pair<sub_t, T>(min, 1, false);
-  check_pair<sub_t, T>(max, -1, false);
-  check_pair<sub_t, T>(0, min, false);
-  check_pair<sub_t, T>(-1, min, true);
-  check_pair<sub_t, T>(min, min, true);
+  check_pair<sub_op, T>(min, 1, false);
+  check_pair<sub_op, T>(max, -1, false);
+  check_pair<sub_op, T>(0, min, false);
+  check_pair<sub_op, T>(-1, min, true);
+  check_pair<sub_op, T>(min, min, true);
   // 3. mul.
-  check_pair<mul_t, T>(min, -1, false);
-  check_pair<mul_t, T>(-1, min, false);
-  check_pair<mul_t, T>(min, min, false);
-  check_pair<mul_t, T>(T(max / 2 + 1), 2, false);
-  check_pair<mul_t, T>(max, max, false);
-  check_pair<mul_t, T>(max, -1, true);
-  check_pair<mul_t, T>(T(min / 2), 2, true);
-  check_pair<mul_t, T>(min, 1, true);
-  check_pair<mul_t, T>(min, 0, true);
+  check_pair<mul_op, T>(min, -1, false);
+  check_pair<mul_op, T>(-1, min, false);
+  check_pair<mul_op, T>(min, min, false);
+  check_pair<mul_op, T>(T(max / 2 + 1), 2, false);
+  check_pair<mul_op, T>(max, max, false);
+  check_pair<mul_op, T>(max, -1, true);
+  check_pair<mul_op, T>(T(min / 2), 2, true);
+  check_pair<mul_op, T>(min, 1, true);
+  check_pair<mul_op, T>(min, 0, true);
   const T half = T(T(1) << (4 * sizeof(T) - 1));
-  check_pair<mul_t, T>(half, half, true);
-  check_pair<mul_t, T>(half, T(2 * half), false);
-  check_pair<mul_t, T>(half, T(-2 * half), true);
-  check_pair<mul_t, T>(T(half + 1), T(-2 * half), false);
+  check_pair<mul_op, T>(half, half, true);
+  check_pair<mul_op, T>(half, T(2 * half), false);
+  check_pair<mul_op, T>(half, T(-2 * half), true);
+  check_pair<mul_op, T>(T(half + 1), T(-2 * half), false);
+  // 4. div.
+  check_pair<div_op, T>(1, 0, false);
+  check_pair<div_op, T>(0, 0, false);
+  check_pair<div_op, T>(min, 0, false);
+  check_pair<div_op, T>(min, -1, false);
+  check_pair<div_op, T>(max, -1, true);
+  check_pair<div_op, T>(min, 1, true);
+  check_pair<div_op, T>(min, min, true);
+  check_pair<div_op, T>(max, min, true);
+  check_pair<div_op, T>(T(max - 1), max, true);
+  check_pair<div_op, T>(-7, 2, true);
+  check_pair<div_op, T>(7, -2, true);
+  check_pair<div_op, T>(-7, -2, true);
+}
+
+/*
+ * A division fails with the error of its lowest failing row, and the error
+ * of a row divided by 0 is DIVZERO.
+ * 1. MIN / -1 at first, and 0 / 0 at second: RANGE at first.
+ * 2. 0 / 0 at first, and MIN / -1 at second: DIVZERO at first.
+ * 3. The same with the row at first not valid, and then null: the error of
+ *    the row at second.
+ * 4. A divisor of 0 in every row not computed is no error.
+ */
+template <typename T> void check_div_errors() {
+  const T min = std::numeric_limits<T>::min();
+  const uint32_t n = 600, first = 300, second = 590;
+  std::vector<T> out(n);
+  auto fails = [&](const std::vector<T> &a, const std::vector<T> &b,
+                   std::vector<uint8_t> f, ty_errnum_t why, uint32_t row) {
+    CHECK(-1 == div_op::vec(n, f.data(), a.data(), b.data(), out.data()));
+    CHECK(why == ty_errnum());
+    CHECK(row == ty_erridx());
+  };
+  std::vector<T> a(n, T(100)), b(n, T(7));
+  std::vector<uint8_t> flag(n, 0);
+  // 1. RANGE, and then DIVZERO.
+  a[first] = min, b[first] = -1;
+  a[second] = 0, b[second] = 0;
+  fails(a, b, flag, TY_ERR_RANGE, first);
+  // 2. DIVZERO, and then RANGE.
+  std::swap(a[first], a[second]);
+  std::swap(b[first], b[second]);
+  fails(a, b, flag, TY_ERR_DIVZERO, first);
+  CHECK(std::string("division by zero") == ty_errmsg());
+  // 3. The first row not computed.
+  flag[first] = TY_VEC_NOTVALID;
+  fails(a, b, flag, TY_ERR_RANGE, second);
+  flag[first] = TY_VEC_NULL;
+  fails(a, b, flag, TY_ERR_RANGE, second);
+  // 4. A divisor of 0 in every row not computed.
+  for (uint32_t i = 0; i < n; i++) {
+    flag[i] = uint8_t(i % 4);
+    a[i] = T(i);
+    b[i] = 0 == flag[i] ? T(3) : T(0);
+  }
+  CHECK((check_rows<div_op, T>(a, b, flag, OWN)) == -1);
+}
+
+/*
+ * A quotient is exact: the dividends around a multiple of the divisor.
+ * 1. Random divisors, and a multiple of each that fits, less 1, itself,
+ *    and 1 more.
+ * 2. Check the rows.
+ */
+template <typename T> void check_div_exact() {
+  std::mt19937_64 rng(29);
+  const T max = std::numeric_limits<T>::max();
+  std::vector<T> a, b;
+  // 1. The rows.
+  for (int i = 0; i < 5000; i++) {
+    const T d = T(T(rng()) >> (rng() % (8 * sizeof(T) - 1)));
+    const T y = 0 == d || -1 == d ? T(2) : d;
+    const T q = T(T(rng()) % (max / 2) / y);
+    for (int off = -1; off <= 1; off++) {
+      a.push_back(T(q * y + off));
+      b.push_back(y);
+    }
+  }
+  // 2. Check the rows.
+  CHECK((check_rows<div_op, T>(a, b, std::vector<uint8_t>(a.size(), 0), OWN)) ==
+        -1);
 }
 
 } // namespace
@@ -552,20 +639,35 @@ TEST_CASE("a vector add over its input fails at the right row") {
   check_overflow_in_place<int64_t>();
 }
 
-TEST_CASE("a vector add, sub and mul agree with the scalar's, errors too") {
-  check_random<add_t, int16_t>();
-  check_random<add_t, int32_t>();
-  check_random<add_t, int64_t>();
-  check_random<sub_t, int16_t>();
-  check_random<sub_t, int32_t>();
-  check_random<sub_t, int64_t>();
-  check_random<mul_t, int16_t>();
-  check_random<mul_t, int32_t>();
-  check_random<mul_t, int64_t>();
+TEST_CASE("a vector add, sub, mul and div agree with the scalar's") {
+  check_random<add_op, int16_t>();
+  check_random<add_op, int32_t>();
+  check_random<add_op, int64_t>();
+  check_random<sub_op, int16_t>();
+  check_random<sub_op, int32_t>();
+  check_random<sub_op, int64_t>();
+  check_random<mul_op, int16_t>();
+  check_random<mul_op, int32_t>();
+  check_random<mul_op, int64_t>();
+  check_random<div_op, int16_t>();
+  check_random<div_op, int32_t>();
+  check_random<div_op, int64_t>();
 }
 
-TEST_CASE("a vector add, sub and mul at their edges") {
+TEST_CASE("a vector add, sub, mul and div at their edges") {
   check_edges<int16_t>();
   check_edges<int32_t>();
   check_edges<int64_t>();
+}
+
+TEST_CASE("a vector div fails with the error of its lowest failing row") {
+  check_div_errors<int16_t>();
+  check_div_errors<int32_t>();
+  check_div_errors<int64_t>();
+}
+
+TEST_CASE("a vector div is exact around a multiple of the divisor") {
+  check_div_exact<int16_t>();
+  check_div_exact<int32_t>();
+  check_div_exact<int64_t>();
 }
