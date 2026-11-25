@@ -27,8 +27,8 @@ nor `TY_VEC_NULL`.
   `flag` if the operation reads only the flags:
   `tyvec_flag_isnull`. The prefix keeps it apart from the scalar
   `ty_int32_add`.
-- **The return is `int`**: 0, or -1 with the thread's error. An
-  operation that cannot fail also returns `int`, always 0, so
+- **The return is `int`**: 0, or 1 if a row failed and is marked.
+  An operation that cannot fail also returns `int`, always 0, so
   that all operations have one shape.
 - **`flag` is one in/out parameter, `uint8_t *flag`, with no
   `const`.** It holds the flags of the inputs, and after the
@@ -37,10 +37,10 @@ nor `TY_VEC_NULL`.
   operation whose result depends on which input is null takes
   two, `uint8_t *flag_a` and `const uint8_t *flag_b`, and writes
   the results' flags over `flag_a`: `AND` and `OR`.
-- **Keep the parameters few.** The order is `n`, `flag`, the
-  inputs, `out`. What describes an error goes in the thread's
-  error state, not in a parameter: the failing row is
-  `ty_erridx()`.
+- **Keep the parameters few.** The order is `n`, `flag`, `err`
+  if the operation can fail or carries errors, the inputs, `out`.
+  `err` is a `std::vector<ty_rowerr_t>&`, the failing rows and
+  their errors.
 - **A bool result is one byte a row**: 1 for true, 0 for false.
 - **Say in `ty_vec.h` which arrays may be the same one.**
 
@@ -56,9 +56,10 @@ nor `TY_VEC_NULL`.
 - **The other bits of a flag stay as they are.**
 - **An operation that cannot fail computes every row**, valid or
   not, when that is cheaper. It usually is.
-- **An operation that can fail raises no error for a row not
-  computed.** It fails with the lowest computed row that does
-  not fit, also when `out` is over an input.
+- **An operation that can fail marks each computed row that
+  fails**, also when `out` is over an input: its `TY_VEC_ERROR`,
+  and an entry in `err`, in row order. It never marks a row not
+  computed, and writes nothing to `err` while no row fails.
 
 ### 1.3 The loop
 

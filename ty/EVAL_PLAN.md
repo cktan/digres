@@ -120,9 +120,10 @@ int tyvec_int32_div(uint32_t n, uint8_t *flag,
   `tyvec_flag_error(n, flag, err)` returns -1 with `ty_errnum()`
   and `ty_erridx()` of the lowest valid row that is marked, or
   0.
-- **The undo code goes.** A marked row's `out` means nothing, so
-  an operation over its own input no longer saves the block or
-  takes it back (`saved[]`, `undo_a`, `undo_b` in `src/vec.cc`).
+- **The undo code stays.** When `out` is over an input, a block
+  that failed must be computed again, row by row, to find each
+  row that failed. That needs the input, which `undo_a`, `undo_b`
+  and `saved[]` in `src/vec.cc` give back.
 
 **The rules of a mark**, row by row, as PostgreSQL evaluates
 left to right:
@@ -304,10 +305,11 @@ int  ty_run(ty_run_t *run, uint32_t n, const ty_arg_t *args,
 
 1. **Marks in the vector operations.** `TY_VEC_ERROR`,
    `ty_rowerr_t`, the `err` parameter, the return of 0 or 1,
-   `tyvec_flag_error`; the undo code goes; `and` and `or` take
-   §3's rules. → verify: `test/test_vec.cc` changed to marks; a
-   row is marked exactly where the scalar operation fails; no
-   row is marked twice.
+   `tyvec_flag_error`, `tyvec_flag_or`; `and` and `or` take §3's
+   rules. → verify: `test/test_vec.cc` changed to marks; a row is
+   marked exactly where the scalar operation fails; no row is
+   marked twice. Built: `and` costs 31% more for the error, 4,049
+   instructions for 2,048 rows, from 3,096; `add.i32` 0.8% more.
 2. **The reader.** Janet's forms: lists, brackets, symbols,
    numbers, `true`, `false`, `nil`, comments. → verify: forms
    read back, and each malformed text gives its line and

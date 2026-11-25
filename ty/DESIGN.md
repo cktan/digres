@@ -965,28 +965,39 @@ compares, and the flag and bool operations are built.
 - **A vector is an array of n values and an array of n flags**,
   a byte a row. Bit 0, `TY_VEC_NOTVALID`, is 1 for a row that is
   not valid, such as a row a filter dropped; bit 1,
-  `TY_VEC_NULL`, is 1 for a null. The other bits are 0 for now.
-  One flag array serves both inputs: a row is null if one of its
-  inputs is. A caller ORs the flags of two inputs into it before
-  the call. `AND` and `OR` take two.
-- **The call**: `tyvec_intN_add(n, flag, a, b, out)`, and the
-  same for `_sub`, `_mul`, `_div` and `_mod`. `out` gets the
+  `TY_VEC_NULL`, is 1 for a null; bit 2, `TY_VEC_ERROR`, is 1 for
+  a row that failed. The other bits are 0 for now. One flag array
+  serves both inputs: a row is null if one of its inputs is. A
+  caller merges the flags of two inputs into it before the call,
+  with `tyvec_flag_or`. `AND` and `OR` take two.
+- **The call**: `tyvec_intN_add(n, flag, err, a, b, out)`, and
+  the same for `_sub`, `_mul`, `_div` and `_mod`. `out` gets the
   results. `flag` is the flags of both inputs, and then of the
   results: an operation writes the results' flags over the
   inputs'. These leave them as they are, so a null input gives a
-  null result.
-- **A row not valid, or null, is never computed into an error.**
-  Its result means nothing.
-- **A failing row fails the call at once**: `TY_ERR_RANGE` if it
-  overflows, or `TY_ERR_DIVZERO` if it divides by 0.
-  `ty_erridx()` is the index of the lowest row computed that
-  fails: the row PostgreSQL, going row by row, would fail on.
+  null result, and a failed one a failed result.
+- **A row not valid, null or failed is never computed.** Its
+  result means nothing.
+- **A failing row does not fail the call.** The operation marks
+  it, and goes on: it sets the row's `TY_VEC_ERROR`, and appends
+  the row and its error, a `ty_rowerr_t`, to `err`:
+  `TY_ERR_RANGE` if it overflows, `TY_ERR_DIVZERO` if it divides
+  by 0. It returns 1 if it marked a row, and 0 if not. Errors are
+  rare, so nothing is written to `err` while no row fails.
+- **A caller asks for the error with `tyvec_flag_error`**: -1
+  with the lowest row that is valid and failed, its error from
+  `err`, and `ty_erridx()` its index: the row PostgreSQL, going
+  row by row, would fail on. It reads only the rows `err` names.
+- **`tyvec_flag_or` merges the flags of two inputs**, and the
+  entries of `b`'s rows that `a` has not failed: when both fail,
+  the left one's error is raised, as PostgreSQL computes it
+  first ([`EVAL_PLAN.md`](EVAL_PLAN.md) §3).
 - **They run on vector instructions** (`src/vec.cc`): GCC's
   vector types of 16 bytes, which the compiler turns into NEON on
   aarch64 and SSE on x86-64. A loop computes with wrap-around and
   gathers the failures of the rows computed, with no branch
   a row. It tests them once a block of 256 rows, and only then
-  looks for the row, one at a time.
+  looks for the rows that failed, one at a time, and marks them.
 - **An overflow's bits**: a sum's sign differs from both
   operands' signs. A difference's operands differ in sign, and
   its sign is not `a`'s. A product of 16 or 32 bits is made in
@@ -1046,23 +1057,37 @@ compares, and the flag and bool operations are built.
   and `true OR null` is true. So which input is null matters, and
   each has its flags. The results' flags go over `flag_a`. A row
   not valid in `a` or in `b` is not valid in the result.
+- **`AND` and `OR` carry errors**, `(n, flag_a, err_a, flag_b,
+  err_b, a, b, out)`. A row that failed in an input has failed,
+  but `false AND <failed>` is false, and `true OR <failed>` is
+  true. Only `a` drops `b`'s error, never the other way: in
+  PostgreSQL, `false AND 1/0 = 1` is false, but `1/0 = 1 AND
+  false` raises. `err_a` takes the entries of the rows that
+  failed by `b`.
+- **The IS tests keep an error**: a failed row stays failed, as
+  PostgreSQL raises before it tests.
 - **`out` of `AND` and `OR` may be `a`, `b` or both.**
 - **`out` of another bool operation may be `vec`.** `flag` may
   not overlap an input or `out`.
 - **`out` of add, sub, mul, div and mod may be `a` or `b`.** When
-  a block fails, its results are already over that input. Add and
-  sub take the input back from the result and the other input.
-  The others cannot, so they save each block of that input first,
-  which costs a copy of 256 rows. Add does not allow `a`, `b` and
-  `out` to be one array, as it has no other input then. Sub does,
-  as `a - a` never overflows, and so do the others.
+  a block fails, its results are already over that input, and its
+  rows are computed again, one at a time, to find those that
+  failed. Add and sub take the input back from the result and the
+  other input. The others cannot, so they save each block of that
+  input first, which costs a copy of 256 rows. Add does not allow
+  `a`, `b` and `out` to be one array, as it has no other input
+  then. Sub does, as `a - a` never overflows, and so do the
+  others.
 
 The tests are `test/test_vec.cc`: each row against the scalar
 `ty_intN_add`, `_sub`, `_mul`, `_div` and `_mod`, at sizes around
-the vector's lanes and the loop's blocks; the lowest failing row
-among several, one past the last whole vector, and one in a row
-not valid and one in a null row, which are no error; and the
-results written over an input, with and without an overflow. The
+the vector's lanes and the loop's blocks; each failing row marked
+with the scalar's error, in row order, and no other; the lowest
+failing row among several, one past the last whole vector, and
+one in a row not valid, a null row and a failed row, which are no
+error; and the results written over an input, with and without an
+overflow. `AND` and `OR` are tested on every pair of true, false,
+null and failed. The
 flag and bool operations are tested on every value of a flag. Div
 and mod are tested around multiples of the divisor, where a
 float's rounding would show. The floats are tested on every pair
