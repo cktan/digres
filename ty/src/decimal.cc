@@ -137,7 +137,8 @@ ty_int128_t drop_places128(ty_int128_t v, int drop, bool cut) {
 
 /*
  * *result = a rounded, or cut if cut, to n places, of a decimal128.
- * 1. An n above 36 is 36.
+ * 1. An n above 36 is 36, and one below -37 is -37, where every value is 0:
+ *    so that no step overflows an int.
  * 2. If n is not below the scale, add zeros: fail if the value passes
  *    36 digits.
  * 3. If n is at least 0, drop the places past n.
@@ -152,6 +153,9 @@ int round_or_cut128(const ty_dec128_t *a, int n, bool cut,
 
   if (n > TY_DEC128_MAX_SCALE) {
     n = TY_DEC128_MAX_SCALE;
+  }
+  if (n < -TY_DEC128_MAX_DIGITS - 1) {
+    n = -TY_DEC128_MAX_DIGITS - 1;
   }
   if (n >= s) {
     for (int i = s; i < n; i++) {
@@ -303,10 +307,12 @@ int64_t drop_places64(int64_t v, int drop, bool cut) {
 
 /*
  * *result = a rounded, or cut if cut, to n places.
- * 1. If n is not below the scale, add zeros: the scale becomes n, and
+ * 1. An n below -18 is -18, where every value is 0: so that no step
+ *    overflows an int.
+ * 2. If n is not below the scale, add zeros: the scale becomes n, and
  *    fails if n is above 17 or the value has more than 17 digits.
- * 2. If n is at least 0, drop the places past n: the scale becomes n.
- * 3. Else drop the scale and the places left of the point, and put the
+ * 3. If n is at least 0, drop the places past n: the scale becomes n.
+ * 4. Else drop the scale and the places left of the point, and put the
  *    zeros back: the scale is 0. A value below 10^17 drops to 0 once 18
  *    places are dropped, so that is where the value is cut off.
  */
@@ -314,6 +320,9 @@ int round_or_cut(const ty_dec64_t *a, int n, bool cut, ty_dec64_t *result) {
   int64_t v = a->value;
   int s = a->scale;
 
+  if (n < -18) {
+    n = -18;
+  }
   if (n >= s) {
     if (n > TY_DEC64_MAX_SCALE) {
       return range_error();

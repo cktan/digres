@@ -219,12 +219,11 @@ def fit64(v, s):
 def do_sqrt(v, s, rscale):
     if v < 0:
         return ("E", "INVALID")
+    # floor(sqrt(N) + 1/2) is floor((floor(sqrt(4 * N)) + 1) / 2), of the
+    # exact N.
     e = 2 * rscale - s
-    n = v * 10 ** e if e >= 0 else v // 10 ** (-e)
-    root = math.isqrt(n)
-    rem = n - root * root
-    if rem > root:
-        root += 1
+    n = 4 * v * 10 ** e if e >= 0 else 4 * v // 10 ** (-e)
+    root = (math.isqrt(n) + 1) // 2
     if root > D128:
         return ("E", "RANGE")
     return (root, rscale)
@@ -321,7 +320,7 @@ def main():
         v, s = gen_value(D128, 36)
         r = random.choice([0, 1, 2, 5, 16, 20, 30, 36, max(s, random.randint(0, 36))])
         emit("d128.sqrt", (v, s, r), do_sqrt(v, s, r))
-    for v, s, r in ((2, 0, 20), (3, 0, 1), (1600, 2, 2), (0, 3, 3), (D128, 0, 0), (D128, 36, 36), (-4, 0, 2), (10 ** 35, 0, 1)):
+    for v, s, r in ((2, 0, 20), (3, 0, 1), (1600, 2, 2), (0, 3, 3), (D128, 0, 0), (D128, 36, 36), (-4, 0, 2), (10 ** 35, 0, 1), (24, 2, 0), (25, 2, 0), (30, 2, 0), (225, 2, 0), (249, 3, 0), (250, 3, 0)):
         emit("d128.sqrt", (v, s, r), do_sqrt(v, s, r))
     # exp, ln, log and the powers, to at most 12 digits: ty computes them in
     # double, some 15 digits, so a result of that many digits is exact but

@@ -235,8 +235,8 @@ int ty_dec64_div(const ty_dec64_t *a, const ty_dec64_t *b, int rscale,
  *     in double; base is not zero. pow_real is for a real exponent: the
  *     base is above zero, or below it and the exponent a whole number.
  *   - to_double is a value as a double, rounded once; from_double is a
- *     double as a value at rscale places. TY_ERR_RANGE if it is not
- *     finite or has 37 digits before the point.
+ *     double as a value at rscale places, rounded half away from zero.
+ *     TY_ERR_RANGE if it is not finite or has 37 digits before the point.
  */
 double ty_dec128_to_double(const ty_dec128_t *a);
 int ty_dec128_from_double(double x, int rscale, ty_dec128_t *result);

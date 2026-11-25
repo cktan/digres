@@ -6,6 +6,9 @@
 /*
  * Tests of the decimal operations.
  */
+#include <limits.h>
+#include <math.h>
+
 #include <algorithm>
 #include <vector>
 
@@ -358,6 +361,8 @@ int trunc_of(int64_t v, int s, int n, ty_dec64_t *r) {
 // 4. Round to tens and hundreds: the scale is 0; a carry that makes 18
 //    digits fails with TY_ERR_RANGE.
 // 5. Round to tens past the value: zero.
+// 6. Round and truncate to the lowest counts of places, down to INT_MIN, of
+//    a value of each scale: zero.
 TEST_CASE("decimal64 round and trunc") {
   ty_dec64_t r;
 
@@ -404,6 +409,19 @@ TEST_CASE("decimal64 round and trunc") {
   CHECK(0 == round_of(12345, 0, -40, &r));
   CHECK(0 == r.value);
   CHECK(0 == r.scale);
+
+  // 6. Round and truncate to the lowest counts of places, down to INT_MIN,
+  //    of a value of each scale: zero.
+  for (int s = 0; s <= TY_DEC64_MAX_SCALE; s++) {
+    for (int n : {INT_MIN, INT_MIN + 1, INT_MIN + 17, INT_MIN + 18, -19, -18}) {
+      CHECK(0 == round_of(99999999999999999, s, n, &r));
+      CHECK(0 == r.value);
+      CHECK(0 == r.scale);
+      CHECK(0 == trunc_of(-99999999999999999, s, n, &r));
+      CHECK(0 == r.value);
+      CHECK(0 == r.scale);
+    }
+  }
 }
 
 // Verify decimal64 ceil and floor.
@@ -554,6 +572,8 @@ TEST_CASE("decimal128 neg, abs, sign, ceil, floor and cmp") {
 // 2. Round to more places: zeros are added; to 40 places is 36.
 // 3. Round to tens and hundreds: the scale is 0.
 // 4. Round past 36 digits: it fails with TY_ERR_RANGE.
+// 5. Round and truncate to the lowest counts of places, down to INT_MIN, of
+//    a value of each scale: zero.
 TEST_CASE("decimal128 round and trunc") {
   ty_dec128_t r;
   ty_int128_t big = ten_to(36) - 1;
@@ -587,6 +607,19 @@ TEST_CASE("decimal128 round and trunc") {
   CHECK(TY_ERR_RANGE == ty_errnum());
   CHECK(-1 == round128_of(big, 0, -1, &r));
   CHECK(TY_ERR_RANGE == ty_errnum());
+
+  // 5. Round and truncate to the lowest counts of places, down to INT_MIN,
+  //    of a value of each scale: zero.
+  for (int s = 0; s <= TY_DEC128_MAX_SCALE; s++) {
+    for (int n : {INT_MIN, INT_MIN + 1, INT_MIN + 36, INT_MIN + 37, -38, -37}) {
+      CHECK(0 == round128_of(big, s, n, &r));
+      CHECK(0 == r.value);
+      CHECK(0 == r.scale);
+      CHECK(0 == trunc128_of(-big, s, n, &r));
+      CHECK(0 == r.value);
+      CHECK(0 == r.scale);
+    }
+  }
 }
 
 // Verify decimal128 %, gcd and lcm, including scales that do not align in
@@ -771,6 +804,9 @@ TEST_CASE("decimal64 div is rounded to fit 17 digits") {
 // 1. Take sqrt(2) at 20 places, and of a square, and of zero.
 // 2. Take it of a value at a scale, and round: sqrt(3) at 1 place.
 // 3. Take it of a negative: TY_ERR_INVALID.
+// 4. Take it at fewer places than half the value's: the digits past them
+//    count in the rounding, at a half, above it and below it, and of 36
+//    digits.
 TEST_CASE("decimal128 sqrt is made a digit at a time") {
   ty_dec128_t r;
 
@@ -801,6 +837,74 @@ TEST_CASE("decimal128 sqrt is made a digit at a time") {
   a = {-4, 0};
   CHECK(-1 == ty_dec128_sqrt(&a, 2, &r));
   CHECK(TY_ERR_INVALID == ty_errnum());
+
+  // 4. Take it at fewer places than half the value's: the digits past them
+  //    count in the rounding, at a half, above it and below it, and of 36
+  //    digits.
+  auto root = [&r](ty_int128_t v, int s, int rscale) {
+    ty_dec128_t x = {v, s};
+    REQUIRE(0 == ty_dec128_sqrt(&x, rscale, &r));
+    REQUIRE(rscale == r.scale);
+    return (int64_t)r.value;
+  };
+  CHECK(0 == root(24, 2, 0)); /* 0.4899 */
+  CHECK(1 == root(25, 2, 0)); /* 0.5 */
+  CHECK(1 == root(30, 2, 0)); /* 0.5477 */
+  CHECK(1 == root(224, 2, 0));
+  CHECK(2 == root(225, 2, 0)); /* 1.5 */
+  CHECK(2 == root(249, 2, 0));
+  CHECK(0 == root(249, 3, 0));  /* three places: 0.49899 */
+  CHECK(1 == root(250, 3, 0));  /* 0.5 */
+  CHECK(0 == root(2025, 4, 0)); /* 0.45 */
+  CHECK(1 == root(25, 4, 1));   /* 0.05 */
+  CHECK(1 == root(ten_to(36) - 1, 36, 0));
+  CHECK(0 == root(ten_to(34) * 25 - 1, 36, 0));
+  CHECK(1 == root(ten_to(34) * 25, 36, 0));
+}
+
+// Verify a double as a decimal is rounded half away from zero, at each kind
+// of tie.
+// 1. Ties at scale 0, whose whole part is even and odd, of both signs.
+// 2. A tie at 2 places, and a tie of 53 bits, whose next double is far.
+// 3. Numbers one double below a tie and one above, and whole numbers.
+// 4. Every tie m / 2^(s+1) of small m at scale s, by integers.
+TEST_CASE("a decimal128 of a double rounds half away from zero") {
+  ty_dec128_t r;
+  auto of = [&r](double x, int s) {
+    REQUIRE(0 == ty_dec128_from_double(x, s, &r));
+    REQUIRE(s == r.scale);
+    return (int64_t)r.value;
+  };
+
+  // 1. Ties at scale 0, whose whole part is even and odd, of both signs.
+  CHECK(1 == of(0.5, 0));
+  CHECK(2 == of(1.5, 0));
+  CHECK(3 == of(2.5, 0));
+  CHECK(-3 == of(-2.5, 0));
+  CHECK(-4 == of(-3.5, 0));
+
+  // 2. A tie at 2 places, and a tie of 53 bits, whose next double is far.
+  CHECK(13 == of(0.125, 2));
+  CHECK(38 == of(0.375, 2));
+  CHECK(11258999068426243 == of(1125899906842624.25, 1));
+  CHECK(11258999068426248 == of(1125899906842624.75, 1));
+
+  // 3. Numbers one double below a tie and one above, and whole numbers.
+  CHECK(2 == of(nextafter(2.5, 0), 0));
+  CHECK(3 == of(nextafter(2.5, 3), 0));
+  CHECK(12 == of(nextafter(0.125, 0), 2));
+  CHECK(1 == of(1.0, 0));
+  CHECK(0 == of(0.0, 0));
+  CHECK(4503599627370497 == of(4503599627370497.0, 0));
+
+  // 4. Every tie m / 2^(s+1) of small m at scale s, by integers.
+  int64_t p5 = 1;
+  for (int s = 0; s <= 12; s++, p5 *= 5) {
+    for (int64_t m = 1; m < 2000; m += 2) {
+      CHECK((m * p5 + 1) / 2 == of(ldexp((double)m, -(s + 1)), s));
+      CHECK(-(m * p5 + 1) / 2 == of(-ldexp((double)m, -(s + 1)), s));
+    }
+  }
 }
 
 // Verify exp, ln, log and the powers, in double.

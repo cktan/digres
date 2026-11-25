@@ -4,13 +4,15 @@
 --    past 36 digits is a float8.
 -- 2. Add, subtract, multiply and divide, at PostgreSQL's scales.
 -- 3. Take remainders and integer quotients, compare across scales, and
---    round, truncate, take ceilings and floors.
+--    round, truncate, take ceilings and floors; to the lowest counts of
+--    places, a round or a truncation is 0.
 -- 4. Take square roots, exponentials, logarithms and powers.
 -- 5. Keep 36 digits, round to a typmod, and cast to and from the integers
 --    and floats.
 -- 6. Take scales, gcd, lcm and a factorial.
 -- 7. Sum, average and take deviations of numerics and integers; int8 sums
---    past int8, of nulls, and over a moving window whose frame empties.
+--    past int8, of nulls, and over a moving window whose frame empties; a
+--    variance that is a tie at its scale rounds away from zero.
 -- 8. Make a series and find a bucket.
 -- 9. Use numeric in jsonb, jsonpath, extract, to_char, money and pg_lsn.
 -- 10. Send values in PostgreSQL's binary format.
@@ -26,6 +28,7 @@ SELECT 1e300, 3.4e38, 1e35;
 SELECT 1.5 + 2.25, 1.5 - 2.25, 1.5 * 2.25, 10 / 3.0, 1 / 3::numeric, 2.0 / 3;
 SELECT 7.5 % 2, -7.5 % 2, div(7.5, 2), 1.5 = 1.50, 1.5 < 1.51, abs(-2.5), -(2.5);
 SELECT round(2.5), round(-2.5), round(1.2345, 2), round(1234.5, -2), trunc(1.999, 2), trunc(-1.999), ceil(1.1), floor(-1.1);
+SELECT n, round(x, n), trunc(x, n), round(y, n), trunc(y, n) FROM (VALUES (1.5::numeric, 1.5::numeric(30,10))) v(x, y), (VALUES (-2147483648), (-2147483647), (-2147483640), (-100)) w(n);
 SELECT sqrt(2::numeric), sqrt(16::numeric), exp(1::numeric), ln(10::numeric), log(100::numeric), log(2, 8::numeric);
 SELECT power(2::numeric, 10), power(2::numeric, 0.5), power(2.0, -2), 2::numeric ^ 3;
 SELECT 999999999999999999999999999999999999::numeric(36,0) + 0, '1.000000000000000000000000000000000000000000'::numeric(36,35);
@@ -54,6 +57,7 @@ SELECT sum(x), avg(x), sum(x)::text = sum(x::decimal128)::text, avg(x)::text = a
 SELECT i, sum(x) OVER w, avg(x) OVER w FROM (VALUES (1, 1.5), (2, 2.25), (3, -3), (4, 0.001)) v(i, x) WINDOW w AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW);
 SELECT sum(x), avg(x), count(x) FROM (VALUES (9223372036854775807::int8), (9223372036854775807), (NULL), (-1)) v(x);
 SELECT sum(x), avg(x) FROM (VALUES (NULL::int8), (NULL)) v(x);
+SELECT var_pop(x) FROM (VALUES (1.97265625), (1.875), (3.44921875), (3.43359375), (0.61328125), (0.40234375), (2.00390625), (3.109375)) v(x);
 SELECT i, sum(x) OVER w, avg(x) OVER w FROM (VALUES (1, 9223372036854775807::int8), (2, 5), (3, NULL), (4, NULL), (5, -7), (6, -9223372036854775808)) v(i, x) WINDOW w AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW);
 SELECT x, round(x, 1), round(x), round(x, -2), trunc(x, 1), trunc(x), trunc(x, -2), ceil(x), floor(x), to_char(x, '999,999.99'), bool_and(ceil(x)::text = ceil(x::decimal128)::text AND ceiling(x)::text = ceiling(x::decimal128)::text AND floor(x)::text = floor(x::decimal128)::text AND round(x, 1)::text = round(x::decimal128, 1)::text AND round(x)::text = round(x::decimal128)::text AND round(x, -2)::text = round(x::decimal128, -2)::text AND trunc(x, 1)::text = trunc(x::decimal128, 1)::text AND trunc(x)::text = trunc(x::decimal128)::text AND trunc(x, -2)::text = trunc(x::decimal128, -2)::text AND to_char(x, '999,999.99') = to_char(x::decimal128, '999,999.99')) OVER () FROM (VALUES (1234.567), (-0.05), (99.95), (-151.25), (-149.5), (149.5), (-7), (9999999999999999.9)) v(x);
 -- decimal64 + decimal64 past 17 digits is an error: the last statement, as

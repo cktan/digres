@@ -4,13 +4,15 @@
 --    past 36 digits is a float8.
 -- 2. Add, subtract, multiply and divide, at PostgreSQL's scales.
 -- 3. Take remainders and integer quotients, compare across scales, and
---    round, truncate, take ceilings and floors.
+--    round, truncate, take ceilings and floors; to the lowest counts of
+--    places, a round or a truncation is 0.
 -- 4. Take square roots, exponentials, logarithms and powers.
 -- 5. Keep 36 digits, round to a typmod, and cast to and from the integers
 --    and floats.
 -- 6. Take scales, gcd, lcm and a factorial.
 -- 7. Sum, average and take deviations of numerics and integers; int8 sums
---    past int8, of nulls, and over a moving window whose frame empties.
+--    past int8, of nulls, and over a moving window whose frame empties; a
+--    variance that is a tie at its scale rounds away from zero.
 -- 8. Make a series and find a bucket.
 -- 9. Use numeric in jsonb, jsonpath, extract, to_char, money and pg_lsn.
 -- 10. Send values in PostgreSQL's binary format.
@@ -50,6 +52,15 @@ SELECT round(2.5), round(-2.5), round(1.2345, 2), round(1234.5, -2), trunc(1.999
 -------+-------+-------+-------+-------+-------+------+-------
      3 |    -3 |  1.23 |  1200 |  1.99 |    -1 |    2 |    -2
 (1 row)
+
+SELECT n, round(x, n), trunc(x, n), round(y, n), trunc(y, n) FROM (VALUES (1.5::numeric, 1.5::numeric(30,10))) v(x, y), (VALUES (-2147483648), (-2147483647), (-2147483640), (-100)) w(n);
+      n      | round | trunc | round | trunc 
+-------------+-------+-------+-------+-------
+ -2147483648 |     0 |     0 |     0 |     0
+ -2147483647 |     0 |     0 |     0 |     0
+ -2147483640 |     0 |     0 |     0 |     0
+        -100 |     0 |     0 |     0 |     0
+(4 rows)
 
 SELECT sqrt(2::numeric), sqrt(16::numeric), exp(1::numeric), ln(10::numeric), log(100::numeric), log(2, 8::numeric);
        sqrt        |       sqrt        |        exp         |         ln         |        log         |        log         
@@ -204,6 +215,12 @@ SELECT sum(x), avg(x) FROM (VALUES (NULL::int8), (NULL)) v(x);
      |    
 (1 row)
 
+SELECT var_pop(x) FROM (VALUES (1.97265625), (1.875), (3.44921875), (3.43359375), (0.61328125), (0.40234375), (2.00390625), (3.109375)) v(x);
+      var_pop       
+--------------------
+ 1.2232131958007813
+(1 row)
+
 SELECT i, sum(x) OVER w, avg(x) OVER w FROM (VALUES (1, 9223372036854775807::int8), (2, 5), (3, NULL), (4, NULL), (5, -7), (6, -9223372036854775808)) v(i, x) WINDOW w AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW);
  i |         sum          |         avg          
 ---+----------------------+----------------------
@@ -231,4 +248,4 @@ SELECT x, round(x, 1), round(x), round(x, -2), trunc(x, 1), trunc(x), trunc(x, -
 -- decimal64 + decimal64 past 17 digits is an error: the last statement, as
 -- psql stops at a file's first error.
 SELECT 99999999999999999::numeric(17,0) + 99999999999999999::numeric(17,0);
-psql:test/select_numeric.sql:61: ERROR:  numeric field overflow
+psql:test/select_numeric.sql:65: ERROR:  numeric field overflow

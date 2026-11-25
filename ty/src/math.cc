@@ -142,6 +142,9 @@ double ty_dec128_to_double(const ty_dec128_t *a) {
  * 3. If that has more than 36 digits, print it at fewer places, so that
  *    it has 36, as the result of a function of the exponent is rounded.
  * 4. Take the digits as the value.
+ * 5. printf rounds a tie to even. x is a tie if x * 2^(scale + 1) is an odd
+ *    number; its digits are cut to an even number, 1 too low, if that is
+ *    1 more than a multiple of 4, as 5 is.
  */
 int ty_dec128_from_double(double x, int rscale, ty_dec128_t *result) {
   char buf[512];
@@ -175,6 +178,9 @@ int ty_dec128_from_double(double x, int rscale, ty_dec128_t *result) {
   if (!parse_fixed(buf, &v, &scale)) {
     return range_error();
   }
+  if (1 == fmod(ldexp(fabs(x), scale + 1), 4)) {
+    v++;
+  }
   result->value = x < 0 ? -v : v;
   result->scale = scale;
   return 0;
@@ -184,27 +190,34 @@ int ty_dec128_from_double(double x, int rscale, ty_dec128_t *result) {
  * *result = sqrt(a) at rscale places, rounded half up.
  * 1. If a is negative, fail.
  * 2. Take N = |value| * 10^(2 * rscale - scale), as a stream of decimal
- *    digits: the digits of the value, then zeros.
+ *    digits: the digits of the value, then zeros. If the power is below
+ *    zero, keep what it cuts off N, cut / unit.
  * 3. Bring down two digits at a time, as by hand: the remainder is
  *    100 * remainder + the pair; the next digit of the root is the
  *    largest d with (20 * root + d) * d at most the remainder. With a root
  *    below 10^36 nothing passes 128 bits.
- * 4. The root is floor(sqrt(N)); round it up if the remainder is above it.
+ * 4. The root is floor(sqrt(N)); round it up if N is at least
+ *    (root + 1/2)^2: if the remainder is above the root, or is the root and
+ *    cut / unit is at least 1/4.
  */
 int ty_dec128_sqrt(const ty_dec128_t *a, int rscale, ty_dec128_t *result) {
   char dig[48];
   int nd = 0;
   int e = 2 * rscale - a->scale;
   u128 x = magnitude(a->value);
+  u128 unit = 1;
+  u128 cut = 0;
 
   if (a->value < 0) {
     return ty_internal::set_error(TY_ERR_INVALID,
                                   "square root of a negative number");
   }
   if (e < 0) {
-    for (int i = 0; i < -e && x != 0; i++) {
-      x /= 10;
+    for (int i = 0; i < -e; i++) {
+      unit *= 10;
     }
+    cut = x % unit;
+    x /= unit;
     e = 0;
   }
   if (x != 0) {
@@ -230,7 +243,7 @@ int ty_dec128_sqrt(const ty_dec128_t *a, int rscale, ty_dec128_t *result) {
       }
     }
   }
-  if (rem > root) {
+  if (rem > root || (rem == root && 4 * cut >= unit)) {
     root++;
     if (root > max_value) {
       return range_error();
