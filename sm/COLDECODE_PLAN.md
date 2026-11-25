@@ -1,7 +1,7 @@
 # COLDECODE_PLAN: a CG decodes into arrays
 
-Status: a design for review. Nothing is built. §9 lists the
-decisions that wait for the user.
+Status: a design, agreed. Nothing is built. §9 lists what the
+user decided.
 
 Today `cg_open` (`sm2/src/col/cg.cc`) decodes a CG into one
 `std::string` a row. This plan makes it decode into arrays: the
@@ -317,9 +317,11 @@ the cheapest of these to build, and should be next.
 
 ---
 
-## 9. For the user to decide
+## 9. Decided
 
-| # | Question | Recommended | The alternative |
+By the user, on 2026-11-25.
+
+| # | Question | Decision | Rejected |
 | --- | --- | --- | --- |
 | 1 | how is a null marked? | a flag byte a row, as ty's operations take | a validity bitmap, as [`../REPORT.md`](../REPORT.md) §8.2 has. It is 1/8 the size, but each batch must expand it for ty |
 | 2 | what is a string in an array? | a pointer to its varlena: 8 bytes, no copy, and what ty's text functions and PostgreSQL take | `sm_str_t` of [`../REPORT.md`](../REPORT.md) §8.2: 16 bytes, with its first bytes in line, so many compares need no second read, and DuckDB takes it with no conversion. The batch scan can make it from the pointers, if DuckDB is chosen |
