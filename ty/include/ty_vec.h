@@ -74,15 +74,12 @@
  *
  *   tyvec_bool_and(n, flag_a, flag_b, a, b, out)
  *   tyvec_bool_or(n, flag_a, flag_b, a, b, out)
- *       SQL's AND and OR of bools that are 0 or 1 in each row not null:
- *       out[i] = a[i] AND b[i], or OR. flag_a is the flags of a, and then
- *       of the result; flag_b is those of b, and stays. A row is null if an
+ *       SQL's AND and OR of bools that are 0 or 1 in each row valid and not
+ *       null: out[i] = a[i] AND b[i], or OR. flag_a is a's flags, and then
+ *       the result's; flag_b is b's, and stays. A row is null if an
  *       input is, but false AND null is false, and true OR null is true.
- *       Only flag_a's TY_VEC_NULL changes, and flag_b's other bits are not
- *       read. An input that settles a row alone, a false of AND or a true
- *       of OR, makes the other's byte and flag in that row mean nothing: a
- *       caller need not compute b there. out may be a, b or both, and
- *       flag_b may be flag_a.
+ *       A row is not valid if an input is not. The other bits of flag_a
+ *       stay. out may be a, b or both, and flag_b may be flag_a.
  *
  * The flag and bool operations cannot fail: they return 0. out may be vec;
  * a flag array may not overlap an input or out.

@@ -1044,13 +1044,8 @@ compares, and the flag and bool operations are built.
   `(n, flag_a, flag_b, a, b, out)`, with SQL's three values. A
   row with a null input is null, but `false AND null` is false,
   and `true OR null` is true. So which input is null matters, and
-  each has its flags. The results' flags go over `flag_a`.
-- **An input that settles a row alone makes the other mean
-  nothing there**, its byte and its flag: a false of `AND`, a
-  true of `OR`. An executor may compute `b` only for the rows
-  that `a` leaves open, as for `b = 0 OR a / b > 1`. So only the
-  `TY_VEC_NULL` of `flag_b` is read: a row it marks not valid
-  stays as valid as `flag_a` says.
+  each has its flags. The results' flags go over `flag_a`. A row
+  not valid in `a` or in `b` is not valid in the result.
 - **`out` of `AND` and `OR` may be `a`, `b` or both.**
 - **`out` of another bool operation may be `vec`.** `flag` may
   not overlap an input or `out`.

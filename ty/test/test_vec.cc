@@ -831,8 +831,9 @@ TEST_CASE("IS NOT NULL, IS TRUE, IS FALSE and NOT of a vector") {
 // 2. Each operation, into an array of its own, into a, into b, and with a, b
 //    and out one array, and one flag array.
 // 3. The row's result, null or a bool, by SQL's table.
-// 4. Only a's null bit changes, b's flags stay, and nothing is written past
-//    the n rows.
+// 4. A row is not valid if it is not in a or not in b: it has no answer. The
+//    other bits of a's flags stay, as b's flags do, and nothing is written
+//    past the n rows.
 TEST_CASE("AND and OR of two vectors are SQL's") {
   enum { OWN, INTO_A, INTO_B, ONE, NPLACES };
   // SQL's answers, at [a][b], each 0, 1 or null, as 2.
@@ -876,9 +877,14 @@ TEST_CASE("AND and OR of two vectors are SQL's") {
           const int p = wfa[i] & TY_VEC_NULL ? 2 : wa[i];
           const int q = wfb[i] & TY_VEC_NULL ? 2 : wb[i];
           const uint8_t want = is_and ? sql_and[p][q] : sql_or[p][q];
-          CHECK((2 == want || out[i] == want));
-          // 4. The flags.
-          CHECK(fa[i] == ((wfa[i] & 0xfd) | (2 == want ? TY_VEC_NULL : 0)));
+          const bool valid = !((wfa[i] | wfb[i]) & TY_VEC_NOTVALID);
+          if (valid) {
+            CHECK((2 == want || out[i] == want));
+            CHECK((fa[i] & TY_VEC_NULL) == (2 == want ? TY_VEC_NULL : 0));
+          }
+          // 4. The other bits of the flags.
+          CHECK((fa[i] & TY_VEC_NOTVALID) == (valid ? 0 : TY_VEC_NOTVALID));
+          CHECK((fa[i] & 0xfc) == (wfa[i] & 0xfc));
         }
         CHECK(fb == wfb);
         CHECK(0xff == fa[n]);
@@ -888,46 +894,35 @@ TEST_CASE("AND and OR of two vectors are SQL's") {
   }
 }
 
-// Verify that a filter's OR and AND need b only in the rows a leaves open.
+// Verify a filter that keeps a column's nulls, and one that drops them.
 // 1. A column x with nulls; a is x IS NULL.
 // 2. b is x > 3, whose flags are x's own, taken before.
 // 3. x IS NULL OR x > 3 is true for a null and for 4, and false for 2.
-// 4. The same with b's rows that a settles not valid and null, and holding
-//    any byte.
-// 5. x IS NOT NULL AND x > 3, in both ways, the same.
+// 4. x IS NOT NULL AND x > 3 is true for 4 alone, and null for no row.
 TEST_CASE("x IS NULL OR x > 3, and x IS NOT NULL AND x > 3") {
   const uint32_t n = 40;
-  for (bool narrow : {false, true}) {
-    // 1. A column x with nulls: 2, 4, null, 2, 4, null ...
-    std::vector<int32_t> x(n), three(n, 3);
-    std::vector<uint8_t> fx(n);
+  // 1. A column x with nulls: 2, 4, null, 2, 4, null ...
+  std::vector<int32_t> x(n), three(n, 3);
+  std::vector<uint8_t> fx(n);
+  for (uint32_t i = 0; i < n; i++) {
+    x[i] = 0 == i % 3 ? 2 : 4;
+    fx[i] = 2 == i % 3 ? TY_VEC_NULL : 0;
+  }
+  for (bool is_or : {true, false}) {
+    std::vector<uint8_t> fa = fx, fb = fx, a(n), b(n);
+    REQUIRE(0 == (is_or ? tyvec_flag_isnull(n, fa.data(), a.data())
+                        : tyvec_flag_isnotnull(n, fa.data(), a.data())));
+    // 2. b is x > 3.
+    REQUIRE(0 ==
+            tyvec_int32_gt(n, fb.data(), x.data(), three.data(), b.data()));
+    // 3, 4. No row is null, and each is SQL's answer.
+    REQUIRE(0 == (is_or ? tyvec_bool_or(n, fa.data(), fb.data(), a.data(),
+                                        b.data(), a.data())
+                        : tyvec_bool_and(n, fa.data(), fb.data(), a.data(),
+                                         b.data(), a.data())));
     for (uint32_t i = 0; i < n; i++) {
-      x[i] = 0 == i % 3 ? 2 : 4;
-      fx[i] = 2 == i % 3 ? TY_VEC_NULL : 0;
-    }
-    for (bool is_or : {true, false}) {
-      std::vector<uint8_t> fa = fx, fb = fx, a(n), b(n);
-      REQUIRE(0 == (is_or ? tyvec_flag_isnull(n, fa.data(), a.data())
-                          : tyvec_flag_isnotnull(n, fa.data(), a.data())));
-      // 2. b is x > 3.
-      REQUIRE(0 ==
-              tyvec_int32_gt(n, fb.data(), x.data(), three.data(), b.data()));
-      // 4. The rows that a settles.
-      for (uint32_t i = 0; narrow && i < n; i++) {
-        if (a[i] == is_or) {
-          fb[i] = TY_VEC_SKIP;
-          b[i] = uint8_t(0x54 + i);
-        }
-      }
-      // 3, 5. No row is null, and each is SQL's answer.
-      REQUIRE(0 == (is_or ? tyvec_bool_or(n, fa.data(), fb.data(), a.data(),
-                                          b.data(), a.data())
-                          : tyvec_bool_and(n, fa.data(), fb.data(), a.data(),
-                                           b.data(), a.data())));
-      for (uint32_t i = 0; i < n; i++) {
-        CHECK(0 == fa[i]);
-        CHECK(a[i] == (0 == i % 3 ? 0 : 1 == i % 3 ? 1 : is_or));
-      }
+      CHECK(0 == fa[i]);
+      CHECK(a[i] == (0 == i % 3 ? 0 : 1 == i % 3 ? 1 : is_or));
     }
   }
 }

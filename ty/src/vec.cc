@@ -546,11 +546,12 @@ int flag_op(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out,
  * it is not null and 0. So a row is null if an input is null, and a is null
  * or 1, and b is null or 1. OR is the same with "known to be true", so with
  * the bools turned around. The bits of a null are taken at the place of
- * TY_VEC_NULL: x + x has a bool there.
+ * TY_VEC_NULL: x + x has a bool there. A row is not valid if an input is
+ * not.
  * 1. 16 rows at a time:
  *    a. The inputs, read before anything is written.
  *    b. The result. One of a null and a known input is right by its low bit.
- *    c. The result's null bit, over flag_a's; the other bits stay.
+ *    c. The result's two bits, over flag_a's; the other bits stay.
  * 2. The rows past the last 16, one at a time, by the same rule.
  */
 template <bool OR>
@@ -558,7 +559,8 @@ int and_or_vec(uint32_t n, uint8_t *flag_a, const uint8_t *flag_b,
                const uint8_t *a, const uint8_t *b, uint8_t *out) {
   typedef uint8_t vec_t __attribute__((vector_size(16)));
   static_assert(2 == TY_VEC_NULL, "x + x puts a bool at the null bit");
-  constexpr uint8_t null_bit = TY_VEC_NULL;
+  constexpr uint8_t notvalid = TY_VEC_NOTVALID;
+  constexpr uint8_t skip = TY_VEC_SKIP;
   constexpr uint8_t keep = uint8_t(~TY_VEC_NULL);
   constexpr uint8_t turn = OR ? 1 : 0;
   // The result, and the flag, of 16 rows or of one.
@@ -572,7 +574,8 @@ int and_or_vec(uint32_t n, uint8_t *flag_a, const uint8_t *flag_b,
   auto flag_of = [](auto f, auto g, auto x, auto y) {
     x ^= turn;
     y ^= turn;
-    return (f & keep) | ((f | g) & (f | (x + x)) & (g | (y + y)) & null_bit);
+    return (f & keep) |
+           ((f | g) & (((f | (x + x)) & (g | (y + y))) | notvalid) & skip);
   };
   const uint32_t whole = n - n % 16;
   uint32_t i = 0;
@@ -587,7 +590,7 @@ int and_or_vec(uint32_t n, uint8_t *flag_a, const uint8_t *flag_b,
     // b. The result.
     vec_t r = result(x, y);
     memcpy(out + i, &r, 16);
-    // c. The result's null bit.
+    // c. The result's two bits.
     f = flag_of(f, g, x, y);
     memcpy(flag_a + i, &f, 16);
   }
