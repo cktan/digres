@@ -958,8 +958,8 @@ given a pack of the host.
 
 `ty_vec.h` holds the operations on vectors: one call on the n
 values of a column at once, for a columnar executor
-([`../REPORT.md`](../REPORT.md) §9). The integers' add and
-the flag and bool operations are built.
+([`../REPORT.md`](../REPORT.md) §9). The integers' add, sub
+and mul, and the flag and bool operations are built.
 
 - **A vector is an array of n values and an array of n flags**,
   a byte a row. Bit 0, `TY_VEC_NOTVALID`, is 1 for a row that is
@@ -968,22 +968,34 @@ the flag and bool operations are built.
   One flag array serves both inputs: a row is null if one of its
   inputs is. A caller ORs the flags of two inputs into it before
   the call.
-- **The call**: `tyvec_intN_add(n, flag, a, b, out)`. `out`
-  gets the sums. `flag` is the flags of both inputs, and then of
-  the results: an operation writes the results' flags over the
-  inputs'. Add leaves them as they are, so a null input gives a
-  null sum.
+- **The call**: `tyvec_intN_add(n, flag, a, b, out)`, and
+  `tyvec_intN_sub` and `tyvec_intN_mul`. `out` gets the results.
+  `flag` is the flags of both inputs, and then of the results: an
+  operation writes the results' flags over the inputs'. These
+  leave them as they are, so a null input gives a null result.
 - **A row not valid, or null, is never computed into an error.**
   Its result means nothing.
 - **An overflow fails the call at once**, with `TY_ERR_RANGE`
   and `ty_erridx()` the index of the lowest row computed that
   overflows: the row PostgreSQL, going row by row, would fail on.
-- **The additions run on vector instructions** (`src/vec.cc`):
-  GCC's vector types of 16 bytes, which the compiler turns into
-  NEON on aarch64 and SSE on x86-64. A loop adds with
-  wrap-around and gathers the overflow bits of the rows computed,
-  with no branch a row; it tests them once a block of 256 rows,
-  and only then looks for the row, one at a time.
+- **They run on vector instructions** (`src/vec.cc`): GCC's
+  vector types of 16 bytes, which the compiler turns into NEON on
+  aarch64 and SSE on x86-64. A loop computes with wrap-around and
+  gathers the overflow bits of the rows computed, with no branch
+  a row. It tests them once a block of 256 rows, and only then
+  looks for the row, one at a time.
+- **An overflow's bits**: a sum's sign differs from both
+  operands' signs. A difference's operands differ in sign, and
+  its sign is not `a`'s. A product of 16 or 32 bits is made in
+  twice the width, and its high half is not all the sign of its
+  low half.
+- **Two multiplications are not plain vector types.** int32's
+  takes NEON's intrinsics on aarch64, as GCC 13 makes scalar ones
+  of the vector types'. int64's is one row at a time: neither
+  NEON nor SSE multiplies 64 bits by 64 bits.
+- **A flag is widened to its row's lane by interleaving** the
+  flags' vector with itself. GCC makes a move a row of
+  `__builtin_convertvector` from bytes.
 - **An operation that cannot fail may compute every row**, valid
   or not, as that is cheaper.
 - **`IS NULL` is `tyvec_flag_isnull(n, flag, out)`**: `out[i]`
@@ -1008,18 +1020,21 @@ the flag and bool operations are built.
 - **`out` of `AND` and `OR` may be `a`, `b` or both.**
 - **`out` of another bool operation may be `vec`.** `flag` may
   not overlap an input or `out`.
-- **`out` of add may be `a` or `b`, but not both at once.** When
-  a block overflows, its sums are already over that input; the
-  search for the row takes the input back as the sum less the
-  other input. With both the same array, there is no other.
+- **`out` of add, sub and mul may be `a` or `b`.** When a block
+  overflows, its results are already over that input. Add and sub
+  take the input back from the result and the other input. Mul
+  cannot, so it saves each block of that input first, which costs
+  a copy of 256 rows. Add does not allow `a`, `b` and `out` to be
+  one array, as it has no other input then. Sub does, as `a - a`
+  never overflows, and mul does.
 
 The tests are `test/test_vec.cc`: each row against the scalar
-`ty_intN_add`, at sizes around the vector's lanes and the
-loop's blocks; the lowest failing row among several, one past
-the last whole vector, and one in a row not valid and one in a
-null row, which are no error; and the results written over an
-input, with and without an overflow. The flag and bool
-operations are tested on every value of a flag.
+`ty_intN_add`, `_sub` and `_mul`, at sizes around the vector's
+lanes and the loop's blocks; the lowest failing row among
+several, one past the last whole vector, and one in a row not
+valid and one in a null row, which are no error; and the results
+written over an input, with and without an overflow. The flag and
+bool operations are tested on every value of a flag.
 
 ## 22. to_char and its reverse
 

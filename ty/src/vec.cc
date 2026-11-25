@@ -12,6 +12,10 @@
 
 #include <string.h>
 
+#ifdef __aarch64__
+#include <arm_neon.h>
+#endif
+
 #include "error.h"
 
 namespace {
@@ -20,84 +24,228 @@ namespace {
 constexpr uint32_t block_rows = 256;
 
 /*
- * The vector add of one width: T the type, U its unsigned type, which
- * adds with wrap-around, as C defines for it.
- * 1. For each block of rows, 16 bytes at a time: add a and b with
- *    wrap-around, store the sum, and gather into ovf the overflow bits of
- *    the rows computed, neither not valid nor null. A sum overflowed if its
- * sign differs from both operands' signs: the top bit of (a ^ r) & (b ^ r).
+ * The vector types of T, an integer of U's width: L lanes in 16 bytes. An
+ * operation adds with wrap-around, so it computes in U.
+ */
+template <typename T, typename U> struct lanes_t {
+  static constexpr uint32_t L = 16 / sizeof(T);
+  typedef T elem_t;
+  typedef U uelem_t;
+  typedef U vec_t __attribute__((vector_size(16)));
+  typedef T svec_t __attribute__((vector_size(16)));
+  static constexpr U top = U(1) << (8 * sizeof(T) - 1);
+};
+
+/*
+ * An operation of arith_vec() is a struct with:
+ *   - vec(): the results of one vector, and in *ovf, a lane a row, bits of
+ *     which ovf_bits are not all 0 if the row overflowed.
+ *   - one(): the result of one row; true if it overflowed.
+ *   - undoes: true if undo_a() gives a back of the result and b, and
+ *     undo_b() gives b back of the result and a.
+ */
+
+/* a + b. It overflowed if its sign differs from both operands' signs. */
+template <typename T, typename U> struct add_op_t : lanes_t<T, U> {
+  typedef typename lanes_t<T, U>::vec_t vec_t;
+  static constexpr U ovf_bits = lanes_t<T, U>::top;
+  static constexpr bool undoes = true;
+  static vec_t vec(vec_t a, vec_t b, vec_t *ovf) {
+    vec_t r = a + b;
+    *ovf = (a ^ r) & (b ^ r);
+    return r;
+  }
+  static bool one(T a, T b, T *r) { return __builtin_add_overflow(a, b, r); }
+  static T undo_a(T r, T b) { return T(U(r) - U(b)); }
+  static T undo_b(T r, T a) { return T(U(r) - U(a)); }
+};
+
+/*
+ * a - b. It overflowed if the operands' signs differ, and the result's is
+ * not a's.
+ */
+template <typename T, typename U> struct sub_op_t : lanes_t<T, U> {
+  typedef typename lanes_t<T, U>::vec_t vec_t;
+  static constexpr U ovf_bits = lanes_t<T, U>::top;
+  static constexpr bool undoes = true;
+  static vec_t vec(vec_t a, vec_t b, vec_t *ovf) {
+    vec_t r = a - b;
+    *ovf = (a ^ b) & (a ^ r);
+    return r;
+  }
+  static bool one(T a, T b, T *r) { return __builtin_sub_overflow(a, b, r); }
+  static T undo_a(T r, T b) { return T(U(r) + U(b)); }
+  static T undo_b(T r, T a) { return T(U(a) - U(r)); }
+};
+
+/*
+ * a * b, of 16 or 32 bits: the product in W, of twice the width. Its low
+ * half is the result, and it overflowed if its high half is not all the
+ * result's sign.
+ */
+template <typename T, typename U, typename W> struct mul_op_t : lanes_t<T, U> {
+  typedef typename lanes_t<T, U>::vec_t vec_t;
+  typedef typename lanes_t<T, U>::svec_t svec_t;
+  static constexpr int bits = 8 * sizeof(T);
+  static constexpr U ovf_bits = U(-1);
+  static constexpr bool undoes = false;
+  static vec_t vec(vec_t a, vec_t b, vec_t *ovf) {
+#ifdef __aarch64__
+    // GCC 13 makes scalar multiplications of the loop below's int32.
+    if constexpr (4 == sizeof(T)) {
+      int32x4_t x = vreinterpretq_s32_u32((uint32x4_t)a);
+      int32x4_t y = vreinterpretq_s32_u32((uint32x4_t)b);
+      int32x4_t lo =
+          vreinterpretq_s32_s64(vmull_s32(vget_low_s32(x), vget_low_s32(y)));
+      int32x4_t hi = vreinterpretq_s32_s64(vmull_high_s32(x, y));
+      int32x4_t r = vuzp1q_s32(lo, hi);
+      *ovf = (vec_t)veorq_s32(vuzp2q_s32(lo, hi), vshrq_n_s32(r, 31));
+      return (vec_t)r;
+    }
+#endif
+    typedef W wide_t __attribute__((vector_size(32)));
+    wide_t p = __builtin_convertvector((svec_t)a, wide_t) *
+               __builtin_convertvector((svec_t)b, wide_t);
+    svec_t r = __builtin_convertvector(p, svec_t);
+    svec_t high = __builtin_convertvector(p >> bits, svec_t);
+    *ovf = (vec_t)(high ^ (r >> (bits - 1)));
+    return (vec_t)r;
+  }
+  static bool one(T a, T b, T *r) { return __builtin_mul_overflow(a, b, r); }
+};
+
+/*
+ * a * b of 64 bits, one lane at a time: neither NEON nor SSE multiplies
+ * 64 bits by 64 bits.
+ */
+struct mul64_op_t : lanes_t<int64_t, uint64_t> {
+  static constexpr uint64_t ovf_bits = 1;
+  static constexpr bool undoes = false;
+  static vec_t vec(vec_t a, vec_t b, vec_t *ovf) {
+    int64_t r0, r1;
+    uint64_t o0 = one(int64_t(a[0]), int64_t(b[0]), &r0);
+    uint64_t o1 = one(int64_t(a[1]), int64_t(b[1]), &r1);
+    *ovf = (vec_t){o0, o1};
+    return (vec_t){uint64_t(r0), uint64_t(r1)};
+  }
+  static bool one(int64_t a, int64_t b, int64_t *r) {
+    return __builtin_mul_overflow(a, b, r);
+  }
+};
+
+/* 16 rows' bytes in a vector. */
+typedef uint8_t bytes_t __attribute__((vector_size(16)));
+
+/*
+ * Call fn(mask, row) for each vector of the 16 rows of m, a byte a row of
+ * all ones or zeros: mask is the bytes of its rows, each W times, so a lane
+ * of W bytes a row, and row is its first row.
+ * 1. Interleave the low half of m with itself, for its first rows, and the
+ *    high half for the others: each byte is there twice as often.
+ * 2. Do it again with each, until a row has W bytes.
+ * GCC makes a move a row of a __builtin_convertvector from bytes.
+ */
+template <uint32_t W, uint32_t ROWS = 16, typename FN>
+inline void for_lanes(bytes_t m, size_t row, FN &&fn) {
+  if constexpr (1 == W) {
+    fn(m, row);
+  } else {
+    const bytes_t low = {0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7};
+    const bytes_t high = low + 8;
+    for_lanes<W / 2, ROWS / 2>(__builtin_shuffle(m, low), row, fn);
+    for_lanes<W / 2, ROWS / 2>(__builtin_shuffle(m, high), row + ROWS / 2, fn);
+  }
+}
+
+/*
+ * An operation OP on two vectors of integers, which may overflow.
+ * 1. For each block of rows, 16 rows at a time, and 16 bytes of them at a
+ *    time: compute, store the results, and gather into ovf the overflow
+ *    bits of the rows computed, neither not valid nor null. If out is a or
+ *    b, and OP cannot undo a result, save the block's input first.
  * 2. At the block's end, if a row computed overflowed, find the lowest
  *    one, row by row, and fail with its index. If out is a or b, the
- *    block's sums are over that input: it is the sum less the other one,
- *    exactly, as the sum wrapped around.
- * 3. The rows past the last 16 bytes, one at a time, by the same rule.
+ *    block's results are over that input: undo them, which is exact, as
+ *    they wrapped around, or take what was saved.
+ * 3. The rows past the last 16, one at a time, by the same rule.
  * The flags stay as they are: a row's result is valid if its inputs are,
  * and null if one of them is.
  */
-template <typename T, typename U>
-int add_vec(uint32_t n, uint8_t *flag, const T *a, const T *b, T *out) {
-  // L lanes of U in 16 bytes, and L flags of a row each.
-  constexpr uint32_t L = 16 / sizeof(T);
-  typedef U vec_t __attribute__((vector_size(16)));
-  typedef uint8_t flags_t __attribute__((vector_size(L)));
-  constexpr U top = U(1) << (8 * sizeof(T) - 1);
+template <typename OP>
+int arith_vec(uint32_t n, uint8_t *flag, const typename OP::elem_t *a,
+              const typename OP::elem_t *b, typename OP::elem_t *out) {
+  typedef typename OP::elem_t T;
+  typedef typename OP::vec_t vec_t;
+  typedef uint64_t words_t __attribute__((vector_size(16)));
+  const bool in_place = out == a || out == b;
+  T saved[OP::undoes ? 1 : block_rows];
   // Fail with row i.
-  auto fail_at = [](uint32_t i) {
-    return ty_internal::set_error(TY_ERR_RANGE, "result out of range", i);
+  auto fail_at = [](size_t i) {
+    return ty_internal::set_error(TY_ERR_RANGE, "result out of range",
+                                  uint32_t(i));
   };
-  // The overflow of row i, x + y: its sign bit, and whether it is computed.
-  auto overflowed = [&](uint32_t i, U x, U y) {
-    U r = x + y;
-    return 0 == (flag[i] & TY_VEC_SKIP) && 0 != ((x ^ r) & (y ^ r) & top);
-  };
-  // Fail with the lowest row computed of [from, to), whose sums are in out,
-  // that overflows; there is one.
-  auto fail_in = [&](uint32_t from, uint32_t to) {
-    uint32_t i = from;
+  // Whether row i is computed.
+  auto is_computed = [&](size_t i) { return 0 == (flag[i] & TY_VEC_SKIP); };
+  // Fail with the lowest row computed of [from, to), whose results are in
+  // out, that overflows; there is one.
+  auto fail_in = [&](size_t from, size_t to) {
+    size_t i = from;
     for (; i + 1 < to; i++) {
-      U r = U(out[i]);
-      U x = out == a ? U(r - U(b[i])) : U(a[i]);
-      U y = out == b ? U(r - U(a[i])) : U(b[i]);
-      if (overflowed(i, x, y)) {
+      T x = a[i], y = b[i], r;
+      if constexpr (OP::undoes) {
+        x = out == a ? OP::undo_a(out[i], b[i]) : x;
+        y = out == b ? OP::undo_b(out[i], a[i]) : y;
+      } else {
+        x = out == a ? saved[i - from] : x;
+        y = out == b ? saved[i - from] : y;
+      }
+      if (is_computed(i) && OP::one(x, y, &r)) {
         break;
       }
     }
     return fail_at(i);
   };
-  // 1. and 2. Whole blocks of whole vectors.
-  uint32_t i = 0;
-  const uint32_t whole = n - n % L;
+  // 1. and 2. Whole blocks of 16 rows; a size_t, as a uint32_t wraps around,
+  // which costs an instruction an address.
+  size_t i = 0;
+  const size_t whole = n - n % 16;
   while (i < whole) {
-    const uint32_t from = i;
-    const uint32_t to = whole - i < block_rows ? whole : i + block_rows;
+    const size_t from = i;
+    const size_t to = whole - i < block_rows ? whole : i + block_rows;
     vec_t ovf = {};
-    for (; i < to; i += L) {
-      vec_t va, vb;
-      flags_t f;
-      memcpy(&va, a + i, 16);
-      memcpy(&vb, b + i, 16);
-      memcpy(&f, flag + i, L);
-      vec_t vr = va + vb;
-      memcpy(out + i, &vr, 16);
-      // All ones in the lane of a row computed, zero in another.
-      vec_t computed =
-          (vec_t)((__builtin_convertvector(f, vec_t) & TY_VEC_SKIP) == 0);
-      ovf |= (va ^ vr) & (vb ^ vr) & computed;
+    if constexpr (!OP::undoes) {
+      if (in_place) {
+        memcpy(saved, out + from, (to - from) * sizeof(T));
+      }
     }
-    U any = 0;
-    for (uint32_t l = 0; l < L; l++) {
-      any |= ovf[l];
+    for (; i < to; i += 16) {
+      bytes_t f;
+      memcpy(&f, flag + i, 16);
+      // All ones in the byte of a row computed, zero in another.
+      const bytes_t computed = (bytes_t)((f & uint8_t(TY_VEC_SKIP)) == 0);
+      for_lanes<sizeof(T)>(
+          computed,
+          i, [&](bytes_t mask, size_t row) __attribute__((always_inline)) {
+            vec_t va, vb, o;
+            memcpy(&va, a + row, 16);
+            memcpy(&vb, b + row, 16);
+            vec_t vr = OP::vec(va, vb, &o);
+            memcpy(out + row, &vr, 16);
+            ovf |= o & (vec_t)mask;
+          });
     }
-    if (TY_UNLIKELY(any & top)) {
+    const words_t any = (words_t)(ovf & OP::ovf_bits);
+    if (TY_UNLIKELY(any[0] | any[1])) {
       return fail_in(from, to);
     }
   }
   // 3. The rest, one row at a time.
   for (; i < n; i++) {
-    if (TY_UNLIKELY(overflowed(i, U(a[i]), U(b[i])))) {
+    T r;
+    if (TY_UNLIKELY(OP::one(a[i], b[i], &r) && is_computed(i))) {
       return fail_at(i);
     }
-    out[i] = T(U(a[i]) + U(b[i]));
+    out[i] = r;
   }
   return 0;
 }
@@ -174,19 +322,55 @@ int bool_op(uint32_t n, const uint8_t *a, const uint8_t *b, uint8_t *out,
 /* out = a + b of each row computed; see ty_vec.h. */
 int tyvec_int16_add(uint32_t n, uint8_t *flag, const int16_t *a,
                     const int16_t *b, int16_t *out) {
-  return add_vec<int16_t, uint16_t>(n, flag, a, b, out);
+  return arith_vec<add_op_t<int16_t, uint16_t>>(n, flag, a, b, out);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
 int tyvec_int32_add(uint32_t n, uint8_t *flag, const int32_t *a,
                     const int32_t *b, int32_t *out) {
-  return add_vec<int32_t, uint32_t>(n, flag, a, b, out);
+  return arith_vec<add_op_t<int32_t, uint32_t>>(n, flag, a, b, out);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
 int tyvec_int64_add(uint32_t n, uint8_t *flag, const int64_t *a,
                     const int64_t *b, int64_t *out) {
-  return add_vec<int64_t, uint64_t>(n, flag, a, b, out);
+  return arith_vec<add_op_t<int64_t, uint64_t>>(n, flag, a, b, out);
+}
+
+/* out = a - b of each row computed; see ty_vec.h. */
+int tyvec_int16_sub(uint32_t n, uint8_t *flag, const int16_t *a,
+                    const int16_t *b, int16_t *out) {
+  return arith_vec<sub_op_t<int16_t, uint16_t>>(n, flag, a, b, out);
+}
+
+/* out = a - b of each row computed; see ty_vec.h. */
+int tyvec_int32_sub(uint32_t n, uint8_t *flag, const int32_t *a,
+                    const int32_t *b, int32_t *out) {
+  return arith_vec<sub_op_t<int32_t, uint32_t>>(n, flag, a, b, out);
+}
+
+/* out = a - b of each row computed; see ty_vec.h. */
+int tyvec_int64_sub(uint32_t n, uint8_t *flag, const int64_t *a,
+                    const int64_t *b, int64_t *out) {
+  return arith_vec<sub_op_t<int64_t, uint64_t>>(n, flag, a, b, out);
+}
+
+/* out = a * b of each row computed; see ty_vec.h. */
+int tyvec_int16_mul(uint32_t n, uint8_t *flag, const int16_t *a,
+                    const int16_t *b, int16_t *out) {
+  return arith_vec<mul_op_t<int16_t, uint16_t, int32_t>>(n, flag, a, b, out);
+}
+
+/* out = a * b of each row computed; see ty_vec.h. */
+int tyvec_int32_mul(uint32_t n, uint8_t *flag, const int32_t *a,
+                    const int32_t *b, int32_t *out) {
+  return arith_vec<mul_op_t<int32_t, uint32_t, int64_t>>(n, flag, a, b, out);
+}
+
+/* out = a * b of each row computed; see ty_vec.h. */
+int tyvec_int64_mul(uint32_t n, uint8_t *flag, const int64_t *a,
+                    const int64_t *b, int64_t *out) {
+  return arith_vec<mul64_op_t>(n, flag, a, b, out);
 }
 
 /* out = 1 for each null row, and 0 for another; see ty_vec.h. */

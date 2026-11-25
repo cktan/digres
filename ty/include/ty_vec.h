@@ -20,19 +20,22 @@
  *     means nothing; it is never an error. (An IS test has a result for a
  *     null row.) An operation that cannot fail may compute every row, as that
  *     is cheaper.
- *   - flag, the flags of the results, over those of the inputs. Add
- *     leaves each as it is: a null input gives a null sum.
+ *   - flag, the flags of the results, over those of the inputs. An
+ *     operation on integers leaves each as it is: a null input gives a null
+ *     result.
  * It returns 0, or -1 at once on the first row computed, by index, whose
  * result does not fit: the thread's error is TY_ERR_RANGE, ty_erridx() is
  * that row's index, and out and flag mean nothing.
  *
- * out may be a or b, but not both at once: a row's inputs are read before
- * its result is written. The additions run on the machine's vector instructions
- * (src/vec.cc).
+ * The operations run on the machine's vector instructions (src/vec.cc).
  *
  *   tyvec_intN_add(n, flag, a, b, out)
- *       out[i] = a[i] + b[i]. RANGE on the first row computed that
- *       overflows.
+ *   tyvec_intN_sub(n, flag, a, b, out)
+ *   tyvec_intN_mul(n, flag, a, b, out)
+ *       out[i] = a[i] + b[i], a[i] - b[i], or a[i] * b[i]. RANGE on the
+ *       first row computed that overflows. out may be a or b, as a row's
+ *       inputs are read before its result is written; add does not allow
+ *       that it is both.
  *
  *   tyvec_flag_isnull(n, flag, out)
  *   tyvec_flag_isnotnull(n, flag, out)
@@ -79,6 +82,18 @@ int tyvec_int16_add(uint32_t n, uint8_t *flag, const int16_t *a,
 int tyvec_int32_add(uint32_t n, uint8_t *flag, const int32_t *a,
                     const int32_t *b, int32_t *out);
 int tyvec_int64_add(uint32_t n, uint8_t *flag, const int64_t *a,
+                    const int64_t *b, int64_t *out);
+int tyvec_int16_sub(uint32_t n, uint8_t *flag, const int16_t *a,
+                    const int16_t *b, int16_t *out);
+int tyvec_int32_sub(uint32_t n, uint8_t *flag, const int32_t *a,
+                    const int32_t *b, int32_t *out);
+int tyvec_int64_sub(uint32_t n, uint8_t *flag, const int64_t *a,
+                    const int64_t *b, int64_t *out);
+int tyvec_int16_mul(uint32_t n, uint8_t *flag, const int16_t *a,
+                    const int16_t *b, int16_t *out);
+int tyvec_int32_mul(uint32_t n, uint8_t *flag, const int32_t *a,
+                    const int32_t *b, int32_t *out);
+int tyvec_int64_mul(uint32_t n, uint8_t *flag, const int64_t *a,
                     const int64_t *b, int64_t *out);
 int tyvec_flag_isnull(uint32_t n, uint8_t *flag, uint8_t *out);
 int tyvec_flag_isnotnull(uint32_t n, uint8_t *flag, uint8_t *out);

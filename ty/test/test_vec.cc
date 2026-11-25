@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <limits>
 #include <random>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -205,6 +206,187 @@ template <typename T> void check_overflow_in_place() {
   }
 }
 
+/* An operation on integers: the vector's of each width, and the scalar's. */
+#define INT_OP(NAME)                                                           \
+  struct NAME##_t {                                                            \
+    static int vec(uint32_t n, uint8_t *f, const int16_t *a, const int16_t *b, \
+                   int16_t *out) {                                             \
+      return tyvec_int16_##NAME(n, f, a, b, out);                              \
+    }                                                                          \
+    static int vec(uint32_t n, uint8_t *f, const int32_t *a, const int32_t *b, \
+                   int32_t *out) {                                             \
+      return tyvec_int32_##NAME(n, f, a, b, out);                              \
+    }                                                                          \
+    static int vec(uint32_t n, uint8_t *f, const int64_t *a, const int64_t *b, \
+                   int64_t *out) {                                             \
+      return tyvec_int64_##NAME(n, f, a, b, out);                              \
+    }                                                                          \
+    static int one(int16_t a, int16_t b, int16_t *r) {                         \
+      return ty_int16_##NAME(a, b, r);                                         \
+    }                                                                          \
+    static int one(int32_t a, int32_t b, int32_t *r) {                         \
+      return ty_int32_##NAME(a, b, r);                                         \
+    }                                                                          \
+    static int one(int64_t a, int64_t b, int64_t *r) {                         \
+      return ty_int64_##NAME(a, b, r);                                         \
+    }                                                                          \
+  };
+INT_OP(add)
+INT_OP(sub)
+INT_OP(mul)
+
+/* Where an operation's results go: an array of its own, a, b, or one array
+   that is a, b and out. */
+enum place_t { OWN, INTO_A, INTO_B, ONE };
+
+/*
+ * Run OP on the rows of a, b and flag, with the results at place, and check
+ * it against the scalar operation, row by row. Returns the row that fails,
+ * or -1.
+ * 1. The scalar operation of each computed row, up to one that fails.
+ * 2. The vector operation, on copies of the rows with one more at the end.
+ * 3. It fails at the scalar's row, or gives the scalar's results and leaves
+ *    the flags; nothing is written past the rows.
+ */
+template <typename OP, typename T>
+int64_t check_rows(const std::vector<T> &a, const std::vector<T> &b,
+                   const std::vector<uint8_t> &flag, place_t place) {
+  const uint32_t n = uint32_t(a.size());
+  const std::vector<T> &second = ONE == place ? a : b;
+  // 1. The scalar operation.
+  std::vector<T> want(n);
+  int64_t fails = -1;
+  for (uint32_t i = 0; i < n && fails < 0; i++) {
+    if (0 == (flag[i] & TY_VEC_SKIP) &&
+        0 != OP::one(a[i], second[i], &want[i])) {
+      fails = i;
+    }
+  }
+  // 2. The vector operation.
+  std::vector<T> x = a, y = b, own(n + 1, T(77));
+  std::vector<uint8_t> f = flag;
+  x.push_back(T(77)), y.push_back(T(77)), f.push_back(0xff);
+  T *out = OWN == place ? own.data() : INTO_B == place ? y.data() : x.data();
+  int rc =
+      OP::vec(n, f.data(), x.data(), ONE == place ? x.data() : y.data(), out);
+  // 3. The same row fails, or the same results.
+  CHECK(rc == (fails < 0 ? 0 : -1));
+  if (0 != rc) {
+    CHECK(TY_ERR_RANGE == ty_errnum());
+    CHECK(fails == int64_t(ty_erridx()));
+  } else {
+    for (uint32_t i = 0; i < n; i++) {
+      if (0 == (flag[i] & TY_VEC_SKIP)) {
+        CHECK(out[i] == want[i]);
+      }
+      CHECK(f[i] == flag[i]);
+    }
+  }
+  CHECK(T(77) == out[n]);
+  CHECK(0xff == f[n]);
+  return fails;
+}
+
+/*
+ * OP agrees with the scalar operation on random rows, some of which
+ * overflow.
+ * 1. For sizes around 16 rows and the blocks of 256, rows of small values,
+ *    and, at one in every wild, of any value; a row in five is not valid,
+ *    and another in five null, with any value.
+ * 2. Check the rows, with the results at each place; with one array for
+ *    all, if OP is not add, as add does not allow it.
+ * 3. Some runs overflowed, and some did not.
+ */
+template <typename OP, typename T> void check_random() {
+  std::mt19937_64 rng(23);
+  int failed = 0, passed = 0;
+  for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 33u, 255u, 256u, 257u, 1003u}) {
+    for (uint32_t wild : {20u, 300u, 2000u, 1000000000u}) {
+      // 1. The rows.
+      std::vector<T> a(n), b(n);
+      std::vector<uint8_t> flag(n);
+      for (uint32_t i = 0; i < n; i++) {
+        flag[i] = (0 == rng() % 5 ? TY_VEC_NOTVALID : 0) |
+                  (0 == rng() % 5 ? TY_VEC_NULL : 0);
+        const bool any = 0 != flag[i] || 0 == rng() % wild;
+        a[i] = any ? T(rng()) : T(int64_t(rng() % 361) - 180);
+        b[i] = any ? T(rng()) : T(int64_t(rng() % 361) - 180);
+      }
+      // 2. Check them at each place.
+      for (place_t place : {OWN, INTO_A, INTO_B, ONE}) {
+        if (ONE == place && std::is_same_v<OP, add_t>) {
+          continue;
+        }
+        (check_rows<OP, T>(a, b, flag, place) < 0 ? passed : failed)++;
+      }
+    }
+  }
+  // 3. Both happened.
+  CHECK(passed > 10);
+  CHECK(failed > 10);
+}
+
+/*
+ * One pair of values at each place of two 16 rows and their rest: it fails
+ * at its row, or fits, and is no error if its row is not valid or null.
+ */
+template <typename OP, typename T> void check_pair(T x, T y, bool fits) {
+  const uint32_t n = 37;
+  for (uint32_t at = 0; at < n; at++) {
+    std::vector<T> a(n, T(3)), b(n, T(2));
+    std::vector<uint8_t> flag(n, 0);
+    a[at] = x, b[at] = y;
+    for (place_t place : {OWN, INTO_A, INTO_B}) {
+      CHECK((check_rows<OP, T>(a, b, flag, place)) ==
+            (fits ? -1 : int64_t(at)));
+      for (uint8_t skip : {TY_VEC_NOTVALID, TY_VEC_NULL, TY_VEC_SKIP}) {
+        std::vector<uint8_t> f = flag;
+        f[at] = skip;
+        CHECK((check_rows<OP, T>(a, b, f, place)) == -1);
+      }
+    }
+  }
+}
+
+/*
+ * The edges of each operation.
+ * 1. add: MAX + 1 and MIN + -1 overflow; MIN + MAX fits.
+ * 2. sub: MIN - 1, MAX - -1 and 0 - MIN overflow; -1 - MIN and MIN - MIN
+ *    fit.
+ * 3. mul: MIN * -1, MIN * MIN and half of MAX + 1 times 2 overflow;
+ *    MAX * -1, half of MIN times 2, MIN * 1 and MIN * 0 fit. So do the
+ *    largest values whose product fits, and one more does not.
+ */
+template <typename T> void check_edges() {
+  const T max = std::numeric_limits<T>::max();
+  const T min = std::numeric_limits<T>::min();
+  // 1. add.
+  check_pair<add_t, T>(max, 1, false);
+  check_pair<add_t, T>(min, -1, false);
+  check_pair<add_t, T>(min, max, true);
+  // 2. sub.
+  check_pair<sub_t, T>(min, 1, false);
+  check_pair<sub_t, T>(max, -1, false);
+  check_pair<sub_t, T>(0, min, false);
+  check_pair<sub_t, T>(-1, min, true);
+  check_pair<sub_t, T>(min, min, true);
+  // 3. mul.
+  check_pair<mul_t, T>(min, -1, false);
+  check_pair<mul_t, T>(-1, min, false);
+  check_pair<mul_t, T>(min, min, false);
+  check_pair<mul_t, T>(T(max / 2 + 1), 2, false);
+  check_pair<mul_t, T>(max, max, false);
+  check_pair<mul_t, T>(max, -1, true);
+  check_pair<mul_t, T>(T(min / 2), 2, true);
+  check_pair<mul_t, T>(min, 1, true);
+  check_pair<mul_t, T>(min, 0, true);
+  const T half = T(T(1) << (4 * sizeof(T) - 1));
+  check_pair<mul_t, T>(half, half, true);
+  check_pair<mul_t, T>(half, T(2 * half), false);
+  check_pair<mul_t, T>(half, T(-2 * half), true);
+  check_pair<mul_t, T>(T(half + 1), T(-2 * half), false);
+}
+
 } // namespace
 
 // Verify that IS NULL of a vector is the null bit of each row, and that no
@@ -368,4 +550,22 @@ TEST_CASE("a vector add over its input fails at the right row") {
   check_overflow_in_place<int16_t>();
   check_overflow_in_place<int32_t>();
   check_overflow_in_place<int64_t>();
+}
+
+TEST_CASE("a vector add, sub and mul agree with the scalar's, errors too") {
+  check_random<add_t, int16_t>();
+  check_random<add_t, int32_t>();
+  check_random<add_t, int64_t>();
+  check_random<sub_t, int16_t>();
+  check_random<sub_t, int32_t>();
+  check_random<sub_t, int64_t>();
+  check_random<mul_t, int16_t>();
+  check_random<mul_t, int32_t>();
+  check_random<mul_t, int64_t>();
+}
+
+TEST_CASE("a vector add, sub and mul at their edges") {
+  check_edges<int16_t>();
+  check_edges<int32_t>();
+  check_edges<int64_t>();
 }

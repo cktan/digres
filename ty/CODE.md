@@ -62,6 +62,11 @@ nor `TY_VEC_NULL`.
   NEON on aarch64 and SSE on x86-64. Do not leave it to the
   compiler to vectorize a plain loop: GCC may do so at `-O3` and
   not at `-O2`.
+- **Look at the code GCC makes** (`objdump -d`): it can make
+  scalar code of a vector type's operation, such as a
+  `__builtin_convertvector` from bytes, or a multiplication of
+  64-bit lanes. Use a shuffle or the machine's intrinsics there,
+  with the vector types as the fallback.
 - **Load and store with `memcpy`**: an array may not be aligned
   to 16 bytes.
 - **No branch a row.** Gather the errors of a block of rows, test
