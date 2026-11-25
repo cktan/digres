@@ -30,7 +30,7 @@ int ty_float_var_combine(ty_float_var_t *a, const ty_float_var_t *b) {
   double n = a->n + b->n;
   double sx;
 
-  if (ty_float64_add(a->sx, b->sx, &sx) != 0) {
+  if (ty_fp64_add(a->sx, b->sx, &sx) != 0) {
     return -1;
   }
   double tmp = a->sx / a->n - b->sx / b->n;
@@ -102,7 +102,7 @@ int ty_float_regr_combine(ty_float_regr_t *a, const ty_float_regr_t *b) {
   double n = a->n + b->n;
   double sx, sy;
 
-  if (ty_float64_add(a->sx, b->sx, &sx) != 0) {
+  if (ty_fp64_add(a->sx, b->sx, &sx) != 0) {
     return -1;
   }
   double tmp1 = a->sx / a->n - b->sx / b->n;
@@ -111,7 +111,7 @@ int ty_float_regr_combine(ty_float_regr_t *a, const ty_float_regr_t *b) {
   if (isinf(sxx) && !isinf(a->sxx) && !isinf(b->sxx)) {
     return ty_err_range();
   }
-  if (ty_float64_add(a->sy, b->sy, &sy) != 0) {
+  if (ty_fp64_add(a->sy, b->sy, &sy) != 0) {
     return -1;
   }
   double tmp2 = a->sy / a->n - b->sy / b->n;

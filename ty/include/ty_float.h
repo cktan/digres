@@ -19,21 +19,21 @@
  * cannot fail returns its result. The small ones are in line. N below is 32
  * or 64, T is float or double.
  *
- *   ty_floatN_add, _sub, _mul, _div (a, b, &r)  r = a op b, checked as above
- *   ty_floatN_neg(a), _abs(a)                   -a, |a|; cannot fail
- *   ty_floatN_cmp(a, b)                         -1, 0 or 1; NaN is last
- *   ty_floatN_eq, _ne, _lt, _le, _gt, _ge (a, b)   1 or 0
- *   ty_floatN_larger(a, b), _smaller(a, b)      the larger, the smaller
+ *   ty_fpN_add, _sub, _mul, _div (a, b, &r)  r = a op b, checked as above
+ *   ty_fpN_neg(a), _abs(a)                   -a, |a|; cannot fail
+ *   ty_fpN_cmp(a, b)                         -1, 0 or 1; NaN is last
+ *   ty_fpN_eq, _ne, _lt, _le, _gt, _ge (a, b)   1 or 0
+ *   ty_fpN_larger(a, b), _smaller(a, b)      the larger, the smaller
  *
  * Conversions:
  *
- *   ty_float32_to_float64(a)       exact; cannot fail
- *   ty_float64_to_float32(a, &r)   RANGE if it overflows a float32,
+ *   ty_fp32_to_fp64(a)       exact; cannot fail
+ *   ty_fp64_to_fp32(a, &r)   RANGE if it overflows a float32,
  *                                  UNDERFLOW if a nonzero rounds to zero
- *   ty_floatN_to_intM(a, &r)       rounded to the nearest, a tie to the even;
+ *   ty_fpN_to_intM(a, &r)       rounded to the nearest, a tie to the even;
  *                                  RANGE for NaN or a value that does not fit
  *                                  (M is 16, 32 or 64)
- *   ty_intM_to_floatN(a)           the nearest; cannot fail
+ *   ty_intM_to_fpN(a)           the nearest; cannot fail
  */
 #ifndef TY_FLOAT_H
 #define TY_FLOAT_H
@@ -47,7 +47,7 @@
 #include "ty_int.h"
 
 #define TY_FLOAT_OPS(N, T, ZERO)                                              \
-    static inline int ty_float##N##_add(T a, T b, T* r) {                     \
+    static inline int ty_fp##N##_add(T a, T b, T* r) {                        \
         T v = a + b;                                                          \
         if (TY_UNLIKELY(__builtin_isinf(v) && !__builtin_isinf(a) &&          \
                         !__builtin_isinf(b))) {                               \
@@ -56,7 +56,7 @@
         *r = v;                                                               \
         return 0;                                                             \
     }                                                                         \
-    static inline int ty_float##N##_sub(T a, T b, T* r) {                     \
+    static inline int ty_fp##N##_sub(T a, T b, T* r) {                        \
         T v = a - b;                                                          \
         if (TY_UNLIKELY(__builtin_isinf(v) && !__builtin_isinf(a) &&          \
                         !__builtin_isinf(b))) {                               \
@@ -65,7 +65,7 @@
         *r = v;                                                               \
         return 0;                                                             \
     }                                                                         \
-    static inline int ty_float##N##_mul(T a, T b, T* r) {                     \
+    static inline int ty_fp##N##_mul(T a, T b, T* r) {                        \
         T v = a * b;                                                          \
         if (TY_UNLIKELY(__builtin_isinf(v) && !__builtin_isinf(a) &&          \
                         !__builtin_isinf(b))) {                               \
@@ -77,7 +77,7 @@
         *r = v;                                                               \
         return 0;                                                             \
     }                                                                         \
-    static inline int ty_float##N##_div(T a, T b, T* r) {                     \
+    static inline int ty_fp##N##_div(T a, T b, T* r) {                        \
         T v;                                                                  \
         if (TY_UNLIKELY(b == ZERO && !__builtin_isnan(a))) {                  \
             return ty_err_divzero();                                          \
@@ -92,36 +92,36 @@
         *r = v;                                                               \
         return 0;                                                             \
     }                                                                         \
-    static inline T ty_float##N##_neg(T a) { return -a; }                     \
-    static inline T ty_float##N##_abs(T a) { return __builtin_fabs(a); }       \
-    static inline int ty_float##N##_eq(T a, T b) {                            \
+    static inline T ty_fp##N##_neg(T a) { return -a; }                        \
+    static inline T ty_fp##N##_abs(T a) { return __builtin_fabs(a); }          \
+    static inline int ty_fp##N##_eq(T a, T b) {                               \
         return __builtin_isnan(a) ? __builtin_isnan(b)                        \
                                   : !__builtin_isnan(b) && a == b;            \
     }                                                                         \
-    static inline int ty_float##N##_ne(T a, T b) {                            \
+    static inline int ty_fp##N##_ne(T a, T b) {                               \
         return __builtin_isnan(a) ? !__builtin_isnan(b)                       \
                                   : __builtin_isnan(b) || a != b;             \
     }                                                                         \
-    static inline int ty_float##N##_lt(T a, T b) {                            \
+    static inline int ty_fp##N##_lt(T a, T b) {                               \
         return !__builtin_isnan(a) && (__builtin_isnan(b) || a < b);          \
     }                                                                         \
-    static inline int ty_float##N##_le(T a, T b) {                            \
+    static inline int ty_fp##N##_le(T a, T b) {                               \
         return __builtin_isnan(b) || (!__builtin_isnan(a) && a <= b);         \
     }                                                                         \
-    static inline int ty_float##N##_gt(T a, T b) {                            \
+    static inline int ty_fp##N##_gt(T a, T b) {                               \
         return !__builtin_isnan(b) && (__builtin_isnan(a) || a > b);          \
     }                                                                         \
-    static inline int ty_float##N##_ge(T a, T b) {                            \
+    static inline int ty_fp##N##_ge(T a, T b) {                               \
         return __builtin_isnan(a) || (!__builtin_isnan(b) && a >= b);         \
     }                                                                         \
-    static inline int ty_float##N##_cmp(T a, T b) {                           \
-        return ty_float##N##_gt(a, b) ? 1 : ty_float##N##_lt(a, b) ? -1 : 0;  \
+    static inline int ty_fp##N##_cmp(T a, T b) {                              \
+        return ty_fp##N##_gt(a, b) ? 1 : ty_fp##N##_lt(a, b) ? -1 : 0;        \
     }                                                                         \
-    static inline T ty_float##N##_larger(T a, T b) {                          \
-        return ty_float##N##_gt(a, b) ? a : b;                                \
+    static inline T ty_fp##N##_larger(T a, T b) {                             \
+        return ty_fp##N##_gt(a, b) ? a : b;                                   \
     }                                                                         \
-    static inline T ty_float##N##_smaller(T a, T b) {                         \
-        return ty_float##N##_lt(a, b) ? a : b;                                \
+    static inline T ty_fp##N##_smaller(T a, T b) {                            \
+        return ty_fp##N##_lt(a, b) ? a : b;                                   \
     }
 
 TY_FLOAT_OPS(32, float, 0.0f)
@@ -130,10 +130,10 @@ TY_FLOAT_OPS(64, double, 0.0)
 #undef TY_FLOAT_OPS
 
 /* A float32 as a float64: exact. */
-static inline double ty_float32_to_float64(float a) { return (double)a; }
+static inline double ty_fp32_to_fp64(float a) { return (double)a; }
 
 /* A float64 as a float32: the nearest; an overflow or an underflow fails. */
-static inline int ty_float64_to_float32(double a, float *r) {
+static inline int ty_fp64_to_fp32(double a, float *r) {
   float v = (float)a;
 
   if (TY_UNLIKELY(__builtin_isinf(v) && !__builtin_isinf(a))) {
@@ -147,43 +147,43 @@ static inline int ty_float64_to_float32(double a, float *r) {
 }
 
 /* A float of either width as an integer: rounded, with a range check. */
-int ty_float64_to_int16(double a, int16_t *r);
-int ty_float64_to_int32(double a, int32_t *r);
-static inline int ty_float32_to_int16(float a, int16_t *r) {
-  return ty_float64_to_int16((double)a, r);
+int ty_fp64_to_int16(double a, int16_t *r);
+int ty_fp64_to_int32(double a, int32_t *r);
+static inline int ty_fp32_to_int16(float a, int16_t *r) {
+  return ty_fp64_to_int16((double)a, r);
 }
-static inline int ty_float32_to_int32(float a, int32_t *r) {
-  return ty_float64_to_int32((double)a, r);
+static inline int ty_fp32_to_int32(float a, int32_t *r) {
+  return ty_fp64_to_int32((double)a, r);
 }
 
 /* A float64 as an int64 is ty_int64_from_double, which ty_int.h has. */
-static inline int ty_float64_to_int64(double a, int64_t *r) {
+static inline int ty_fp64_to_int64(double a, int64_t *r) {
   return ty_int64_from_double(a, r);
 }
-static inline int ty_float32_to_int64(float a, int64_t *r) {
-  return ty_float64_to_int64((double)a, r);
+static inline int ty_fp32_to_int64(float a, int64_t *r) {
+  return ty_fp64_to_int64((double)a, r);
 }
 
 /* An integer as a float: the nearest, as C converts it. */
-static inline float ty_int16_to_float32(int16_t a) { return (float)a; }
-static inline float ty_int32_to_float32(int32_t a) { return (float)a; }
-static inline float ty_int64_to_float32(int64_t a) { return (float)a; }
-static inline double ty_int16_to_float64(int16_t a) { return (double)a; }
-static inline double ty_int32_to_float64(int32_t a) { return (double)a; }
-static inline double ty_int64_to_float64(int64_t a) { return (double)a; }
+static inline float ty_int16_to_fp32(int16_t a) { return (float)a; }
+static inline float ty_int32_to_fp32(int32_t a) { return (float)a; }
+static inline float ty_int64_to_fp32(int64_t a) { return (float)a; }
+static inline double ty_int16_to_fp64(int16_t a) { return (double)a; }
+static inline double ty_int32_to_fp64(int32_t a) { return (double)a; }
+static inline double ty_int64_to_fp64(int64_t a) { return (double)a; }
 
 /*
- * Rounding of a float64: ty_float64_round to the nearest, a tie to the even;
+ * Rounding of a float64: ty_fp64_round to the nearest, a tie to the even;
  * ceil toward +infinity; floor toward -infinity; trunc toward zero; sign -1,
  * 0 or 1 (NaN is 0). None fails; NaN and infinity go through.
  */
-static inline double ty_float64_round(double a) { return rint(a); }
-static inline double ty_float64_ceil(double a) { return ceil(a); }
-static inline double ty_float64_floor(double a) { return floor(a); }
-static inline double ty_float64_trunc(double a) {
+static inline double ty_fp64_round(double a) { return rint(a); }
+static inline double ty_fp64_ceil(double a) { return ceil(a); }
+static inline double ty_fp64_floor(double a) { return floor(a); }
+static inline double ty_fp64_trunc(double a) {
   return a >= 0 ? floor(a) : -floor(-a);
 }
-static inline double ty_float64_sign(double a) {
+static inline double ty_fp64_sign(double a) {
   return a > 0 ? 1.0 : a < 0 ? -1.0 : 0.0;
 }
 
@@ -202,100 +202,100 @@ static inline double ty_float64_sign(double a) {
  *
  * The message of an INVALID is PostgreSQL's text.
  */
-int ty_float64_sqrt_slow(double a, double *r);
-int ty_float64_cbrt_slow(double a, double *r);
-int ty_float64_exp_slow(double a, double *r);
-int ty_float64_ln_slow(double a, double *r);
-int ty_float64_log10_slow(double a, double *r);
-int ty_float64_pow_slow(double a, double b, double *r);
+int ty_fp64_sqrt_slow(double a, double *r);
+int ty_fp64_cbrt_slow(double a, double *r);
+int ty_fp64_exp_slow(double a, double *r);
+int ty_fp64_ln_slow(double a, double *r);
+int ty_fp64_log10_slow(double a, double *r);
+int ty_fp64_pow_slow(double a, double b, double *r);
 
 /*
  * The common case of each is in line, so that a host's wrapper costs no call:
  * a finite argument inside the domain whose result is finite and not zero.
  * Anything else goes to the out-of-line _slow function, which decides it.
  */
-static inline int ty_float64_sqrt(double a, double *r) {
+static inline int ty_fp64_sqrt(double a, double *r) {
   double v = sqrt(a);
 
   if (TY_UNLIKELY(!(a > 0) || __builtin_isinf(a) || v == 0.0)) {
-    return ty_float64_sqrt_slow(a, r);
+    return ty_fp64_sqrt_slow(a, r);
   }
   *r = v;
   return 0;
 }
 
-static inline int ty_float64_cbrt(double a, double *r) {
+static inline int ty_fp64_cbrt(double a, double *r) {
   double v = cbrt(a);
 
   if (TY_UNLIKELY(v == 0.0 || !__builtin_isfinite(v) ||
                   !__builtin_isfinite(a))) {
-    return ty_float64_cbrt_slow(a, r);
+    return ty_fp64_cbrt_slow(a, r);
   }
   *r = v;
   return 0;
 }
 
-static inline int ty_float64_exp(double a, double *r) {
+static inline int ty_fp64_exp(double a, double *r) {
   double v;
 
   if (TY_UNLIKELY(!__builtin_isfinite(a))) {
-    return ty_float64_exp_slow(a, r);
+    return ty_fp64_exp_slow(a, r);
   }
   errno = 0;
   v = exp(a);
   if (TY_UNLIKELY(errno != 0 || !__builtin_isfinite(v) || v == 0.0)) {
-    return ty_float64_exp_slow(a, r);
+    return ty_fp64_exp_slow(a, r);
   }
   *r = v;
   return 0;
 }
 
-static inline int ty_float64_ln(double a, double *r) {
+static inline int ty_fp64_ln(double a, double *r) {
   double v;
 
   if (TY_UNLIKELY(!(a > 0) || __builtin_isinf(a))) {
-    return ty_float64_ln_slow(a, r);
+    return ty_fp64_ln_slow(a, r);
   }
   v = log(a);
   if (TY_UNLIKELY(v == 0.0 && a != 1.0)) {
-    return ty_float64_ln_slow(a, r);
+    return ty_fp64_ln_slow(a, r);
   }
   *r = v;
   return 0;
 }
 
-static inline int ty_float64_log10(double a, double *r) {
+static inline int ty_fp64_log10(double a, double *r) {
   double v;
 
   if (TY_UNLIKELY(!(a > 0) || __builtin_isinf(a))) {
-    return ty_float64_log10_slow(a, r);
+    return ty_fp64_log10_slow(a, r);
   }
   v = log10(a);
   if (TY_UNLIKELY(v == 0.0 && a != 1.0)) {
-    return ty_float64_log10_slow(a, r);
+    return ty_fp64_log10_slow(a, r);
   }
   *r = v;
   return 0;
 }
 
-static inline int ty_float64_pow(double a, double b, double *r) {
+static inline int ty_fp64_pow(double a, double b, double *r) {
   double v;
 
   if (TY_UNLIKELY(!(a > 0) || !__builtin_isfinite(a) ||
                   !__builtin_isfinite(b))) {
-    return ty_float64_pow_slow(a, b, r);
+    return ty_fp64_pow_slow(a, b, r);
   }
   errno = 0;
   v = pow(a, b);
   if (TY_UNLIKELY(errno != 0 || !__builtin_isfinite(v) || v == 0.0)) {
-    return ty_float64_pow_slow(a, b, r);
+    return ty_fp64_pow_slow(a, b, r);
   }
   *r = v;
   return 0;
 }
 
 /*
- * The text of a float. ty_floatN_format writes a float to out, which has room
+ * The text of a float. ty_fpN_format writes a float to out, which has room
  * for TY_FLOAT_TEXT_SIZE, and a NUL; it returns the length without the NUL. If
  * extra_digits is above 0 the text is the shortest that reads back to the
  * same value (PostgreSQL's Ryu, which is not always the very shortest);
@@ -303,7 +303,7 @@ static inline int ty_float64_pow(double a, double b, double *r) {
  * extra_digits, held to 1 to 32. NaN is NaN, and infinity is Infinity or
  * -Infinity; -0 is -0.
  *
- * ty_floatN_parse reads a float from the NUL-terminated s: space, then what
+ * ty_fpN_parse reads a float from the NUL-terminated s: space, then what
  * strtod (strtof for float32) takes, or NaN, Infinity or inf with a sign,
  * in any case; then space. *end, if end is not NULL, is set to where the
  * number and the space after it stop, and what follows is not an error; with
@@ -313,10 +313,10 @@ static inline int ty_float64_pow(double a, double b, double *r) {
  * first character that is not space, and is set for a RANGE too.
  */
 #define TY_FLOAT_TEXT_SIZE 32
-size_t ty_float32_format(float a, int extra_digits, char *out);
-size_t ty_float64_format(double a, int extra_digits, char *out);
-int ty_float32_parse(const char *s, float *r, const char **end, size_t *len);
-int ty_float64_parse(const char *s, double *r, const char **end, size_t *len);
+size_t ty_fp32_format(float a, int extra_digits, char *out);
+size_t ty_fp64_format(double a, int extra_digits, char *out);
+int ty_fp32_parse(const char *s, float *r, const char **end, size_t *len);
+int ty_fp64_parse(const char *s, double *r, const char **end, size_t *len);
 
 /*
  * Trigonometry, the hyperbolic functions, and the like, of a float64, with
@@ -333,16 +333,16 @@ int ty_float64_parse(const char *s, double *r, const char **end, size_t *len);
  *   erf, erfc, gamma, lgamma
  *
  * degrees(a) and radians(a) convert, with the checks of div and mul;
- * ty_float64_pi() is pi.
+ * ty_fp64_pi() is pi.
  */
 #define TY_FLOAT_RADIANS_PER_DEGREE 0.0174532925199432957692
 
-#define TY_FLOAT_UNARY(NAME) int ty_float64_##NAME(double a, double* r)
+#define TY_FLOAT_UNARY(NAME) int ty_fp64_##NAME(double a, double* r)
 TY_FLOAT_UNARY(cot);
-int ty_float64_acos_slow(double a, double *r);
-int ty_float64_asin_slow(double a, double *r);
-int ty_float64_atan_slow(double a, double *r);
-int ty_float64_sincos_slow(int which, double a, double *r);
+int ty_fp64_acos_slow(double a, double *r);
+int ty_fp64_asin_slow(double a, double *r);
+int ty_fp64_atan_slow(double a, double *r);
+int ty_fp64_sincos_slow(int which, double a, double *r);
 TY_FLOAT_UNARY(acosd);
 TY_FLOAT_UNARY(asind);
 TY_FLOAT_UNARY(atand);
@@ -366,64 +366,64 @@ TY_FLOAT_UNARY(lgamma);
  * infinity, and acos and asin outside [-1, 1] are decided out of line). The
  * libm sets errno for these only for an infinite angle, which is tested.
  */
-static inline int ty_float64_acos(double a, double *r) {
+static inline int ty_fp64_acos(double a, double *r) {
   if (TY_UNLIKELY(!(a >= -1.0 && a <= 1.0))) {
-    return ty_float64_acos_slow(a, r);
+    return ty_fp64_acos_slow(a, r);
   }
   *r = acos(a);
   return 0;
 }
 
-static inline int ty_float64_asin(double a, double *r) {
+static inline int ty_fp64_asin(double a, double *r) {
   if (TY_UNLIKELY(!(a >= -1.0 && a <= 1.0))) {
-    return ty_float64_asin_slow(a, r);
+    return ty_fp64_asin_slow(a, r);
   }
   *r = asin(a);
   return 0;
 }
 
-static inline int ty_float64_atan(double a, double *r) {
+static inline int ty_fp64_atan(double a, double *r) {
   if (TY_UNLIKELY(__builtin_isnan(a))) {
-    return ty_float64_atan_slow(a, r);
+    return ty_fp64_atan_slow(a, r);
   }
   *r = atan(a);
   return 0;
 }
 
-static inline int ty_float64_cos(double a, double *r) {
+static inline int ty_fp64_cos(double a, double *r) {
   if (TY_UNLIKELY(!__builtin_isfinite(a))) {
-    return ty_float64_sincos_slow(0, a, r);
+    return ty_fp64_sincos_slow(0, a, r);
   }
   *r = cos(a);
   return 0;
 }
 
-static inline int ty_float64_sin(double a, double *r) {
+static inline int ty_fp64_sin(double a, double *r) {
   if (TY_UNLIKELY(!__builtin_isfinite(a))) {
-    return ty_float64_sincos_slow(1, a, r);
+    return ty_fp64_sincos_slow(1, a, r);
   }
   *r = sin(a);
   return 0;
 }
 
-static inline int ty_float64_tan(double a, double *r) {
+static inline int ty_fp64_tan(double a, double *r) {
   if (TY_UNLIKELY(!__builtin_isfinite(a))) {
-    return ty_float64_sincos_slow(2, a, r);
+    return ty_fp64_sincos_slow(2, a, r);
   }
   *r = tan(a);
   return 0;
 }
 
 #undef TY_FLOAT_UNARY
-int ty_float64_atan2(double y, double x, double *r);
-int ty_float64_atan2d(double y, double x, double *r);
-static inline int ty_float64_degrees(double a, double *r) {
-  return ty_float64_div(a, TY_FLOAT_RADIANS_PER_DEGREE, r);
+int ty_fp64_atan2(double y, double x, double *r);
+int ty_fp64_atan2d(double y, double x, double *r);
+static inline int ty_fp64_degrees(double a, double *r) {
+  return ty_fp64_div(a, TY_FLOAT_RADIANS_PER_DEGREE, r);
 }
-static inline int ty_float64_radians(double a, double *r) {
-  return ty_float64_mul(a, TY_FLOAT_RADIANS_PER_DEGREE, r);
+static inline int ty_fp64_radians(double a, double *r) {
+  return ty_fp64_mul(a, TY_FLOAT_RADIANS_PER_DEGREE, r);
 }
-static inline double ty_float64_pi(void) { return 3.14159265358979323846; }
+static inline double ty_fp64_pi(void) { return 3.14159265358979323846; }
 
 /*
  * Statistical aggregates over float64, the arithmetic of avg, the variances,
@@ -559,8 +559,8 @@ int ty_float_regr_intercept(const ty_float_regr_t *st, double *r);
  * of 0 or less, a NaN, an infinite bound, or equal bounds; RANGE for
  * count + 1 past int32.
  */
-int ty_float64_width_bucket(double operand, double bound1, double bound2,
-                            int32_t count, int32_t *r);
+int ty_fp64_width_bucket(double operand, double bound1, double bound2,
+                         int32_t count, int32_t *r);
 
 /*
  * Whether val is within the offset of base, for a window frame of RANGE
@@ -569,8 +569,8 @@ int ty_float64_width_bucket(double operand, double bound1, double bound2,
  * whose sum or difference has no value, every val is within. A negative or
  * NaN offset is TY_ERR_INVALID. The float32 values are widened to float64.
  */
-static inline int ty_float64_in_range(double val, double base, double offset,
-                                      int sub, int less, int *r) {
+static inline int ty_fp64_in_range(double val, double base, double offset,
+                                   int sub, int less, int *r) {
   double sum;
 
   if (TY_UNLIKELY(!(offset >= 0))) {
@@ -597,7 +597,7 @@ static inline int ty_float64_in_range(double val, double base, double offset,
  * float64 of its value, so the two types hash alike. The low 32 bits with seed
  * 0 are the standard hash. It cannot fail.
  */
-uint64_t ty_float64_hash(double a, uint64_t seed);
-uint64_t ty_float32_hash(float a, uint64_t seed);
+uint64_t ty_fp64_hash(double a, uint64_t seed);
+uint64_t ty_fp32_hash(float a, uint64_t seed);
 
 #endif /* TY_FLOAT_H */

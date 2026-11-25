@@ -239,8 +239,8 @@ TEST_CASE("numeric's text and float casts are digres's") {
 
       REQUIRE(3 == sscanf(line, "tof8 %4095s => %4095s %4095s", a, b, c));
       REQUIRE(0 == ty_dec128_parse(a, -1, 0, &v, &why));
-      f8[ty_float64_format(ty_dec128_to_float64(&v), 1, f8)] = '\0';
-      f4[ty_float32_format(ty_dec128_to_float32(&v), 1, f4)] = '\0';
+      f8[ty_fp64_format(ty_dec128_to_fp64(&v), 1, f8)] = '\0';
+      f4[ty_fp32_format(ty_dec128_to_fp32(&v), 1, f4)] = '\0';
       want = std::string(b) + " " + c;
       got = std::string(f8) + " " + (0 == strcmp(c, "-") ? "-" : f4);
     } else if (0 == strcmp(kind, "fromf8") || 0 == strcmp(kind, "fromf4")) {

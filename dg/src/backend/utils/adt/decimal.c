@@ -1285,7 +1285,7 @@ Datum float4_numeric(PG_FUNCTION_ARGS) {
 Datum numeric_float8(PG_FUNCTION_ARGS) {
   ty_dec128_t a = dec_ty(PG_GETARG_NUMERIC(0));
 
-  PG_RETURN_FLOAT8(ty_dec128_to_float64(&a));
+  PG_RETURN_FLOAT8(ty_dec128_to_fp64(&a));
 }
 
 /* numeric to float8, for the planner: never an error. */
@@ -1297,7 +1297,7 @@ Datum numeric_float8_no_overflow(PG_FUNCTION_ARGS) {
 Datum numeric_float4(PG_FUNCTION_ARGS) {
   ty_dec128_t a = dec_ty(PG_GETARG_NUMERIC(0));
 
-  PG_RETURN_FLOAT4(ty_dec128_to_float32(&a));
+  PG_RETURN_FLOAT4(ty_dec128_to_fp32(&a));
 }
 
 /* numeric to pg_lsn: rounded to an integer, from 0 to 2^64 - 1. */
@@ -2433,7 +2433,7 @@ Datum decimal64_float4(PG_FUNCTION_ARGS) {
   Datum d = PG_GETARG_DATUM(0);
   ty_dec128_t a = {d64_value(d), d64_scale(d)};
 
-  PG_RETURN_FLOAT4(ty_dec128_to_float32(&a));
+  PG_RETURN_FLOAT4(ty_dec128_to_fp32(&a));
 }
 
 /* decimal64 to float8, the nearest to its text. */
@@ -2441,7 +2441,7 @@ Datum decimal64_float8(PG_FUNCTION_ARGS) {
   Datum d = PG_GETARG_DATUM(0);
   ty_dec128_t a = {d64_value(d), d64_scale(d)};
 
-  PG_RETURN_FLOAT8(ty_dec128_to_float64(&a));
+  PG_RETURN_FLOAT8(ty_dec128_to_fp64(&a));
 }
 
 /*

@@ -410,7 +410,7 @@ notice ([`../CLAUDE.md`](../CLAUDE.md)).
    - **Floats moved (2026-11-21), unattended.**
      The user asked for as many types as could be done in a
      long run; the hooks of section 8 were settled by passing a
-     setting in: `ty_floatN_format` takes `extra_float_digits` as
+     setting in: `ty_fpN_format` takes `extra_float_digits` as
      an argument. `ty_float.h`: arithmetic with PostgreSQL's
      overflow, underflow and division-by-zero rules; NaN-last
      order; the conversions; rounding; `sqrt`, `cbrt`, `exp`,
@@ -1099,7 +1099,7 @@ notice ([`../CLAUDE.md`](../CLAUDE.md)).
        `trim_scale`, and the float casts, which go by the text.
        They are ty's now (`ty_dec128_parse`, `_format`,
        `ty_dec_digits_t`, `_min_scale`, `_trim_scale`,
-       `_to_float64`, `_to_float32`, `_from_float`; ty/DESIGN.md
+       `_to_fp64`, `_to_fp32`, `_from_float`; ty/DESIGN.md
        §24), digres's own code moved. digres words the errors
        by ty's `*why`. Tested by 6,668 vectors of the digres
        before the move, by hand in ty, and by

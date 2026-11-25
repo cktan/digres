@@ -1187,8 +1187,8 @@ int ty_int64_to_char(int64_t v, const ty_num_format_t *f,
 }
 
 /* to_char of a float8: RN of its rounded int4, EEEE by printf, or digits. */
-int ty_float8_to_char(double v, const ty_num_format_t *f,
-                      const ty_num_locale_t *loc, ty_varlena_t **out) {
+int ty_fp64_to_char(double v, const ty_num_format_t *f,
+                    const ty_num_locale_t *loc, ty_varlena_t **out) {
   const desc_t *d = &f->desc;
 
   if (0 == f->len || f->len >= (size_t)(INT32_MAX - 4) / k_item) {
@@ -1229,8 +1229,8 @@ int ty_float8_to_char(double v, const ty_num_format_t *f,
 }
 
 /* to_char of a float4: as a float8's, in float arithmetic, to FLT_DIG. */
-int ty_float4_to_char(float v, const ty_num_format_t *f,
-                      const ty_num_locale_t *loc, ty_varlena_t **out) {
+int ty_fp32_to_char(float v, const ty_num_format_t *f,
+                    const ty_num_locale_t *loc, ty_varlena_t **out) {
   const desc_t *d = &f->desc;
 
   if (0 == f->len || f->len >= (size_t)(INT32_MAX - 4) / k_item) {

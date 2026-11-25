@@ -201,10 +201,10 @@ int ty_int32_to_char(int32_t v, const ty_num_format_t *f,
                      const ty_num_locale_t *loc, ty_varlena_t **out);
 int ty_int64_to_char(int64_t v, const ty_num_format_t *f,
                      const ty_num_locale_t *loc, ty_varlena_t **out);
-int ty_float4_to_char(float v, const ty_num_format_t *f,
-                      const ty_num_locale_t *loc, ty_varlena_t **out);
-int ty_float8_to_char(double v, const ty_num_format_t *f,
-                      const ty_num_locale_t *loc, ty_varlena_t **out);
+int ty_fp32_to_char(float v, const ty_num_format_t *f,
+                    const ty_num_locale_t *loc, ty_varlena_t **out);
+int ty_fp64_to_char(double v, const ty_num_format_t *f,
+                    const ty_num_locale_t *loc, ty_varlena_t **out);
 
 /*
  * For a host that makes the digits itself, as digres does for a decimal:

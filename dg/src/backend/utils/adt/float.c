@@ -135,7 +135,7 @@ float4 float4in_internal(char *num, char **endptr_p, const char *type_name,
   const char *first = num;
 
   /* ty reads the number, the names NaN and Infinity, and the space around */
-  if (ty_float32_parse(num, &val, endptr_p ? &end : NULL, &len) == 0) {
+  if (ty_fp32_parse(num, &val, endptr_p ? &end : NULL, &len) == 0) {
     if (endptr_p)
       *endptr_p = (char *)end;
     return val;
@@ -169,7 +169,7 @@ Datum float4out(PG_FUNCTION_ARGS) {
   char *ascii = (char *)palloc(TY_FLOAT_TEXT_SIZE);
 
   /* ty prints the shortest text if extra_float_digits is above 0, else %g */
-  ty_float32_format(PG_GETARG_FLOAT4(0), tcb->guc.extra_float_digits, ascii);
+  ty_fp32_format(PG_GETARG_FLOAT4(0), tcb->guc.extra_float_digits, ascii);
   PG_RETURN_CSTRING(ascii);
 }
 
@@ -236,7 +236,7 @@ float8 float8in_internal(char *num, char **endptr_p, const char *type_name,
   const char *first = num;
 
   /* ty reads the number, the names NaN and Infinity, and the space around */
-  if (ty_float64_parse(num, &val, endptr_p ? &end : NULL, &len) == 0) {
+  if (ty_fp64_parse(num, &val, endptr_p ? &end : NULL, &len) == 0) {
     if (endptr_p)
       *endptr_p = (char *)end;
     return val;
@@ -282,7 +282,7 @@ Datum float8out(PG_FUNCTION_ARGS) {
 char *float8out_internal(double num) {
   char *ascii = (char *)palloc(TY_FLOAT_TEXT_SIZE);
 
-  ty_float64_format(num, tcb->guc.extra_float_digits, ascii);
+  ty_fp64_format(num, tcb->guc.extra_float_digits, ascii);
   return ascii;
 }
 
@@ -333,14 +333,14 @@ static pg_noreturn pg_noinline void float_ty_error(int sqlstate) {
  *		float4abs		- returns |arg1| (absolute value)
  */
 Datum float4abs(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT4(ty_float32_abs(PG_GETARG_FLOAT4(0)));
+  PG_RETURN_FLOAT4(ty_fp32_abs(PG_GETARG_FLOAT4(0)));
 }
 
 /*
  *		float4um		- returns -arg1 (unary minus)
  */
 Datum float4um(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT4(ty_float32_neg(PG_GETARG_FLOAT4(0)));
+  PG_RETURN_FLOAT4(ty_fp32_neg(PG_GETARG_FLOAT4(0)));
 }
 
 Datum float4up(PG_FUNCTION_ARGS) {
@@ -350,11 +350,11 @@ Datum float4up(PG_FUNCTION_ARGS) {
 }
 
 Datum float4larger(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT4(ty_float32_larger(PG_GETARG_FLOAT4(0), PG_GETARG_FLOAT4(1)));
+  PG_RETURN_FLOAT4(ty_fp32_larger(PG_GETARG_FLOAT4(0), PG_GETARG_FLOAT4(1)));
 }
 
 Datum float4smaller(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT4(ty_float32_smaller(PG_GETARG_FLOAT4(0), PG_GETARG_FLOAT4(1)));
+  PG_RETURN_FLOAT4(ty_fp32_smaller(PG_GETARG_FLOAT4(0), PG_GETARG_FLOAT4(1)));
 }
 
 /*
@@ -367,14 +367,14 @@ Datum float4smaller(PG_FUNCTION_ARGS) {
  *		float8abs		- returns |arg1| (absolute value)
  */
 Datum float8abs(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float64_abs(PG_GETARG_FLOAT8(0)));
+  PG_RETURN_FLOAT8(ty_fp64_abs(PG_GETARG_FLOAT8(0)));
 }
 
 /*
  *		float8um		- returns -arg1 (unary minus)
  */
 Datum float8um(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float64_neg(PG_GETARG_FLOAT8(0)));
+  PG_RETURN_FLOAT8(ty_fp64_neg(PG_GETARG_FLOAT8(0)));
 }
 
 Datum float8up(PG_FUNCTION_ARGS) {
@@ -384,11 +384,11 @@ Datum float8up(PG_FUNCTION_ARGS) {
 }
 
 Datum float8larger(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float64_larger(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1)));
+  PG_RETURN_FLOAT8(ty_fp64_larger(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1)));
 }
 
 Datum float8smaller(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float64_smaller(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1)));
+  PG_RETURN_FLOAT8(ty_fp64_smaller(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1)));
 }
 
 /*
@@ -475,9 +475,7 @@ Datum float8div(PG_FUNCTION_ARGS) {
  *		float4{eq,ne,lt,le,gt,ge}		- float4/float4
  *comparison operations
  */
-int float4_cmp_internal(float4 a, float4 b) {
-  return ty_float32_cmp(a, b);
-}
+int float4_cmp_internal(float4 a, float4 b) { return ty_fp32_cmp(a, b); }
 
 Datum float4eq(PG_FUNCTION_ARGS) {
   float4 arg1 = PG_GETARG_FLOAT4(0);
@@ -546,9 +544,7 @@ Datum btfloat4sortsupport(PG_FUNCTION_ARGS) {
  *		float8{eq,ne,lt,le,gt,ge}		- float8/float8
  *comparison operations
  */
-int float8_cmp_internal(float8 a, float8 b) {
-  return ty_float64_cmp(a, b);
-}
+int float8_cmp_internal(float8 a, float8 b) { return ty_fp64_cmp(a, b); }
 
 Datum float8eq(PG_FUNCTION_ARGS) {
   float8 arg1 = PG_GETARG_FLOAT8(0);
@@ -637,7 +633,7 @@ static inline bool float_in_range(float8 val, float8 base, float8 offset,
                                   bool sub, bool less) {
   int r;
 
-  if (ty_float64_in_range(val, base, offset, sub, less, &r))
+  if (ty_fp64_in_range(val, base, offset, sub, less, &r))
     ereport(ERROR,
             (errcode(ERRCODE_INVALID_PRECEDING_OR_FOLLOWING_SIZE),
              errmsg("invalid preceding or following size in window function")));
@@ -679,7 +675,7 @@ Datum in_range_float4_float8(PG_FUNCTION_ARGS) {
  *number
  */
 Datum ftod(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float32_to_float64(PG_GETARG_FLOAT4(0)));
+  PG_RETURN_FLOAT8(ty_fp32_to_fp64(PG_GETARG_FLOAT4(0)));
 }
 
 /*
@@ -689,7 +685,7 @@ Datum ftod(PG_FUNCTION_ARGS) {
 Datum dtof(PG_FUNCTION_ARGS) {
   float4 result;
 
-  if (ty_float64_to_float32(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_to_fp32(PG_GETARG_FLOAT8(0), &result))
     float_raise_ty();
 
   PG_RETURN_FLOAT4(result);
@@ -703,7 +699,7 @@ Datum dtoi4(PG_FUNCTION_ARGS) {
   int32 result;
 
   /* ty rounds to the nearest and checks the range */
-  if (ty_float64_to_int32(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_to_int32(PG_GETARG_FLOAT8(0), &result))
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("integer out of range")));
 
@@ -718,7 +714,7 @@ Datum dtoi2(PG_FUNCTION_ARGS) {
   int16 result;
 
   /* ty rounds to the nearest and checks the range */
-  if (ty_float64_to_int16(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_to_int16(PG_GETARG_FLOAT8(0), &result))
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("smallint out of range")));
 
@@ -730,7 +726,7 @@ Datum dtoi2(PG_FUNCTION_ARGS) {
  *number
  */
 Datum i4tod(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_int32_to_float64(PG_GETARG_INT32(0)));
+  PG_RETURN_FLOAT8(ty_int32_to_fp64(PG_GETARG_INT32(0)));
 }
 
 /*
@@ -738,7 +734,7 @@ Datum i4tod(PG_FUNCTION_ARGS) {
  *number
  */
 Datum i2tod(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_int16_to_float64(PG_GETARG_INT16(0)));
+  PG_RETURN_FLOAT8(ty_int16_to_fp64(PG_GETARG_INT16(0)));
 }
 
 /*
@@ -749,7 +745,7 @@ Datum ftoi4(PG_FUNCTION_ARGS) {
   int32 result;
 
   /* ty rounds to the nearest and checks the range */
-  if (ty_float32_to_int32(PG_GETARG_FLOAT4(0), &result))
+  if (ty_fp32_to_int32(PG_GETARG_FLOAT4(0), &result))
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("integer out of range")));
 
@@ -764,7 +760,7 @@ Datum ftoi2(PG_FUNCTION_ARGS) {
   int16 result;
 
   /* ty rounds to the nearest and checks the range */
-  if (ty_float32_to_int16(PG_GETARG_FLOAT4(0), &result))
+  if (ty_fp32_to_int16(PG_GETARG_FLOAT4(0), &result))
     ereport(ERROR, (errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
                     errmsg("smallint out of range")));
 
@@ -776,7 +772,7 @@ Datum ftoi2(PG_FUNCTION_ARGS) {
  *number
  */
 Datum i4tof(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT4(ty_int32_to_float32(PG_GETARG_INT32(0)));
+  PG_RETURN_FLOAT4(ty_int32_to_fp32(PG_GETARG_INT32(0)));
 }
 
 /*
@@ -784,7 +780,7 @@ Datum i4tof(PG_FUNCTION_ARGS) {
  *number
  */
 Datum i2tof(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT4(ty_int16_to_float32(PG_GETARG_INT16(0)));
+  PG_RETURN_FLOAT4(ty_int16_to_fp32(PG_GETARG_INT16(0)));
 }
 
 /*
@@ -797,7 +793,7 @@ Datum i2tof(PG_FUNCTION_ARGS) {
  *		dround			- returns	ROUND(arg1)
  */
 Datum dround(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float64_round(PG_GETARG_FLOAT8(0)));
+  PG_RETURN_FLOAT8(ty_fp64_round(PG_GETARG_FLOAT8(0)));
 }
 
 /*
@@ -805,7 +801,7 @@ Datum dround(PG_FUNCTION_ARGS) {
  *than or equal to the specified float
  */
 Datum dceil(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float64_ceil(PG_GETARG_FLOAT8(0)));
+  PG_RETURN_FLOAT8(ty_fp64_ceil(PG_GETARG_FLOAT8(0)));
 }
 
 /*
@@ -813,7 +809,7 @@ Datum dceil(PG_FUNCTION_ARGS) {
  *than or equal to the specified float
  */
 Datum dfloor(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float64_floor(PG_GETARG_FLOAT8(0)));
+  PG_RETURN_FLOAT8(ty_fp64_floor(PG_GETARG_FLOAT8(0)));
 }
 
 /*
@@ -822,7 +818,7 @@ Datum dfloor(PG_FUNCTION_ARGS) {
  *zero.
  */
 Datum dsign(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float64_sign(PG_GETARG_FLOAT8(0)));
+  PG_RETURN_FLOAT8(ty_fp64_sign(PG_GETARG_FLOAT8(0)));
 }
 
 /*
@@ -831,7 +827,7 @@ Datum dsign(PG_FUNCTION_ARGS) {
  *... the least integer greater than or equal to arg1
  */
 Datum dtrunc(PG_FUNCTION_ARGS) {
-  PG_RETURN_FLOAT8(ty_float64_trunc(PG_GETARG_FLOAT8(0)));
+  PG_RETURN_FLOAT8(ty_fp64_trunc(PG_GETARG_FLOAT8(0)));
 }
 
 /*
@@ -840,7 +836,7 @@ Datum dtrunc(PG_FUNCTION_ARGS) {
 Datum dsqrt(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_sqrt(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_sqrt(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION);
 
   PG_RETURN_FLOAT8(result);
@@ -852,7 +848,7 @@ Datum dsqrt(PG_FUNCTION_ARGS) {
 Datum dcbrt(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_cbrt(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_cbrt(PG_GETARG_FLOAT8(0), &result))
     float_raise_ty();
 
   PG_RETURN_FLOAT8(result);
@@ -865,7 +861,7 @@ Datum dpow(PG_FUNCTION_ARGS) {
   float8 result;
 
   /* ty decides the NaN, the infinities and the domain errors as POSIX says */
-  if (ty_float64_pow(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1), &result))
+  if (ty_fp64_pow(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1), &result))
     float_ty_error(ERRCODE_INVALID_ARGUMENT_FOR_POWER_FUNCTION);
 
   PG_RETURN_FLOAT8(result);
@@ -878,7 +874,7 @@ Datum dpow(PG_FUNCTION_ARGS) {
 Datum dexp(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_exp(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_exp(PG_GETARG_FLOAT8(0), &result))
     float_raise_ty();
 
   PG_RETURN_FLOAT8(result);
@@ -891,7 +887,7 @@ Datum dlog1(PG_FUNCTION_ARGS) {
   float8 result;
 
   /* the SQL standard asks for particular SQLSTATE codes for ln() */
-  if (ty_float64_ln(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_ln(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_INVALID_ARGUMENT_FOR_LOG);
 
   PG_RETURN_FLOAT8(result);
@@ -903,7 +899,7 @@ Datum dlog1(PG_FUNCTION_ARGS) {
 Datum dlog10(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_log10(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_log10(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_INVALID_ARGUMENT_FOR_LOG);
 
   PG_RETURN_FLOAT8(result);
@@ -915,7 +911,7 @@ Datum dlog10(PG_FUNCTION_ARGS) {
 Datum dacos(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_acos(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_acos(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -927,7 +923,7 @@ Datum dacos(PG_FUNCTION_ARGS) {
 Datum dasin(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_asin(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_asin(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -939,7 +935,7 @@ Datum dasin(PG_FUNCTION_ARGS) {
 Datum datan(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_atan(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_atan(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -952,7 +948,7 @@ Datum datan(PG_FUNCTION_ARGS) {
 Datum datan2(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_atan2(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1), &result))
+  if (ty_fp64_atan2(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -964,7 +960,7 @@ Datum datan2(PG_FUNCTION_ARGS) {
 Datum dcos(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_cos(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_cos(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -977,7 +973,7 @@ Datum dcos(PG_FUNCTION_ARGS) {
 Datum dcot(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_cot(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_cot(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -989,7 +985,7 @@ Datum dcot(PG_FUNCTION_ARGS) {
 Datum dsin(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_sin(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_sin(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1001,7 +997,7 @@ Datum dsin(PG_FUNCTION_ARGS) {
 Datum dtan(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_tan(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_tan(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1015,7 +1011,7 @@ Datum dtan(PG_FUNCTION_ARGS) {
 Datum dacosd(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_acosd(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_acosd(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1027,7 +1023,7 @@ Datum dacosd(PG_FUNCTION_ARGS) {
 Datum dasind(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_asind(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_asind(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1039,7 +1035,7 @@ Datum dasind(PG_FUNCTION_ARGS) {
 Datum datand(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_atand(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_atand(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1052,7 +1048,7 @@ Datum datand(PG_FUNCTION_ARGS) {
 Datum datan2d(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_atan2d(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1), &result))
+  if (ty_fp64_atan2d(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1064,7 +1060,7 @@ Datum datan2d(PG_FUNCTION_ARGS) {
 Datum dcosd(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_cosd(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_cosd(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1077,7 +1073,7 @@ Datum dcosd(PG_FUNCTION_ARGS) {
 Datum dcotd(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_cotd(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_cotd(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1089,7 +1085,7 @@ Datum dcotd(PG_FUNCTION_ARGS) {
 Datum dsind(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_sind(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_sind(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1101,7 +1097,7 @@ Datum dsind(PG_FUNCTION_ARGS) {
 Datum dtand(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_tand(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_tand(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1113,7 +1109,7 @@ Datum dtand(PG_FUNCTION_ARGS) {
 Datum degrees(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_degrees(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_degrees(PG_GETARG_FLOAT8(0), &result))
     float_raise_ty();
 
   PG_RETURN_FLOAT8(result);
@@ -1122,7 +1118,7 @@ Datum degrees(PG_FUNCTION_ARGS) {
 /*
  *		dpi				- returns the constant PI
  */
-Datum dpi(PG_FUNCTION_ARGS) { PG_RETURN_FLOAT8(ty_float64_pi()); }
+Datum dpi(PG_FUNCTION_ARGS) { PG_RETURN_FLOAT8(ty_fp64_pi()); }
 
 /*
  *		radians			- converts degrees to radians
@@ -1130,7 +1126,7 @@ Datum dpi(PG_FUNCTION_ARGS) { PG_RETURN_FLOAT8(ty_float64_pi()); }
 Datum radians(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_radians(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_radians(PG_GETARG_FLOAT8(0), &result))
     float_raise_ty();
 
   PG_RETURN_FLOAT8(result);
@@ -1144,7 +1140,7 @@ Datum radians(PG_FUNCTION_ARGS) {
 Datum dsinh(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_sinh(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_sinh(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1156,7 +1152,7 @@ Datum dsinh(PG_FUNCTION_ARGS) {
 Datum dcosh(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_cosh(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_cosh(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1168,7 +1164,7 @@ Datum dcosh(PG_FUNCTION_ARGS) {
 Datum dtanh(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_tanh(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_tanh(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1181,7 +1177,7 @@ Datum dtanh(PG_FUNCTION_ARGS) {
 Datum dasinh(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_asinh(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_asinh(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1194,7 +1190,7 @@ Datum dasinh(PG_FUNCTION_ARGS) {
 Datum dacosh(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_acosh(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_acosh(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1207,7 +1203,7 @@ Datum dacosh(PG_FUNCTION_ARGS) {
 Datum datanh(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_atanh(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_atanh(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1221,7 +1217,7 @@ Datum datanh(PG_FUNCTION_ARGS) {
 Datum derf(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_erf(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_erf(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1234,7 +1230,7 @@ Datum derf(PG_FUNCTION_ARGS) {
 Datum derfc(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_erfc(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_erfc(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1248,7 +1244,7 @@ Datum derfc(PG_FUNCTION_ARGS) {
 Datum dgamma(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_gamma(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_gamma(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1261,7 +1257,7 @@ Datum dgamma(PG_FUNCTION_ARGS) {
 Datum dlgamma(PG_FUNCTION_ARGS) {
   float8 result;
 
-  if (ty_float64_lgamma(PG_GETARG_FLOAT8(0), &result))
+  if (ty_fp64_lgamma(PG_GETARG_FLOAT8(0), &result))
     float_ty_error(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE);
 
   PG_RETURN_FLOAT8(result);
@@ -1882,9 +1878,8 @@ Datum float84ge(PG_FUNCTION_ARGS) {
 Datum width_bucket_float8(PG_FUNCTION_ARGS) {
   int32 result;
 
-  if (ty_float64_width_bucket(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1),
-                              PG_GETARG_FLOAT8(2), PG_GETARG_INT32(3),
-                              &result)) {
+  if (ty_fp64_width_bucket(PG_GETARG_FLOAT8(0), PG_GETARG_FLOAT8(1),
+                           PG_GETARG_FLOAT8(2), PG_GETARG_INT32(3), &result)) {
     if (ty_errnum() == TY_ERR_INVALID)
       ereport(ERROR,
               (errcode(ERRCODE_INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION),

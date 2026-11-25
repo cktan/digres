@@ -111,21 +111,21 @@ Datum hashenumextended(PG_FUNCTION_ARGS) {
 
 Datum hashfloat4(PG_FUNCTION_ARGS) {
   /* ty: zero and -0 alike, every NaN alike, and a float4 as its float8 */
-  PG_RETURN_UINT32((uint32)ty_float32_hash(PG_GETARG_FLOAT4(0), 0));
+  PG_RETURN_UINT32((uint32)ty_fp32_hash(PG_GETARG_FLOAT4(0), 0));
 }
 
 Datum hashfloat4extended(PG_FUNCTION_ARGS) {
   PG_RETURN_UINT64(
-      ty_float32_hash(PG_GETARG_FLOAT4(0), (uint64)PG_GETARG_INT64(1)));
+      ty_fp32_hash(PG_GETARG_FLOAT4(0), (uint64)PG_GETARG_INT64(1)));
 }
 
 Datum hashfloat8(PG_FUNCTION_ARGS) {
-  PG_RETURN_UINT32((uint32)ty_float64_hash(PG_GETARG_FLOAT8(0), 0));
+  PG_RETURN_UINT32((uint32)ty_fp64_hash(PG_GETARG_FLOAT8(0), 0));
 }
 
 Datum hashfloat8extended(PG_FUNCTION_ARGS) {
   PG_RETURN_UINT64(
-      ty_float64_hash(PG_GETARG_FLOAT8(0), (uint64)PG_GETARG_INT64(1)));
+      ty_fp64_hash(PG_GETARG_FLOAT8(0), (uint64)PG_GETARG_INT64(1)));
 }
 
 Datum hashoidvector(PG_FUNCTION_ARGS) {

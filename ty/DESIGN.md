@@ -473,10 +473,10 @@ cases and the errors are PostgreSQL's, from `float.c` and
 - **The hash** is PostgreSQL's: `0` and `-0` hash as the seed,
   every NaN as one NaN, and a `float32` as the `float64` of its
   value.
-- **Text.** `ty_floatN_format` takes `extra_float_digits` as an
+- **Text.** `ty_fpN_format` takes `extra_float_digits` as an
   argument, not from a session: above 0 it prints the shortest
   text with PostgreSQL's Ryu, else `%.Ng` with `N` the digits of
-  the type plus the argument. `ty_floatN_parse` reads what
+  the type plus the argument. `ty_fpN_parse` reads what
   `strtod` (`strtof` for `float32`) takes, and the names NaN and
   Infinity, and reports the length of a number that is out of
   range so the host can quote it. This is how ty takes a setting:
@@ -526,7 +526,7 @@ their inverses, erf, erfc, gamma or lgamma correctly, so another
 machine may give the next float: the test takes one float apart
 as the same for those, and needs the same bits for the rest.
 
-`ty_float64_in_range`, in line, is the test of a window frame of
+`ty_fp64_in_range`, in line, is the test of a window frame of
 RANGE offsets, for float8, and for float4 widened. digres has no
 such frame yet, and reaches it by a call of `in_range` only.
 
@@ -1190,7 +1190,7 @@ The binary form stays digres's, but its digits go through ty:
 `decimal64` is read and written as the `decimal128` of its value.
 `ty_dec128_min_scale` and `ty_dec128_trim_scale` are inline. The
 float casts go by the text, as PostgreSQL's do:
-`ty_dec128_to_float64` and `_to_float32` read a decimal's text by
+`ty_dec128_to_fp64` and `_to_fp32` read a decimal's text by
 `strtod` and `strtof`, and `ty_dec128_from_float` reads a float's
 `"%.*g"` text, 15 digits for a float8 and 6 for a float4.
 

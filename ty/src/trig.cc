@@ -149,7 +149,7 @@ void fold_degrees(double *x, int *sign, bool neg_at_neg, bool neg_over_180,
 } // namespace
 
 /* acos outside the inline range: NaN is NaN, and [-1, 1] only. */
-int ty_float64_acos_slow(double a, double *r) {
+int ty_fp64_acos_slow(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -161,7 +161,7 @@ int ty_float64_acos_slow(double a, double *r) {
 }
 
 /* asin outside the inline range. */
-int ty_float64_asin_slow(double a, double *r) {
+int ty_fp64_asin_slow(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -173,7 +173,7 @@ int ty_float64_asin_slow(double a, double *r) {
 }
 
 /* atan of a NaN. */
-int ty_float64_atan_slow(double a, double *r) {
+int ty_fp64_atan_slow(double a, double *r) {
   *r = a;
   return 0;
 }
@@ -182,7 +182,7 @@ int ty_float64_atan_slow(double a, double *r) {
  * cos (0), sin (1) or tan (2) of a NaN or an infinity: NaN is NaN, an
  * infinite angle has none.
  */
-int ty_float64_sincos_slow(int which, double a, double *r) {
+int ty_fp64_sincos_slow(int which, double a, double *r) {
   (void)which;
   if (isnan(a)) {
     *r = a;
@@ -192,7 +192,7 @@ int ty_float64_sincos_slow(int which, double a, double *r) {
 }
 
 /* atan2(y, x), radians. */
-int ty_float64_atan2(double y, double x, double *r) {
+int ty_fp64_atan2(double y, double x, double *r) {
   if (isnan(y) || isnan(x)) {
     *r = __builtin_nan("");
     return 0;
@@ -201,7 +201,7 @@ int ty_float64_atan2(double y, double x, double *r) {
 }
 
 /* cotangent, radians: 1 / tan; cot(0) is infinite and not an error. */
-int ty_float64_cot(double a, double *r) {
+int ty_fp64_cot(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -217,7 +217,7 @@ int ty_float64_cot(double a, double *r) {
 }
 
 /* arc cosine, degrees. */
-int ty_float64_acosd(double a, double *r) {
+int ty_fp64_acosd(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -231,7 +231,7 @@ int ty_float64_acosd(double a, double *r) {
 }
 
 /* arc sine, degrees. */
-int ty_float64_asind(double a, double *r) {
+int ty_fp64_asind(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -245,7 +245,7 @@ int ty_float64_asind(double a, double *r) {
 }
 
 /* arc tangent, degrees: atan scaled so that atan(1) is exactly 45. */
-int ty_float64_atand(double a, double *r) {
+int ty_fp64_atand(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -257,7 +257,7 @@ int ty_float64_atand(double a, double *r) {
 }
 
 /* atan2(y, x), degrees. */
-int ty_float64_atan2d(double y, double x, double *r) {
+int ty_fp64_atan2d(double y, double x, double *r) {
   if (isnan(y) || isnan(x)) {
     *r = __builtin_nan("");
     return 0;
@@ -273,7 +273,7 @@ int ty_float64_atan2d(double y, double x, double *r) {
  * 1. NaN is NaN; an infinite angle is invalid.
  * 2. Fold the angle into 0 to 90 by the symmetries; the sign flips past 90.
  */
-int ty_float64_cosd(double a, double *r) {
+int ty_fp64_cosd(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -289,7 +289,7 @@ int ty_float64_cosd(double a, double *r) {
 }
 
 /* sine, degrees. */
-int ty_float64_sind(double a, double *r) {
+int ty_fp64_sind(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -305,7 +305,7 @@ int ty_float64_sind(double a, double *r) {
 }
 
 /* tangent, degrees: exact at 45. */
-int ty_float64_tand(double a, double *r) {
+int ty_fp64_tand(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -325,7 +325,7 @@ int ty_float64_tand(double a, double *r) {
 }
 
 /* cotangent, degrees: exact at 45. */
-int ty_float64_cotd(double a, double *r) {
+int ty_fp64_cotd(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -345,7 +345,7 @@ int ty_float64_cotd(double a, double *r) {
 }
 
 /* hyperbolic sine; ERANGE gives the infinity of the sign. */
-int ty_float64_sinh(double a, double *r) {
+int ty_fp64_sinh(double a, double *r) {
   errno = 0;
   double v = sinh(a);
 
@@ -357,7 +357,7 @@ int ty_float64_sinh(double a, double *r) {
 }
 
 /* hyperbolic cosine; ERANGE gives infinity, and zero is an underflow. */
-int ty_float64_cosh(double a, double *r) {
+int ty_fp64_cosh(double a, double *r) {
   errno = 0;
   double v = cosh(a);
 
@@ -372,16 +372,16 @@ int ty_float64_cosh(double a, double *r) {
 }
 
 /* hyperbolic tangent. */
-int ty_float64_tanh(double a, double *r) { return give(tanh(a), r); }
+int ty_fp64_tanh(double a, double *r) { return give(tanh(a), r); }
 
 /* inverse hyperbolic sine. */
-int ty_float64_asinh(double a, double *r) {
+int ty_fp64_asinh(double a, double *r) {
   *r = asinh(a);
   return 0;
 }
 
 /* inverse hyperbolic cosine: 1 and up. */
-int ty_float64_acosh(double a, double *r) {
+int ty_fp64_acosh(double a, double *r) {
   if (a < 1.0) {
     return out_of_range_input();
   }
@@ -390,7 +390,7 @@ int ty_float64_acosh(double a, double *r) {
 }
 
 /* inverse hyperbolic tangent: -1 to 1, infinite at the ends. */
-int ty_float64_atanh(double a, double *r) {
+int ty_fp64_atanh(double a, double *r) {
   if (a < -1.0 || a > 1.0) {
     return out_of_range_input();
   }
@@ -399,10 +399,10 @@ int ty_float64_atanh(double a, double *r) {
 }
 
 /* the error function. */
-int ty_float64_erf(double a, double *r) { return give(erf(a), r); }
+int ty_fp64_erf(double a, double *r) { return give(erf(a), r); }
 
 /* the complementary error function. */
-int ty_float64_erfc(double a, double *r) { return give(erfc(a), r); }
+int ty_fp64_erfc(double a, double *r) { return give(erfc(a), r); }
 
 /*
  * The gamma function.
@@ -411,7 +411,7 @@ int ty_float64_erfc(double a, double *r) { return give(erfc(a), r); }
  *    an overflow, or an underflow if the result is zero; a zero result is
  *    an underflow.
  */
-int ty_float64_gamma(double a, double *r) {
+int ty_fp64_gamma(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -437,7 +437,7 @@ int ty_float64_gamma(double a, double *r) {
 }
 
 /* The log of the absolute value of gamma. */
-int ty_float64_lgamma(double a, double *r) {
+int ty_fp64_lgamma(double a, double *r) {
   errno = 0;
   double v = lgamma(a);
 

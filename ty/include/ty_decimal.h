@@ -495,8 +495,8 @@ enum {
 int ty_dec128_format(const ty_dec128_t *a, char *out);
 int ty_dec128_parse(const char *s, int precision, int scale, ty_dec128_t *out,
                     int *why);
-double ty_dec128_to_float64(const ty_dec128_t *a);
-float ty_dec128_to_float32(const ty_dec128_t *a);
+double ty_dec128_to_fp64(const ty_dec128_t *a);
+float ty_dec128_to_fp32(const ty_dec128_t *a);
 int ty_dec128_from_float(double x, int digits, ty_dec128_t *out, int *why);
 
 static inline int ty_dec128_min_scale(const ty_dec128_t *a) {

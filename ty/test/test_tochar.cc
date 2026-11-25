@@ -239,8 +239,8 @@ std::string num_char(const std::string &t, const std::string &v,
            : "i8" == t
                ? ty_int64_to_char(strtoll(v.c_str(), nullptr, 10), f, loc, &r)
            : "f4" == t
-               ? ty_float4_to_char(strtof(v.c_str(), nullptr), f, loc, &r)
-               : ty_float8_to_char(strtod(v.c_str(), nullptr), f, loc, &r);
+               ? ty_fp32_to_char(strtof(v.c_str(), nullptr), f, loc, &r)
+               : ty_fp64_to_char(strtod(v.c_str(), nullptr), f, loc, &r);
 
   ty_free(f);
   return 0 == rc ? r.str() : "ERR " + std::string(ty_errmsg());

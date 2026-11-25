@@ -387,7 +387,7 @@ int ty_interval_make(int32_t years, int32_t months, int32_t weeks, int32_t days,
   r.time = (int64_t)hours * TY_USECS_PER_HOUR_I + (int64_t)mins * 60000000;
   double us;
 
-  if (ty_float64_mul(secs, 1000000.0, &us) != 0) {
+  if (ty_fp64_mul(secs, 1000000.0, &us) != 0) {
     return -1;
   }
   us = rint(us);

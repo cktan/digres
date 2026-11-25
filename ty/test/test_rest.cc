@@ -56,7 +56,7 @@ std::string in_range(double val, double base, double offset, int sub,
                      int less) {
   int r;
 
-  if (0 != ty_float64_in_range(val, base, offset, sub, less, &r)) {
+  if (0 != ty_fp64_in_range(val, base, offset, sub, less, &r)) {
     return "err";
   }
   return r ? "t" : "f";
@@ -83,7 +83,7 @@ std::string timetz_part(const char *unit, int64_t time, int zone) {
   }
   ty_dec128_t d = {p.num, TY_PART_SCALED == p.kind ? p.scale : 0};
   ty_dec128_format(&d, num);
-  f8[ty_float64_format(p.f, 1, f8)] = '\0';
+  f8[ty_fp64_format(p.f, 1, f8)] = '\0';
   return std::string(num) + " " + f8;
 }
 

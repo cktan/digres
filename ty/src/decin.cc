@@ -462,7 +462,7 @@ int ty_dec128_format(const ty_dec128_t *a, char *out) {
 }
 
 /* a as the nearest float64: its text read by strtod. */
-double ty_dec128_to_float64(const ty_dec128_t *a) {
+double ty_dec128_to_fp64(const ty_dec128_t *a) {
   char buf[TY_DEC_TEXT_SIZE];
 
   ty_dec128_format(a, buf);
@@ -470,7 +470,7 @@ double ty_dec128_to_float64(const ty_dec128_t *a) {
 }
 
 /* a as the nearest float32: its text read by strtof. */
-float ty_dec128_to_float32(const ty_dec128_t *a) {
+float ty_dec128_to_fp32(const ty_dec128_t *a) {
   char buf[TY_DEC_TEXT_SIZE];
 
   ty_dec128_format(a, buf);

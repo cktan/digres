@@ -25,12 +25,12 @@
 
 /* The shortest decimal of f, in result, with a NUL; returns its length. */
 int double_to_shortest_decimal_bufn(double f, char *result) {
-  return (int)ty_float64_format(f, 1, result);
+  return (int)ty_fp64_format(f, 1, result);
 }
 
 /* The same; the result has room for DOUBLE_SHORTEST_DECIMAL_LEN bytes. */
 int double_to_shortest_decimal_buf(double f, char *result) {
-  return (int)ty_float64_format(f, 1, result);
+  return (int)ty_fp64_format(f, 1, result);
 }
 
 /* The shortest decimal of f, in memory from palloc. */
@@ -43,12 +43,12 @@ char *double_to_shortest_decimal(double f) {
 
 /* The shortest decimal of the float f, in result, with a NUL. */
 int float_to_shortest_decimal_bufn(float f, char *result) {
-  return (int)ty_float32_format(f, 1, result);
+  return (int)ty_fp32_format(f, 1, result);
 }
 
 /* The same; the result has room for FLOAT_SHORTEST_DECIMAL_LEN bytes. */
 int float_to_shortest_decimal_buf(float f, char *result) {
-  return (int)ty_float32_format(f, 1, result);
+  return (int)ty_fp32_format(f, 1, result);
 }
 
 /* The shortest decimal of the float f, in memory from palloc. */

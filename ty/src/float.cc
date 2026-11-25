@@ -33,7 +33,7 @@ bool is_whole(double a) { return floor(a) == a; }
 } // namespace
 
 /* A float64 as an int16: rounded, and checked against the range. */
-int ty_float64_to_int16(double a, int16_t *r) {
+int ty_fp64_to_int16(double a, int16_t *r) {
   double n = rint(a);
 
   if (isnan(n) || n < -32768.0 || n >= 32768.0) {
@@ -44,7 +44,7 @@ int ty_float64_to_int16(double a, int16_t *r) {
 }
 
 /* A float64 as an int32. */
-int ty_float64_to_int32(double a, int32_t *r) {
+int ty_fp64_to_int32(double a, int32_t *r) {
   double n = rint(a);
 
   if (isnan(n) || n < -2147483648.0 || n >= 2147483648.0) {
@@ -55,7 +55,7 @@ int ty_float64_to_int32(double a, int32_t *r) {
 }
 
 /* The square root; a negative number has none. */
-int ty_float64_sqrt_slow(double a, double *r) {
+int ty_fp64_sqrt_slow(double a, double *r) {
   if (a < 0) {
     return invalid("cannot take square root of a negative number");
   }
@@ -72,7 +72,7 @@ int ty_float64_sqrt_slow(double a, double *r) {
 }
 
 /* The cube root. */
-int ty_float64_cbrt_slow(double a, double *r) {
+int ty_fp64_cbrt_slow(double a, double *r) {
   double v = cbrt(a);
 
   if (isinf(v) && !isinf(a)) {
@@ -91,7 +91,7 @@ int ty_float64_cbrt_slow(double a, double *r) {
  * 2. Else call exp, and report a result of infinity or of zero as an
  *    overflow or an underflow, as the libm's ERANGE says it.
  */
-int ty_float64_exp_slow(double a, double *r) {
+int ty_fp64_exp_slow(double a, double *r) {
   if (isnan(a)) {
     *r = a;
     return 0;
@@ -117,7 +117,7 @@ int ty_float64_exp_slow(double a, double *r) {
 }
 
 /* The natural logarithm. */
-int ty_float64_ln_slow(double a, double *r) {
+int ty_fp64_ln_slow(double a, double *r) {
   if (a == 0.0) {
     return invalid("cannot take logarithm of zero");
   }
@@ -137,7 +137,7 @@ int ty_float64_ln_slow(double a, double *r) {
 }
 
 /* The base 10 logarithm. */
-int ty_float64_log10_slow(double a, double *r) {
+int ty_fp64_log10_slow(double a, double *r) {
   if (a == 0.0) {
     return invalid("cannot take logarithm of zero");
   }
@@ -166,7 +166,7 @@ int ty_float64_log10_slow(double a, double *r) {
  * 4. Else call pow, and report ERANGE, an infinite result, or a zero result
  *    from a nonzero a as an overflow or an underflow.
  */
-int ty_float64_pow_slow(double a, double b, double *r) {
+int ty_fp64_pow_slow(double a, double b, double *r) {
   double v;
 
   if (isnan(a)) {
@@ -252,8 +252,8 @@ int ty_float64_pow_slow(double a, double b, double *r) {
  *    overflows, halve everything first.
  * 4. Descending bounds: the same, mirrored.
  */
-int ty_float64_width_bucket(double operand, double bound1, double bound2,
-                            int32_t count, int32_t *r) {
+int ty_fp64_width_bucket(double operand, double bound1, double bound2,
+                         int32_t count, int32_t *r) {
   int32_t v;
 
   if (count <= 0) {
@@ -316,7 +316,7 @@ int ty_float64_width_bucket(double operand, double bound1, double bound2,
  * 2. Every NaN is the quiet NaN of bits 0x7ff8000000000000.
  * 3. Hash the 8 bytes of the double, in the machine's order.
  */
-uint64_t ty_float64_hash(double a, uint64_t seed) {
+uint64_t ty_fp64_hash(double a, uint64_t seed) {
   if (a == 0.0) {
     return seed;
   }
@@ -330,8 +330,8 @@ uint64_t ty_float64_hash(double a, uint64_t seed) {
 }
 
 /* The hash of a float32: that of the float64 of its value. */
-uint64_t ty_float32_hash(float a, uint64_t seed) {
-  return ty_float64_hash((double)a, seed);
+uint64_t ty_fp32_hash(float a, uint64_t seed) {
+  return ty_fp64_hash((double)a, seed);
 }
 
 namespace {
@@ -445,7 +445,7 @@ int parse_float(const char *num, T *r, const char **end, size_t *len, T huge) {
 } // namespace
 
 /* The text of a float32. */
-size_t ty_float32_format(float a, int extra_digits, char *out) {
+size_t ty_fp32_format(float a, int extra_digits, char *out) {
   if (extra_digits > 0) {
     return (size_t)float_to_shortest_decimal_buf(a, out);
   }
@@ -453,7 +453,7 @@ size_t ty_float32_format(float a, int extra_digits, char *out) {
 }
 
 /* The text of a float64. */
-size_t ty_float64_format(double a, int extra_digits, char *out) {
+size_t ty_fp64_format(double a, int extra_digits, char *out) {
   if (extra_digits > 0) {
     return (size_t)double_to_shortest_decimal_buf(a, out);
   }
@@ -461,11 +461,11 @@ size_t ty_float64_format(double a, int extra_digits, char *out) {
 }
 
 /* Read a float32, as strtof does, so a decimal rounds once. */
-int ty_float32_parse(const char *s, float *r, const char **end, size_t *len) {
+int ty_fp32_parse(const char *s, float *r, const char **end, size_t *len) {
   return parse_float<float, strtof>(s, r, end, len, HUGE_VALF);
 }
 
 /* Read a float64. */
-int ty_float64_parse(const char *s, double *r, const char **end, size_t *len) {
+int ty_fp64_parse(const char *s, double *r, const char **end, size_t *len) {
   return parse_float<double, strtod>(s, r, end, len, HUGE_VAL);
 }

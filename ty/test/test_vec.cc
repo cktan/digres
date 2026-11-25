@@ -253,10 +253,10 @@ INT_OP(mod)
       return tyvec_fp64_##NAME(n, f, a, b, out);                               \
     }                                                                          \
     static int one(float a, float b, float *r) {                               \
-      return ty_float32_##NAME(a, b, r);                                       \
+      return ty_fp32_##NAME(a, b, r);                                          \
     }                                                                          \
     static int one(double a, double b, double *r) {                            \
-      return ty_float64_##NAME(a, b, r);                                       \
+      return ty_fp64_##NAME(a, b, r);                                          \
     }                                                                          \
   };
 FP_OP(add)

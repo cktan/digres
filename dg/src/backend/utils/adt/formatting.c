@@ -1545,7 +1545,7 @@ Datum float4_to_char(PG_FUNCTION_ARGS) {
   if (num_format_empty(fmt))
     PG_RETURN_TEXT_P(cstring_to_text(""));
   /* ty makes the digits and writes them by the format */
-  rc = ty_float4_to_char(value, num_format(fcinfo, fmt), &loc, TYVO(&result));
+  rc = ty_fp32_to_char(value, num_format(fcinfo, fmt), &loc, TYVO(&result));
   return num_result(rc, result);
 }
 
@@ -1562,6 +1562,6 @@ Datum float8_to_char(PG_FUNCTION_ARGS) {
   if (num_format_empty(fmt))
     PG_RETURN_TEXT_P(cstring_to_text(""));
   /* ty makes the digits and writes them by the format */
-  rc = ty_float8_to_char(value, num_format(fcinfo, fmt), &loc, TYVO(&result));
+  rc = ty_fp64_to_char(value, num_format(fcinfo, fmt), &loc, TYVO(&result));
   return num_result(rc, result);
 }
