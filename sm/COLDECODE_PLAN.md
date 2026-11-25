@@ -1,19 +1,21 @@
 # COLDECODE_PLAN: a CG decodes into arrays
 
-Status: a design, agreed but for one question. Nothing is built.
-§9 lists what the user decided, and what is open.
+Status: built. §9 lists what the user decided, and §10 has the
+measures. [`COLSTORE.md`](COLSTORE.md) §5.5 is the design of
+record.
 
-Today `cg_open` (`sm2/src/col/cg.cc`) decodes a CG into one
-`std::string` a row. This plan makes it decode into arrays: the
-form that ty's vector operations read
+Before this plan `cg_open` (`sm2/src/col/cg.cc`) decoded a CG
+into one `std::string` a row. This plan makes it decode into
+arrays: the form that ty's vector operations read
 ([`../ty/DESIGN.md`](../ty/DESIGN.md#21-vectors) §21). It is the
 first step of
 [`../REPORT.md`](../REPORT.md#7-the-recommendation-as-steps) §7,
 columnar decode in sm2. The row scan of today uses the same
 arrays, so it gets faster with no change of its interface.
 
-Out of scope: the batch scan in `sm.h`, the executor, and a
-change of the file format. §8 says what each would need.
+Out of scope: the batch scan in `sm.h`, the executor, and a new
+layout of the values in a file. §8 says what each would need.
+The one change of the file is that nulls are flag bytes (§9).
 
 ---
 
@@ -90,14 +92,14 @@ values, not four rows.
 
 ---
 
-## 3. What decode costs today
+## 3. What decode cost before
 
 Instructions a value, for CGs of 10,000 rows made like TPC-H's
 `lineitem`, at `-O3`. `cg_open` is three parts: the CRC32C, zstd,
 and the decode. The last column is a prototype of §5's decode,
 of the same files, but without §5.3's checks.
 
-| CG | encoding | CRC32C | zstd | decode today | decode, prototype |
+| CG | encoding | CRC32C | zstd | decode before | decode, prototype |
 | --- | --- | --- | --- | --- | --- |
 | `_id`, 1 to n | delta | 9 | 0 | 143 | 21 |
 | `returnflag`, 3 texts | dictionary | 2 | 6 | 124 | 16 |
@@ -120,7 +122,7 @@ of the same files, but without §5.3's checks.
   compare it with the RG key's. It is made a byte at a time from
   a table, 7 instructions a byte. §8 has both.
 - **Memory falls too.** A decoded `int8` CG of 10,000 rows is
-  320 KB of `std::string` today, and 80 KB as an array.
+  320 KB of `std::string` before, and 80 KB as an array.
 
 ---
 
@@ -211,9 +213,7 @@ in.
 
 1. Check the tail, the CRC32C and the sizes, and decompress, as
    today.
-2. Expand the null bitmap, if there is one, to flag bytes, 16
-   rows at a time with SIMD. §9 has the open question of a file
-   that stores flag bytes.
+2. Copy the flag bytes, if there are any, and check them.
 3. Decode the values:
    1. **plain, fixed:** read each length, which must be the
       type's, and copy the value to its slot. A null's length
@@ -242,13 +242,15 @@ The CRC32C finds damage. These checks keep a bad writer from
 making a reader run past the body. Each fails with
 `SM_ERR_CORRUPT`.
 
-| Check | Today |
+| Check | Before |
 | --- | --- |
 | each length is inside the body | yes |
 | a fixed value's length is the type's | no |
 | a varlena's header gives its length, and is neither compressed nor a TOAST pointer | no |
 | a delta CG's type is `int2`, `int4` or `int8`, and its width is the type's | no |
-| the dictionary has no more values than the CG has rows, before memory is taken for it | no |
+| the dictionary has no more values than the CG has rows | no |
+| a count of values is at most a quarter of the body's bytes, before memory is taken for it | no |
+| a flag byte is 0 or 2 | - |
 | every code is below `dict_n`, a null row's too | not a null row's |
 
 The codes are checked by a loop with no branch: OR the failures,
@@ -343,13 +345,13 @@ By the user, on 2026-11-25.
 | 1 | how is a null marked? | a flag byte a row, as ty's operations take | a validity bitmap, as [`../REPORT.md`](../REPORT.md) §8.2 has. It is 1/8 the size, but each batch must expand it for ty |
 | 2 | what is a string in an array? | a pointer to its varlena: 8 bytes, no copy, and what ty's text functions and PostgreSQL take | `sm_str_t` of [`../REPORT.md`](../REPORT.md) §8.2: 16 bytes, with its first bytes in line, so many compares need no second read, and DuckDB takes it with no conversion. The batch scan can make it from the pointers, if DuckDB is chosen |
 | 3 | does a dictionary stay as codes? | yes: a `GROUP BY` or a filter may work on the codes | expand to flat always: a simpler reader, but a code of 2 bits becomes 16 bytes of `decimal128`, and a filter or a `GROUP BY` sees no dictionary |
-| 4 | does the file format change? | no (§8) | yes, at once: §8's new layout |
+| 4 | do a file's values change their layout? | no (§8) | yes, at once: §8's new layout |
+| 5 | how does a file store nulls? | a flag byte a row: nulls are rare, and zstd squeezes the bytes | a bitmap, expanded at each read |
 
-**Open: does the file store nulls as flag bytes, not as a
-bitmap?** Then a read has no bitmap to expand. Measured on a
-plain `int4` CG of 10,000 rows, at `-O3`. The cost is of the
-nulls alone, in instructions a row. For the bitmap it is zstd and
-the SIMD expand, and for flag bytes zstd, a check and a copy:
+Question 5, measured on a plain `int4` CG of 10,000 rows, at
+`-O3`. The cost is of the nulls alone, in instructions a row: for
+the bitmap zstd and a SIMD expand, and for flag bytes zstd, a
+check and a copy.
 
 | Nulls | file, no nulls stored | bitmap | flag bytes | cost, bitmap | cost, flag bytes |
 | --- | --- | --- | --- | --- | --- |
@@ -360,9 +362,46 @@ the SIMD expand, and for flag bytes zstd, a check and a copy:
 | 10%, at random | 41,609 | 42,841 | 44,025 | 1.3 | 10.8 |
 | 50%, at random | 28,560 | 29,833 | 31,107 | 3.1 | 12.9 |
 
-- **zstd squeezes runs, and then the two are equal.** It does not
-  squeeze nulls at random: the flag bytes are up to 1.3 KB more,
-  and zstd takes 10 instructions a row to write them out.
-- **The expand costs about 1 instruction a row.** There is little
-  to avoid.
-- **Recommended: keep the bitmap.**
+The two are equal for few nulls and for nulls in runs. Many nulls
+at random cost more as flag bytes, and are rare.
+
+---
+
+## 10. Measured
+
+Instructions a value, as in §3, of the built code at `-O3`. The
+files are §3's, but the `int4` one has flag bytes.
+
+| CG | `cg_open` before | `cg_open` | decode | `cg_get` before | `cg_get` |
+| --- | --- | --- | --- | --- | --- |
+| `_id`, 1 to n | 152 | 28 | 19 | 26 | 27 |
+| `returnflag`, 3 texts | 131 | 25 | 18 | 26 | 32 |
+| `shipdate`, 2,526 dates | 308 | 66 | 20 | 26 | 29 |
+| `quantity`, 50 `decimal64` | 174 | 24 | 18 | 26 | 29 |
+| `extendedprice`, `decimal64` | 292 | 208 | 12 | 26 | 27 |
+| random `float8` | 269 | 185 | 12 | 26 | 27 |
+| random `int4`, 10% null | 249 | 181 | 33 | 25 | 29 |
+| `comment`, 10 to 43 bytes | 852 | 422 | 26 | 26 | 30 |
+| **sum** | **2,428** | **1,140** | **157** | **207** | **230** |
+
+- **`cg_open` is 2.1 times faster**, and the decode 9 times. The
+  checks of §5.3 are the difference from the prototype.
+- **`cg_get` costs 1 to 6 instructions more a row**, for the code
+  and the varlena's header. Both calls together cost less for
+  every CG.
+
+A scan in digres, instructions a row, of a column store table of
+100,000 rows on the optimized build (the slope of 10 and 40
+prepared statements, under `perf stat`):
+
+| Query | before | after | change |
+| --- | --- | --- | --- |
+| `sum(a)`, `int4` | 2,436 | 2,231 | -8% |
+| `sum(p)`, `decimal64` | 2,614 | 2,410 | -8% |
+| `sum(f)`, `float8` | 2,556 | 2,351 | -8% |
+| `count(*)` where `k = 'A'`, 3 texts | 2,695 | 2,476 | -8% |
+| `count` of five columns | 5,972 | 4,999 | -16% |
+
+**The decode is a small part of a row scan.** The rest, some
+2,000 instructions a row, makes each row a tuple, takes it apart
+and runs PostgreSQL's executor. The batch scan (§8) removes that.

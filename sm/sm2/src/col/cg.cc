@@ -16,22 +16,28 @@
  *   tail     fixed: magic, format, encoding, rows, the sizes of
  *            the parts above, the CRC32C of all before it, magic
  *
- * The body, before zstd: the encoding byte, the row count, a flags
- * byte, a null bitmap if a row is null, then the values as the
- * encoding lays them out. Every value is in the body: a column store
- * table takes no varlena past its limit (sm3::col_max_value).
+ * The body, before zstd: the encoding byte, the row count, a byte
+ * that says whether flag bytes follow, a flag byte a row if a row is
+ * null, then the values as the encoding lays them out. Every value is
+ * in the body: a column store table takes no varlena past its limit
+ * (sm3::col_max_value).
+ *
+ * A CG is decoded into arrays (cg_vec, ../../COLDECODE_PLAN.md).
  */
 
 #include "sm2.h"
 
 #include "collation.h"
+#include "native.h"
 #include "sm0_codec.h"
 #include "sm0_crc.h"
+#include "ty_vec.h"
 
 #include <zstd.h>
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <unordered_set>
 
 namespace {
@@ -58,9 +64,19 @@ constexpr uint8_t bloom_probes = 7;
 
 /* The tail's magic, format, and size. */
 constexpr uint32_t cg_magic = 0x53434731; /* "SCG1" */
-constexpr uint32_t cg_format = 1;
+constexpr uint32_t cg_format = 2;
 /* magic, format, encoding, flags, rows, 4 sizes, CRC32C, magic. */
 constexpr size_t tail_size = 4 + 4 + 1 + 1 + 4 + 4 * 4 + 4 + 4;
+
+/*
+ * A null row's flag byte in the body; 0 is a row not null. It is ty's
+ * bit, so that a flag byte is read as it is, and part of the format.
+ */
+constexpr uint8_t flag_null = 2;
+static_assert(flag_null == TY_VEC_NULL);
+
+/* The spare bytes past a body: unpack's last load stays inside them. */
+constexpr size_t body_spare = 8;
 
 /* The stats' flag bits. */
 enum : uint8_t {
@@ -127,53 +143,65 @@ void pack(std::string &out, const std::vector<uint64_t> &v, uint8_t bits) {
   }
 }
 
-/* Read n values of width bits each from in; false if cut short. */
-bool unpack(std::string_view &in, size_t n, uint8_t bits,
-            std::vector<uint64_t> &v) {
-  size_t bytes = (n * bits + 7) / 8;
-  if (in.size() < bytes || bits > 64) {
+/*
+ * Read n values of bits bits each from the front of in, low bit first,
+ * into out, whose type is as wide: false if they are cut short. Past
+ * in's end are body_spare bytes.
+ * 1. A value of up to 56 bits is in the 8 bytes from its first bit's.
+ * 2. A wider one is read a bit at a time.
+ */
+template <typename T>
+bool unpack(std::string_view &in, size_t n, uint8_t bits, T *out) {
+  static_assert(8 <= body_spare);
+  if (bits > 8 * sizeof(T)) {
     return false;
   }
-  const unsigned char *p = reinterpret_cast<const unsigned char *>(in.data());
-  v.assign(n, 0);
+  const size_t bytes = (n * bits + 7) / 8;
+  if (in.size() < bytes) {
+    return false;
+  }
+  const char *p = in.data();
+  in.remove_prefix(bytes);
+  // 1. One load a value.
+  if (bits <= 56) {
+    const uint64_t mask = (uint64_t(1) << bits) - 1;
+    size_t bit = 0;
+    for (size_t i = 0; i < n; i++, bit += bits) {
+      uint64_t x = sm2::load_le<uint64_t>({p + bit / 8, 8});
+      out[i] = static_cast<T>((x >> (bit % 8)) & mask);
+    }
+    return true;
+  }
+  // 2. A bit at a time.
   size_t bit = 0;
   for (size_t i = 0; i < n; i++) {
     uint64_t x = 0;
     for (uint8_t b = 0; b < bits; b++, bit++) {
-      if ((p[bit / 8] >> (bit % 8)) & 1) {
+      if ((static_cast<unsigned char>(p[bit / 8]) >> (bit % 8)) & 1) {
         x |= uint64_t(1) << b;
       }
     }
-    v[i] = x;
+    out[i] = static_cast<T>(x);
   }
-  in.remove_prefix(bytes);
   return true;
 }
 
-/* Append a bitmap of n flags. */
-void put_bitmap(std::string &out, const std::vector<bool> &f) {
-  size_t start = out.size();
-  out.append((f.size() + 7) / 8, '\0');
-  for (size_t i = 0; i < f.size(); i++) {
-    if (f[i]) {
-      out[start + i / 8] =
-          static_cast<char>(out[start + i / 8] | (1 << (i % 8)));
-    }
-  }
-}
-
-/* Read a bitmap of n flags from in; false if cut short. */
-bool get_bitmap(std::string_view &in, size_t n, std::vector<bool> &f) {
-  size_t bytes = (n + 7) / 8;
-  if (in.size() < bytes) {
+/*
+ * Read n flag bytes from the front of in into out: false if they are cut
+ * short, or one is not a flag byte.
+ */
+bool get_flags(std::string_view &in, size_t n, std::vector<uint8_t> &out) {
+  if (in.size() < n) {
     return false;
   }
-  f.assign(n, false);
+  out.resize(n);
+  uint8_t bad = 0;
   for (size_t i = 0; i < n; i++) {
-    f[i] = (in[i / 8] >> (i % 8)) & 1;
+    out[i] = static_cast<uint8_t>(in[i]);
+    bad |= out[i] & static_cast<uint8_t>(~flag_null);
   }
-  in.remove_prefix(bytes);
-  return true;
+  in.remove_prefix(n);
+  return 0 == bad;
 }
 
 /*
@@ -267,21 +295,6 @@ int64_t int_of(std::string_view d) {
   int64_t v;
   memcpy(&v, d.data(), 8);
   return v;
-}
-
-/* The datum of width bytes for the integer v. */
-std::string int_datum(int64_t v, size_t width) {
-  std::string d(width, '\0');
-  if (width == 2) {
-    int16_t x = static_cast<int16_t>(v);
-    memcpy(d.data(), &x, 2);
-  } else if (width == 4) {
-    int32_t x = static_cast<int32_t>(v);
-    memcpy(d.data(), &x, 4);
-  } else {
-    memcpy(d.data(), &v, 8);
-  }
-  return d;
 }
 
 /* Whether some value of st may be above k (or at it, with incl). */
@@ -387,11 +400,188 @@ bool filter_may_hold(const sm2::cg_column_t &col, const sm2::cg_stats_t &st,
 
 } // namespace
 
-/* A CG decoded: each row's datum, or null. */
+/*
+ * A CG decoded into arrays (cg_vec_t). The values are a fixed type's bytes
+ * in fixed, or a varlena type's addresses in ptrs; those point into body,
+ * or at no_varlena for a null row.
+ */
 struct sm2::cg_t {
-  std::vector<std::string> datums;
-  std::vector<bool> nulls;
+  const type_t *type = nullptr;
+  uint32_t n = 0;                /* rows */
+  uint32_t nvalues = 0;          /* values: n, or the dictionary's */
+  bool dict = false;             /* codes are the rows */
+  std::unique_ptr<char[]> fixed; /* nvalues of type->len bytes */
+  std::vector<const char *> ptrs;
+  std::vector<uint32_t> codes;
+  std::vector<uint8_t> flags; /* empty: no row is null */
+  std::string body;           /* empty for a fixed type */
 };
+
+namespace {
+
+/* What a null row of a varlena type points at: an empty varlena. */
+constexpr char no_varlena[1] = {'\x03'};
+
+/*
+ * Whether v is one whole varlena by its header, neither compressed nor a
+ * TOAST pointer, whose header says a length of 0.
+ */
+bool is_varlena(std::string_view v) {
+  if (v.empty()) {
+    return false;
+  }
+  const uint8_t first = static_cast<uint8_t>(v[0]);
+  if (first & 1) {
+    return v.size() == first >> 1;
+  }
+  if (v.size() < 4) {
+    return false;
+  }
+  const uint32_t header = sm2::load_le<uint32_t>(v.substr(0, 4));
+  return 0 == (header & 3) && v.size() == header >> 2;
+}
+
+/* The whole varlena at p, which is_varlena said yes to. */
+std::string_view varlena_at(const char *p) {
+  const uint8_t first = static_cast<uint8_t>(*p);
+  const size_t len =
+      first & 1 ? first >> 1 : sm2::load_le<uint32_t>({p, 4}) >> 2;
+  return {p, len};
+}
+
+/*
+ * Read n values of W bytes each, put_str's, from the front of in into out;
+ * a row flags has as null, if it is not nullptr, is of length 0, and is 0
+ * there. Returns false if one is cut short, or of another length.
+ */
+template <size_t W>
+bool get_fixed(std::string_view &in, size_t n, const uint8_t *flags,
+               char *out) {
+  const char *p = in.data(), *end = p + in.size();
+  for (size_t i = 0; i < n; i++, out += W) {
+    const size_t want = flags && flags[i] ? 0 : W;
+    if (static_cast<size_t>(end - p) < 4 + want || sm0::get_be32(p) != want) {
+      return false;
+    }
+    p += 4;
+    if (0 == want) {
+      memset(out, 0, W);
+    } else {
+      memcpy(out, p, W);
+      p += W;
+    }
+  }
+  in.remove_prefix(p - in.data());
+  return true;
+}
+
+/* get_fixed of a type of len bytes. */
+bool get_fixed(std::string_view &in, size_t n, const uint8_t *flags, size_t len,
+               char *out) {
+  switch (len) {
+  case 1:
+    return get_fixed<1>(in, n, flags, out);
+  case 2:
+    return get_fixed<2>(in, n, flags, out);
+  case 4:
+    return get_fixed<4>(in, n, flags, out);
+  case 8:
+    return get_fixed<8>(in, n, flags, out);
+  case 16:
+    return get_fixed<16>(in, n, flags, out);
+  default: // name
+    return 64 == len && get_fixed<64>(in, n, flags, out);
+  }
+}
+
+/*
+ * Read n varlenas, put_str's, from the front of the body's in, and their
+ * addresses into out. Returns false if one is cut short, or is no varlena.
+ * 1. Its length; a null row's is 0.
+ * 2. The varlena, whose header must say that length.
+ * 3. One with a 4-byte header is aligned to 4, as PostgreSQL's macros need:
+ *    it is moved left, over the length just read.
+ */
+bool get_varlenas(std::string_view &in, size_t n, const uint8_t *flags,
+                  std::vector<const char *> &out) {
+  // The bytes are the body's own, which the caller may write.
+  char *p = const_cast<char *>(in.data());
+  const char *end = p + in.size();
+  out.resize(n);
+  for (size_t i = 0; i < n; i++) {
+    // 1. Its length.
+    if (end - p < 4) {
+      return false;
+    }
+    const size_t len = sm0::get_be32(p);
+    p += 4;
+    if (static_cast<size_t>(end - p) < len) {
+      return false;
+    }
+    if (flags && flags[i]) {
+      if (0 != len) {
+        return false;
+      }
+      out[i] = no_varlena;
+      continue;
+    }
+    // 2. The varlena.
+    if (!is_varlena({p, len})) {
+      return false;
+    }
+    // 3. Its alignment.
+    char *at = p;
+    const size_t off = reinterpret_cast<uintptr_t>(p) % 4;
+    if (0 == (*p & 1) && 0 != off) {
+      at -= off;
+      memmove(at, p, len);
+    }
+    out[i] = at;
+    p += len;
+  }
+  in.remove_prefix(p - in.data());
+  return true;
+}
+
+/*
+ * The n values at the front of in, of cg's type, into cg. Returns false if
+ * one is cut short or bad.
+ */
+bool get_values(std::string_view &in, size_t n, const uint8_t *flags,
+                sm2::cg_t *cg) {
+  // Each has a length of 4 bytes: no count asks for more memory than its
+  // body may fill.
+  if (n > in.size() / 4) {
+    return false;
+  }
+  cg->nvalues = static_cast<uint32_t>(n);
+  if (cg->type->len < 0) {
+    return get_varlenas(in, n, flags, cg->ptrs);
+  }
+  cg->fixed.reset(new char[n * cg->type->len]);
+  return get_fixed(in, n, flags, cg->type->len, cg->fixed.get());
+}
+
+/*
+ * The integers of type T that a delta body holds: the first, then each next
+ * one's difference from the one before. The sums wrap, as the writer's do.
+ */
+template <typename T>
+bool get_deltas(std::string_view &in, size_t n, uint64_t base, uint8_t bits,
+                char *out) {
+  std::vector<uint64_t> deltas(n ? n - 1 : 0);
+  if (!unpack(in, deltas.size(), bits, deltas.data())) {
+    return false;
+  }
+  for (size_t i = 0; i < n; i++) {
+    base += i > 0 ? deltas[i - 1] : 0;
+    const T v = static_cast<T>(base);
+    memcpy(out + i * sizeof(T), &v, sizeof(T));
+  }
+  return true;
+}
+
+} // namespace
 
 /* Append st's bytes; see sm2.h. */
 void sm2::cg_stats_encode(const cg_stats_t &st, std::string &out) {
@@ -575,18 +765,19 @@ int sm2::cg_build(const cg_column_t &col, std::span<const cg_value_t> values,
   std::string body;
   body.push_back(static_cast<char>(enc));
   sm0::put_be32(body, static_cast<uint32_t>(n));
-  uint8_t maps = st.nulls ? 1 : 0;
-  body.push_back(static_cast<char>(maps));
-  if (st.nulls) {
-    put_bitmap(body, nulls);
+  uint8_t has_flags = st.nulls ? 1 : 0;
+  body.push_back(static_cast<char>(has_flags));
+  for (size_t i = 0; st.nulls && i < n; i++) {
+    body.push_back(nulls[i] ? static_cast<char>(flag_null) : '\0');
   }
   if (enc == enc_delta) {
     int64_t base = int_of(datums[0]);
     std::vector<uint64_t> deltas;
     uint64_t maxd = 0;
     for (size_t i = 1; i < n; i++) {
-      uint64_t dl =
-          static_cast<uint64_t>(int_of(datums[i]) - int_of(datums[i - 1]));
+      // Unsigned: the difference of two int64 may pass int64.
+      uint64_t dl = static_cast<uint64_t>(int_of(datums[i])) -
+                    static_cast<uint64_t>(int_of(datums[i - 1]));
       deltas.push_back(dl);
       maxd = std::max(maxd, dl);
     }
@@ -652,9 +843,17 @@ int sm2::cg_build(const cg_column_t &col, std::span<const cg_value_t> values,
   return 0;
 }
 
-/* Check and decode a CG file; see sm2.h. */
-int sm2::cg_open(std::string_view file, cg_t *&out) {
+/*
+ * Check and decode a CG file; see sm2.h.
+ * 1. Check the tail, the CRC32C and the sizes, and decompress the body.
+ * 2. The flag bytes, if a row is null.
+ * 3. The values, by the encoding. A fixed type's are copied to an array; a
+ *    varlena type's stay in the body.
+ * 4. Keep the body if the values are in it.
+ */
+int sm2::cg_open(std::string_view file, const type_t *type, cg_t *&out) {
   out = nullptr;
+  // 1. The tail, and the body.
   if (file.size() < tail_size) {
     return corrupt("file shorter than its tail");
   }
@@ -679,83 +878,85 @@ int sm2::cg_open(std::string_view file, cg_t *&out) {
   if (uint64_t(zlen) + slen + flen + tail_size != file.size()) {
     return corrupt("part sizes do not add up");
   }
-  std::string body(rawlen, '\0');
-  size_t got = ZSTD_decompress(body.data(), body.size(), file.data(), zlen);
+  std::string body(rawlen + body_spare, '\0');
+  size_t got = ZSTD_decompress(body.data(), rawlen, file.data(), zlen);
   if (ZSTD_isError(got) || got != rawlen) {
     return corrupt("bad zstd body");
   }
-  std::string_view in = body;
+  std::string_view in(body.data(), rawlen);
   if (in.size() < 6) {
     return corrupt("body cut short");
   }
   uint8_t enc = static_cast<uint8_t>(in[0]);
   uint32_t n = sm0::get_be32(in.data() + 1);
-  uint8_t maps = static_cast<uint8_t>(in[5]);
+  uint8_t has_flags = static_cast<uint8_t>(in[5]);
   in.remove_prefix(6);
   if (n != rows) {
     return corrupt("row counts differ");
   }
   std::unique_ptr<cg_t> cg(new cg_t);
-  cg->datums.resize(n);
-  cg->nulls.assign(n, false);
-  if ((maps & 1) && !get_bitmap(in, n, cg->nulls)) {
-    return corrupt("null bitmap cut short");
+  cg->type = type;
+  cg->n = n;
+  // 2. The flag bytes.
+  if (has_flags && !get_flags(in, n, cg->flags)) {
+    return corrupt("bad flag bytes");
   }
+  const uint8_t *flags = has_flags ? cg->flags.data() : nullptr;
+  // 3. The values.
   if (enc == enc_delta) {
     if (in.size() < 10) {
       return corrupt("delta header cut short");
     }
-    int64_t v = static_cast<int64_t>(sm0::get_be64(in.data()));
-    size_t width = static_cast<uint8_t>(in[8]);
+    uint64_t base = sm0::get_be64(in.data());
+    uint8_t width = static_cast<uint8_t>(in[8]);
     uint8_t bits = static_cast<uint8_t>(in[9]);
     in.remove_prefix(10);
-    std::vector<uint64_t> deltas;
-    if (n > 0 && !unpack(in, n - 1, bits, deltas)) {
-      return corrupt("deltas cut short");
+    if (!is_int(type) || width != type->len || flags) {
+      return corrupt("delta of a column that has none");
     }
-    for (uint32_t i = 0; i < n; i++) {
-      if (i > 0) {
-        v += static_cast<int64_t>(deltas[i - 1]);
-      }
-      cg->datums[i] = int_datum(v, width);
+    cg->nvalues = n;
+    cg->fixed.reset(new char[size_t(n) * width]);
+    char *p = cg->fixed.get();
+    if (!(width == 2   ? get_deltas<int16_t>(in, n, base, bits, p)
+          : width == 4 ? get_deltas<int32_t>(in, n, base, bits, p)
+                       : get_deltas<int64_t>(in, n, base, bits, p))) {
+      return corrupt("deltas cut short");
     }
   } else if (enc == enc_dict) {
     uint32_t dn;
     if (!get_u32(in, dn)) {
       return corrupt("dictionary cut short");
     }
-    std::vector<std::string> dict(dn);
-    for (uint32_t c = 0; c < dn; c++) {
-      if (!get_str(in, dict[c])) {
-        return corrupt("dictionary cut short");
-      }
+    if (dn > n) {
+      return corrupt("dictionary larger than its CG");
     }
-    if (in.empty()) {
-      return corrupt("codes cut short");
+    if (!get_values(in, dn, nullptr, cg.get()) || in.empty()) {
+      return corrupt("bad dictionary");
     }
     uint8_t bits = static_cast<uint8_t>(in[0]);
     in.remove_prefix(1);
-    std::vector<uint64_t> codes;
-    if (!unpack(in, n, bits, codes)) {
+    cg->dict = true;
+    cg->codes.resize(n);
+    if (!unpack(in, n, bits, cg->codes.data())) {
       return corrupt("codes cut short");
     }
+    uint32_t bad = 0;
     for (uint32_t i = 0; i < n; i++) {
-      if (cg->nulls[i]) {
-        continue;
-      }
-      if (codes[i] >= dn) {
-        return corrupt("code past the dictionary");
-      }
-      cg->datums[i] = dict[codes[i]];
+      bad |= cg->codes[i] >= dn;
+    }
+    if (bad) {
+      return corrupt("code past the dictionary");
     }
   } else if (enc == enc_plain) {
-    for (uint32_t i = 0; i < n; i++) {
-      if (!get_str(in, cg->datums[i])) {
-        return corrupt("values cut short");
-      }
+    if (!get_values(in, n, flags, cg.get())) {
+      return corrupt("bad values");
     }
   } else {
     return corrupt("unknown encoding");
+  }
+  // 4. The body.
+  if (type->len < 0) {
+    cg->body = std::move(body);
   }
   out = cg.release();
   return 0;
@@ -765,18 +966,31 @@ int sm2::cg_open(std::string_view file, cg_t *&out) {
 void sm2::cg_close(cg_t *cg) { delete cg; }
 
 /* The rows of a CG; see sm2.h. */
-uint32_t sm2::cg_rows(const cg_t *cg) {
-  return static_cast<uint32_t>(cg->datums.size());
+uint32_t sm2::cg_rows(const cg_t *cg) { return cg->n; }
+
+/* A CG's arrays; see sm2.h. */
+void sm2::cg_vec(const cg_t *cg, cg_vec_t &out) {
+  out.n = cg->n;
+  out.values = cg->type->len < 0 ? static_cast<const void *>(cg->ptrs.data())
+                                 : cg->fixed.get();
+  out.codes = cg->dict ? cg->codes.data() : nullptr;
+  out.dict_n = cg->dict ? cg->nvalues : 0;
+  out.flags = cg->flags.empty() ? nullptr : cg->flags.data();
 }
 
 /* Row i of a CG; see sm2.h. */
 int sm2::cg_get(const cg_t *cg, uint32_t i, std::string_view &datum) {
   datum = std::string_view();
-  if (cg->nulls[i]) {
+  if (!cg->flags.empty() && cg->flags[i]) {
     return 1;
   }
-  const std::string &d = cg->datums[i];
-  datum = d;
+  const uint32_t k = cg->dict ? cg->codes[i] : i;
+  if (cg->type->len < 0) {
+    datum = varlena_at(cg->ptrs[k]);
+  } else {
+    const size_t len = cg->type->len;
+    datum = {cg->fixed.get() + k * len, len};
+  }
   return 0;
 }
 

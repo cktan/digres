@@ -45,8 +45,10 @@ CXXFLAGS += -std=c++20 -fno-rtti -Wall -Wextra -Iinclude -Isrc/type -Isrc/ryu \
 # the instrumented one.
 include ../../ext/ext.mk
 CXXFLAGS += -I$(DOCTEST_INC)
-# ty, which sm1's threads call; this level's tests link it.
+# ty, which sm1's threads call; this level's tests link it, and its flag
+# bytes are a CG's.
 include ../../ty/ty.mk
+CXXFLAGS += -I$(TY_INC)
 ROCKSDB_LIB ?= $(ROCKSDB_REL)
 LDLIBS   += $(ROCKSDB_LIB) $(ROCKSDB_DEPS) -licui18n -licuuc -licudata \
             $(TY_LIB) -lpthread

@@ -62,7 +62,7 @@ is never a build dependency.
 | LSM Index | [`../LSMINDEX.md`](../LSMINDEX.md) | the key encoder's rules, entries, cut keys, the index `rel` | `rel/index.cc`, `type/key.cc`, `type/collation.cc` |
 | B-tree Index | [`../BTREEINDEX.md`](../BTREEINDEX.md) | an index as a B+tree of its own pages | `tree/`, the tree paths of `rel/index.cc` |
 | TOAST | [`../TOAST.md`](../TOAST.md) | a row's long datums, out of line in the table's store | `rel/toast.cc` |
-| Column group | [`../COLSTORE.md`](../COLSTORE.md) §5, §6 | a column store's CG: its encodings, its file, its zonemap and filter, the pruning test; bytes alone, no store | `col/cg.cc` |
+| Column group | [`../COLSTORE.md`](../COLSTORE.md) §5, §6 | a column store's CG: its encodings, its file, its arrays in memory, its zonemap and filter, the pruning test; bytes alone, no store | `col/cg.cc` |
 | Catalog | [`../CATALOG.md`](../CATALOG.md) | `catkv`, the bytes of sm3's catalog, which sm2 stores and never reads | `rel/catkv.cc` |
 
 ## 4. Structure

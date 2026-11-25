@@ -410,7 +410,9 @@ int rg_read_open(table_t *table, uint64_t fsid, rg_meta_t meta,
                      rg_file_name(c.attnum) + " is not what its key names");
     }
     sm2::cg_t *cg = nullptr;
-    if (sm2::cg_open(file, cg) != 0) {
+    const sm2::type_t *type =
+        c.attnum < 0 ? &sm2::type_int8 : def.columns[c.attnum].type;
+    if (sm2::cg_open(file, type, cg) != 0) {
       return -1;
     }
     if (c.attnum < 0) {

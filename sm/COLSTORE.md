@@ -312,19 +312,20 @@ The rows of an RG that `rewrite_table` wrote (§9.2) may not be in
 - **The values are bit-packed codes.**
 - **The writer of the CG chooses.** It uses a dictionary if the
   dictionary and its codes are smaller than plain.
-- **A read expands each code to its datum.** digres evaluates a
-  predicate on each row's datums. A predicate evaluated on codes
-  waits for the columnar executor.
+- **A read decodes it into arrays**, of values and of codes
+  (§5.5). digres evaluates a predicate on each row's datums. A
+  predicate evaluated on codes waits for the columnar executor.
 
 ### 5.3 The layout of a file
 
 A CG file holds, in this order (`sm2/src/col/cg.cc`):
 
 1. The body, compressed with zstd: the encoding, the row count,
-   a flags byte that says whether a null bitmap follows, the
-   null bitmap where a row needs it, then
-   the values as the encoding lays them out, the dictionary
-   first in a CG with one (§5.1, §5.2).
+   a byte that says whether flag bytes follow, a flag byte for
+   each row if a row is null, then the values as the encoding
+   lays them out, the dictionary first in a CG with one (§5.1,
+   §5.2). A flag byte is 2 for a null, as ty's `TY_VEC_NULL`, and
+   0 for a value, so a read takes it as it is.
 2. The zonemap (§6.1).
 3. The filter: the exact set or the bloom filter (§6.3).
 4. A tail of 38 bytes: a magic number, a format number, the
@@ -381,6 +382,32 @@ it.
   ([`NEXT.md`](NEXT.md)).
 - **The limit can change.** It is one constant, and no file
   records it.
+
+### 5.5 A CG in memory
+
+`cg_open` decodes a CG into arrays, and `cg_vec` hands them out
+([`COLDECODE_PLAN.md`](COLDECODE_PLAN.md)). They are what ty's
+vector operations read ([`../ty/DESIGN.md`](../ty/DESIGN.md)
+§21). `cg_get` gives one row's datum from them, for a scan that
+goes row by row.
+
+| Array | What it holds |
+| --- | --- |
+| `values`, flat | a value a row: a fixed type's bytes, or the address of a varlena |
+| `values`, dictionary | each distinct value once |
+| `codes` | a dictionary alone: row i is `values[codes[i]]` |
+| `flags` | a flag byte a row; none if no row is null |
+
+- **Plain and delta are flat.** A dictionary stays one: an
+  executor may work on its codes.
+- **A varlena stays in the body**, which zstd wrote. Only one
+  with a 4-byte header that is not aligned to 4 moves, left over
+  its length.
+- **A null row's value can be read**: zero bytes, an empty
+  varlena, or a code of the dictionary. It means nothing.
+- **A bad file fails with `SM_ERR_CORRUPT`**, also one whose
+  CRC32C is right: each length, each varlena's header, each code
+  and each flag byte is checked.
 
 ---
 

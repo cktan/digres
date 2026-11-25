@@ -1589,16 +1589,39 @@ int cg_build(const cg_column_t& col, std::span<const cg_value_t> values,
 struct cg_t;
 
 /*
- * Check and decode a CG file. Returns 0 with the CG in out, or -1
- * with SM_ERR_CORRUPT for a bad file, its CRC32C included.
+ * A CG's values as arrays, valid until cg_close. A null row's value
+ * means nothing, but can be read: zero bytes, the address of an empty
+ * varlena, or a code below dict_n.
  */
-int cg_open(std::string_view file, cg_t*& out);
+struct cg_vec_t {
+    uint32_t        n;      /* rows */
+    const void*     values; /* flat: one a row; a dictionary: dict_n.
+                               A fixed type: its len bytes each,
+                               aligned to 8. A varlena type: const
+                               char* each, at a varlena; one with a
+                               4-byte header is aligned to 4 */
+    const uint32_t* codes;  /* a dictionary: row i is
+                               values[codes[i]]; nullptr: flat */
+    uint32_t        dict_n; /* a dictionary: the values; 0: flat */
+    const uint8_t*  flags;  /* a byte a row, 0 or TY_VEC_NULL (ty's
+                               ty_vec.h); nullptr: no row is null */
+};
+
+/*
+ * Check and decode a CG file of a column of type, into arrays. Returns 0
+ * with the CG in out, or -1 with SM_ERR_CORRUPT for a bad file, its
+ * CRC32C included.
+ */
+int cg_open(std::string_view file, const type_t* type, cg_t*& out);
 
 /* Free a CG from cg_open; nullptr is a no-op. */
 void cg_close(cg_t* cg);
 
 /* The number of rows of a CG. */
 uint32_t cg_rows(const cg_t* cg);
+
+/* A CG's arrays. */
+void cg_vec(const cg_t* cg, cg_vec_t& out);
 
 /*
  * Row i of a CG: 0 with datum viewing the value, valid until

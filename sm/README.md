@@ -156,7 +156,7 @@ of each.
 - [`BTREELOAD_PLAN.md`](BTREELOAD_PLAN.md) — the plan for a bulk
   load that builds a B-tree from the bottom up
 - [`COLDECODE_PLAN.md`](COLDECODE_PLAN.md) — the plan for a CG
-  that decodes into arrays: a design, not built
+  that decodes into arrays
 - [`LOGICALDECODE.md`](LOGICALDECODE.md) — Logical Decoding: a
   design, not built
 
