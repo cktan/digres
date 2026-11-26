@@ -1298,6 +1298,70 @@ TEST_CASE("a float compare is PostgreSQL's") {
   check_pg_order<double, uint64_t>(CMP_ROWS(fp64, double));
 }
 
+namespace {
+
+/*
+ * Check tyvec_squeeze on vectors of T: each row's value its index, so a
+ * kept row is known by its value.
+ * 1. For each size around 16 rows, and each pattern: none dropped, all,
+ *    every other, runs of 16 dropped and kept, each 16's first half or
+ *    second half dropped, and random; each flag's other bits set in some
+ *    rows.
+ * 2. The count is that of the rows kept; the front of vec and flag is the
+ *    kept rows' values and flags, in their order.
+ */
+template <typename T> void check_squeeze() {
+  std::mt19937_64 rng(53);
+  for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 31u, 32u, 33u, 100u, 1000u}) {
+    for (int pattern = 0; pattern < 8; pattern++) {
+      // 1. The rows.
+      std::vector<T> vec(n);
+      std::vector<uint8_t> flag(n);
+      for (uint32_t i = 0; i < n; i++) {
+        vec[i] = T(i % 100);
+        const bool drop = 0 == pattern   ? false
+                          : 1 == pattern ? true
+                          : 2 == pattern ? 1 == i % 2
+                          : 3 == pattern ? 1 == (i / 16) % 2
+                          : 4 == pattern ? 0 == (i / 16) % 3
+                          : 5 == pattern ? i % 16 < 8
+                          : 6 == pattern ? i % 16 >= 8
+                                         : 0 == rng() % 3;
+        flag[i] = uint8_t((drop ? TY_VEC_NOTVALID : 0) | (rng() % 7 & ~1));
+      }
+      std::vector<T> want_vec;
+      std::vector<uint8_t> want_flag;
+      for (uint32_t i = 0; i < n; i++) {
+        if (0 == (flag[i] & TY_VEC_NOTVALID)) {
+          want_vec.push_back(vec[i]);
+          want_flag.push_back(flag[i]);
+        }
+      }
+      // 2. The rows kept.
+      CAPTURE(n);
+      CAPTURE(pattern);
+      const int m = tyvec_squeeze(n, flag.data(), vec.data());
+      REQUIRE(m == int(want_vec.size()));
+      vec.resize(m), flag.resize(m);
+      CHECK(vec == want_vec);
+      CHECK(flag == want_flag);
+    }
+  }
+}
+
+} // namespace
+
+// Verify that tyvec_squeeze drops the rows not valid, and keeps the others,
+// null and failed ones too, in their order, for each type.
+TEST_CASE("tyvec_squeeze drops the rows not valid") {
+  check_squeeze<int16_t>();
+  check_squeeze<int32_t>();
+  check_squeeze<int64_t>();
+  check_squeeze<float>();
+  check_squeeze<double>();
+  check_squeeze<uint8_t>();
+}
+
 TEST_CASE("a vector add agrees with the scalar add, row by row") {
   check_agrees<int16_t>();
   check_agrees<int32_t>();

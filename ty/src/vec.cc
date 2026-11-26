@@ -973,6 +973,54 @@ CMP_FNS_FP(fp64, double)
 namespace {
 
 /*
+ * Drop the rows not valid of vec and flag; see tyvec_squeeze in ty_vec.h.
+ * A row is written at or before the place it is read from, so the rows
+ * move forward, over rows already read.
+ * 1. 16 rows at a time: if none is dropped, move the 16 rows at once, or
+ *    leave them where they are if none was dropped before; if all are
+ *    dropped, pass them; else move each row kept, one at a time.
+ * 2. The rows past the last 16, one at a time.
+ */
+template <typename T> int squeeze_vec(uint32_t n, uint8_t *flag, T *vec) {
+  typedef uint64_t words_t __attribute__((vector_size(16)));
+  const uint32_t whole = n - n % 16;
+  uint32_t w = 0, i = 0;
+  // 1. 16 rows at a time.
+  for (; i < whole; i += 16) {
+    bytes_t f;
+    memcpy(&f, flag + i, 16);
+    const words_t drop = (words_t)(f & uint8_t(TY_VEC_NOTVALID));
+    if (0 == (drop[0] | drop[1])) {
+      if (w != i) {
+        memmove(vec + w, vec + i, 16 * sizeof(T));
+        memmove(flag + w, flag + i, 16);
+      }
+      w += 16;
+      continue;
+    }
+    const words_t keep =
+        (words_t)((f & uint8_t(TY_VEC_NOTVALID)) ^ uint8_t(TY_VEC_NOTVALID));
+    if (0 == (keep[0] | keep[1])) {
+      continue;
+    }
+    for (uint32_t k = i; k < i + 16; k++) {
+      if (0 == (flag[k] & TY_VEC_NOTVALID)) {
+        vec[w] = vec[k];
+        flag[w++] = flag[k];
+      }
+    }
+  }
+  // 2. The rest.
+  for (; i < n; i++) {
+    if (0 == (flag[i] & TY_VEC_NOTVALID)) {
+      vec[w] = vec[i];
+      flag[w++] = flag[i];
+    }
+  }
+  return int(w);
+}
+
+/*
  * n lines of a vector's rows into out; see tyvec_print in ty_vec.h. A value
  * is written by ty_print, as V, which is T but for a bool.
  * 1. Each row's first entry in err, if any row failed.
@@ -1014,6 +1062,36 @@ void print_vec(uint32_t n, const uint8_t *flag, const T *values,
 }
 
 } // namespace
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, int16_t *vec) {
+  return squeeze_vec(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, int32_t *vec) {
+  return squeeze_vec(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, int64_t *vec) {
+  return squeeze_vec(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, float *vec) {
+  return squeeze_vec(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, double *vec) {
+  return squeeze_vec(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, uint8_t *vec) {
+  return squeeze_vec(n, flag, vec);
+}
 
 /* A vector of int16, a line a row; see ty_vec.h. */
 void tyvec_print(uint32_t n, const uint8_t *flag, const int16_t *values,

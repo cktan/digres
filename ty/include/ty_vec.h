@@ -113,6 +113,14 @@
  *       a[i] |= b[i] | c[i] of n bytes, such as flags; c may be NULL, and
  *       then a[i] |= b[i]. b and c may be a.
  *
+ *   tyvec_squeeze(n, flag, vec)
+ *       Drop each row whose flag has TY_VEC_NOTVALID: the other rows' values
+ *       and flags move to the front of vec and flag, in their order, and
+ *       the count of them is returned. A null or failed row stays. What is
+ *       past that count means nothing. An error list's rows are not moved:
+ *       its entries name the rows as they were. One for each type: int16_t,
+ *       int32_t, int64_t, float, double, and bool as uint8_t.
+ *
  *   tyvec_print(n, flag, values, out, err)
  *       Append to out n lines, one a row, for a test to compare: the row's
  *       index, a space, and its value by ty_print (ty_print.h), or
@@ -229,6 +237,12 @@ int tyvec_bool_or(uint32_t n, uint8_t *flag_a, const uint8_t *a,
                   std::vector<ty_rowerr_t> &err);
 void ty_bitor_vec(uint32_t n, uint8_t *a, const uint8_t *b, const uint8_t *c);
 
+int tyvec_squeeze(uint32_t n, uint8_t *flag, int16_t *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, int32_t *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, int64_t *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, float *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, double *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, uint8_t *vec);
 void tyvec_print(uint32_t n, const uint8_t *flag, const int16_t *values,
                  std::string &out, const std::vector<ty_rowerr_t> &err);
 void tyvec_print(uint32_t n, const uint8_t *flag, const int32_t *values,
