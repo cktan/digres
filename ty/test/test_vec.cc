@@ -1307,7 +1307,8 @@ namespace {
  *    every other, runs of 16 dropped and kept, each 16's first half or
  *    second half dropped, random, and 16 rows kept by a mask that is each
  *    16's number times an odd number, so 4,096 blocks have each mask of 8
- *    rows; each flag's other bits set in some rows.
+ *    rows; a third of the rows null. No row has failed: a vector to
+ *    squeeze has none.
  * 2. The count is that of the rows kept; the front of vec and flag is the
  *    kept rows' values and flags, in their order.
  */
@@ -1335,7 +1336,8 @@ template <typename T> void check_squeeze() {
                           : 7 == pattern
                               ? 0 == rng() % 3
                               : 0 == ((i / 16 * 40503u >> (i % 16)) & 1);
-        flag[i] = uint8_t((drop ? TY_VEC_NOTVALID : 0) | (rng() % 7 & ~1));
+        flag[i] = uint8_t((drop ? TY_VEC_NOTVALID : 0) |
+                          (0 == rng() % 3 ? TY_VEC_NULL : 0));
       }
       std::vector<T> want_vec;
       std::vector<uint8_t> want_flag;
@@ -1361,7 +1363,7 @@ template <typename T> void check_squeeze() {
 } // namespace
 
 // Verify that tyvec_squeeze drops the rows not valid, and keeps the others,
-// null and failed ones too, in their order, for each type, of each width.
+// null ones too, in their order, for each type, of each width.
 TEST_CASE("tyvec_squeeze drops the rows not valid") {
   check_squeeze<int16_t>();
   check_squeeze<int32_t>();

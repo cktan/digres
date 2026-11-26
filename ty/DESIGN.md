@@ -1085,7 +1085,9 @@ compares, and the flag and bool operations are built.
   The other rows' values and flags move to the front of `vec`
   and `flag`, in their order, and it returns their count. Each
   column has its own flags, so a batch squeezes each column with
-  its own. Only a value's width matters: there is one for each C
+  its own. No row may have failed: a caller raises a vector's
+  errors with `tyvec_flag_error` first, so no error list names
+  rows that would move. A debug build asserts it. Only a value's width matters: there is one for each C
   type of a column's vector, of 1, 2, 4, 8 or 16 bytes. A
   varlena type's vector is of `const char *`, and a dictionary's
   of its `uint32_t` codes.

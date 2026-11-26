@@ -116,9 +116,10 @@
  *   tyvec_squeeze(n, flag, vec)
  *       Drop each row whose flag has TY_VEC_NOTVALID: the other rows' values
  *       and flags move to the front of vec and flag, in their order, and
- *       the count of them is returned. A null or failed row stays. What is
- *       past that count means nothing. An error list's rows are not moved:
- *       its entries name the rows as they were. Only a value's width
+ *       the count of them is returned. A null row stays. No row may have
+ *       failed: a caller raises a vector's errors (tyvec_flag_error) before
+ *       it squeezes, so the vector has no error list whose rows would move.
+ *       What is past that count means nothing. Only a value's width
  *       matters, so there is one for each C type of a column's vector:
  *         1 byte:   uint8_t: bool, "char"
  *         2 bytes:  int16_t

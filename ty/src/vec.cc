@@ -10,6 +10,7 @@
  */
 #include "ty_vec.h"
 
+#include <assert.h>
 #include <string.h>
 
 #include <limits>
@@ -1129,6 +1130,12 @@ inline uint32_t pack_block(const uint8_t *from, uint8_t *to, uint32_t keep) {
  */
 template <uint32_t W> int squeeze_vec(uint32_t n, uint8_t *flag, void *vec) {
   static_assert(1 == W || 2 == W || 4 == W || 8 == W || 16 == W);
+#ifndef NDEBUG
+  // A vector to squeeze has no error: its errors were raised before.
+  for (uint32_t k = 0; k < n; k++) {
+    assert(0 == (flag[k] & TY_VEC_ERROR));
+  }
+#endif
   uint8_t *const bytes = static_cast<uint8_t *>(vec);
   const uint32_t whole = n - n % 16;
   uint32_t w = 0, i = 0;
