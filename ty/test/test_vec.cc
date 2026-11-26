@@ -1191,6 +1191,113 @@ TEST_CASE("tyvec_print writes a line a row") {
   CHECK(out == "-7 1099511627776 1.5 NaN f");
 }
 
+namespace {
+
+/*
+ * PostgreSQL's order of floats (float4_eq to float8_ge in its
+ * src/include/utils/float.h): every NaN equals every other, and is above
+ * every number; -0 equals 0; else the numbers' own order. -1, 0 or 1.
+ */
+template <typename T> int pg_float_cmp(T a, T b) {
+  const bool na = a != a, nb = b != b;
+  if (na || nb) {
+    return int(na) - int(nb);
+  }
+  return (a > b) - (a < b);
+}
+
+/* The bits of u as a float of its width. */
+template <typename T, typename U> T float_of(U u) {
+  T x;
+  memcpy(&x, &u, sizeof x);
+  return x;
+}
+
+/*
+ * Check the six compares of T, vector and scalar, against PostgreSQL's
+ * order on a and b; returns the rows that differ.
+ */
+template <typename T>
+uint64_t check_pg_cmp(const std::vector<cmp_fns_t<T>> &fns,
+                      const std::vector<T> &a, const std::vector<T> &b) {
+  const uint32_t n = uint32_t(a.size());
+  std::vector<uint8_t> f(n, 0), out(n);
+  uint64_t bad = 0;
+  for (const cmp_fns_t<T> &fn : fns) {
+    REQUIRE(0 == fn.vec(n, f.data(), a.data(), b.data(), out.data()));
+    const std::string name = fn.name;
+    for (uint32_t i = 0; i < n; i++) {
+      const int c = pg_float_cmp(a[i], b[i]);
+      const bool want = name.ends_with("eq")   ? 0 == c
+                        : name.ends_with("ne") ? 0 != c
+                        : name.ends_with("lt") ? c < 0
+                        : name.ends_with("le") ? c <= 0
+                        : name.ends_with("gt") ? c > 0
+                                               : c >= 0;
+      bad += out[i] != want;
+      bad += (0 != fn.one(a[i], b[i])) != want;
+    }
+  }
+  return bad;
+}
+
+/*
+ * The compares of T are PostgreSQL's, on pairs of special values at each
+ * place of two 16 rows and their rest, and on random bits.
+ */
+template <typename T, typename U>
+void check_pg_order(const std::vector<cmp_fns_t<T>> &fns) {
+  typedef std::numeric_limits<T> lim;
+  const T list[] = {0,
+                    T(-0.0),
+                    1,
+                    -1,
+                    lim::infinity(),
+                    -lim::infinity(),
+                    lim::quiet_NaN(),
+                    -lim::quiet_NaN(),
+                    lim::signaling_NaN(),
+                    float_of<T>(U(-1)),
+                    lim::max(),
+                    lim::lowest(),
+                    lim::min(),
+                    lim::denorm_min(),
+                    -lim::denorm_min()};
+  uint64_t bad = 0;
+  // 1. Each pair at each place.
+  for (T x : list) {
+    for (T y : list) {
+      for (uint32_t at = 0; at < 37; at += 5) {
+        std::vector<T> a(37, T(2)), b(37, T(3));
+        a[at] = x, b[at] = y;
+        bad += check_pg_cmp(fns, a, b);
+      }
+    }
+  }
+  // 2. Random bits, a NaN's payloads and denormals among them; a row in
+  //    seven equal.
+  std::mt19937_64 rng(41);
+  std::vector<T> a(1 << 16), b(1 << 16);
+  for (size_t i = 0; i < a.size(); i++) {
+    a[i] = float_of<T>(U(rng()));
+    b[i] = 0 == i % 7 ? a[i] : float_of<T>(U(rng()));
+  }
+  bad += check_pg_cmp(fns, a, b);
+  CHECK(0 == bad);
+}
+
+} // namespace
+
+// Verify that the compares of floats, vector and scalar, are PostgreSQL's:
+// a NaN equals a NaN, of any payload or sign, and is above every number; -0
+// equals 0; infinities and denormals as numbers.
+// 1. Each pair of special values, at places of two 16 rows and the rest.
+// 2. Random bits.
+TEST_CASE("a float compare is PostgreSQL's") {
+  check_pg_order<float, uint32_t>(CMP_ROWS(fp32, float));
+  check_pg_order<double, uint64_t>(CMP_ROWS(fp64, double));
+}
+
 TEST_CASE("a vector add agrees with the scalar add, row by row") {
   check_agrees<int16_t>();
   check_agrees<int32_t>();
