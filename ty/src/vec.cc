@@ -19,6 +19,8 @@
 #endif
 
 #include "error.h"
+#include "ty_int.h"
+#include "ty_print.h"
 
 namespace {
 
@@ -967,3 +969,84 @@ CMP_FNS(int64, int64_t)
 CMP_FNS(bool, uint8_t)
 CMP_FNS_FP(fp32, float)
 CMP_FNS_FP(fp64, double)
+
+namespace {
+
+/*
+ * n lines of a vector's rows into out; see tyvec_print in ty_vec.h. A value
+ * is written by ty_print, as V, which is T but for a bool.
+ * 1. Each row's first entry in err, if any row failed.
+ * 2. Each row: its index, then what it is: not valid, failed, null, or its
+ *    value.
+ */
+template <typename V, typename T>
+void print_vec(uint32_t n, const uint8_t *flag, const T *values,
+               std::string &out, const std::vector<ty_rowerr_t> &err) {
+  // 1. The entries; few rows fail.
+  std::vector<const ty_rowerr_t *> first;
+  if (!err.empty()) {
+    first.assign(n, nullptr);
+    for (const ty_rowerr_t &e : err) {
+      if (e.row < n && nullptr == first[e.row]) {
+        first[e.row] = &e;
+      }
+    }
+  }
+  // 2. The rows.
+  char buf[TY_INT32_TEXT_SIZE];
+  for (uint32_t i = 0; i < n; i++) {
+    out.append(buf, ty_uint32_format_n(i, buf));
+    out += ' ';
+    const uint8_t f = nullptr != flag ? flag[i] : 0;
+    if (f & TY_VEC_NOTVALID) {
+      out += "notvalid";
+    } else if (f & TY_VEC_ERROR) {
+      out += "error ";
+      const ty_rowerr_t *e = first.empty() ? nullptr : first[i];
+      out += nullptr != e ? ty_errname(ty_errnum_t(e->code)) : "?";
+    } else if (f & TY_VEC_NULL) {
+      out += "null";
+    } else {
+      ty_print(V(values[i]), out);
+    }
+    out += '\n';
+  }
+}
+
+} // namespace
+
+/* A vector of int16, a line a row; see ty_vec.h. */
+void tyvec_print(uint32_t n, const uint8_t *flag, const int16_t *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err) {
+  print_vec<int16_t>(n, flag, values, out, err);
+}
+
+/* A vector of int32, a line a row; see ty_vec.h. */
+void tyvec_print(uint32_t n, const uint8_t *flag, const int32_t *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err) {
+  print_vec<int32_t>(n, flag, values, out, err);
+}
+
+/* A vector of int64, a line a row; see ty_vec.h. */
+void tyvec_print(uint32_t n, const uint8_t *flag, const int64_t *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err) {
+  print_vec<int64_t>(n, flag, values, out, err);
+}
+
+/* A vector of float, a line a row; see ty_vec.h. */
+void tyvec_print(uint32_t n, const uint8_t *flag, const float *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err) {
+  print_vec<float>(n, flag, values, out, err);
+}
+
+/* A vector of double, a line a row; see ty_vec.h. */
+void tyvec_print(uint32_t n, const uint8_t *flag, const double *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err) {
+  print_vec<double>(n, flag, values, out, err);
+}
+
+/* A vector of bool, a byte a row, a line a row; see ty_vec.h. */
+void tyvec_print(uint32_t n, const uint8_t *flag, const uint8_t *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err) {
+  print_vec<bool>(n, flag, values, out, err);
+}

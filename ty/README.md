@@ -60,6 +60,7 @@ A thread that calls `ty_set_alloc` for nothing gets `malloc` and
 | `include/ty_abbrev.h` | the abbreviated keys of a sort |
 | `include/ty_hll.h` | HyperLogLog |
 | `include/ty_vec.h` | the operations on vectors, for a columnar executor |
+| `include/ty_print.h` | a value's text, for a test to compare; `tyvec_print` writes a vector by it |
 | `include/ty_error.h` | the error codes |
 | `src/` | the library; `text_raw.h` and `bytea_raw.h` are the operations on a pointer and a length that `text_vl.cc` and `bytea_vl.cc` call |
 | `test/` | the unit tests, in doctest, and the vectors |

@@ -112,12 +112,20 @@
  *   ty_bitor_vec(n, a, b, c)
  *       a[i] |= b[i] | c[i] of n bytes, such as flags; c may be NULL, and
  *       then a[i] |= b[i]. b and c may be a.
+ *
+ *   tyvec_print(n, flag, values, out, err)
+ *       Append to out n lines, one a row, for a test to compare: the row's
+ *       index, a space, and its value by ty_print (ty_print.h), or
+ *       "notvalid", "error" and its code's name from err, or "null", in
+ *       that order. flag may be NULL. One for each type: int16_t, int32_t,
+ *       int64_t, float, double, and bool as uint8_t.
  */
 #ifndef TY_VEC_H
 #define TY_VEC_H
 
 #include <stdint.h>
 
+#include <string>
 #include <vector>
 
 #include "ty.h"
@@ -220,6 +228,19 @@ int tyvec_bool_or(uint32_t n, uint8_t *flag_a, const uint8_t *a,
                   const uint8_t *flag_b, const uint8_t *b, uint8_t *out,
                   std::vector<ty_rowerr_t> &err);
 void ty_bitor_vec(uint32_t n, uint8_t *a, const uint8_t *b, const uint8_t *c);
+
+void tyvec_print(uint32_t n, const uint8_t *flag, const int16_t *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err);
+void tyvec_print(uint32_t n, const uint8_t *flag, const int32_t *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err);
+void tyvec_print(uint32_t n, const uint8_t *flag, const int64_t *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err);
+void tyvec_print(uint32_t n, const uint8_t *flag, const float *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err);
+void tyvec_print(uint32_t n, const uint8_t *flag, const double *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err);
+void tyvec_print(uint32_t n, const uint8_t *flag, const uint8_t *values,
+                 std::string &out, const std::vector<ty_rowerr_t> &err);
 int tyvec_flag_error(uint32_t n, const uint8_t *flag,
                      const std::vector<ty_rowerr_t> &err);
 int tyvec_err_merge(uint32_t n, const uint8_t *flag,

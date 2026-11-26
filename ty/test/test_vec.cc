@@ -12,6 +12,7 @@
 #include "ty_error.h"
 #include "ty_float.h"
 #include "ty_int.h"
+#include "ty_print.h"
 #include "ty_vec.h"
 
 #include <algorithm>
@@ -1130,6 +1131,64 @@ TEST_CASE("ty_bitor_vec ORs b, and c if there is one, into a") {
       CHECK(0x11 == x[n]);
     }
   }
+}
+
+// Verify that tyvec_print writes a line a row: its index, then its value as
+// PostgreSQL writes it, or what the row is.
+// 1. A vector of int32 with a row of each kind: a value, null, failed with
+//    an entry, failed with none, not valid and failed, and the edges.
+// 2. The same with no flags, and with no row.
+// 3. A float, a double and a bool: the fewest digits, NaN, -0, t and f.
+// 4. It appends: what out held stays.
+// 5. A value is ty_print's: each type's own text.
+TEST_CASE("tyvec_print writes a line a row") {
+  // 1. Each kind of row.
+  const int32_t v[] = {3, 9, 7, 8, 5, INT32_MIN, INT32_MAX};
+  const uint8_t f[] = {0,
+                       TY_VEC_NULL,
+                       TY_VEC_ERROR,
+                       TY_VEC_ERROR | TY_VEC_NULL,
+                       TY_VEC_NOTVALID | TY_VEC_ERROR,
+                       0,
+                       0};
+  const std::vector<ty_rowerr_t> err = {{2, TY_ERR_DIVZERO}, {2, TY_ERR_RANGE}};
+  std::string out;
+  tyvec_print(7, f, v, out, err);
+  CHECK(out == "0 3\n1 null\n2 error TY_ERR_DIVZERO\n3 error ?\n4 notvalid\n"
+               "5 -2147483648\n6 2147483647\n");
+  // 2. No flags, and no row.
+  out.clear();
+  tyvec_print(2, nullptr, v, out, {});
+  CHECK(out == "0 3\n1 9\n");
+  out.clear();
+  tyvec_print(0, f, v, out, err);
+  CHECK(out.empty());
+  // 3. The other types.
+  const float x[] = {0.1f, -0.0f, std::numeric_limits<float>::quiet_NaN()};
+  const double y[] = {0.1, 1e300, -std::numeric_limits<double>::infinity()};
+  const int16_t h[] = {-32768};
+  const int64_t w[] = {INT64_MIN};
+  const uint8_t b[] = {1, 0};
+  out.clear();
+  tyvec_print(3, nullptr, x, out, {});
+  tyvec_print(3, nullptr, y, out, {});
+  tyvec_print(1, nullptr, h, out, {});
+  tyvec_print(1, nullptr, w, out, {});
+  tyvec_print(2, nullptr, b, out, {});
+  CHECK(out == "0 0.1\n1 -0\n2 NaN\n0 0.1\n1 1e+300\n2 -Infinity\n"
+               "0 -32768\n0 -9223372036854775808\n0 t\n1 f\n");
+  // 4. It appends.
+  out = "before\n";
+  tyvec_print(1, nullptr, v, out, {});
+  CHECK(out == "before\n0 3\n");
+  // 5. ty_print alone.
+  out.clear();
+  ty_print(int16_t(-7), out), out += ' ';
+  ty_print(int64_t(1) << 40, out), out += ' ';
+  ty_print(1.5f, out), out += ' ';
+  ty_print(std::numeric_limits<double>::quiet_NaN(), out), out += ' ';
+  ty_print(false, out);
+  CHECK(out == "-7 1099511627776 1.5 NaN f");
 }
 
 TEST_CASE("a vector add agrees with the scalar add, row by row") {
