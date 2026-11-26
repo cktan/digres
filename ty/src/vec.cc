@@ -973,44 +973,179 @@ CMP_FNS_FP(fp64, double)
 namespace {
 
 /*
+ * The shuffles that pack a group of R rows of W bytes each, R * W bytes in
+ * all, whose bytes are at Off on in a vector: for each mask of the rows
+ * kept, the places of the kept rows' bytes in their order, then 0s; and the
+ * count of the rows kept.
+ */
+template <uint32_t R, uint32_t W, uint32_t Off> struct pack_table_t {
+  alignas(16) uint8_t idx[1u << R][R * W];
+  uint8_t count[1u << R];
+  constexpr pack_table_t() : idx(), count() {
+    for (uint32_t m = 0; m < (1u << R); m++) {
+      uint32_t at = 0;
+      for (uint32_t r = 0; r < R; r++) {
+        if (m & (1u << r)) {
+          for (uint32_t b = 0; b < W; b++) {
+            idx[m][at * W + b] = uint8_t(Off + r * W + b);
+          }
+          at++;
+        }
+      }
+      count[m] = uint8_t(at);
+    }
+  }
+};
+
+/*
+ * The tables: of the low and high 8 rows of a vector of bytes, a flag or a
+ * bool a row; and of a vector of 8, 4 or 2 rows of 2, 4 or 8 bytes.
+ */
+constexpr pack_table_t<8, 1, 0> pack_lo = {};
+constexpr pack_table_t<8, 1, 8> pack_hi = {};
+constexpr pack_table_t<8, 2, 0> pack16 = {};
+constexpr pack_table_t<4, 4, 0> pack32 = {};
+constexpr pack_table_t<2, 8, 0> pack64 = {};
+
+/* The table of a value of W bytes, 2, 4 or 8. */
+template <uint32_t W> constexpr const auto &pack_of() {
+  if constexpr (2 == W) {
+    return pack16;
+  } else if constexpr (4 == W) {
+    return pack32;
+  } else {
+    return pack64;
+  }
+}
+
+/* Store at to the B bytes, 16 or 8, of v that idx names, in its order. */
+template <uint32_t B>
+inline void shuffle_to(bytes_t v, const uint8_t *idx, uint8_t *to) {
+#ifdef __aarch64__
+  // GCC's __builtin_shuffle adds an AND of each place, which tbl needs not.
+  if constexpr (16 == B) {
+    vst1q_u8(to, vqtbl1q_u8((uint8x16_t)v, vld1q_u8(idx)));
+  } else {
+    vst1_u8(to, vqtbl1_u8((uint8x16_t)v, vld1_u8(idx)));
+  }
+#else
+  bytes_t places = {};
+  memcpy(&places, idx, B);
+  const bytes_t out = __builtin_shuffle(v, places);
+  memcpy(to, &out, B);
+#endif
+}
+
+static_assert(1 == TY_VEC_NOTVALID, "kept_of takes the bit as 0 or 1");
+
+/*
+ * True if no row of the 16 flags at flag is dropped: a test of two words,
+ * apart from the vector of the flags, so a block with none dropped does no
+ * vector work.
+ */
+inline bool none_of(const uint8_t *flag) {
+  uint64_t lo, hi;
+  memcpy(&lo, flag, 8);
+  memcpy(&hi, flag + 8, 8);
+  return 0 == ((lo | hi) & 0x0101010101010101ull);
+}
+
+/* The bits of the bytes of d that are 0, of 16 bytes of 0 or 1: byte i at
+   bit i. */
+inline uint32_t kept_of(bytes_t d) {
+#ifdef __aarch64__
+  const uint8x16_t bit = {1, 2, 4, 8, 16, 32, 64, 128,
+                          1, 2, 4, 8, 16, 32, 64, 128};
+  const uint8x16_t k = vandq_u8(vceqzq_u8((uint8x16_t)d), bit);
+  return vaddv_u8(vget_low_u8(k)) | uint32_t(vaddv_u8(vget_high_u8(k))) << 8;
+#else
+  // A multiply moves each byte's bit to its place in the top byte.
+  const bytes_t one = d ^ uint8_t(1);
+  uint64_t lo, hi;
+  memcpy(&lo, &one, 8);
+  memcpy(&hi, reinterpret_cast<const char *>(&one) + 8, 8);
+  const uint64_t magic = 0x0102040810204080ull;
+  return uint32_t((lo * magic) >> 56) | uint32_t((hi * magic) >> 56) << 8;
+#endif
+}
+
+/*
+ * Pack the kept rows of the 16 rows of W bytes at from to to, at or before
+ * from, and give their count. Each store ends at or before the end of the
+ * group it was loaded from, so no row not yet loaded is written over.
+ * 1. W of 1: load the 16 bytes; shuffle the low 8 rows into 8 bytes, then
+ *    the high 8 rows after them.
+ * 2. Else: each group of 16 bytes, R rows, is loaded and shuffled in turn.
+ */
+template <uint32_t W>
+inline uint32_t pack_block(const uint8_t *from, uint8_t *to, uint32_t keep) {
+  bytes_t v;
+  if constexpr (1 == W) {
+    // 1. Bytes.
+    memcpy(&v, from, 16);
+    const uint32_t lo = keep & 0xff, hi = keep >> 8;
+    shuffle_to<8>(v, pack_lo.idx[lo], to);
+    const uint32_t c = pack_lo.count[lo];
+    shuffle_to<8>(v, pack_hi.idx[hi], to + c);
+    return c + pack_hi.count[hi];
+  } else {
+    // 2. Groups of 16 bytes.
+    constexpr uint32_t R = 16 / W;
+    const auto &t = pack_of<W>();
+    uint32_t at = 0;
+    for (uint32_t g = 0; g < 16; g += R) {
+      const uint32_t m = (keep >> g) & ((1u << R) - 1);
+      memcpy(&v, from + g * W, 16);
+      shuffle_to<16>(v, t.idx[m], to + at * W);
+      at += t.count[m];
+    }
+    return at;
+  }
+}
+
+/*
  * Drop the rows not valid of vec and flag; see tyvec_squeeze in ty_vec.h.
  * A row is written at or before the place it is read from, so the rows
  * move forward, over rows already read.
- * 1. 16 rows at a time: if none is dropped, move the 16 rows at once, or
- *    leave them where they are if none was dropped before; if all are
- *    dropped, pass them; else move each row kept, one at a time.
- * 2. The rows past the last 16, one at a time.
+ * 1. 16 rows at a time: which rows are dropped, from their flags.
+ * 2. None dropped, which two words of the flags show: move the 16 rows, 16
+ * bytes at a time forward, or leave them where they are if none was dropped
+ * before.
+ * 3. All dropped: pass them.
+ * 4. Else pack the values and the flags, by shuffles from the tables.
+ * 5. The rows past the last 16, one at a time.
  */
 template <typename T> int squeeze_vec(uint32_t n, uint8_t *flag, T *vec) {
-  typedef uint64_t words_t __attribute__((vector_size(16)));
+  constexpr uint32_t W = sizeof(T);
+  uint8_t *const bytes = reinterpret_cast<uint8_t *>(vec);
   const uint32_t whole = n - n % 16;
   uint32_t w = 0, i = 0;
-  // 1. 16 rows at a time.
   for (; i < whole; i += 16) {
-    bytes_t f;
-    memcpy(&f, flag + i, 16);
-    const words_t drop = (words_t)(f & uint8_t(TY_VEC_NOTVALID));
-    if (0 == (drop[0] | drop[1])) {
+    // 1, 2. None dropped.
+    if (none_of(flag + i)) {
       if (w != i) {
-        memmove(vec + w, vec + i, 16 * sizeof(T));
+        for (uint32_t k = 0; k < 16 * W; k += 16) {
+          bytes_t v;
+          memcpy(&v, bytes + i * W + k, 16);
+          memcpy(bytes + w * W + k, &v, 16);
+        }
         memmove(flag + w, flag + i, 16);
       }
       w += 16;
       continue;
     }
-    const words_t keep =
-        (words_t)((f & uint8_t(TY_VEC_NOTVALID)) ^ uint8_t(TY_VEC_NOTVALID));
-    if (0 == (keep[0] | keep[1])) {
+    // 1. The rows dropped, as bytes of 1. 3. All dropped.
+    bytes_t f;
+    memcpy(&f, flag + i, 16);
+    const uint32_t keep = kept_of(f & uint8_t(TY_VEC_NOTVALID));
+    if (0 == keep) {
       continue;
     }
-    for (uint32_t k = i; k < i + 16; k++) {
-      if (0 == (flag[k] & TY_VEC_NOTVALID)) {
-        vec[w] = vec[k];
-        flag[w++] = flag[k];
-      }
-    }
+    // 4. Some dropped.
+    pack_block<W>(bytes + i * W, bytes + w * W, keep);
+    w += pack_block<1>(flag + i, flag + w, keep);
   }
-  // 2. The rest.
+  // 5. The rest.
   for (; i < n; i++) {
     if (0 == (flag[i] & TY_VEC_NOTVALID)) {
       vec[w] = vec[i];

@@ -1305,15 +1305,17 @@ namespace {
  * kept row is known by its value.
  * 1. For each size around 16 rows, and each pattern: none dropped, all,
  *    every other, runs of 16 dropped and kept, each 16's first half or
- *    second half dropped, and random; each flag's other bits set in some
- *    rows.
+ *    second half dropped, random, and 16 rows kept by a mask that is each
+ *    16's number times an odd number, so 4,096 blocks have each mask of 8
+ *    rows; each flag's other bits set in some rows.
  * 2. The count is that of the rows kept; the front of vec and flag is the
  *    kept rows' values and flags, in their order.
  */
 template <typename T> void check_squeeze() {
   std::mt19937_64 rng(53);
-  for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 31u, 32u, 33u, 100u, 1000u}) {
-    for (int pattern = 0; pattern < 8; pattern++) {
+  for (uint32_t n :
+       {0u, 1u, 15u, 16u, 17u, 31u, 32u, 33u, 100u, 1000u, 16u * 4096}) {
+    for (int pattern = 0; pattern < 9; pattern++) {
       // 1. The rows.
       std::vector<T> vec(n);
       std::vector<uint8_t> flag(n);
@@ -1326,7 +1328,9 @@ template <typename T> void check_squeeze() {
                           : 4 == pattern ? 0 == (i / 16) % 3
                           : 5 == pattern ? i % 16 < 8
                           : 6 == pattern ? i % 16 >= 8
-                                         : 0 == rng() % 3;
+                          : 7 == pattern
+                              ? 0 == rng() % 3
+                              : 0 == ((i / 16 * 40503u >> (i % 16)) & 1);
         flag[i] = uint8_t((drop ? TY_VEC_NOTVALID : 0) | (rng() % 7 & ~1));
       }
       std::vector<T> want_vec;
