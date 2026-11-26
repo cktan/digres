@@ -338,7 +338,12 @@ int  ty_run(ty_run_t *run, uint32_t n, const ty_arg_t *args,
    makes one. The casts are between the five numeric types, and
    between `bool` and `i32`.
 4. **The machine.** `ty_run_new`, `ty_run`. → verify: §7's
-   cases.
+   cases. Built: `src/eval_run.cc`. A vector operation writes
+   into the run's spare array, which then changes place with its
+   first operand's, so no operation's `out` is over an input. A
+   vector's `select` and casts are a loop of rows in the machine,
+   with the scalar casts; vector operations of their own may
+   replace them.
 5. **Random programs.** A generator writes a program of vectors
    and its twin with each `.v` taken out. The vector program on a
    batch must give, in each row, what the scalar one gives on
