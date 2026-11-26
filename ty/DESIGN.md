@@ -1081,6 +1081,23 @@ compares, and the flag and bool operations are built.
   `a`, `b` and `out` to be one array, as it has no other input
   then. Sub does, as `a - a` never overflows, and so do the
   others.
+- **`tyvec_squeeze(n, flag, vec)` drops the rows not valid.**
+  The other rows' values and flags move to the front of `vec`
+  and `flag`, in their order, and it returns their count. Each
+  column has its own flags, so a batch squeezes each column with
+  its own. Only a value's width matters: there is one for each C
+  type of a column's vector, of 1, 2, 4, 8 or 16 bytes. A
+  varlena type's vector is of `const char *`, and a dictionary's
+  of its `uint32_t` codes.
+- **Squeeze works on 16 rows at a time.** A block with no row
+  dropped, which a test of two words of its flags shows, moves
+  at once, or stays where it is. A block with all rows dropped
+  is passed. In another, the mask of its kept rows picks a row
+  of a table of byte places, made at compile time, and one
+  shuffle packs each 16 bytes of values, `tbl` on NEON. The
+  flags take two shuffles of 8 bytes. A row of 16 bytes is one
+  vector: each is stored, and the place steps past it if it is
+  kept. No branch depends on a row.
 
 The tests are `test/test_vec.cc`: each row against the scalar
 `ty_intN_add`, `_sub`, `_mul`, `_div` and `_mod`, at sizes around

@@ -1075,7 +1075,9 @@ inline uint32_t kept_of(bytes_t d) {
  * group it was loaded from, so no row not yet loaded is written over.
  * 1. W of 1: load the 16 bytes; shuffle the low 8 rows into 8 bytes, then
  *    the high 8 rows after them.
- * 2. Else: each group of 16 bytes, R rows, is loaded and shuffled in turn.
+ * 2. W of 16: each row is a vector; store it at to, and step to past it if
+ *    it is kept, with no branch.
+ * 3. Else: each group of 16 bytes, R rows, is loaded and shuffled in turn.
  */
 template <uint32_t W>
 inline uint32_t pack_block(const uint8_t *from, uint8_t *to, uint32_t keep) {
@@ -1088,8 +1090,17 @@ inline uint32_t pack_block(const uint8_t *from, uint8_t *to, uint32_t keep) {
     const uint32_t c = pack_lo.count[lo];
     shuffle_to<8>(v, pack_hi.idx[hi], to + c);
     return c + pack_hi.count[hi];
+  } else if constexpr (16 == W) {
+    // 2. Rows of 16 bytes.
+    uint32_t at = 0;
+    for (uint32_t r = 0; r < 16; r++) {
+      memcpy(&v, from + r * 16, 16);
+      memcpy(to + at * 16, &v, 16);
+      at += (keep >> r) & 1;
+    }
+    return at;
   } else {
-    // 2. Groups of 16 bytes.
+    // 3. Groups of 16 bytes.
     constexpr uint32_t R = 16 / W;
     const auto &t = pack_of<W>();
     uint32_t at = 0;
@@ -1104,9 +1115,10 @@ inline uint32_t pack_block(const uint8_t *from, uint8_t *to, uint32_t keep) {
 }
 
 /*
- * Drop the rows not valid of vec and flag; see tyvec_squeeze in ty_vec.h.
- * A row is written at or before the place it is read from, so the rows
- * move forward, over rows already read.
+ * Drop the rows not valid of vec, of rows of W bytes, and of flag; see
+ * tyvec_squeeze in ty_vec.h. Only W matters, not the type. A row is written at
+ * or before the place it is read from, so the rows move forward, over rows
+ * already read.
  * 1. 16 rows at a time: which rows are dropped, from their flags.
  * 2. None dropped, which two words of the flags show: move the 16 rows, 16
  * bytes at a time forward, or leave them where they are if none was dropped
@@ -1115,9 +1127,9 @@ inline uint32_t pack_block(const uint8_t *from, uint8_t *to, uint32_t keep) {
  * 4. Else pack the values and the flags, by shuffles from the tables.
  * 5. The rows past the last 16, one at a time.
  */
-template <typename T> int squeeze_vec(uint32_t n, uint8_t *flag, T *vec) {
-  constexpr uint32_t W = sizeof(T);
-  uint8_t *const bytes = reinterpret_cast<uint8_t *>(vec);
+template <uint32_t W> int squeeze_vec(uint32_t n, uint8_t *flag, void *vec) {
+  static_assert(1 == W || 2 == W || 4 == W || 8 == W || 16 == W);
+  uint8_t *const bytes = static_cast<uint8_t *>(vec);
   const uint32_t whole = n - n % 16;
   uint32_t w = 0, i = 0;
   for (; i < whole; i += 16) {
@@ -1148,7 +1160,7 @@ template <typename T> int squeeze_vec(uint32_t n, uint8_t *flag, T *vec) {
   // 5. The rest.
   for (; i < n; i++) {
     if (0 == (flag[i] & TY_VEC_NOTVALID)) {
-      vec[w] = vec[i];
+      memmove(bytes + w * W, bytes + i * W, W);
       flag[w++] = flag[i];
     }
   }
@@ -1200,32 +1212,62 @@ void print_vec(uint32_t n, const uint8_t *flag, const T *values,
 
 /* Drop the rows not valid; see ty_vec.h. */
 int tyvec_squeeze(uint32_t n, uint8_t *flag, int16_t *vec) {
-  return squeeze_vec(n, flag, vec);
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
 }
 
 /* Drop the rows not valid; see ty_vec.h. */
 int tyvec_squeeze(uint32_t n, uint8_t *flag, int32_t *vec) {
-  return squeeze_vec(n, flag, vec);
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
 }
 
 /* Drop the rows not valid; see ty_vec.h. */
 int tyvec_squeeze(uint32_t n, uint8_t *flag, int64_t *vec) {
-  return squeeze_vec(n, flag, vec);
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
 }
 
 /* Drop the rows not valid; see ty_vec.h. */
 int tyvec_squeeze(uint32_t n, uint8_t *flag, float *vec) {
-  return squeeze_vec(n, flag, vec);
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
 }
 
 /* Drop the rows not valid; see ty_vec.h. */
 int tyvec_squeeze(uint32_t n, uint8_t *flag, double *vec) {
-  return squeeze_vec(n, flag, vec);
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
 }
 
 /* Drop the rows not valid; see ty_vec.h. */
 int tyvec_squeeze(uint32_t n, uint8_t *flag, uint8_t *vec) {
-  return squeeze_vec(n, flag, vec);
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, uint32_t *vec) {
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, const char **vec) {
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_int128_t *vec) {
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_uuid_t *vec) {
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_interval_t *vec) {
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
+}
+
+/* Drop the rows not valid; see ty_vec.h. */
+int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_timetz_t *vec) {
+  return squeeze_vec<sizeof *vec>(n, flag, vec);
 }
 
 /* A vector of int16, a line a row; see ty_vec.h. */

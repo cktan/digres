@@ -1301,8 +1301,8 @@ TEST_CASE("a float compare is PostgreSQL's") {
 namespace {
 
 /*
- * Check tyvec_squeeze on vectors of T: each row's value its index, so a
- * kept row is known by its value.
+ * Check tyvec_squeeze on vectors of T: each row's bytes made from its
+ * index, so a kept row is known by its bytes.
  * 1. For each size around 16 rows, and each pattern: none dropped, all,
  *    every other, runs of 16 dropped and kept, each 16's first half or
  *    second half dropped, random, and 16 rows kept by a mask that is each
@@ -1320,7 +1320,11 @@ template <typename T> void check_squeeze() {
       std::vector<T> vec(n);
       std::vector<uint8_t> flag(n);
       for (uint32_t i = 0; i < n; i++) {
-        vec[i] = T(i % 100);
+        uint8_t b[sizeof(T)];
+        for (uint32_t k = 0; k < sizeof(T); k++) {
+          b[k] = uint8_t(i * 7 + k * 13 + (i >> 8));
+        }
+        memcpy(&vec[i], b, sizeof(T));
         const bool drop = 0 == pattern   ? false
                           : 1 == pattern ? true
                           : 2 == pattern ? 1 == i % 2
@@ -1346,8 +1350,9 @@ template <typename T> void check_squeeze() {
       CAPTURE(pattern);
       const int m = tyvec_squeeze(n, flag.data(), vec.data());
       REQUIRE(m == int(want_vec.size()));
-      vec.resize(m), flag.resize(m);
-      CHECK(vec == want_vec);
+      CHECK(
+          (0 == m || 0 == memcmp(vec.data(), want_vec.data(), m * sizeof(T))));
+      flag.resize(m);
       CHECK(flag == want_flag);
     }
   }
@@ -1356,7 +1361,7 @@ template <typename T> void check_squeeze() {
 } // namespace
 
 // Verify that tyvec_squeeze drops the rows not valid, and keeps the others,
-// null and failed ones too, in their order, for each type.
+// null and failed ones too, in their order, for each type, of each width.
 TEST_CASE("tyvec_squeeze drops the rows not valid") {
   check_squeeze<int16_t>();
   check_squeeze<int32_t>();
@@ -1364,6 +1369,12 @@ TEST_CASE("tyvec_squeeze drops the rows not valid") {
   check_squeeze<float>();
   check_squeeze<double>();
   check_squeeze<uint8_t>();
+  check_squeeze<uint32_t>();
+  check_squeeze<const char *>();
+  check_squeeze<ty_int128_t>();
+  check_squeeze<ty_uuid_t>();
+  check_squeeze<ty_interval_t>();
+  check_squeeze<ty_timetz_t>();
 }
 
 TEST_CASE("a vector add agrees with the scalar add, row by row") {

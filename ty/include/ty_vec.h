@@ -118,8 +118,17 @@
  *       and flags move to the front of vec and flag, in their order, and
  *       the count of them is returned. A null or failed row stays. What is
  *       past that count means nothing. An error list's rows are not moved:
- *       its entries name the rows as they were. One for each type: int16_t,
- *       int32_t, int64_t, float, double, and bool as uint8_t.
+ *       its entries name the rows as they were. Only a value's width
+ *       matters, so there is one for each C type of a column's vector:
+ *         1 byte:   uint8_t: bool, "char"
+ *         2 bytes:  int16_t
+ *         4 bytes:  int32_t: int4, date; float; uint32_t: oid, a
+ *                   dictionary's codes
+ *         8 bytes:  int64_t: int8, time, timestamp, timestamptz, a
+ *                   decimal64's value; double; const char *: a varlena
+ *                   type's, such as text, bytea and numeric
+ *         16 bytes: ty_int128_t: a decimal128's value; ty_uuid_t;
+ *                   ty_interval_t; ty_timetz_t
  *
  *   tyvec_print(n, flag, values, out, err)
  *       Append to out n lines, one a row, for a test to compare: the row's
@@ -137,6 +146,10 @@
 #include <vector>
 
 #include "ty.h"
+#include "ty_datetime.h"
+#include "ty_decimal.h"
+#include "ty_interval.h"
+#include "ty_uuid.h"
 
 /* Bit 0 of a row's flag: 1 if the row is not valid. */
 #define TY_VEC_NOTVALID 0x01
@@ -243,6 +256,12 @@ int tyvec_squeeze(uint32_t n, uint8_t *flag, int64_t *vec);
 int tyvec_squeeze(uint32_t n, uint8_t *flag, float *vec);
 int tyvec_squeeze(uint32_t n, uint8_t *flag, double *vec);
 int tyvec_squeeze(uint32_t n, uint8_t *flag, uint8_t *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, uint32_t *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, const char **vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_int128_t *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_uuid_t *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_interval_t *vec);
+int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_timetz_t *vec);
 void tyvec_print(uint32_t n, const uint8_t *flag, const int16_t *values,
                  std::string &out, const std::vector<ty_rowerr_t> &err);
 void tyvec_print(uint32_t n, const uint8_t *flag, const int32_t *values,
