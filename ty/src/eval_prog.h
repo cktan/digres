@@ -111,6 +111,12 @@ struct ty_prog_t {
   std::vector<ty_internal::instr_t> code;
   ty_internal::slot_type_t result;
   uint32_t max_depth = 0; /* the most slots the stack holds */
+  /*
+   * The constants that a splat makes vectors of, by their index in consts:
+   * a run fills each vector once. A splat of one has b, its place here
+   * plus 1; another splat has b 0.
+   */
+  std::vector<uint16_t> splat_consts;
 };
 
 #endif /* TY_SRC_EVAL_PROG_H */

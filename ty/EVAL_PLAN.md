@@ -348,10 +348,22 @@ int  ty_run(ty_run_t *run, uint32_t n, const ty_arg_t *args,
    and its twin with each `.v` taken out. The vector program on a
    batch must give, in each row, what the scalar one gives on
    that row: its value, its null, and its error. → verify: some
-   millions of rows, with nulls and with values that fail.
+   millions of rows, with nulls and with values that fail. Built:
+   `test/test_eval_random.cc`, 3,000 programs of depth 4 at most,
+   of every operator, on batches of 1 to 40 rows; 1,177 of them
+   fail, and none differs. A row not valid is left out: its
+   validity comes from the inputs a program reads, and a program
+   of constants alone reads none.
 6. **Measure.** Instructions a row of §1's example, against the
    same calls written by hand in C. → verify: the machine adds
-   less than 5%, at a batch of 2,048.
+   less than 5%, at a batch of 2,048. Measured: 10,557
+   instructions a batch, against 9,979 by hand, 5.8% more, at
+   `-O3`. It was 194% more at first. The splat of a constant is
+   now filled once, at `ty_run_new`; a vector with no flag set
+   is clear, so its flags are written, all 0, only when an
+   operation must write over them, and an operation gets NULL
+   for them; and a splat fills 64 bytes a step. What is left is
+   the machine's dispatch and its checks of the error lists.
 
 ---
 

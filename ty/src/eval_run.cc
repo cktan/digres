@@ -8,11 +8,13 @@
  * ../EVAL_PLAN.md §3 and §5): a run of a program's bytecode on a stack of
  * slots, each a scalar or a vector of n rows, with its flags and errors.
  *
- * A vector slot's values are its own array, or the array of a parameter or
- * a local, which no operation writes: an operation writes its result into
- * the run's spare array, which then changes place with the slot's own, so
- * no operation's out is over an input. A slot's flags are always its own,
- * as an operation writes them over its first input's. A failing row is
+ * A vector slot's values are its own array, or the array of a parameter, a
+ * local or a splat of a constant, which no operation writes: an operation
+ * writes its result into the run's spare array, which then changes place
+ * with the slot's own, so no operation's out is over an input. A slot's
+ * flags are its own, as an operation writes them over its first input's;
+ * NULLs are rare, so a vector with none set is clear, and its flags are
+ * written, all 0, only when an operation needs them. A failing row is
  * marked (ty_vec.h); the run raises the lowest valid marked row at its end.
  */
 #include <string.h>
@@ -41,6 +43,7 @@ struct slot_t {
   const void *values = nullptr; /* a vector's: own.data(), or a view */
   std::vector<uint64_t> own;    /* max_n values of 8 bytes at most */
   std::vector<uint8_t> flags;   /* a vector's: max_n */
+  bool clear = false;           /* a vector's flags are all 0, unwritten */
   std::vector<ty_rowerr_t> err; /* a vector's errors */
   uint64_t scalar = 0;          /* a scalar's value, in its first bytes */
   uint8_t sflag = 0;            /* a scalar's flag */
@@ -68,6 +71,32 @@ template <typename F> auto by_type(vtype_t t, F &&f) {
   case vtype_t::boolean:
   default:
     return f(as_t<uint8_t>{});
+  }
+}
+
+/*
+ * Fill out with n copies of v: 64 bytes at a time, then 16, then the rest.
+ * GCC leaves the plain loop scalar.
+ */
+template <typename T> void fill(T *out, T v, uint32_t n) {
+  constexpr uint32_t L = 16 / sizeof(T);
+  typedef T vec_t __attribute__((vector_size(16)));
+  vec_t x;
+  for (uint32_t k = 0; k < L; k++) {
+    x[k] = v;
+  }
+  uint32_t i = 0;
+  for (; i + 4 * L <= n; i += 4 * L) {
+    memcpy(out + i, &x, 16);
+    memcpy(out + i + L, &x, 16);
+    memcpy(out + i + 2 * L, &x, 16);
+    memcpy(out + i + 3 * L, &x, 16);
+  }
+  for (; i + L <= n; i += L) {
+    memcpy(out + i, &x, 16);
+  }
+  for (; i < n; i++) {
+    out[i] = v;
   }
 }
 
@@ -288,6 +317,7 @@ struct ty_run_t {
   uint32_t max_n;
   std::vector<slot_t> stack;
   std::vector<slot_t> locals;
+  std::vector<slot_t> cached; /* the vectors of prog->splat_consts */
   std::vector<uint64_t> spare;
   std::vector<uint8_t> spare_flags;
 };
@@ -298,6 +328,20 @@ namespace {
 void size_slot(slot_t &s, uint32_t max_n) {
   s.own.assign(max_n ? max_n : 1, 0);
   s.flags.assign(max_n ? max_n : 1, 0);
+}
+
+/* s's flags, to read or to write: all 0 if s is clear, which it is not then. */
+uint8_t *flags_of(slot_t &s, uint32_t n) {
+  if (s.clear) {
+    memset(s.flags.data(), 0, n);
+    s.clear = false;
+  }
+  return s.flags.data();
+}
+
+/* s's flags as a second input's: NULL if it is clear. */
+const uint8_t *flags_b(const slot_t &s) {
+  return s.clear ? nullptr : s.flags.data();
 }
 
 /* Put the spare's values in s's place: the result of an operation on s. */
@@ -312,7 +356,10 @@ void copy_slot(slot_t &dst, const slot_t &src, uint32_t n) {
   dst.vec = src.vec;
   if (src.vec) {
     dst.values = src.values;
-    memcpy(dst.flags.data(), src.flags.data(), n);
+    dst.clear = src.clear;
+    if (!src.clear) {
+      memcpy(dst.flags.data(), src.flags.data(), n);
+    }
     dst.err = src.err;
   } else {
     dst.scalar = src.scalar;
@@ -327,8 +374,8 @@ void copy_slot(slot_t &dst, const slot_t &src, uint32_t n) {
  * one not valid in c not valid. Into c's slot, over c.
  */
 template <typename T>
-void select_vec(ty_run_t *r, slot_t &c, const slot_t &x, const slot_t &y,
-                uint32_t n) {
+void select_vec(ty_run_t *r, slot_t &c, slot_t &x, slot_t &y, uint32_t n) {
+  flags_of(c, n), flags_of(x, n), flags_of(y, n);
   const uint8_t *cv = static_cast<const uint8_t *>(c.values);
   const T *xv = static_cast<const T *>(x.values);
   const T *yv = static_cast<const T *>(y.values);
@@ -371,6 +418,7 @@ void select_vec(ty_run_t *r, slot_t &c, const slot_t &x, const slot_t &y,
  */
 template <typename F, typename T>
 void cast_vec(ty_run_t *r, slot_t &s, uint32_t n) {
+  flags_of(s, n);
   const F *v = static_cast<const F *>(s.values);
   T *out = reinterpret_cast<T *>(r->spare.data());
   for (uint32_t i = 0; i < n; i++) {
@@ -446,10 +494,9 @@ int run(ty_run_t *r, uint32_t n, const ty_arg_t *args, ty_result_t *result) {
       s.err.clear();
       if (in.vec) {
         s.values = a.values;
-        if (nullptr != a.flags) {
+        s.clear = nullptr == a.flags;
+        if (!s.clear) {
           memcpy(s.flags.data(), a.flags, n);
-        } else {
-          memset(s.flags.data(), 0, n);
         }
       } else {
         s.scalar = 0;
@@ -486,17 +533,27 @@ int run(ty_run_t *r, uint32_t n, const ty_arg_t *args, ty_result_t *result) {
     }
     case op_t::splat: {
       slot_t &s = st[sp - 1];
+      s.err.clear();
+      // A constant's vector, made once.
+      if (0 != in.b) {
+        const slot_t &c = r->cached[in.b - 1];
+        s.vec = true;
+        s.values = c.own.data();
+        s.clear = c.clear;
+        if (!c.clear) {
+          memcpy(s.flags.data(), c.flags.data(), n);
+        }
+        break;
+      }
       by_type(in.type, [&](auto t) {
         using T = typename decltype(t)::type;
-        const T v = get<T>(s);
-        T *out = reinterpret_cast<T *>(r->spare.data());
-        for (uint32_t i = 0; i < n; i++) {
-          out[i] = v;
-        }
+        fill(reinterpret_cast<T *>(r->spare.data()), get<T>(s), n);
       });
       const uint8_t f = s.sflag & (TY_VEC_NULL | TY_VEC_ERROR);
-      memset(s.flags.data(), f, n);
-      s.err.clear();
+      s.clear = 0 == f;
+      if (!s.clear) {
+        memset(s.flags.data(), f, n);
+      }
       for (uint32_t i = 0; (f & TY_VEC_ERROR) && i < n; i++) {
         s.err.push_back({i, s.scode});
       }
@@ -512,11 +569,14 @@ int run(ty_run_t *r, uint32_t n, const ty_arg_t *args, ty_result_t *result) {
       by_type(in.type, [&](auto t) {
         using T = typename decltype(t)::type;
         if (in.vec) {
-          vec_arith(in.op, n, a.flags.data(), static_cast<const T *>(a.values),
-                    b.flags.data(), static_cast<const T *>(b.values),
-                    reinterpret_cast<T *>(r->spare.data()), a.err);
+          const bool clear = a.clear && b.clear;
+          const int marked = vec_arith(
+              in.op, n, flags_of(a, n), static_cast<const T *>(a.values),
+              flags_b(b), static_cast<const T *>(b.values),
+              reinterpret_cast<T *>(r->spare.data()), a.err);
           tyvec_err_merge(n, a.flags.data(), a.err, b.err);
           take_spare(r, a);
+          a.clear = clear && 0 == marked;
         } else if (!scalar_skip(a, b)) {
           T out = T(0);
           const ty_errnum_t why =
@@ -542,7 +602,10 @@ int run(ty_run_t *r, uint32_t n, const ty_arg_t *args, ty_result_t *result) {
       by_type(in.type, [&](auto t) {
         using T = typename decltype(t)::type;
         if (in.vec) {
-          ty_bitor_vec(n, a.flags.data(), b.flags.data(), nullptr);
+          if (!b.clear) {
+            ty_bitor_vec(n, flags_of(a, n), b.flags.data(), nullptr);
+          }
+          // A compare reads no flag: it computes every row.
           vec_cmp(in.op, n, a.flags.data(), static_cast<const T *>(a.values),
                   static_cast<const T *>(b.values),
                   reinterpret_cast<uint8_t *>(r->spare.data()));
@@ -575,13 +638,16 @@ int run(ty_run_t *r, uint32_t n, const ty_arg_t *args, ty_result_t *result) {
         const uint8_t *x = static_cast<const uint8_t *>(a.values);
         const uint8_t *y = static_cast<const uint8_t *>(b.values);
         uint8_t *out = reinterpret_cast<uint8_t *>(r->spare.data());
+        const bool clear = a.clear && b.clear;
+        uint8_t *fa = flags_of(a, n);
         if (is_and) {
-          tyvec_bool_and(n, a.flags.data(), x, b.flags.data(), y, out, a.err);
+          tyvec_bool_and(n, fa, x, flags_b(b), y, out, a.err);
         } else {
-          tyvec_bool_or(n, a.flags.data(), x, b.flags.data(), y, out, a.err);
+          tyvec_bool_or(n, fa, x, flags_b(b), y, out, a.err);
         }
         tyvec_err_merge(n, a.flags.data(), a.err, b.err);
         take_spare(r, a);
+        a.clear = clear;
       } else if (0 == (a.sflag & TY_VEC_ERROR)) {
         // a is not the side that settles it, as br_and or br_or jumped
         // past then: b decides, but a null a and a b that does not settle.
@@ -611,6 +677,7 @@ int run(ty_run_t *r, uint32_t n, const ty_arg_t *args, ty_result_t *result) {
       if (in.vec) {
         uint8_t *out = reinterpret_cast<uint8_t *>(r->spare.data());
         const uint8_t *v = static_cast<const uint8_t *>(a.values);
+        flags_of(a, n);
         switch (in.op) {
         case op_t::isnull:
           tyvec_flag_isnull(n, a.flags.data(), out);
@@ -695,6 +762,7 @@ int run(ty_run_t *r, uint32_t n, const ty_arg_t *args, ty_result_t *result) {
       // 2. The result.
       slot_t &s = st[sp - 1];
       if (s.vec) {
+        flags_of(s, n);
         if (0 != tyvec_flag_error(n, s.flags.data(), s.err)) {
           return -1;
         }
@@ -731,6 +799,23 @@ int ty_run_new(const ty_prog_t *prog, uint32_t max_n, ty_run_t **out) {
     }
     for (slot_t &s : r->locals) {
       size_slot(s, max_n);
+    }
+    // Each constant a splat takes, as a vector of max_n rows.
+    r->cached.resize(prog->splat_consts.size());
+    for (size_t i = 0; i < r->cached.size(); i++) {
+      slot_t &s = r->cached[i];
+      const konst_t &k = prog->consts[prog->splat_consts[i]];
+      size_slot(s, max_n);
+      s.vec = true;
+      s.clear = !k.null;
+      memset(s.flags.data(), k.null ? TY_VEC_NULL : 0, max_n);
+      by_type(k.type, [&](auto t) {
+        using T = typename decltype(t)::type;
+        const T v = std::is_same_v<T, float>    ? T(k.f)
+                    : std::is_same_v<T, double> ? T(k.d)
+                                                : T(k.i);
+        fill(reinterpret_cast<T *>(s.own.data()), v, max_n);
+      });
     }
     r->spare.assign(max_n ? max_n : 1, 0);
     r->spare_flags.assign(max_n ? max_n : 1, 0);

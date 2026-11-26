@@ -197,7 +197,8 @@ TEST_CASE("a scalar run jumps, and gives SQL's answers") {
 // 2. Casts of vectors: i32 to i16 fails on a row that does not fit; f64 to
 //    i32 rounds; bool to i32.
 // 3. A vector cond of three arms, and IS TRUE of a vector with a null.
-// 4. A run that fails, then one that does not, of the same run.
+// 4. A run that fails, then one that does not, of the same run; and one
+//    with nulls, then one given no flags.
 // 5. More rows than the run was made for: TY_ERR_INVALID.
 TEST_CASE("a run takes let, casts and cond, and is used again") {
   // 1. let.
@@ -231,6 +232,14 @@ TEST_CASE("a run takes let, casts and cond, and is used again") {
   CHECK(run<int32_t>(p7, 2, {{z, nullptr}}) ==
         "ERR TY_ERR_DIVZERO row 0: division by zero");
   CHECK(run<int32_t>(p7, 2, {{five, nullptr}}) == "0 2\n1 5\n");
+  // A run with nulls, then one given no flags: no null is left of the first.
+  prog_run_t p8("(fn [x:i32.v] (add.i32.v x x))");
+  const uint8_t nulls[] = {TY_VEC_NULL, TY_VEC_NULL};
+  CHECK(run<int32_t>(p8, 2, {{five, nulls}}) == "0 null\n1 null\n");
+  CHECK(run<int32_t>(p8, 2, {{five, nullptr}}) == "0 10\n1 4\n");
+  prog_run_t p9("(fn [x:i32.v] x)");
+  CHECK(run<int32_t>(p9, 2, {{five, nulls}}) == "0 null\n1 null\n");
+  CHECK(run<int32_t>(p9, 2, {{five, nullptr}}) == "0 5\n1 2\n");
   // 5. Too many rows.
   std::vector<int32_t> many(65, 1);
   CHECK(run<int32_t>(p7, 65, {{many.data(), nullptr}})

@@ -497,6 +497,16 @@ struct compiler_t {
       expr(f.items[1], &one);
       in.op = op_t::splat;
       in.vec = true;
+      // A splat of a constant: its vector is the same each batch.
+      const form_kind_t k = f.items[1].kind;
+      if (form_kind_t::integer == k || form_kind_t::real == k ||
+          form_kind_t::boolean == k || form_kind_t::nil == k) {
+        if (prog->splat_consts.size() >= max_index - 1) {
+          fail(f, "the program has too many constants");
+        }
+        prog->splat_consts.push_back(uint16_t(prog->consts.size() - 1));
+        in.b = uint16_t(prog->splat_consts.size());
+      }
       emit(f, in);
       return {t, true};
     }
