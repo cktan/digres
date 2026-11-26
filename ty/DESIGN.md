@@ -966,32 +966,35 @@ compares, and the flag and bool operations are built.
   a byte a row. Bit 0, `TY_VEC_NOTVALID`, is 1 for a row that is
   not valid, such as a row a filter dropped; bit 1,
   `TY_VEC_NULL`, is 1 for a null; bit 2, `TY_VEC_ERROR`, is 1 for
-  a row that failed. The other bits are 0 for now. One flag array
-  serves both inputs: a row is null if one of its inputs is. A
-  caller merges the flags of two inputs into it before the call,
-  with `tyvec_flag_or`. `AND` and `OR` take two.
-- **The call**: `tyvec_intN_add(n, flag, err, a, b, out)`, and
-  the same for `_sub`, `_mul`, `_div` and `_mod`. `out` gets the
-  results. `flag` is the flags of both inputs, and then of the
-  results: an operation writes the results' flags over the
-  inputs'. These leave them as they are, so a null input gives a
-  null result, and a failed one a failed result.
+  a row that failed. The other bits are 0 for now.
+- **The call**: `tyvec_intN_add(n, flag_a, a, flag_b, b, out,
+  err)`, and the same for `_sub`, `_mul`, `_div` and `_mod`. Each
+  input comes with its flags. `out` gets the results, and
+  `flag_a` their flags: the two inputs' ORed, in the loop that
+  computes, so a null input gives a null result, and a failed one
+  a failed result. That costs 3 instructions for 16 rows, where a
+  pass of its own before the call cost twice as much.
+- **`flag_b` may be NULL**, for an input with no flags, such as a
+  constant: NULLs are rare. Then the call reads one flag array.
 - **A row not valid, null or failed is never computed.** Its
   result means nothing.
 - **A failing row does not fail the call.** The operation marks
   it, and goes on: it sets the row's `TY_VEC_ERROR`, and appends
-  the row and its error, a `ty_rowerr_t`, to `err`:
-  `TY_ERR_RANGE` if it overflows, `TY_ERR_DIVZERO` if it divides
-  by 0. It returns 1 if it marked a row, and 0 if not. Errors are
-  rare, so nothing is written to `err` while no row fails.
+  the row and its error, a `ty_rowerr_t`, to `err`, its own
+  alone: `TY_ERR_RANGE` if it overflows, `TY_ERR_DIVZERO` if it
+  divides by 0. It returns 1 if it marked a row, and 0 if not.
+  Errors are rare, so nothing is written to `err` while no row
+  fails.
 - **A caller asks for the error with `tyvec_flag_error`**: -1
   with the lowest row that is valid and failed, its error from
   `err`, and `ty_erridx()` its index: the row PostgreSQL, going
   row by row, would fail on. It reads only the rows `err` names.
-- **`tyvec_flag_or` merges the flags of two inputs**, and the
-  entries of `b`'s rows that `a` has not failed: when both fail,
-  the left one's error is raised, as PostgreSQL computes it
-  first ([`EVAL_PLAN.md`](EVAL_PLAN.md) §3).
+- **`tyvec_err_merge` merges the inputs' errors after the call.**
+  A caller that keeps a list for each input appends to the
+  first's the entries of `b`'s rows that the result has failed
+  and the list does not name: when both fail, the left one's
+  error is raised, as PostgreSQL computes it first
+  ([`EVAL_PLAN.md`](EVAL_PLAN.md) §3).
 - **They run on vector instructions** (`src/vec.cc`): GCC's
   vector types of 16 bytes, which the compiler turns into NEON on
   aarch64 and SSE on x86-64. A loop computes with wrap-around and
@@ -1052,18 +1055,18 @@ compares, and the flag and bool operations are built.
 - **`NOT` is `tyvec_bool_not(n, flag, vec, out)`**. `NOT` of a
   null is null, so `flag` stays as it is.
 - **`AND` and `OR` are `tyvec_bool_and` and `tyvec_bool_or`**,
-  `(n, flag_a, flag_b, a, b, out)`, with SQL's three values. A
+  `(n, flag_a, a, flag_b, b, out, err)`, with SQL's three values. A
   row with a null input is null, but `false AND null` is false,
   and `true OR null` is true. So which input is null matters, and
   each has its flags. The results' flags go over `flag_a`. A row
   not valid in `a` or in `b` is not valid in the result.
-- **`AND` and `OR` carry errors**, `(n, flag_a, err_a, flag_b,
-  err_b, a, b, out)`. A row that failed in an input has failed,
-  but `false AND <failed>` is false, and `true OR <failed>` is
-  true. Only `a` drops `b`'s error, never the other way: in
-  PostgreSQL, `false AND 1/0 = 1` is false, but `1/0 = 1 AND
-  false` raises. `err_a` takes the entries of the rows that
-  failed by `b`.
+- **`AND` and `OR` carry errors**, `(n, flag_a, a, flag_b, b,
+  out, err)`, and add none: they cannot fail. A row that failed
+  in an input has failed, but `false AND <failed>` is false, and
+  `true OR <failed>` is true. Only `a` drops `b`'s error, never
+  the other way: in PostgreSQL, `false AND 1/0 = 1` is false, but
+  `1/0 = 1 AND false` raises. `tyvec_err_merge` then takes only
+  the entries of `b` whose rows are still failed.
 - **The IS tests keep an error**: a failed row stays failed, as
   PostgreSQL raises before it tests.
 - **`out` of `AND` and `OR` may be `a`, `b` or both.**

@@ -361,10 +361,11 @@ const char *row_error_msg(ty_errnum_t why) {
 
 /*
  * An operation OP on two vectors of numbers, which may fail.
- * 1. For each block of rows, 16 rows at a time, and 16 bytes of them at a
- *    time: compute, store the results, and gather into bad the failures
- *    of the rows computed: valid, not null, not failed. If out is a or b,
- *    and OP cannot undo a result, save the block's input first.
+ * 1. For each block of rows, 16 rows at a time: merge flag_b into flag_a,
+ *    if there is a flag_b. Then, 16 bytes at a time: compute, store the
+ *    results, and gather into bad the failures of the rows computed: valid,
+ *    not null, not failed. If out is a or b, and OP cannot undo a result,
+ *    save the block's input first.
  * 2. At the block's end, if a row computed failed, find each that did, row
  *    by row, and mark it. If out is a or b, the block's results are over
  *    that input: undo them, which is exact, as they wrapped around, or take
@@ -375,9 +376,9 @@ const char *row_error_msg(ty_errnum_t why) {
  * its inputs are, and null if one of them is.
  */
 template <typename OP>
-int arith_vec(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-              const typename OP::elem_t *a, const typename OP::elem_t *b,
-              typename OP::elem_t *out) {
+int arith_vec(uint32_t n, uint8_t *flag, const typename OP::elem_t *a,
+              const uint8_t *flag_b, const typename OP::elem_t *b,
+              typename OP::elem_t *out, std::vector<ty_rowerr_t> &err) {
   typedef typename OP::elem_t T;
   typedef typename OP::vec_t vec_t;
   typedef uint64_t words_t __attribute__((vector_size(16)));
@@ -426,6 +427,12 @@ int arith_vec(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
     for (; i < to; i += 16) {
       bytes_t f;
       memcpy(&f, flag + i, 16);
+      if (nullptr != flag_b) {
+        bytes_t g;
+        memcpy(&g, flag_b + i, 16);
+        f |= g;
+        memcpy(flag + i, &f, 16);
+      }
       // All ones in the byte of a row computed, zero in another.
       const bytes_t computed = (bytes_t)((f & uint8_t(TY_VEC_SKIP)) == 0);
       for_lanes<sizeof(T)>(
@@ -447,6 +454,9 @@ int arith_vec(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
   // 3. The rest, one row at a time.
   for (; i < n; i++) {
     T r;
+    if (nullptr != flag_b) {
+      flag[i] |= flag_b[i];
+    }
     const ty_errnum_t why = OP::one(a[i], b[i], &r);
     if (TY_UNLIKELY(TY_OK != why && is_computed(i))) {
       mark(i, why);
@@ -558,20 +568,16 @@ int flag_op(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out,
  * a is known to be false: a left input is computed first, so only it drops
  * the other's error. So a's error bit stays, and b's is taken where a is
  * null or 1: (f | (x + x)) << 1 has those at TY_VEC_ERROR. A row is not valid
- * if an input is not. err_a takes the entries of err_b of the rows that failed
- * by b alone.
+ * if an input is not. No flag_b is flags of all zeros.
  * 1. 16 rows at a time:
  *    a. The inputs, read before anything is written.
  *    b. The result. One of a null and a known input is right by its low bit.
  *    c. The result's three bits, over flag_a's; the other bits stay.
  * 2. The rows past the last 16, one at a time, by the same rule.
- * 3. The entries of err_b whose row failed by b alone, which were noted
- *    before flag_a was written.
  */
 template <bool OR>
-int and_or_vec(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
-               const uint8_t *flag_b, const std::vector<ty_rowerr_t> &err_b,
-               const uint8_t *a, const uint8_t *b, uint8_t *out) {
+int and_or_vec(uint32_t n, uint8_t *flag_a, const uint8_t *a,
+               const uint8_t *flag_b, const uint8_t *b, uint8_t *out) {
   typedef uint8_t vec_t __attribute__((vector_size(16)));
   static_assert(2 == TY_VEC_NULL, "x + x puts a bool at the null bit");
   static_assert(4 == TY_VEC_ERROR, "f << 1 and x << 2 put bits at the error");
@@ -596,23 +602,17 @@ int and_or_vec(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
     return (f & keep) | ((f | g) & ((fx & (g | (y + y))) | notvalid) & two) |
            (g & (fx << 1) & error);
   };
-  // 3. The rows that may fail by b alone: b failed there, and a did not.
-  std::vector<uint32_t> by_b;
-  if (&err_a != &err_b) {
-    for (const ty_rowerr_t &e : err_b) {
-      if (0 == (flag_a[e.row] & error)) {
-        by_b.push_back(uint32_t(&e - err_b.data()));
-      }
-    }
-  }
+
   const uint32_t whole = n - n % 16;
   uint32_t i = 0;
   // 1. Whole vectors.
   for (; i < whole; i += 16) {
     // a. The inputs.
-    vec_t f, g, x, y;
+    vec_t f, g = {}, x, y;
     memcpy(&f, flag_a + i, 16);
-    memcpy(&g, flag_b + i, 16);
+    if (nullptr != flag_b) {
+      memcpy(&g, flag_b + i, 16);
+    }
     memcpy(&x, a + i, 16);
     memcpy(&y, b + i, 16);
     // b. The result.
@@ -626,13 +626,8 @@ int and_or_vec(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
   for (; i < n; i++) {
     const uint8_t x = a[i], y = b[i];
     out[i] = uint8_t(result(x, y));
-    flag_a[i] = uint8_t(flag_of(flag_a[i], flag_b[i], x, y));
-  }
-  // 3. b's errors that were not dropped.
-  for (uint32_t k : by_b) {
-    if (flag_a[err_b[k].row] & error) {
-      err_a.push_back(err_b[k]);
-    }
+    const uint8_t g = nullptr != flag_b ? flag_b[i] : 0;
+    flag_a[i] = uint8_t(flag_of(flag_a[i], g, x, y));
   }
   return 0;
 }
@@ -640,146 +635,186 @@ int and_or_vec(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
 } // namespace
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int tyvec_int16_add(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int16_t *a, const int16_t *b, int16_t *out) {
-  return arith_vec<add_op_t<int16_t, uint16_t>>(n, flag, err, a, b, out);
+int tyvec_int16_add(uint32_t n, uint8_t *flag_a, const int16_t *a,
+                    const uint8_t *flag_b, const int16_t *b, int16_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<add_op_t<int16_t, uint16_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int tyvec_int32_add(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int32_t *a, const int32_t *b, int32_t *out) {
-  return arith_vec<add_op_t<int32_t, uint32_t>>(n, flag, err, a, b, out);
+int tyvec_int32_add(uint32_t n, uint8_t *flag_a, const int32_t *a,
+                    const uint8_t *flag_b, const int32_t *b, int32_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<add_op_t<int32_t, uint32_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int tyvec_int64_add(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int64_t *a, const int64_t *b, int64_t *out) {
-  return arith_vec<add_op_t<int64_t, uint64_t>>(n, flag, err, a, b, out);
+int tyvec_int64_add(uint32_t n, uint8_t *flag_a, const int64_t *a,
+                    const uint8_t *flag_b, const int64_t *b, int64_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<add_op_t<int64_t, uint64_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a - b of each row computed; see ty_vec.h. */
-int tyvec_int16_sub(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int16_t *a, const int16_t *b, int16_t *out) {
-  return arith_vec<sub_op_t<int16_t, uint16_t>>(n, flag, err, a, b, out);
+int tyvec_int16_sub(uint32_t n, uint8_t *flag_a, const int16_t *a,
+                    const uint8_t *flag_b, const int16_t *b, int16_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<sub_op_t<int16_t, uint16_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a - b of each row computed; see ty_vec.h. */
-int tyvec_int32_sub(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int32_t *a, const int32_t *b, int32_t *out) {
-  return arith_vec<sub_op_t<int32_t, uint32_t>>(n, flag, err, a, b, out);
+int tyvec_int32_sub(uint32_t n, uint8_t *flag_a, const int32_t *a,
+                    const uint8_t *flag_b, const int32_t *b, int32_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<sub_op_t<int32_t, uint32_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a - b of each row computed; see ty_vec.h. */
-int tyvec_int64_sub(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int64_t *a, const int64_t *b, int64_t *out) {
-  return arith_vec<sub_op_t<int64_t, uint64_t>>(n, flag, err, a, b, out);
+int tyvec_int64_sub(uint32_t n, uint8_t *flag_a, const int64_t *a,
+                    const uint8_t *flag_b, const int64_t *b, int64_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<sub_op_t<int64_t, uint64_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a * b of each row computed; see ty_vec.h. */
-int tyvec_int16_mul(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int16_t *a, const int16_t *b, int16_t *out) {
-  return arith_vec<mul_op_t<int16_t, uint16_t, int32_t>>(n, flag, err, a, b,
-                                                         out);
+int tyvec_int16_mul(uint32_t n, uint8_t *flag_a, const int16_t *a,
+                    const uint8_t *flag_b, const int16_t *b, int16_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<mul_op_t<int16_t, uint16_t, int32_t>>(n, flag_a, a, flag_b,
+                                                         b, out, err);
 }
 
 /* out = a * b of each row computed; see ty_vec.h. */
-int tyvec_int32_mul(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int32_t *a, const int32_t *b, int32_t *out) {
-  return arith_vec<mul_op_t<int32_t, uint32_t, int64_t>>(n, flag, err, a, b,
-                                                         out);
+int tyvec_int32_mul(uint32_t n, uint8_t *flag_a, const int32_t *a,
+                    const uint8_t *flag_b, const int32_t *b, int32_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<mul_op_t<int32_t, uint32_t, int64_t>>(n, flag_a, a, flag_b,
+                                                         b, out, err);
 }
 
 /* out = a * b of each row computed; see ty_vec.h. */
-int tyvec_int64_mul(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int64_t *a, const int64_t *b, int64_t *out) {
-  return arith_vec<mul64_op_t>(n, flag, err, a, b, out);
+int tyvec_int64_mul(uint32_t n, uint8_t *flag_a, const int64_t *a,
+                    const uint8_t *flag_b, const int64_t *b, int64_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<mul64_op_t>(n, flag_a, a, flag_b, b, out, err);
 }
 
 /* out = a / b of each row computed; see ty_vec.h. */
-int tyvec_int16_div(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int16_t *a, const int16_t *b, int16_t *out) {
-  return arith_vec<div_op_t<int16_t, uint16_t>>(n, flag, err, a, b, out);
+int tyvec_int16_div(uint32_t n, uint8_t *flag_a, const int16_t *a,
+                    const uint8_t *flag_b, const int16_t *b, int16_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<div_op_t<int16_t, uint16_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a / b of each row computed; see ty_vec.h. */
-int tyvec_int32_div(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int32_t *a, const int32_t *b, int32_t *out) {
-  return arith_vec<div_op_t<int32_t, uint32_t>>(n, flag, err, a, b, out);
+int tyvec_int32_div(uint32_t n, uint8_t *flag_a, const int32_t *a,
+                    const uint8_t *flag_b, const int32_t *b, int32_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<div_op_t<int32_t, uint32_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a / b of each row computed; see ty_vec.h. */
-int tyvec_int64_div(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int64_t *a, const int64_t *b, int64_t *out) {
-  return arith_vec<div_op_t<int64_t, uint64_t>>(n, flag, err, a, b, out);
+int tyvec_int64_div(uint32_t n, uint8_t *flag_a, const int64_t *a,
+                    const uint8_t *flag_b, const int64_t *b, int64_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<div_op_t<int64_t, uint64_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a % b of each row computed; see ty_vec.h. */
-int tyvec_int16_mod(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int16_t *a, const int16_t *b, int16_t *out) {
-  return arith_vec<mod_op_t<int16_t, uint16_t>>(n, flag, err, a, b, out);
+int tyvec_int16_mod(uint32_t n, uint8_t *flag_a, const int16_t *a,
+                    const uint8_t *flag_b, const int16_t *b, int16_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<mod_op_t<int16_t, uint16_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a % b of each row computed; see ty_vec.h. */
-int tyvec_int32_mod(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int32_t *a, const int32_t *b, int32_t *out) {
-  return arith_vec<mod_op_t<int32_t, uint32_t>>(n, flag, err, a, b, out);
+int tyvec_int32_mod(uint32_t n, uint8_t *flag_a, const int32_t *a,
+                    const uint8_t *flag_b, const int32_t *b, int32_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<mod_op_t<int32_t, uint32_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a % b of each row computed; see ty_vec.h. */
-int tyvec_int64_mod(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                    const int64_t *a, const int64_t *b, int64_t *out) {
-  return arith_vec<mod_op_t<int64_t, uint64_t>>(n, flag, err, a, b, out);
+int tyvec_int64_mod(uint32_t n, uint8_t *flag_a, const int64_t *a,
+                    const uint8_t *flag_b, const int64_t *b, int64_t *out,
+                    std::vector<ty_rowerr_t> &err) {
+  return arith_vec<mod_op_t<int64_t, uint64_t>>(n, flag_a, a, flag_b, b, out,
+                                                err);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int tyvec_fp32_add(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                   const float *a, const float *b, float *out) {
-  return arith_vec<fp_add_op_t<float, uint32_t, false>>(n, flag, err, a, b,
-                                                        out);
+int tyvec_fp32_add(uint32_t n, uint8_t *flag_a, const float *a,
+                   const uint8_t *flag_b, const float *b, float *out,
+                   std::vector<ty_rowerr_t> &err) {
+  return arith_vec<fp_add_op_t<float, uint32_t, false>>(n, flag_a, a, flag_b, b,
+                                                        out, err);
 }
 
 /* out = a + b of each row computed; see ty_vec.h. */
-int tyvec_fp64_add(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                   const double *a, const double *b, double *out) {
-  return arith_vec<fp_add_op_t<double, uint64_t, false>>(n, flag, err, a, b,
-                                                         out);
+int tyvec_fp64_add(uint32_t n, uint8_t *flag_a, const double *a,
+                   const uint8_t *flag_b, const double *b, double *out,
+                   std::vector<ty_rowerr_t> &err) {
+  return arith_vec<fp_add_op_t<double, uint64_t, false>>(n, flag_a, a, flag_b,
+                                                         b, out, err);
 }
 
 /* out = a - b of each row computed; see ty_vec.h. */
-int tyvec_fp32_sub(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                   const float *a, const float *b, float *out) {
-  return arith_vec<fp_add_op_t<float, uint32_t, true>>(n, flag, err, a, b, out);
+int tyvec_fp32_sub(uint32_t n, uint8_t *flag_a, const float *a,
+                   const uint8_t *flag_b, const float *b, float *out,
+                   std::vector<ty_rowerr_t> &err) {
+  return arith_vec<fp_add_op_t<float, uint32_t, true>>(n, flag_a, a, flag_b, b,
+                                                       out, err);
 }
 
 /* out = a - b of each row computed; see ty_vec.h. */
-int tyvec_fp64_sub(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                   const double *a, const double *b, double *out) {
-  return arith_vec<fp_add_op_t<double, uint64_t, true>>(n, flag, err, a, b,
-                                                        out);
+int tyvec_fp64_sub(uint32_t n, uint8_t *flag_a, const double *a,
+                   const uint8_t *flag_b, const double *b, double *out,
+                   std::vector<ty_rowerr_t> &err) {
+  return arith_vec<fp_add_op_t<double, uint64_t, true>>(n, flag_a, a, flag_b, b,
+                                                        out, err);
 }
 
 /* out = a * b of each row computed; see ty_vec.h. */
-int tyvec_fp32_mul(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                   const float *a, const float *b, float *out) {
-  return arith_vec<fp_mul_op_t<float, uint32_t>>(n, flag, err, a, b, out);
+int tyvec_fp32_mul(uint32_t n, uint8_t *flag_a, const float *a,
+                   const uint8_t *flag_b, const float *b, float *out,
+                   std::vector<ty_rowerr_t> &err) {
+  return arith_vec<fp_mul_op_t<float, uint32_t>>(n, flag_a, a, flag_b, b, out,
+                                                 err);
 }
 
 /* out = a * b of each row computed; see ty_vec.h. */
-int tyvec_fp64_mul(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                   const double *a, const double *b, double *out) {
-  return arith_vec<fp_mul_op_t<double, uint64_t>>(n, flag, err, a, b, out);
+int tyvec_fp64_mul(uint32_t n, uint8_t *flag_a, const double *a,
+                   const uint8_t *flag_b, const double *b, double *out,
+                   std::vector<ty_rowerr_t> &err) {
+  return arith_vec<fp_mul_op_t<double, uint64_t>>(n, flag_a, a, flag_b, b, out,
+                                                  err);
 }
 
 /* out = a / b of each row computed; see ty_vec.h. */
-int tyvec_fp32_div(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                   const float *a, const float *b, float *out) {
-  return arith_vec<fp_div_op_t<float, uint32_t>>(n, flag, err, a, b, out);
+int tyvec_fp32_div(uint32_t n, uint8_t *flag_a, const float *a,
+                   const uint8_t *flag_b, const float *b, float *out,
+                   std::vector<ty_rowerr_t> &err) {
+  return arith_vec<fp_div_op_t<float, uint32_t>>(n, flag_a, a, flag_b, b, out,
+                                                 err);
 }
 
 /* out = a / b of each row computed; see ty_vec.h. */
-int tyvec_fp64_div(uint32_t n, uint8_t *flag, std::vector<ty_rowerr_t> &err,
-                   const double *a, const double *b, double *out) {
-  return arith_vec<fp_div_op_t<double, uint64_t>>(n, flag, err, a, b, out);
+int tyvec_fp64_div(uint32_t n, uint8_t *flag_a, const double *a,
+                   const uint8_t *flag_b, const double *b, double *out,
+                   std::vector<ty_rowerr_t> &err) {
+  return arith_vec<fp_div_op_t<double, uint64_t>>(n, flag_a, a, flag_b, b, out,
+                                                  err);
 }
 
 /* out = 1 for each null row, and 0 for another; see ty_vec.h. */
@@ -815,17 +850,17 @@ int tyvec_bool_not(uint32_t n, uint8_t *flag, const uint8_t *vec,
 }
 
 /* out = a AND b, by SQL's three values; see ty_vec.h. */
-int tyvec_bool_and(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
-                   const uint8_t *flag_b, const std::vector<ty_rowerr_t> &err_b,
-                   const uint8_t *a, const uint8_t *b, uint8_t *out) {
-  return and_or_vec<false>(n, flag_a, err_a, flag_b, err_b, a, b, out);
+int tyvec_bool_and(uint32_t n, uint8_t *flag_a, const uint8_t *a,
+                   const uint8_t *flag_b, const uint8_t *b, uint8_t *out,
+                   std::vector<ty_rowerr_t> & /* err */) {
+  return and_or_vec<false>(n, flag_a, a, flag_b, b, out);
 }
 
 /* out = a OR b, by SQL's three values; see ty_vec.h. */
-int tyvec_bool_or(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
-                  const uint8_t *flag_b, const std::vector<ty_rowerr_t> &err_b,
-                  const uint8_t *a, const uint8_t *b, uint8_t *out) {
-  return and_or_vec<true>(n, flag_a, err_a, flag_b, err_b, a, b, out);
+int tyvec_bool_or(uint32_t n, uint8_t *flag_a, const uint8_t *a,
+                  const uint8_t *flag_b, const uint8_t *b, uint8_t *out,
+                  std::vector<ty_rowerr_t> & /* err */) {
+  return and_or_vec<true>(n, flag_a, a, flag_b, b, out);
 }
 
 /*
@@ -874,23 +909,30 @@ void ty_bitor_vec(uint32_t n, uint8_t *a, const uint8_t *b, const uint8_t *c) {
 }
 
 /*
- * The flags of a row of two inputs; see ty_vec.h.
- * 1. Note b's entries of a row a has not failed, before flag_a is written.
- * 2. OR the flags.
+ * b's errors that a result keeps; see ty_vec.h. Few rows fail, so the rows
+ * of err are noted only when both lists have entries.
  */
-int tyvec_flag_or(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
-                  const uint8_t *flag_b,
-                  const std::vector<ty_rowerr_t> &err_b) {
-  // 1. b's entries.
-  if (&err_a != &err_b) {
-    for (const ty_rowerr_t &e : err_b) {
-      if (0 == (flag_a[e.row] & TY_VEC_ERROR)) {
-        err_a.push_back(e);
+int tyvec_err_merge(uint32_t n, const uint8_t *flag,
+                    std::vector<ty_rowerr_t> &err,
+                    const std::vector<ty_rowerr_t> &err_b) {
+  if (err_b.empty() || &err == &err_b) {
+    return 0;
+  }
+  std::vector<bool> in_err;
+  if (!err.empty()) {
+    in_err.assign(n, false);
+    for (const ty_rowerr_t &e : err) {
+      if (e.row < n) {
+        in_err[e.row] = true;
       }
     }
   }
-  // 2. The flags.
-  ty_bitor_vec(n, flag_a, flag_b, nullptr);
+  for (const ty_rowerr_t &e : err_b) {
+    if (e.row < n && (flag[e.row] & TY_VEC_ERROR) &&
+        (in_err.empty() || !in_err[e.row])) {
+      err.push_back(e);
+    }
+  }
   return 0;
 }
 

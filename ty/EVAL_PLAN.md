@@ -99,16 +99,19 @@ typedef struct {
   uint8_t  code; /* TY_ERR_RANGE, _DIVZERO, _UNDERFLOW, ... */
 } ty_rowerr_t;
 
-/* 0 if no row failed; 1 if some did, marked in flag and err */
-int tyvec_int32_div(uint32_t n, uint8_t *flag,
-                    std::vector<ty_rowerr_t> &err,
-                    const int32_t *a, const int32_t *b,
-                    int32_t *out);
+/* 0 if no row failed; 1 if some did, marked in flag_a and err */
+int tyvec_int32_div(uint32_t n, uint8_t *flag_a, const int32_t *a,
+                    const uint8_t *flag_b, const int32_t *b,
+                    int32_t *out, std::vector<ty_rowerr_t> &err);
 ```
 
 - **`err` takes an entry for each failing row**, appended in the
   order the errors happen. Nothing is written to it when no row
-  fails, which is nearly always.
+  fails, which is nearly always. An operation appends its own
+  alone; the run keeps a list for each slot, and adds `b`'s with
+  `tyvec_err_merge` after the call.
+- **Each input comes with its flags**, and the operation ORs them
+  into `flag_a` as it computes. `flag_b` may be NULL.
 - **A marked row is not computed again.** `TY_VEC_SKIP` has the
   error bit, so a later operation skips the row, as it skips a
   null.
@@ -305,12 +308,15 @@ int  ty_run(ty_run_t *run, uint32_t n, const ty_arg_t *args,
 
 1. **Marks in the vector operations.** `TY_VEC_ERROR`,
    `ty_rowerr_t`, the `err` parameter, the return of 0 or 1,
-   `tyvec_flag_error`, `tyvec_flag_or`; `and` and `or` take §3's
-   rules. → verify: `test/test_vec.cc` changed to marks; a row is
-   marked exactly where the scalar operation fails; no row is
-   marked twice. Built: `and` costs 18% more for the error, 3,664
-   instructions for 2,048 rows, from 3,096, and `or` 16%: 4 more
-   instructions for 16 rows. `add.i32` costs 0.8% more.
+   `tyvec_flag_error`, `tyvec_err_merge`; `and` and `or` take
+   §3's rules; each input with its flags. → verify:
+   `test/test_vec.cc` changed to marks; a row is marked exactly
+   where the scalar operation fails; no row is marked twice.
+   Built: `and` costs 18% more for the error, 3,664 instructions
+   for 2,048 rows, from 3,096, and `or` 16%: 4 more instructions
+   for 16 rows. `add.i32` costs 0.8% more. With its two inputs'
+   flags merged in its loop, `add.i32` of 2,048 rows costs 6,843
+   instructions, where a merge first and then the add cost 7,375.
 2. **The reader.** Janet's forms: lists, brackets, symbols,
    numbers, `true`, `false`, `nil`, comments. → verify: forms
    read back, and each malformed text gives its line and

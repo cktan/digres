@@ -30,17 +30,16 @@ nor `TY_VEC_NULL`.
 - **The return is `int`**: 0, or 1 if a row failed and is marked.
   An operation that cannot fail also returns `int`, always 0, so
   that all operations have one shape.
-- **`flag` is one in/out parameter, `uint8_t *flag`, with no
-  `const`.** It holds the flags of the inputs, and after the
-  call those of the results. Do not add a second flag array: a
-  caller ORs the flags of two inputs before the call. Only an
-  operation whose result depends on which input is null takes
-  two, `uint8_t *flag_a` and `const uint8_t *flag_b`, and writes
-  the results' flags over `flag_a`: `AND` and `OR`.
-- **Keep the parameters few.** The order is `n`, `flag`, `err`
-  if the operation can fail or carries errors, the inputs, `out`.
-  `err` is a `std::vector<ty_rowerr_t>&`, the failing rows and
-  their errors.
+- **Each input comes with its flags.** An operation of one input
+  takes `uint8_t *flag`, with no `const`: the input's flags in,
+  the results' out. One of two takes `uint8_t *flag_a` and
+  `const uint8_t *flag_b`, and writes the results' over
+  `flag_a`. `flag_b` may be NULL, for an input with no flags.
+- **Keep the parameters few.** The order is `n`, each input after
+  its flags, `out`, then `err` if the operation of two inputs can
+  fail or carries errors: `(n, flag_a, a, flag_b, b, out, err)`.
+  `err` is a `std::vector<ty_rowerr_t>&`, to which the operation
+  appends its own failing rows and their errors.
 - **A bool result is one byte a row**: 1 for true, 0 for false.
 - **Say in `ty_vec.h` which arrays may be the same one.**
 

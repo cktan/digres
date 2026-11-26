@@ -52,18 +52,21 @@ template <typename FN> int at_once(uint32_t n, uint8_t *f, FN &&fn) {
 /* The vector add of each width, failing at once. */
 int vec_add(uint32_t n, uint8_t *f, const int16_t *a, const int16_t *b,
             int16_t *out) {
-  return at_once(
-      n, f, [&](auto &err) { return tyvec_int16_add(n, f, err, a, b, out); });
+  return at_once(n, f, [&](auto &err) {
+    return tyvec_int16_add(n, f, a, nullptr, b, out, err);
+  });
 }
 int vec_add(uint32_t n, uint8_t *f, const int32_t *a, const int32_t *b,
             int32_t *out) {
-  return at_once(
-      n, f, [&](auto &err) { return tyvec_int32_add(n, f, err, a, b, out); });
+  return at_once(n, f, [&](auto &err) {
+    return tyvec_int32_add(n, f, a, nullptr, b, out, err);
+  });
 }
 int vec_add(uint32_t n, uint8_t *f, const int64_t *a, const int64_t *b,
             int64_t *out) {
-  return at_once(
-      n, f, [&](auto &err) { return tyvec_int64_add(n, f, err, a, b, out); });
+  return at_once(n, f, [&](auto &err) {
+    return tyvec_int64_add(n, f, a, nullptr, b, out, err);
+  });
 }
 
 /* Columns of n rows of T: a, b and their flags. */
@@ -232,12 +235,14 @@ template <typename T> void check_overflow_in_place() {
  * failing rows (mark) or fails at once (vec), and the scalar's.
  */
 #define INT_OP_W(NAME, T, TYPE)                                                \
-  static int mark(uint32_t n, uint8_t *f, std::vector<ty_rowerr_t> &err,      \
-                  const T *a, const T *b, T *out) {                            \
-    return tyvec_##TYPE##_##NAME(n, f, err, a, b, out);                        \
+  static int mark(uint32_t n, uint8_t *f, const T *a, const uint8_t *g,        \
+                  const T *b, T *out, std::vector<ty_rowerr_t> &err) {         \
+    return tyvec_##TYPE##_##NAME(n, f, a, g, b, out, err);                     \
   }                                                                            \
   static int vec(uint32_t n, uint8_t *f, const T *a, const T *b, T *out) {     \
-    return at_once(n, f, [&](auto &err) { return mark(n, f, err, a, b, out); }); \
+    return at_once(n, f, [&](auto &err) {                                      \
+      return mark(n, f, a, nullptr, b, out, err);                              \
+    });                                                                        \
   }                                                                            \
   static int one(T a, T b, T *r) { return ty_##TYPE##_##NAME(a, b, r); }
 #define INT_OP(NAME)                                                           \
@@ -278,10 +283,13 @@ enum place_t { OWN, INTO_A, INTO_B, ONE };
  * it against the scalar operation, row by row. Returns the lowest row that
  * fails, or -1.
  * 1. The scalar operation of each computed row, and its error if it fails.
- * 2. The vector operation, on copies of the rows with one more at the end.
+ * 2. The vector operation, on copies of the rows with one more at the end:
+ *    with the flags all in flag_a and no flag_b, and then split between
+ *    the two, some bits in both.
  * 3. Each computed row that fails by the scalar is marked, with its error,
- *    in row order, and no other; the flags of the others stay, and each
- *    gives the scalar's result. Nothing is written past the rows.
+ *    in row order, and no other; flag_a gets the flags ORed, and each other
+ *    row gives the scalar's result. Nothing is written past the rows, and
+ *    flag_b stays.
  * 4. tyvec_flag_error gives the lowest failing row, and its error.
  */
 template <typename OP, typename T>
@@ -298,44 +306,57 @@ int64_t check_rows(const std::vector<T> &a, const std::vector<T> &b,
       want_err.push_back({i, uint8_t(ty_errnum())});
     }
   }
-  // 2. The vector operation.
-  std::vector<T> x = a, y = b, own(n + 1, T(77));
-  std::vector<uint8_t> f = flag;
-  std::vector<ty_rowerr_t> err;
-  x.push_back(T(77)), y.push_back(T(77)), f.push_back(0xff);
-  T *out = OWN == place ? own.data() : INTO_B == place ? y.data() : x.data();
-  int rc = OP::mark(n, f.data(), err, x.data(),
-                    ONE == place ? x.data() : y.data(), out);
-  // 3. The marks and the results; one assertion each.
-  CHECK(rc == (want_err.empty() ? 0 : 1));
-  bool same_err = err.size() == want_err.size();
-  for (size_t k = 0; same_err && k < err.size(); k++) {
-    same_err = err[k].row == want_err[k].row && err[k].code == want_err[k].code;
-  }
-  CHECK(same_err);
-  int64_t bad_flag = -1, bad_value = -1;
-  size_t k = 0;
-  for (uint32_t i = 0; i < n; i++) {
-    const bool fails = k < want_err.size() && want_err[k].row == i;
-    k += fails;
-    if (f[i] != (fails ? flag[i] | TY_VEC_ERROR : flag[i]) && bad_flag < 0) {
-      bad_flag = i;
-    }
-    if (!fails && 0 == (flag[i] & TY_VEC_SKIP) && !same(out[i], want[i]) &&
-        bad_value < 0) {
-      bad_value = i;
-    }
-  }
-  CHECK(-1 == bad_flag);
-  CHECK(-1 == bad_value);
-  CHECK(T(77) == out[n]);
-  CHECK(0xff == f[n]);
-  // 4. The lowest.
   const int64_t fails = want_err.empty() ? -1 : int64_t(want_err[0].row);
-  CHECK(tyvec_flag_error(n, f.data(), err) == (fails < 0 ? 0 : -1));
-  if (fails >= 0) {
-    CHECK(fails == int64_t(ty_erridx()));
-    CHECK(want_err[0].code == ty_errnum());
+  for (bool split : {false, true}) {
+    CAPTURE(split);
+    // 2. The vector operation.
+    std::vector<T> x = a, y = b, own(n + 1, T(77));
+    std::vector<uint8_t> f = flag, g(n + 1, 0);
+    for (uint32_t i = 0; split && i < n; i++) {
+      const uint8_t to_b = flag[i] & (0 == i % 3   ? 0x05
+                                      : 1 == i % 3 ? 0x02
+                                                   : 0);
+      g[i] = to_b;
+      f[i] = uint8_t(flag[i] & ~to_b) | (0 == i % 5 ? to_b : 0);
+    }
+    const std::vector<uint8_t> g_was = g;
+    std::vector<ty_rowerr_t> err;
+    x.push_back(T(77)), y.push_back(T(77)), f.push_back(0xff);
+    T *out = OWN == place ? own.data() : INTO_B == place ? y.data() : x.data();
+    int rc = OP::mark(n, f.data(), x.data(), split ? g.data() : nullptr,
+                      ONE == place ? x.data() : y.data(), out, err);
+    // 3. The marks and the results; one assertion each.
+    CHECK(rc == (want_err.empty() ? 0 : 1));
+    bool same_err = err.size() == want_err.size();
+    for (size_t k = 0; same_err && k < err.size(); k++) {
+      same_err =
+          err[k].row == want_err[k].row && err[k].code == want_err[k].code;
+    }
+    CHECK(same_err);
+    int64_t bad_flag = -1, bad_value = -1;
+    size_t k = 0;
+    for (uint32_t i = 0; i < n; i++) {
+      const bool fails = k < want_err.size() && want_err[k].row == i;
+      k += fails;
+      if (f[i] != (fails ? flag[i] | TY_VEC_ERROR : flag[i]) && bad_flag < 0) {
+        bad_flag = i;
+      }
+      if (!fails && 0 == (flag[i] & TY_VEC_SKIP) && !same(out[i], want[i]) &&
+          bad_value < 0) {
+        bad_value = i;
+      }
+    }
+    CHECK(-1 == bad_flag);
+    CHECK(-1 == bad_value);
+    CHECK(T(77) == out[n]);
+    CHECK(0xff == f[n]);
+    CHECK(g == g_was);
+    // 4. The lowest.
+    CHECK(tyvec_flag_error(n, f.data(), err) == (fails < 0 ? 0 : -1));
+    if (fails >= 0) {
+      CHECK(fails == int64_t(ty_erridx()));
+      CHECK(want_err[0].code == ty_errnum());
+    }
   }
   return fails;
 }
@@ -847,16 +868,16 @@ TEST_CASE("IS NOT NULL, IS TRUE, IS FALSE and NOT of a vector") {
 //    pair of flags, all 8 bits of a's and some of b's, with each pair of
 //    bools. A null or failed row holds a byte that is no bool, with the low
 //    bit of the bool. A failed row of a has an entry in err_a, of b in err_b.
-// 2. Each operation, into an array of its own, into a, into b, and with a, b
-//    and out one array, and one flag array and one err.
+// 2. Each operation, into an array of its own, into a, into b, with a, b
+//    and out one array, and one flag array and one err, and with no flag_b.
 // 3. The row's result, null, failed or a bool, by SQL's table: only a's
 //    false, of AND, or true, of OR, drops b's error.
 // 4. A row is not valid if it is not in a or not in b: it has no answer. The
-//    other bits of a's flags stay, as b's flags and err_b do; err_a gains
-//    the entries of the rows that failed by b, after its own. Nothing is
-//    written past the n rows.
+//    other bits of a's flags stay, as b's flags do. Nothing is appended to
+//    err; tyvec_err_merge then appends to a's entries those of the rows that
+//    failed by b. Nothing is written past the n rows.
 TEST_CASE("AND and OR of two vectors are SQL's") {
-  enum { OWN, INTO_A, INTO_B, ONE, NPLACES };
+  enum { OWN, INTO_A, INTO_B, ONE, NO_FLAG_B, NPLACES };
   // SQL's answers, at [a][b], each 0, 1, null as 2, or failed as 3.
   static const uint8_t sql_and[4][4] = {
       {0, 0, 0, 0}, {0, 1, 2, 3}, {0, 2, 2, 3}, {3, 3, 3, 3}};
@@ -892,20 +913,34 @@ TEST_CASE("AND and OR of two vectors are SQL's") {
           wfb = wfa;
           web = wea;
         }
+        if (NO_FLAG_B == place) {
+          // b has no flags: each of its bytes is a bool.
+          std::fill(wfb.begin(), wfb.begin() + n, 0);
+          for (uint32_t i = 0; i < n; i++) {
+            wb[i] &= 1;
+          }
+          web.clear();
+        }
         std::vector<uint8_t> fa = wfa, fb = wfb, a = wa, b = wb;
         std::vector<ty_rowerr_t> ea = wea, eb = web;
         std::vector<uint8_t> own(n + 1, 0xaa);
         const uint8_t *y = ONE == place ? a.data() : b.data();
-        const uint8_t *g = ONE == place ? fa.data() : fb.data();
+        const uint8_t *g = ONE == place         ? fa.data()
+                           : NO_FLAG_B == place ? nullptr
+                                                : fb.data();
         const std::vector<ty_rowerr_t> &e2 = ONE == place ? ea : eb;
         uint8_t *out = OWN == place      ? own.data()
                        : INTO_B == place ? b.data()
                                          : a.data();
         // 2. The operation.
-        REQUIRE(0 == (is_and ? tyvec_bool_and(n, fa.data(), ea, g, e2, a.data(),
-                                              y, out)
-                             : tyvec_bool_or(n, fa.data(), ea, g, e2, a.data(),
-                                             y, out)));
+        REQUIRE(0 ==
+                (is_and
+                     ? tyvec_bool_and(n, fa.data(), a.data(), g, y, out, ea)
+                     : tyvec_bool_or(n, fa.data(), a.data(), g, y, out, ea)));
+        // They cannot fail: nothing is appended.
+        CHECK(ea.size() == wea.size());
+        // b's entries that the result keeps.
+        REQUIRE(0 == tyvec_err_merge(n, fa.data(), ea, e2));
         // The first row whose answer, or flags, are not SQL's.
         int64_t bad_value = -1, bad_flag = -1;
         std::vector<ty_rowerr_t> want_err = wea;
@@ -958,12 +993,14 @@ TEST_CASE("AND and OR of two vectors are SQL's") {
   }
 }
 
-// Verify that the flags of two inputs merge, a's error first, and that the
-// lowest valid failed row is raised with its own error.
+// Verify that the errors of two inputs merge, a's first, and that the lowest
+// valid failed row is raised with its own error.
 // 1. a and b fail in some rows each, some of them the same; some rows are
 //    not valid, and one of those failed.
-// 2. tyvec_flag_or: the flags are ORed; err_a keeps its entries and gains
-//    b's of the rows a had not failed.
+// 2. The flags are ORed, as an operation does; tyvec_err_merge: err keeps
+//    its entries and gains b's of the rows the result failed and err does
+//    not name, not of a row whose mark was dropped; nothing with b's list
+//    as its own.
 // 3. tyvec_flag_error: the lowest failed row that is valid, with its code;
 //    0 with no entry, with entries only of rows not valid, or past n.
 TEST_CASE("the flags of two inputs merge, and the lowest error is raised") {
@@ -981,6 +1018,7 @@ TEST_CASE("the flags of two inputs merge, and the lowest error is raised") {
   fail(fb, eb, 40, TY_ERR_DIVZERO);
   fail(fb, eb, 20, TY_ERR_DIVZERO);
   fail(fb, eb, 3, TY_ERR_UNDERFLOW);
+  fail(fb, eb, 50, TY_ERR_DIVZERO);
   fb[3] |= TY_VEC_NOTVALID;
   fb[60] = TY_VEC_NULL;
   // In the rows past the whole vectors, a's bits must stay.
@@ -989,10 +1027,16 @@ TEST_CASE("the flags of two inputs merge, and the lowest error is raised") {
   // 2. Merge.
   std::vector<uint8_t> f = fa;
   std::vector<ty_rowerr_t> e = ea;
-  REQUIRE(0 == tyvec_flag_or(n, f.data(), e, fb.data(), eb));
+  ty_bitor_vec(n, f.data(), fb.data(), nullptr);
   for (uint32_t i = 0; i < n; i++) {
     CHECK(f[i] == (fa[i] | fb[i]));
   }
+  // An AND whose a is false at row 50 dropped b's mark there.
+  f[50] &= uint8_t(~TY_VEC_ERROR);
+  REQUIRE(0 == tyvec_err_merge(n, f.data(), e, eb));
+  std::vector<ty_rowerr_t> self = eb;
+  REQUIRE(0 == tyvec_err_merge(n, f.data(), self, self));
+  CHECK(self.size() == eb.size());
   // Row 40 failed in a, so b's entry for it is not taken.
   REQUIRE(4 == e.size());
   CHECK((40 == e[0].row && 9 == e[1].row && 20 == e[2].row && 3 == e[3].row));
@@ -1039,10 +1083,10 @@ TEST_CASE("x IS NULL OR x > 3, and x IS NOT NULL AND x > 3") {
             tyvec_int32_gt(n, fb.data(), x.data(), three.data(), b.data()));
     // 3, 4. No row is null, and each is SQL's answer.
     std::vector<ty_rowerr_t> ea, eb;
-    REQUIRE(0 == (is_or ? tyvec_bool_or(n, fa.data(), ea, fb.data(), eb,
-                                        a.data(), b.data(), a.data())
-                        : tyvec_bool_and(n, fa.data(), ea, fb.data(), eb,
-                                         a.data(), b.data(), a.data())));
+    REQUIRE(0 == (is_or ? tyvec_bool_or(n, fa.data(), a.data(), fb.data(),
+                                        b.data(), a.data(), ea)
+                        : tyvec_bool_and(n, fa.data(), a.data(), fb.data(),
+                                         b.data(), a.data(), ea)));
     for (uint32_t i = 0; i < n; i++) {
       CHECK(0 == fa[i]);
       CHECK(a[i] == (0 == i % 3 ? 0 : 1 == i % 3 ? 1 : is_or));
