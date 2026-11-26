@@ -320,7 +320,11 @@ int  ty_run(ty_run_t *run, uint32_t n, const ty_arg_t *args,
 2. **The reader.** Janet's forms: lists, brackets, symbols,
    numbers, `true`, `false`, `nil`, comments. → verify: forms
    read back, and each malformed text gives its line and
-   column.
+   column. Built: `src/eval_read.cc`, `src/eval_form.h`. A
+   number keeps its text, for the compiler to read by its
+   operator's type. A string, a keyword, a quote, a brace, an
+   array, a byte that is not ASCII, and a list nested deeper than
+   256 are refused, each with its line and column.
 3. **The compiler.** The table of names (§4), the type checks,
    the stack's layout, the jumps of scalar arms, `ty_prog_dump`.
    → verify: the dump of §1's example, and an error for each
