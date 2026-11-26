@@ -206,9 +206,13 @@ is one `fn` form. The reader is ty's own, a few hundred lines.
 The compiler reads the text into forms, checks the types, and
 emits the bytecode in one pass.
 
-- **An instruction is a 16-bit opcode and a 16-bit operand**: an
-  index into the constants or the parameters, or the target of a
-  jump.
+- **An instruction is an operation, its type, whether it is of
+  vectors, a cast's second type, and two 16-bit operands**: an
+  index into the constants, the parameters or the locals, or the
+  targets of a jump. A scalar `if`'s test takes two: its else arm,
+  and past it, for a test that failed (`src/eval_prog.h`).
+- **A `let` stores each value in a local**, and a name gets it
+  back; the names of a `let` leave scope after its body.
 - **The stack's depth, and the type of each slot at each point,
   are known at compile time.** So a run has its arrays when it
   is made, and a batch allocates nothing.
@@ -253,7 +257,7 @@ int  ty_prog_compile(const char *text, size_t len, ty_prog_t **out);
 void ty_prog_free(ty_prog_t *prog);
 
 /* The bytecode as text, one instruction a line: for tests. */
-int  ty_prog_dump(const ty_prog_t *prog, ty_varlena_t **out);
+void ty_prog_dump(const ty_prog_t *prog, std::string &out);
 
 /* A thread's state for batches of at most max_n rows. */
 int  ty_run_new(const ty_prog_t *prog, uint32_t max_n, ty_run_t **out);
@@ -276,9 +280,9 @@ int  ty_run(ty_run_t *run, uint32_t n, const ty_arg_t *args,
             ty_result_t *out);
 ```
 
-- **The memory is the thread's alloc function** (`ty_set_alloc`),
-  taken by `ty_prog_compile` and `ty_run_new`, and never by
-  `ty_run`.
+- **The memory is taken by `ty_prog_compile` and `ty_run_new`**,
+  with `new`, and never by `ty_run`. Running out of it is
+  `TY_ERR_NOMEM`; no exception leaves ty.
 - **A flags pointer of NULL means no null**, so a column with no
   null costs no copy of a flag it does not have: NULLs are rare.
 - **A scalar program is a run with `n` of 1**, whose parameters
@@ -328,7 +332,11 @@ int  ty_run(ty_run_t *run, uint32_t n, const ty_arg_t *args,
 3. **The compiler.** The table of names (§4), the type checks,
    the stack's layout, the jumps of scalar arms, `ty_prog_dump`.
    → verify: the dump of §1's example, and an error for each
-   mismatch.
+   mismatch. Built: `include/ty_eval.h`, `src/eval_compile.cc`,
+   `src/eval_prog.h`. A constant is read by its operator's type,
+   and a constant where a vector is wanted is an error: `splat`
+   makes one. The casts are between the five numeric types, and
+   between `bool` and `i32`.
 4. **The machine.** `ty_run_new`, `ty_run`. → verify: §7's
    cases.
 5. **Random programs.** A generator writes a program of vectors
