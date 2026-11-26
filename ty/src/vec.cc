@@ -1277,6 +1277,42 @@ int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_timetz_t *vec) {
   return squeeze_vec<sizeof *vec>(n, flag, vec);
 }
 
+/* An empty varlena, of a short header: its size, 1, is the header alone. */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+static const char empty_varlena = '\x81';
+#else
+static const char empty_varlena = '\x03';
+#endif
+
+/*
+ * Mark a dictionary's entries no row uses; see ty_vec.h.
+ * 1. Each entry: not valid, and, if there is out_dict, the empty varlena.
+ * 2. Each row that counts: its entry valid, and dict's in out_dict.
+ */
+void tyvec_dict_mark(uint32_t n, const uint8_t *flag, const uint32_t *codes,
+                     uint32_t dict_n, const char *const *dict,
+                     const char **out_dict, uint8_t *dict_flag) {
+  // 1. No entry used.
+  memset(dict_flag, TY_VEC_NOTVALID, dict_n);
+  if (nullptr != out_dict) {
+    for (uint32_t c = 0; c < dict_n; c++) {
+      out_dict[c] = &empty_varlena;
+    }
+  }
+  // 2. The entries of the rows; NULLs are rare, so the branch is not taken.
+  for (uint32_t i = 0; i < n; i++) {
+    if (nullptr != flag && 0 != (flag[i] & (TY_VEC_NOTVALID | TY_VEC_NULL))) {
+      continue;
+    }
+    const uint32_t c = codes[i];
+    assert(c < dict_n);
+    dict_flag[c] = 0;
+    if (nullptr != out_dict) {
+      out_dict[c] = dict[c];
+    }
+  }
+}
+
 /* A vector of int16, a line a row; see ty_vec.h. */
 void tyvec_print(uint32_t n, const uint8_t *flag, const int16_t *values,
                  std::string &out, const std::vector<ty_rowerr_t> &err) {

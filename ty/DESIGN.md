@@ -1100,6 +1100,16 @@ compares, and the flag and bool operations are built.
   flags take two shuffles of 8 bytes. A row of 16 bytes is one
   vector: each is stored, and the place steps past it if it is
   kept. No branch depends on a row.
+- **`tyvec_dict_mark` marks a dictionary's entries no row
+  uses**, after a squeeze or before it: the rows that are not
+  valid or null use none. Its `dict_flag` makes the dictionary a
+  vector whose unused entries are not valid, so an operation on
+  the dictionary computes only the entries used. For a varlena
+  type, its `out_dict` has the address of each entry used, and
+  of an empty varlena for each other one, so a dictionary sent
+  over the wire has only the bytes of the entries used. The
+  codes do not change, so the dictionary keeps its order, and
+  the CG's dictionary is not written.
 
 The tests are `test/test_vec.cc`: each row against the scalar
 `ty_intN_add`, `_sub`, `_mul`, `_div` and `_mod`, at sizes around

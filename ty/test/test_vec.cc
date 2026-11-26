@@ -13,6 +13,7 @@
 #include "ty_float.h"
 #include "ty_int.h"
 #include "ty_print.h"
+#include "ty_varlena.h"
 #include "ty_vec.h"
 
 #include <algorithm>
@@ -1377,6 +1378,72 @@ TEST_CASE("tyvec_squeeze drops the rows not valid") {
   check_squeeze<ty_uuid_t>();
   check_squeeze<ty_interval_t>();
   check_squeeze<ty_timetz_t>();
+}
+
+// Verify that tyvec_dict_mark marks as used the entries of the rows that
+// count, and no other, and leaves the others an empty varlena.
+// 1. Make a dictionary of short varlenas of 1 to 3 bytes, and rows that
+//    point into it, some not valid, some null, around 16 rows and more.
+// 2. For each form, flags or none, varlenas or none, mark it.
+// 3. Each entry is used if a row that counts points at it: its flag is 0
+//    and its address dict's; else its flag is not valid, and, with
+//    varlenas, it is empty.
+TEST_CASE("tyvec_dict_mark marks the entries no row uses") {
+  std::mt19937_64 rng(59);
+  for (uint32_t dict_n : {1u, 2u, 17u, 300u}) {
+    // 1. The dictionary.
+    std::vector<std::string> bytes(dict_n);
+    std::vector<const char *> dict(dict_n);
+    for (uint32_t c = 0; c < dict_n; c++) {
+      const uint32_t len = 1 + c % 3;
+      bytes[c].push_back(char((len + 1) << 1 | 1));
+      for (uint32_t k = 0; k < len; k++) {
+        bytes[c].push_back(char('a' + (c + k) % 26));
+      }
+      dict[c] = bytes[c].data();
+    }
+    for (uint32_t n : {0u, 1u, 16u, 33u, 1000u}) {
+      std::vector<uint32_t> codes(n);
+      std::vector<uint8_t> flag(n);
+      for (uint32_t i = 0; i < n; i++) {
+        codes[i] = uint32_t(rng() % dict_n);
+        const uint64_t r = rng() % 8;
+        flag[i] = 0 == r ? TY_VEC_NOTVALID : 1 == r ? TY_VEC_NULL : 0;
+      }
+      for (int form = 0; form < 4; form++) {
+        // 2. Mark it.
+        const bool flags = form & 1, varlenas = form & 2;
+        std::vector<const char *> out(dict_n, nullptr);
+        std::vector<uint8_t> dict_flag(dict_n, 0xff);
+        tyvec_dict_mark(n, flags ? flag.data() : nullptr, codes.data(), dict_n,
+                        varlenas ? dict.data() : nullptr,
+                        varlenas ? out.data() : nullptr, dict_flag.data());
+        // 3. Each entry.
+        std::vector<bool> used(dict_n, false);
+        for (uint32_t i = 0; i < n; i++) {
+          if (!flags || 0 == flag[i]) {
+            used[codes[i]] = true;
+          }
+        }
+        CAPTURE(dict_n);
+        CAPTURE(n);
+        CAPTURE(form);
+        for (uint32_t c = 0; c < dict_n; c++) {
+          CAPTURE(c);
+          CHECK(dict_flag[c] == (used[c] ? 0 : TY_VEC_NOTVALID));
+          if (!varlenas) {
+            CHECK(nullptr == out[c]);
+          } else if (used[c]) {
+            CHECK(out[c] == dict[c]);
+          } else {
+            REQUIRE(nullptr != out[c]);
+            CHECK(0 ==
+                  ty_vl_len(reinterpret_cast<const ty_varlena_t *>(out[c])));
+          }
+        }
+      }
+    }
+  }
 }
 
 TEST_CASE("a vector add agrees with the scalar add, row by row") {

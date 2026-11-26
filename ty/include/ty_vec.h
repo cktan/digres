@@ -131,6 +131,19 @@
  *         16 bytes: ty_int128_t: a decimal128's value; ty_uuid_t;
  *                   ty_interval_t; ty_timetz_t
  *
+ *   tyvec_dict_mark(n, flag, codes, dict_n, dict, out_dict, dict_flag)
+ *       Mark the entries of a dictionary that no row uses, for a column of
+ *       n rows whose row i is entry codes[i] of dict_n. A row counts if
+ *       its flag has neither TY_VEC_NOTVALID nor TY_VEC_NULL; flag may be
+ *       NULL, and then every row counts. dict_flag gets dict_n flags: 0 for
+ *       an entry used, TY_VEC_NOTVALID for one not, so the dictionary and
+ *       dict_flag are a vector whose operations compute only the entries
+ *       used. out_dict gets dict_n varlena addresses: dict's for an entry
+ *       used, an empty varlena's for one not, so the dictionary sent over
+ *       the wire has the bytes of the entries used only. The codes do not
+ *       change, nor does dict. dict and out_dict may be NULL, for a type
+ *       that is not a varlena: then only dict_flag is written.
+ *
  *   tyvec_print(n, flag, values, out, err)
  *       Append to out n lines, one a row, for a test to compare: the row's
  *       index, a space, and its value by ty_print (ty_print.h), or
@@ -263,6 +276,9 @@ int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_int128_t *vec);
 int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_uuid_t *vec);
 int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_interval_t *vec);
 int tyvec_squeeze(uint32_t n, uint8_t *flag, ty_timetz_t *vec);
+void tyvec_dict_mark(uint32_t n, const uint8_t *flag, const uint32_t *codes,
+                     uint32_t dict_n, const char *const *dict,
+                     const char **out_dict, uint8_t *dict_flag);
 void tyvec_print(uint32_t n, const uint8_t *flag, const int16_t *values,
                  std::string &out, const std::vector<ty_rowerr_t> &err);
 void tyvec_print(uint32_t n, const uint8_t *flag, const int32_t *values,
