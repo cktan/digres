@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include <limits>
+#include <memory>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -719,7 +720,8 @@ int run(ty_run_t *r, uint32_t n, const ty_arg_t *args, ty_result_t *result) {
 int ty_run_new(const ty_prog_t *prog, uint32_t max_n, ty_run_t **out) {
   *out = nullptr;
   try {
-    ty_run_t *r = new ty_run_t;
+    // Held until it is whole, so a failed allocation frees what was made.
+    std::unique_ptr<ty_run_t> r(new ty_run_t);
     r->prog = prog;
     r->max_n = max_n;
     r->stack.resize(prog->max_depth);
@@ -732,7 +734,7 @@ int ty_run_new(const ty_prog_t *prog, uint32_t max_n, ty_run_t **out) {
     }
     r->spare.assign(max_n ? max_n : 1, 0);
     r->spare_flags.assign(max_n ? max_n : 1, 0);
-    *out = r;
+    *out = r.release();
     return 0;
   } catch (const std::bad_alloc &) {
     return set_error(TY_ERR_NOMEM, "out of memory");
