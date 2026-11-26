@@ -101,6 +101,12 @@
  *
  * The flag and bool operations cannot fail: they return 0. out may be vec;
  * a flag array may not overlap an input or out.
+ *
+ * A utility, not an operation of SQL:
+ *
+ *   ty_bitor_vec(n, a, b, c)
+ *       a[i] |= b[i] | c[i] of n bytes, such as flags; c may be NULL, and
+ *       then a[i] |= b[i]. b and c may be a.
  */
 #ifndef TY_VEC_H
 #define TY_VEC_H
@@ -185,6 +191,7 @@ int tyvec_bool_and(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
 int tyvec_bool_or(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
                   const uint8_t *flag_b, const std::vector<ty_rowerr_t> &err_b,
                   const uint8_t *a, const uint8_t *b, uint8_t *out);
+void ty_bitor_vec(uint32_t n, uint8_t *a, const uint8_t *b, const uint8_t *c);
 int tyvec_flag_error(uint32_t n, const uint8_t *flag,
                      const std::vector<ty_rowerr_t> &err);
 int tyvec_flag_or(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,

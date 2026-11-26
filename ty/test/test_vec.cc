@@ -14,6 +14,7 @@
 #include "ty_int.h"
 #include "ty_vec.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1045,6 +1046,44 @@ TEST_CASE("x IS NULL OR x > 3, and x IS NOT NULL AND x > 3") {
     for (uint32_t i = 0; i < n; i++) {
       CHECK(0 == fa[i]);
       CHECK(a[i] == (0 == i % 3 ? 0 : 1 == i % 3 ? 1 : is_or));
+    }
+  }
+}
+
+// Verify that ty_bitor_vec ORs b and c into a, with c or without, and with
+// b or c the same array as a.
+// 1. For sizes around 16 bytes, bytes of each bit pattern, and one more
+//    byte past them.
+// 2. a |= b | c, and a |= b with no c; b as a; c as a.
+// 3. Nothing is written past the n bytes.
+TEST_CASE("ty_bitor_vec ORs b, and c if there is one, into a") {
+  for (uint32_t n : {0u, 1u, 15u, 16u, 17u, 31u, 33u, 300u}) {
+    // 1. The bytes.
+    std::vector<uint8_t> a(n + 1, 0x11), b(n + 1, 0xff), c(n + 1, 0xff);
+    for (uint32_t i = 0; i < n; i++) {
+      a[i] = uint8_t(i * 37), b[i] = uint8_t(i * 11 + 1), c[i] = uint8_t(i * 5);
+    }
+    // 2. Each form.
+    struct form_t {
+      bool with_c, b_is_a, c_is_a;
+    };
+    for (form_t fm : {form_t{true, false, false}, form_t{false, false, false},
+                      form_t{false, true, false}, form_t{true, false, true}}) {
+      std::vector<uint8_t> x = a;
+      const uint8_t *y = fm.b_is_a ? x.data() : b.data();
+      const uint8_t *z = fm.c_is_a ? x.data() : c.data();
+      ty_bitor_vec(n, x.data(), y, fm.with_c ? z : nullptr);
+      uint32_t bad = n;
+      for (uint32_t i = 0; i < n; i++) {
+        const uint8_t yb = fm.b_is_a ? a[i] : b[i];
+        const uint8_t zb = !fm.with_c ? 0 : fm.c_is_a ? a[i] : c[i];
+        if (x[i] != uint8_t(a[i] | yb | zb)) {
+          bad = std::min(bad, i);
+        }
+      }
+      CHECK(bad == n);
+      // 3. Past the n bytes.
+      CHECK(0x11 == x[n]);
     }
   }
 }

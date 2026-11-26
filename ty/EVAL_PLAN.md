@@ -308,8 +308,9 @@ int  ty_run(ty_run_t *run, uint32_t n, const ty_arg_t *args,
    `tyvec_flag_error`, `tyvec_flag_or`; `and` and `or` take §3's
    rules. → verify: `test/test_vec.cc` changed to marks; a row is
    marked exactly where the scalar operation fails; no row is
-   marked twice. Built: `and` costs 31% more for the error, 4,049
-   instructions for 2,048 rows, from 3,096; `add.i32` 0.8% more.
+   marked twice. Built: `and` costs 18% more for the error, 3,664
+   instructions for 2,048 rows, from 3,096, and `or` 16%: 4 more
+   instructions for 16 rows. `add.i32` costs 0.8% more.
 2. **The reader.** Janet's forms: lists, brackets, symbols,
    numbers, `true`, `false`, `nil`, comments. → verify: forms
    read back, and each malformed text gives its line and

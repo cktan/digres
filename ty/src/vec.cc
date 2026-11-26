@@ -556,9 +556,10 @@ int flag_op(uint32_t n, uint8_t *flag, const uint8_t *vec, uint8_t *out,
  * the bools turned around. The bits of a null are taken at the place of
  * TY_VEC_NULL: x + x has a bool there. A row failed if an input did, unless
  * a is known to be false: a left input is computed first, so only it drops
- * the other's error. Its bits are at TY_VEC_ERROR: f << 1 has a's null
- * there, and x << 2 a's bool. A row is not valid if an input is not. err_a
- * takes the entries of err_b of the rows that failed by b alone.
+ * the other's error. So a's error bit stays, and b's is taken where a is
+ * null or 1: (f | (x + x)) << 1 has those at TY_VEC_ERROR. A row is not valid
+ * if an input is not. err_a takes the entries of err_b of the rows that failed
+ * by b alone.
  * 1. 16 rows at a time:
  *    a. The inputs, read before anything is written.
  *    b. The result. One of a null and a known input is right by its low bit.
@@ -577,7 +578,7 @@ int and_or_vec(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
   constexpr uint8_t notvalid = TY_VEC_NOTVALID;
   constexpr uint8_t two = TY_VEC_NOTVALID | TY_VEC_NULL;
   constexpr uint8_t error = TY_VEC_ERROR;
-  constexpr uint8_t keep = uint8_t(~(TY_VEC_NULL | TY_VEC_ERROR));
+  constexpr uint8_t keep = uint8_t(~TY_VEC_NULL);
   constexpr uint8_t turn = OR ? 1 : 0;
   // The result, and the flag, of 16 rows or of one.
   auto result = [](auto x, auto y) {
@@ -590,9 +591,10 @@ int and_or_vec(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
   auto flag_of = [](auto f, auto g, auto x, auto y) {
     x ^= turn;
     y ^= turn;
-    return (f & keep) |
-           ((f | g) & (((f | (x + x)) & (g | (y + y))) | notvalid) & two) |
-           ((f | g) & (f | (f << 1) | (x << 2)) & error);
+    // a's null or bool, at TY_VEC_NULL; one place up, at TY_VEC_ERROR.
+    const auto fx = f | (x + x);
+    return (f & keep) | ((f | g) & ((fx & (g | (y + y))) | notvalid) & two) |
+           (g & (fx << 1) & error);
   };
   // 3. The rows that may fail by b alone: b failed there, and a did not.
   std::vector<uint32_t> by_b;
@@ -848,9 +850,33 @@ int tyvec_flag_error(uint32_t n, const uint8_t *flag,
 }
 
 /*
+ * a |= b | c of n bytes, or a |= b with no c; see ty_vec.h.
+ * 1. 16 bytes at a time, each read before a is written.
+ * 2. The bytes past the last 16, one at a time.
+ */
+void ty_bitor_vec(uint32_t n, uint8_t *a, const uint8_t *b, const uint8_t *c) {
+  const uint32_t whole = n - n % 16;
+  uint32_t i = 0;
+  // 1. 16 bytes at a time; with no c, b is or'd twice, which is b.
+  const uint8_t *c2 = nullptr != c ? c : b;
+  for (; i < whole; i += 16) {
+    bytes_t x, y, z;
+    memcpy(&x, a + i, 16);
+    memcpy(&y, b + i, 16);
+    memcpy(&z, c2 + i, 16);
+    x |= y | z;
+    memcpy(a + i, &x, 16);
+  }
+  // 2. The rest.
+  for (; i < n; i++) {
+    a[i] |= uint8_t(b[i] | c2[i]);
+  }
+}
+
+/*
  * The flags of a row of two inputs; see ty_vec.h.
  * 1. Note b's entries of a row a has not failed, before flag_a is written.
- * 2. OR the flags, 16 rows at a time, then the rest.
+ * 2. OR the flags.
  */
 int tyvec_flag_or(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
                   const uint8_t *flag_b,
@@ -864,18 +890,7 @@ int tyvec_flag_or(uint32_t n, uint8_t *flag_a, std::vector<ty_rowerr_t> &err_a,
     }
   }
   // 2. The flags.
-  const uint32_t whole = n - n % 16;
-  uint32_t i = 0;
-  for (; i < whole; i += 16) {
-    bytes_t f, g;
-    memcpy(&f, flag_a + i, 16);
-    memcpy(&g, flag_b + i, 16);
-    f |= g;
-    memcpy(flag_a + i, &f, 16);
-  }
-  for (; i < n; i++) {
-    flag_a[i] |= flag_b[i];
-  }
+  ty_bitor_vec(n, flag_a, flag_b, nullptr);
   return 0;
 }
 
