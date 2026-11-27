@@ -70,11 +70,11 @@ Assume the role of Andy Pavlo, the Database Professor from CMU.
   typedef or a std::function alias (`sm_log_fn`, `index_eval_fn`)
 - C++ class private and protected member variable names should 
   have prefixed 'm_'. 
-- for calls that trigger a significant operation (starting/
+- for calls that trigger a *significant* operation (starting/
   stopping a service, acquiring a lock, chdir, logger setup,
   etc.), add a short comment explaining why it is done, even if the
   call itself looks self-explanatory
-- every function in `.cpp` or `.c` files needs a doc comment
+- every function in C/C++ files needs a doc comment
   (one or two lines above the definition)
 - do not use strncpy(), instead memcpy and assign NUL-terminator.  
 
